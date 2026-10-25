@@ -414,7 +414,8 @@ fn cmp_symbol(op: CmpOp) -> &'static str {
 }
 
 /// Writes `v`'s repr. `active` holds the containers being rendered,
-/// outermost first: meeting a list again means a cycle.
+/// outermost first: meeting one again means a cycle, shown as `[...]`
+/// or `(...)` as in Python.
 fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Span) -> Result<()> {
     let text = match v {
         Value::List(l) => {
@@ -426,15 +427,13 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
             return write_items(&l.borrow(), id, ("[", "]"), active, out, span);
         }
         Value::Tuple(t) => {
+            let id = Rc::as_ptr(t).cast::<()>();
+            if active.contains(&id) {
+                out.push_str("(...)");
+                return Ok(());
+            }
             let close = if t.len() == 1 { ",)" } else { ")" };
-            return write_items(
-                t,
-                Rc::as_ptr(t).cast::<()>(),
-                ("(", close),
-                active,
-                out,
-                span,
-            );
+            return write_items(t, id, ("(", close), active, out, span);
         }
         Value::None => "None".to_string(),
         Value::Bool(true) => "True".to_string(),

@@ -1092,6 +1092,13 @@ fn cyclic_lists_render_as_python_does() {
         print(vec![name("a"), call("str", vec![name("b")])]),
     ]);
     assert_eq!(ok(program), "[[...]] ([[...]],)\n[[[...]]] [[[...]]]\n");
+    let tuple_cycle = vec![
+        assign("a", list(vec![])),
+        assign("t", tuple(vec![name("a")])),
+        append("a", name("t")),
+        print(vec![name("t"), name("a")]),
+    ];
+    assert_eq!(ok(tuple_cycle), "([(...)],) [([...],)]\n");
 }
 
 #[test]
