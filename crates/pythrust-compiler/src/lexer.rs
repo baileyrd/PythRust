@@ -513,11 +513,12 @@ impl<'a> Lexer<'a> {
         self.src[self.pos..].chars().next()
     }
 
-    /// Length of the line break at `pos`: 1 for `\n`, 2 for `\r\n`.
+    /// Length of the line break at `pos`: 2 for `\r\n`, 1 for `\n` or a
+    /// lone `\r` (CPython's universal newlines).
     fn newline_len(&self) -> Option<usize> {
         match (self.peek(), self.peek_at(1)) {
-            (Some(b'\n'), _) => Some(1),
             (Some(b'\r'), Some(b'\n')) => Some(2),
+            (Some(b'\n' | b'\r'), _) => Some(1),
             _ => None,
         }
     }
@@ -806,6 +807,34 @@ mod tests {
             EndMarker,
         ];
         assert_eq!(kinds(src), expected);
+    }
+
+    #[test]
+    fn lone_cr_is_a_line_break() {
+        assert_eq!(
+            kinds("x\ry\r"),
+            vec![name("x"), Newline, name("y"), Newline, EndMarker]
+        );
+        let blocks = "if x:\r    a\r\r    # c\r    b\r";
+        let expected = vec![
+            If,
+            name("x"),
+            Colon,
+            Newline,
+            Indent,
+            name("a"),
+            Newline,
+            name("b"),
+            Newline,
+            Dedent,
+            EndMarker,
+        ];
+        assert_eq!(kinds(blocks), expected);
+        assert_eq!(line("1 + \\\r2"), vec![Int(1), Plus, Int(2)]);
+        assert_eq!(line("'ab\\\rcd'"), vec![string("abcd")]);
+        assert_err("'a\rb'", 0, 2, "unterminated");
+        let spans: Vec<Span> = lex("x\ry").unwrap().iter().map(|t| t.span).collect();
+        assert_eq!(spans[1], Span { start: 1, end: 2 });
     }
 
     #[test]
@@ -1157,7 +1186,6 @@ mod tests {
             let d = lex_err(src);
             assert!(d.message.contains(&format!("{c:?}")), "{d}");
         }
-        assert_err("x\ry\n", 1, 2, "'\\r'");
     }
 
     // ---- Whole program ----
