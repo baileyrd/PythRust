@@ -83,6 +83,7 @@ pub enum StmtKind {
 pub struct Branch {
     pub test: Expr,
     pub body: Block,
+    pub span: Span,
 }
 
 /// `['temper'] 'def' NAME '(' [params] ')' ['->' type] ':' block`
@@ -93,6 +94,7 @@ pub struct FuncDef {
     pub params: Vec<Param>,
     pub returns: Option<TypeExpr>,
     pub body: Block,
+    pub span: Span,
 }
 
 /// Tempering level of a function.
