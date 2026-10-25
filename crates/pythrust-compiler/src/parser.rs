@@ -797,13 +797,18 @@ fn check_params(params: &[Param]) -> Result<()> {
 
 fn check_args(args: &[Arg]) -> Result<()> {
     let mut after_keyword = args.iter().skip_while(|a| a.name.is_none());
-    match after_keyword.find(|a| a.name.is_none()) {
-        Some(arg) => Err(error(
-            arg.span,
-            "positional argument follows keyword argument",
-        )),
-        None => Ok(()),
+    if let Some(arg) = after_keyword.find(|a| a.name.is_none()) {
+        let msg = "positional argument follows keyword argument";
+        return Err(error(arg.span, msg));
     }
+    let keywords: Vec<&Ident> = args.iter().filter_map(|a| a.name.as_ref()).collect();
+    for (i, keyword) in keywords.iter().enumerate() {
+        if keywords.iter().take(i).any(|k| k.name == keyword.name) {
+            let msg = format!("keyword argument `{}` repeated", keyword.name);
+            return Err(error(keyword.span, msg));
+        }
+    }
+    Ok(())
 }
 
 fn int_literal(value: u64, span: Span) -> Result<i64> {

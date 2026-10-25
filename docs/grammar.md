@@ -55,7 +55,7 @@ for_stmt    = 'for' target_list 'in' expr ':' block ['else' ':' block] ;
 - Attribute assignment (`a.b = c`) waits for classes.
 - `def` appears only at module top level. Nested functions bring closure capture, which waits for ownership (phase 4).
 - Phase 2 parses and records `temper`; nothing about it is enforced until M5.
-- Rejected by the parser, as CPython rejects them before running: `return` outside a function, `break`/`continue` outside a loop (a loop's `else` is outside it), duplicate parameter names, a parameter without a default after one with a default, and a positional argument after a keyword argument.
+- Rejected by the parser, as CPython rejects them before running: `return` outside a function, `break`/`continue` outside a loop (a loop's `else` is outside it), duplicate parameter names, a parameter without a default after one with a default, a positional argument after a keyword argument, and a repeated keyword argument.
 - Parameters: defaults are evaluated once, when `def` runs, as in Python. A call binds positional arguments first, then keyword arguments by name. An unknown name, a parameter bound twice, or a parameter left unbound is an error.
 
 ## Types (annotation syntax)

@@ -518,6 +518,21 @@ fn call_arguments() {
 }
 
 #[test]
+fn repeated_keyword_argument() {
+    let msg = "keyword argument `x` repeated";
+    assert_eq!(err("f ( x = 1 , x = 2 ) NL"), msg);
+    assert_eq!(err("f ( 0 , x = 1 , y = 2 , x = 3 ) NL"), msg);
+    assert_eq!(
+        err("if False : NL INDENT f ( x = 1 , x = 2 ) NL DEDENT"),
+        msg
+    );
+    assert_eq!(ok("f ( x = 1 , y = 2 ) NL"), "(call f (kw x 1) (kw y 2))");
+    let src = "f ( x = 1 , x = 2 ) NL";
+    let span = parse_err(src).span;
+    assert_eq!((text(src, span), span.start), ("x", 12));
+}
+
+#[test]
 fn tuples_and_parentheses() {
     assert_eq!(ok("( ) NL"), "(tuple)");
     assert_eq!(ok("( 1 , ) NL"), "(tuple 1)");
