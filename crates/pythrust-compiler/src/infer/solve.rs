@@ -171,24 +171,6 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
     }
 }
 
-/// The diagnostic for a constraint still waiting when nothing is generic.
-pub(super) fn unsolved(c: &Constraint) -> Diagnostic {
-    let what = match &c.need {
-        Need::Binary(b) => format!("the operands of `{}`", op_symbol(b.op)),
-        Need::Negate { .. } => "the operand of unary `-`".to_string(),
-        Need::Equal { .. } | Need::Order { .. } => "the sides of this comparison".to_string(),
-        Need::Len(_) => "the argument of `len`".to_string(),
-        Need::Iter { .. } => "what is iterated here".to_string(),
-        Need::Index { .. } => "what is indexed here".to_string(),
-        Need::Unpack { .. } => "what is unpacked here".to_string(),
-        Need::ToNumber { func, .. } => format!("the argument of `{func}`"),
-    };
-    error(
-        c,
-        format!("cannot infer the type of {what}; add an annotation"),
-    )
-}
-
 fn need_types(need: &Need) -> Vec<&Type> {
     match need {
         Need::Binary(b) => vec![&b.left, &b.right, &b.out],

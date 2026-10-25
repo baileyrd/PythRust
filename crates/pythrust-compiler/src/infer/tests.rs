@@ -447,15 +447,35 @@ fn unknown_method_is_an_error() {
 }
 
 #[test]
-fn unresolvable_operation_asks_for_annotation() {
+fn operations_on_never_built_values_are_accepted() {
     let b = B::default();
     let sum = b.bin(
         BinOp::Add,
         b.idx(b.n("xs"), b.i(0)),
         b.idx(b.n("xs"), b.i(1)),
     );
-    let msg = err(vec![b.assign("xs", b.list(vec![])), b.ex(sum)]);
-    assert!(msg.starts_with("cannot infer"), "{msg}");
+    ok(vec![b.assign("xs", b.list(vec![])), b.ex(sum)]);
+}
+
+#[test]
+fn generic_sort_accepts_an_empty_list() {
+    let b = B::default();
+    let body = vec![
+        b.if_(
+            b.cmp(
+                b.idx(b.n("xs"), b.i(0)),
+                vec![(CmpOp::Gt, b.idx(b.n("xs"), b.i(1)))],
+            ),
+            vec![b.st(StmtKind::Pass)],
+            vec![],
+        ),
+        b.ret(b.n("xs")),
+    ];
+    ok(vec![
+        b.def("sort", &["xs"], body),
+        b.ex(b.call("sort", vec![b.list(vec![])])),
+        b.ex(b.call("sort", vec![b.list(vec![b.i(1)])])),
+    ]);
 }
 
 #[test]

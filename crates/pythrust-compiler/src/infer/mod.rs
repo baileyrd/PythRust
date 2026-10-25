@@ -68,10 +68,11 @@ pub fn infer(module: &Module) -> Result<Types> {
             c.settle()?;
         }
     }
-    let waiting = solve::solve(&mut c.subst, mem::take(&mut c.pending))?;
-    if let Some(first) = waiting.first() {
-        return Err(solve::unsolved(first));
-    }
+    // Whatever still waits involves only variables nothing ever bound: no
+    // value of those types is ever built (`bubble_sort([])` compares no
+    // elements), so the operation never runs. It is accepted, and the
+    // variables stay unconstrained in the typed view.
+    solve::solve(&mut c.subst, mem::take(&mut c.pending))?;
     c.resolve_schemes()?;
     Ok(c.finish())
 }

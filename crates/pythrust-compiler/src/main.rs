@@ -7,7 +7,7 @@
 
 use std::process::ExitCode;
 
-use pythrust_compiler::{lexer, parser, DiagKind, Diagnostic, Span};
+use pythrust_compiler::{infer, lexer, parser, DiagKind, Diagnostic, Span};
 
 const USAGE: &str = "usage: pythrust <run|check> <file>";
 
@@ -70,8 +70,7 @@ fn execute(command: Command, src: &str) -> pythrust_compiler::Result<()> {
     let tokens = lexer::lex(src)?;
     let module = parser::parse(&tokens)?;
     match command {
-        // Thread C adds `infer` here; until then check is lex and parse.
-        Command::Check => Ok(()),
+        Command::Check => infer::infer(&module).map(drop),
         // Thread D replaces this with the interpreter.
         Command::Run => Err(Diagnostic {
             span: module.span,
