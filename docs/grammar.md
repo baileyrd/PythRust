@@ -1,4 +1,4 @@
-# Loose Syntax Grammar (phase 1 draft)
+# Loose Syntax Grammar (phase-2 subset)
 
 Scope: the phase-2 subset only. Functions, numbers, strings, lists, control flow. Python-compatible wherever possible, so existing Python readers need no new model.
 
@@ -47,8 +47,9 @@ while_stmt  = 'while' expr ':' block ['else' ':' block] ;
 for_stmt    = 'for' target_list 'in' expr ':' block ['else' ':' block] ;
 ```
 
-Notes:
-- `temper def f(...)` marks a function tempered (see design.md). The keyword is a prefix, not a decorator, so the compiler sees it without resolving names.
+### Notes
+
+- `temper def f(...)` marks a function *tempered*: the compiler requires more to be written explicitly, and the meaning never changes (see [design.md](design.md#core-idea-tempering)). Only function-level tempering exists here; module- and project-level tempering come later. The keyword is a prefix, not a decorator, so the compiler sees it without resolving names.
 - Annotations are optional everywhere. Loose code infers them; they are hints, never required.
 - Single-line bodies (`if x: y`) are not in phase 2. One way to write a block.
 - Attribute assignment (`a.b = c`) waits for classes.
@@ -91,7 +92,8 @@ atom        = NAME | INT | FLOAT | STRING
             | '[' [expr (',' expr)* [',']] ']' ;         # list literal
 ```
 
-Semantic rules (not grammar):
+### Semantic rules
+
 - `/` is true division (float); `//` is floor division. Same as Python.
 - `and`/`or` short-circuit and return an operand, as in Python.
 - Comparison chains evaluate each operand once.
@@ -103,7 +105,7 @@ Semantic rules (not grammar):
 
 ## Deliberate omissions (phase 2)
 
-Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators. Each is additive and none changes the grammar above.
+Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators. Each is additive: existing phase-2 programs keep their meaning.
 
 ## Decided
 
@@ -111,7 +113,7 @@ Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts 
 - **Tempering marker:** `temper def f(...)`, a keyword prefix.
 - **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`.
 
-## Open syntax questions (phase 1 blockers)
+## Open syntax questions (M3 blockers)
 
 1. **Pause marker.** The explicit interleave point required in tempered mode. Candidate: a keyword prefix on the call (`pause fetch(x)`).
 2. **Shared-lock keyword.** One short keyword for the built-in locked wrapper. Candidate: `shared`.
