@@ -845,3 +845,62 @@ fn errors_carry_the_span_of_the_offending_node() {
     let result = infer(&module(vec![b.ex(b.list(vec![b.i(1), bad]))]));
     assert_eq!(result.err().map(|d| d.span), Some(span));
 }
+
+#[test]
+fn default_aliased_through_another_function_stays_fixed() {
+    let b = B::default();
+    let p = b.param("xs", None, Some(b.list(vec![])));
+    let msg = err(vec![
+        b.def_full("shared", vec![p], None, vec![b.ret(b.n("xs"))]),
+        b.def("get", &[], vec![b.ret(b.call("shared", vec![]))]),
+        b.ex(b.method(b.call("get", vec![]), "append", vec![b.i(1)])),
+        b.ex(b.method(b.call("get", vec![]), "append", vec![b.s("s")])),
+    ]);
+    assert!(msg.starts_with("`append` needs a list"), "{msg}");
+}
+
+#[test]
+fn default_bound_after_its_def_stays_fixed() {
+    let b = B::default();
+    let p = b.param("xs", None, Some(b.list(vec![])));
+    let body = vec![
+        b.ex(b.method(b.n("xs"), "append", vec![b.list(vec![])])),
+        b.ret(b.n("xs")),
+    ];
+    let inner = |v: Expr| b.method(b.idx(b.call("f", vec![]), b.i(0)), "append", vec![v]);
+    let msg = err(vec![
+        b.def_full("f", vec![p], None, body),
+        b.ex(inner(b.i(1))),
+        b.ex(inner(b.s("s"))),
+    ]);
+    assert!(
+        msg.contains("list[int]") && msg.contains("list[str]"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn break_in_nested_loop_else_exits_the_outer_loop() {
+    let b = B::default();
+    let inner = b.st(StmtKind::For {
+        target: b.t("x"),
+        iter: b.list(vec![b.i(1)]),
+        body: vec![b.st(StmtKind::Pass)],
+        orelse: vec![b.st(StmtKind::Break)],
+    });
+    let body = vec![b.while_(b.bl(true), vec![inner, b.ret(b.i(1))])];
+    let msg = err(vec![b.def("f", &[], body)]);
+    assert_eq!(
+        msg,
+        "`f` returns int, but can reach its end, which returns None"
+    );
+}
+
+#[test]
+fn break_in_nested_loop_body_does_not_exit_the_outer_loop() {
+    let b = B::default();
+    let inner = b.for_(b.t("x"), b.list(vec![b.i(1)]), vec![b.st(StmtKind::Break)]);
+    let body = vec![b.while_(b.bl(true), vec![inner, b.ret(b.i(1))])];
+    let types = ok(vec![b.def("f", &[], body)]);
+    assert_eq!(types.func("f").map(|f| f.ret.clone()), Some(Type::Int));
+}

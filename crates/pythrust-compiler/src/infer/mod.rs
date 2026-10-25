@@ -126,6 +126,9 @@ struct Checker {
     funcs: HashMap<String, Func>,
     pending: Vec<Constraint>,
     frame: Frame,
+    /// Types of parameters with defaults, across all groups. Never
+    /// generic, and resolved afresh at each generalization.
+    defaults: Vec<Type>,
 }
 
 impl Checker {
@@ -153,13 +156,12 @@ impl Checker {
             let sig = self.signature(f)?;
             self.funcs.insert(f.name.name.clone(), Func::Mono(sig));
         }
-        let mut fixed = BTreeSet::new();
         for f in group {
-            self.body(f, &mut fixed)?;
+            self.body(f)?;
         }
         let waiting = solve::solve(&mut self.subst, mem::take(&mut self.pending))?;
         self.pending = outer;
-        self.generalize(group, waiting, fixed)
+        self.generalize(group, waiting)
     }
 
     fn signature(&mut self, f: &FuncDef) -> Result<FuncType> {
@@ -185,10 +187,10 @@ impl Checker {
         }
     }
 
-    /// Infers defaults (in module scope) and the body of `f`. Variables in
-    /// default values go into `fixed`: one default object is shared by
-    /// every call, so its type must not be generic.
-    fn body(&mut self, f: &FuncDef, fixed: &mut BTreeSet<TypeVar>) -> Result<()> {
+    /// Infers defaults (in module scope) and the body of `f`. A default's
+    /// type joins `defaults`: one default object is shared by every call,
+    /// so its type must not be generic.
+    fn body(&mut self, f: &FuncDef) -> Result<()> {
         let sig = self.mono(f)?;
         for (p, pt) in f.params.iter().zip(&sig.params) {
             let Some(default) = &p.default else {
@@ -197,7 +199,7 @@ impl Checker {
             let t = self.expr(default)?;
             let what = format!("default for `{}`", pt.name);
             self.expect(default.span, &pt.ty, &t, &what)?;
-            self.subst.free_vars(&pt.ty, fixed);
+            self.defaults.push(pt.ty.clone());
         }
         let mut locals: HashMap<String, Type> = sig
             .params
@@ -239,14 +241,14 @@ impl Checker {
     /// Turns each function's monomorphic signature into a scheme over the
     /// variables no global or default can reach. Waiting constraints on
     /// those variables join the scheme; the rest stay pending outside.
-    fn generalize(
-        &mut self,
-        group: &[&FuncDef],
-        waiting: Vec<Constraint>,
-        fixed: BTreeSet<TypeVar>,
-    ) -> Result<()> {
-        let mut env = fixed;
-        for t in self.globals.values() {
+    ///
+    /// The environment is resolved now, not when it was recorded, so a
+    /// variable bound after the fact (`xs.append([])` on a default) stays
+    /// fixed. Earlier schemes need no entry: their non-generic variables
+    /// come from globals or defaults, which are both included.
+    fn generalize(&mut self, group: &[&FuncDef], waiting: Vec<Constraint>) -> Result<()> {
+        let mut env = BTreeSet::new();
+        for t in self.globals.values().chain(&self.defaults) {
             self.subst.free_vars(t, &mut env);
         }
         let vars: Vec<BTreeSet<TypeVar>> = waiting

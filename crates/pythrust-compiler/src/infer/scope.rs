@@ -285,11 +285,13 @@ fn diverges(stmt: &Stmt) -> bool {
     }
 }
 
-/// Whether `stmt` contains a `break` for the enclosing loop (not one
-/// belonging to a nested loop).
+/// Whether `stmt` contains a `break` for the enclosing loop. A nested
+/// loop's body breaks only that loop, but its `else` runs after it and
+/// breaks the enclosing one.
 fn breaks(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Break => true,
+        StmtKind::While { orelse, .. } | StmtKind::For { orelse, .. } => orelse.iter().any(breaks),
         StmtKind::If {
             branch,
             elifs,
