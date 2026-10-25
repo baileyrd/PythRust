@@ -108,7 +108,11 @@ atom        = NAME | INT | FLOAT | STRING
 - Call arguments and list elements are comma lists but never tuples: `f(1, 2)` is two arguments, `f((1, 2))` is one tuple.
 - `a, b = b, a` evaluates the right side fully before assigning.
 - Lists are homogeneous: every element has one type.
-- A tuple subscript must be an integer literal, so the element type is known statically.
+- A tuple subscript must be an integer literal, optionally negated (`t[-1]`), so the element type is known statically.
+- Subscripts apply to lists, strings, and tuples. A negative index counts from the end: `xs[-1]` is the last element. An index out of range in either direction is a runtime error, for tuples too. Slicing is not in phase 2.
+- Indexing a string and iterating over it (`for ch in s`) yield a length-1 `str`, counted in code points, as in CPython. Under UTF-8, indexing a non-ASCII string is O(n); the phase-3 backend deals with that.
+- `in` with a `str` on the right is a substring test. The left operand must be a `str`; anything else is a compile error.
+- List `==` and `!=` compare element-wise. Both lists must have the same element type, otherwise it is a compile error. Scalar `int == float` stays as in Python.
 - An annotation that conflicts with the inferred type is a type error.
 
 ## Builtins (phase 2)
@@ -123,6 +127,8 @@ A closed set. Anything else is a name error.
 
 Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out of range, unpacking arity, division by zero, ...) stops the program, prints a diagnostic with its source span to stderr, and exits with status 1, as an uncaught CPython exception does.
 
+A compile error (lexical, syntax, or type) is reported before anything runs: `pythrust run` prints the diagnostic to stderr, writes nothing to stdout, and exits with status 1.
+
 ## Deviations from Python
 
 - Spaces only: a tab outside a string or comment is an error, not just in indentation.
@@ -132,7 +138,10 @@ Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out
 - String prefixes and triple quotes are rejected with a dedicated error.
 - `NAME` is ASCII only.
 - Ints are `i64`: overflow is a runtime error, including `i64::MIN // -1` and `-i64::MIN`. An out-of-range literal is a compile error.
-- Lists are homogeneous; tuple subscripts are integer literals.
+- Lists are homogeneous; tuple subscripts are integer literals, optionally negated.
+- Type errors are reported before the program runs, so a program with one prints nothing. Python raises the same mistakes as a `TypeError` at runtime, if it raises them at all.
+- `1 in "abc"`: a non-`str` left operand of `in` on a string is a compile error. Python raises a `TypeError`.
+- List equality needs the same element type: `[1] == [1.0]` is a type error, where Python compares element-wise and returns `True`.
 - A variable has one type in its scope. `int` never widens to `float` on assignment: `total = 0` then `total += 0.5` is a type error (write `0.0`). Mixed arithmetic in an expression still promotes, as in Python.
 - `int ** int` is `int`. A negative exponent is a compile error when it is a literal (`2 ** -1`) and a runtime error otherwise; the fix is a float base (`2.0 ** -1`). Python returns a `float`.
 - `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
