@@ -142,6 +142,8 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 - **No int-to-float variable widening:** `total = 0` followed by `total += 1.5` is a compile error, with a fix-it to initialize with `0.0`.
 - **Negative integer exponents:** `int ** int` returns `int`; a negative exponent is a runtime error. With an integer base, a literal negative exponent (`x ** -1`) is a compile-time error. Both messages say "use a float base". `2.0 ** -1` stays legal.
 - Lists are homogeneous; tuple subscripts are integer literals.
+- A negative `float` raised to a fractional power is a runtime error; Python returns a `complex`, which the subset lacks.
+- Mixed `int`/`float` arithmetic and comparison, and `int / int`, go through `f64`, so results can differ from Python's exact math for magnitudes above 2**53.
 
 ## Deliberate omissions (phase 2)
 
