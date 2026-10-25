@@ -27,13 +27,14 @@ block       = NEWLINE INDENT stmt+ DEDENT ;
 
 ```ebnf
 simple_stmt = assign | ann_assign | aug_assign | return_stmt
-            | 'break' | 'continue' | 'pass' | expr ;
+            | 'break' | 'continue' | 'pass' | expr_list ;
 
-assign      = target '=' expr ;
+assign      = target_list '=' expr_list ;
 ann_assign  = NAME ':' type ['=' expr] ;
 aug_assign  = target ('+=' | '-=' | '*=' | '/=' | '//=' | '%=') expr ;
-return_stmt = 'return' [expr] ;
-target      = NAME | postfix ;      # postfix must end in a subscript_op (checked after parsing)
+return_stmt = 'return' [expr_list] ;
+target_list = target (',' target)* [','] ;                # more than one, or a trailing comma, unpacks
+target      = NAME | postfix | '(' target_list ')' ;      # postfix must end in a subscript_op (checked after parsing)
 
 compound_stmt = func_def | if_stmt | while_stmt | for_stmt ;
 
@@ -43,7 +44,7 @@ param       = NAME [':' type] ['=' expr] ;
 
 if_stmt     = 'if' expr ':' block ('elif' expr ':' block)* ['else' ':' block] ;
 while_stmt  = 'while' expr ':' block ['else' ':' block] ;
-for_stmt    = 'for' NAME 'in' expr ':' block ['else' ':' block] ;
+for_stmt    = 'for' target_list 'in' expr ':' block ['else' ':' block] ;
 ```
 
 Notes:
@@ -58,13 +59,14 @@ Notes:
 type        = NAME ['[' type (',' type)* ']'] ;
 ```
 
-Matches Python: `int`, `str`, `list[int]`. Names resolve in the type namespace. `A | B` unions and `T | None` are a later addition.
+Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. `A | B` unions and `T | None` are a later addition.
 
 ## Expressions
 
 Lowest to highest precedence:
 
 ```ebnf
+expr_list   = expr (',' expr)* [','] ;                  # a comma makes a tuple
 expr        = or_expr ['if' or_expr 'else' expr] ;     # conditional expression
 or_expr     = and_expr ('or' and_expr)* ;
 and_expr    = not_expr ('and' not_expr)* ;
@@ -84,6 +86,8 @@ attr        = '.' NAME ;
 atom        = NAME | INT | FLOAT | STRING
             | 'True' | 'False' | 'None'
             | '(' expr ')'
+            | '(' ')'                                    # empty tuple
+            | '(' expr ',' [expr (',' expr)* [',']] ')'  # tuple: (a,) (a, b) (a, b,)
             | '[' [expr (',' expr)* [',']] ']' ;         # list literal
 ```
 
@@ -91,21 +95,25 @@ Semantic rules (not grammar):
 - `/` is true division (float); `//` is floor division. Same as Python.
 - `and`/`or` short-circuit and return an operand, as in Python.
 - Comparison chains evaluate each operand once.
-- A bare `expr` statement is allowed (calls for effect).
+- A bare `expr_list` statement is allowed (calls for effect).
+- Tuples are fixed-length, immutable values. Subscript assignment on a tuple is an error. Element types are positional, so `(1, "a")` is `tuple[int, str]`.
+- Unpacking arity must match. A mismatch is a compile error when both lengths are statically known, otherwise a runtime error.
+- Call arguments and list elements are comma lists but never tuples: `f(1, 2)` is two arguments, `f((1, 2))` is one tuple.
+- `a, b = b, a` evaluates the right side fully before assigning.
 
 ## Deliberate omissions (phase 2)
 
-Tuples, dicts, sets, slicing, comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators. Each is additive and none changes the grammar above.
+Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators. Each is additive and none changes the grammar above.
 
 ## Decided
 
 - **Integers:** `i64` with checked overflow (runtime error, no silent wrap).
 - **Tempering marker:** `temper def f(...)`, a keyword prefix.
+- **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`.
 
 ## Open syntax questions (phase 1 blockers)
 
 1. **Pause marker.** The explicit interleave point required in tempered mode. Candidate: a keyword prefix on the call (`pause fetch(x)`).
 2. **Shared-lock keyword.** One short keyword for the built-in locked wrapper. Candidate: `shared`.
-3. **Tuples.** Needed almost immediately (multiple returns, `for k, v in ...`). Likely the first addition after the subset.
 
 The keywords `pause` and `shared` are reserved so adopting them later breaks no programs. `temper` is already live in `func_def`.
