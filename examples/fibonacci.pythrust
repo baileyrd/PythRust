@@ -5,10 +5,13 @@ def fib_rec(n):
 
 
 def fib_iter(n):
+    # Stops at fib(n): computing fib(n + 1) would overflow i64 at n = 92.
+    if n == 0:
+        return 0
     a, b = 0, 1
-    for _ in range(n):
+    for _ in range(n - 1):
         a, b = b, a + b
-    return a
+    return b
 
 
 for i in range(15):
