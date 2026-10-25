@@ -113,12 +113,15 @@ pub struct Param {
     pub span: Span,
 }
 
-/// `type = (NAME | 'None') ['[' type (',' type)* ']']`. `None` is spelled
-/// `name: "None"`. `args` empty means no brackets.
+/// `type = type_atom ['|' 'None']`, with
+/// `type_atom = (NAME | 'None') ['[' type (',' type)* ']']`. `None` is
+/// spelled `name: "None"`. `args` empty means no brackets. `optional` is
+/// the `| None` suffix; `span` covers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeExpr {
     pub name: Ident,
     pub args: Vec<TypeExpr>,
+    pub optional: bool,
     pub span: Span,
 }
 

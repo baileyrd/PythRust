@@ -317,6 +317,19 @@ fn equal(s: &mut Subst, c: &Constraint, l: &Type, r: &Type) -> Result<Step> {
     if l.is_numeric() && r.is_numeric() {
         return Ok(Step::Done(vec![]));
     }
+    match (&l, &r) {
+        (Type::Optional(_), Type::None) | (Type::None, Type::Optional(_)) => {
+            return Ok(Step::Done(vec![]))
+        }
+        (Type::Optional(t), other) | (other, Type::Optional(t)) => {
+            let inner = Need::Equal {
+                left: (**t).clone(),
+                right: other.clone(),
+            };
+            return Ok(Step::Done(vec![inner]));
+        }
+        _ => {}
+    }
     if s.unify(&l, &r).is_err() {
         let msg = format!(
             "cannot compare {} with {}: they are never equal",

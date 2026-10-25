@@ -136,7 +136,8 @@ Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out
 - `int ** int` is `int`. A negative exponent is a compile error when it is a literal (`2 ** -1`) and a runtime error otherwise; the fix is a float base (`2.0 ** -1`). Python returns a `float`.
 - `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
 - Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.
-- A function that returns a value on some path must not fall off its end (that would return `None`; there are no unions yet).
+- A function that returns a value on some path must not fall off its end (that returns `None`) unless its return annotation is `T | None`.
+- A variable first bound to `None` has type `None` unless annotated: `x = None` then `x = 5` is a type error; write `x: int | None = None`. `T` and `None` flow into `T | None` (also inside tuples); lists stay invariant.
 - A negative `float` raised to a fractional power is a runtime error; Python returns a `complex`, which the subset lacks.
 - Mixed `int`/`float` arithmetic and comparison, and `int / int`, go through `f64`, so results can differ from Python's exact math for magnitudes above 2**53.
 

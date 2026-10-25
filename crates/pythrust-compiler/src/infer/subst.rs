@@ -41,6 +41,7 @@ impl Subst {
     pub(super) fn zonk(&self, ty: &Type) -> Type {
         match self.resolve(ty) {
             Type::List(elem) => Type::List(Box::new(self.zonk(&elem))),
+            Type::Optional(inner) => Type::Optional(Box::new(self.zonk(&inner))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.zonk(t)).collect()),
             other => other,
         }
@@ -55,12 +56,30 @@ impl Subst {
         match (&a, &b) {
             (Type::Var(x), Type::Var(y)) if x == y => Ok(()),
             (Type::Var(v), other) | (other, Type::Var(v)) => self.bind(*v, other),
-            (Type::List(x), Type::List(y)) => self.unify(x, y),
+            (Type::List(x), Type::List(y)) | (Type::Optional(x), Type::Optional(y)) => {
+                self.unify(x, y)
+            }
             (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => {
                 xs.iter().zip(ys).try_for_each(|(x, y)| self.unify(x, y))
             }
             _ if a == b => Ok(()),
             _ => Err(Clash::Mismatch),
+        }
+    }
+
+    /// Like `unify`, but a value may flow into a wider target: `T` and
+    /// `None` into `T | None`, and tuples element-wise (they are
+    /// immutable). Lists stay invariant, since they are mutable.
+    pub(super) fn assign(&mut self, target: &Type, value: &Type) -> Result<(), Clash> {
+        match (self.resolve(target), self.resolve(value)) {
+            (Type::Optional(_), Type::None) => Ok(()),
+            (Type::Optional(inner), v) if !matches!(v, Type::Optional(_) | Type::Var(_)) => {
+                self.assign(&inner, &v)
+            }
+            (Type::Tuple(ts), Type::Tuple(vs)) if ts.len() == vs.len() => {
+                ts.iter().zip(&vs).try_for_each(|(t, v)| self.assign(t, v))
+            }
+            (t, v) => self.unify(&t, &v),
         }
     }
 
@@ -70,7 +89,7 @@ impl Subst {
             Type::Var(v) => {
                 out.insert(v);
             }
-            Type::List(elem) => self.free_vars(&elem, out),
+            Type::List(elem) | Type::Optional(elem) => self.free_vars(&elem, out),
             Type::Tuple(elems) => elems.iter().for_each(|t| self.free_vars(t, out)),
             _ => {}
         }
@@ -81,6 +100,7 @@ impl Subst {
         match self.resolve(ty) {
             Type::Var(v) => map.get(&v).cloned().unwrap_or(Type::Var(v)),
             Type::List(elem) => Type::List(Box::new(self.rename(&elem, map))),
+            Type::Optional(inner) => Type::Optional(Box::new(self.rename(&inner, map))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.rename(t, map)).collect()),
             other => other,
         }
@@ -162,6 +182,22 @@ mod tests {
         let mut s = Subst::default();
         let a = s.fresh();
         assert_eq!(s.unify(&a, &list(a.clone())), Err(Clash::Infinite));
+    }
+
+    #[test]
+    fn assign_widens_into_optional_but_not_back() {
+        let mut s = Subst::default();
+        let opt = Type::Optional(Box::new(Type::Int));
+        assert_eq!(s.assign(&opt, &Type::None), Ok(()));
+        assert_eq!(s.assign(&opt, &Type::Int), Ok(()));
+        assert_eq!(s.assign(&opt, &Type::Str), Err(Clash::Mismatch));
+        assert_eq!(s.assign(&Type::Int, &opt), Err(Clash::Mismatch));
+        let pair = |t: Type| Type::Tuple(vec![t, Type::Str]);
+        assert_eq!(s.assign(&pair(opt.clone()), &pair(Type::None)), Ok(()));
+        assert_eq!(
+            s.assign(&list(opt), &list(Type::None)),
+            Err(Clash::Mismatch)
+        );
     }
 
     #[test]

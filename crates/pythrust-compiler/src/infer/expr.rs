@@ -248,13 +248,54 @@ impl Checker {
             ));
         }
         let item = self.expr(&arg.value)?;
-        let list = Type::List(Box::new(item));
+        let elem = self.subst.fresh();
+        let list = Type::List(Box::new(elem.clone()));
         self.expect(value.span, &list, &receiver, "`append` needs a list")?;
+        let what = "appended value does not match the list";
+        self.expect(arg.value.span, &elem, &item, what)?;
         Ok(Type::None)
     }
 
-    /// The type an annotation spells.
+    /// Infers `e` against a known `expected` type, so list and tuple
+    /// literals take their element types from it: with
+    /// `xs: list[int | None] = [None, 1]` the elements need not agree.
+    pub(super) fn checked(&mut self, e: &Expr, expected: &Type) -> Result<Type> {
+        let items = match &e.kind {
+            ExprKind::List(items) | ExprKind::Tuple(items) => items,
+            _ => return self.expr(e),
+        };
+        let slots: Vec<Type> = match (&e.kind, self.subst.resolve(expected)) {
+            (ExprKind::List(_), Type::List(elem)) => vec![*elem; items.len()],
+            (ExprKind::Tuple(_), Type::Tuple(elems)) if elems.len() == items.len() => elems,
+            _ => return self.expr(e),
+        };
+        let mut found = Vec::new();
+        for (x, slot) in items.iter().zip(&slots) {
+            let t = self.checked(x, slot)?;
+            self.expect(x.span, slot, &t, "element does not match the annotation")?;
+            found.push(t);
+        }
+        let t = match &e.kind {
+            ExprKind::List(_) => expected.clone(),
+            _ => Type::Tuple(found),
+        };
+        self.nodes.insert(e.span, t.clone());
+        Ok(t)
+    }
+
+    /// The type an annotation spells, with its `| None` suffix.
     pub(super) fn annotation(&mut self, t: &TypeExpr) -> Result<Type> {
+        let atom = self.annotation_atom(t)?;
+        if !t.optional {
+            return Ok(atom);
+        }
+        Ok(match atom {
+            Type::None | Type::Optional(_) => atom,
+            other => Type::Optional(Box::new(other)),
+        })
+    }
+
+    fn annotation_atom(&mut self, t: &TypeExpr) -> Result<Type> {
         let args = t
             .args
             .iter()

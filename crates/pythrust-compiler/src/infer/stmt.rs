@@ -5,7 +5,7 @@ use crate::diag::Result;
 use crate::span::Span;
 
 use super::expr::int_literal;
-use super::solve::{Binary, Need};
+use super::solve::{self, Binary, Need};
 use super::ty::Type;
 use super::{error, Checker};
 
@@ -30,7 +30,7 @@ impl Checker {
                 value,
             } => {
                 let declared = self.annotation(annotation)?;
-                let t = self.expr(value)?;
+                let t = self.checked(value, &declared)?;
                 self.expect(
                     value.span,
                     &declared,
@@ -151,7 +151,20 @@ impl Checker {
 
     fn bind_name(&mut self, name: &str, span: Span, ty: &Type) -> Result<()> {
         let var = self.variable(name, span)?;
-        let what = format!("cannot change the type of `{name}`");
-        self.expect(span, &var, ty, &what)
+        self.subst.assign(&var, ty).map_err(|clash| {
+            let detail = solve::mismatch(&self.subst, clash, &var, ty);
+            let mut msg = format!("cannot change the type of `{name}`: {detail}");
+            let (was, now) = (self.subst.zonk(&var), self.subst.zonk(ty));
+            let other = match (&was, &now) {
+                (Type::None, t) | (t, Type::None) => Some(t),
+                _ => None,
+            };
+            if let Some(t) = other {
+                msg.push_str(&format!(
+                    "; to allow None, annotate it, as in `{name}: {t} | None = None`"
+                ));
+            }
+            error(span, msg)
+        })
     }
 }

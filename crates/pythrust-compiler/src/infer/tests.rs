@@ -219,7 +219,14 @@ impl B {
         TypeExpr {
             name: self.id(name),
             args,
+            optional: false,
             span: self.sp(),
+        }
+    }
+    fn opt(&self, name: &str, args: Vec<TypeExpr>) -> TypeExpr {
+        TypeExpr {
+            optional: true,
+            ..self.ty(name, args)
         }
     }
     fn param(&self, name: &str, annotation: Option<TypeExpr>, default: Option<Expr>) -> Param {
@@ -690,7 +697,8 @@ fn falling_off_the_end_returns_none() {
     let msg = err(vec![b.def("f", &["x"], body)]);
     assert_eq!(
         msg,
-        "`f` returns int, but can reach its end, which returns None"
+        "`f` returns int, but can reach its end, which returns None; \
+         annotate `-> int | None` if that is intended"
     );
 }
 
@@ -859,7 +867,10 @@ fn default_aliased_through_another_function_stays_fixed() {
         b.ex(b.method(b.call("get", vec![]), "append", vec![b.i(1)])),
         b.ex(b.method(b.call("get", vec![]), "append", vec![b.s("s")])),
     ]);
-    assert!(msg.starts_with("`append` needs a list"), "{msg}");
+    assert_eq!(
+        msg,
+        "appended value does not match the list: expected int, found str"
+    );
 }
 
 #[test]
@@ -895,7 +906,8 @@ fn break_in_nested_loop_else_exits_the_outer_loop() {
     let msg = err(vec![b.def("f", &[], body)]);
     assert_eq!(
         msg,
-        "`f` returns int, but can reach its end, which returns None"
+        "`f` returns int, but can reach its end, which returns None; \
+         annotate `-> int | None` if that is intended"
     );
 }
 
@@ -930,4 +942,126 @@ fn negative_exponent_on_float_base_or_unknown_sign_is_accepted() {
         b.assign_to(target, b.bin(BinOp::Pow, b.i(2), b.n("n"))),
     ]);
     assert_eq!(types.at(span), Some(&Type::Int));
+}
+
+// Optional (`T | None`).
+
+fn int_or_none() -> Type {
+    Type::Optional(Box::new(Type::Int))
+}
+
+#[test]
+fn optional_variable_holds_none_or_its_type() {
+    let b = B::default();
+    let target = b.t("x");
+    let span = target.span;
+    let types = ok(vec![
+        b.ann("x", b.opt("int", vec![]), b.e(ExprKind::None)),
+        b.assign_to(target, b.i(5)),
+        b.assign("x", b.e(ExprKind::None)),
+    ]);
+    assert_eq!(types.at(span), Some(&int_or_none()));
+}
+
+#[test]
+fn none_first_without_annotation_asks_for_one() {
+    let b = B::default();
+    let msg = err(vec![
+        b.assign("x", b.e(ExprKind::None)),
+        b.assign("x", b.i(5)),
+    ]);
+    assert_eq!(
+        msg,
+        "cannot change the type of `x`: expected None, found int; \
+         to allow None, annotate it, as in `x: int | None = None`"
+    );
+}
+
+#[test]
+fn optional_is_not_its_inner_type() {
+    let b = B::default();
+    let msg = err(vec![
+        b.ann("x", b.opt("int", vec![]), b.i(1)),
+        b.ex(b.bin(BinOp::Add, b.n("x"), b.i(1))),
+    ]);
+    assert_eq!(msg, "unsupported operand types for +: int | None and int");
+    let msg = err(vec![
+        b.ann("x", b.opt("int", vec![]), b.i(1)),
+        b.ann("y", b.ty("int", vec![]), b.n("x")),
+    ]);
+    assert!(msg.ends_with("expected int, found int | None"), "{msg}");
+}
+
+#[test]
+fn optional_compares_with_none_and_its_type() {
+    let b = B::default();
+    ok(vec![
+        b.ann("x", b.opt("int", vec![]), b.i(1)),
+        b.ex(b.cmp(b.n("x"), vec![(CmpOp::Eq, b.e(ExprKind::None))])),
+        b.ex(b.cmp(b.n("x"), vec![(CmpOp::NotEq, b.i(2))])),
+    ]);
+    let msg = err(vec![
+        b.ann("x", b.opt("int", vec![]), b.i(1)),
+        b.ex(b.cmp(b.n("x"), vec![(CmpOp::Lt, b.i(2))])),
+    ]);
+    assert_eq!(msg, "cannot order int | None against int");
+}
+
+#[test]
+fn list_of_optional_takes_mixed_literal_and_appends() {
+    let b = B::default();
+    let annotation = b.ty("list", vec![b.opt("int", vec![])]);
+    let target = b.t("ys");
+    let span = target.span;
+    let types = ok(vec![
+        b.ann("xs", annotation, b.list(vec![b.e(ExprKind::None), b.i(1)])),
+        b.ex(b.method(b.n("xs"), "append", vec![b.e(ExprKind::None)])),
+        b.ex(b.method(b.n("xs"), "append", vec![b.i(2)])),
+        b.assign_to(target, b.n("xs")),
+    ]);
+    assert_eq!(types.at(span), Some(&list_of(int_or_none())));
+}
+
+#[test]
+fn optional_return_may_fall_through() {
+    let b = B::default();
+    let body = vec![b.if_(b.n("x"), vec![b.ret(b.i(1))], vec![])];
+    let p = b.param("x", None, None);
+    let types = ok(vec![b.def_full(
+        "f",
+        vec![p],
+        Some(b.opt("int", vec![])),
+        body,
+    )]);
+    assert_eq!(types.func("f").map(|f| f.ret.clone()), Some(int_or_none()));
+    let body = vec![b.if_(b.n("x"), vec![b.ret(b.i(1))], vec![])];
+    let msg = err(vec![b.def("g", &["x"], body)]);
+    assert!(
+        msg.ends_with("annotate `-> int | None` if that is intended"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn optional_parameter_with_none_default() {
+    let b = B::default();
+    let p = b.param("x", Some(b.opt("int", vec![])), Some(b.e(ExprKind::None)));
+    ok(vec![
+        b.def_full("f", vec![p], None, vec![b.ret(b.n("x"))]),
+        b.ex(b.call("f", vec![])),
+        b.ex(b.call("f", vec![b.i(3)])),
+    ]);
+}
+
+#[test]
+fn none_or_none_annotation_is_none() {
+    let b = B::default();
+    let target = b.id("x");
+    let span = target.span;
+    let types = ok(vec![b.st(StmtKind::AnnAssign {
+        target,
+        annotation: b.opt("None", vec![]),
+        value: b.e(ExprKind::None),
+    })]);
+    assert_eq!(types.at(span), Some(&Type::None));
 }

@@ -196,7 +196,7 @@ impl Checker {
             let Some(default) = &p.default else {
                 continue;
             };
-            let t = self.expr(default)?;
+            let t = self.checked(default, &pt.ty)?;
             let what = format!("default for `{}`", pt.name);
             self.expect(default.span, &pt.ty, &t, &what)?;
             self.defaults.push(pt.ty.clone());
@@ -220,9 +220,12 @@ impl Checker {
             return Ok(());
         }
         let name = &f.name.name;
-        self.subst.unify(&sig.ret, &Type::None).map_err(|_| {
+        self.subst.assign(&sig.ret, &Type::None).map_err(|_| {
             let ret = self.subst.zonk(&sig.ret);
-            let msg = format!("`{name}` returns {ret}, but can reach its end, which returns None");
+            let msg = format!(
+                "`{name}` returns {ret}, but can reach its end, which returns None; \
+                 annotate `-> {ret} | None` if that is intended"
+            );
             error(f.name.span, msg)
         })
     }
@@ -357,9 +360,10 @@ impl Checker {
         Ok(())
     }
 
-    /// Unifies `found` with `expected`; on failure the message names `what`.
+    /// Assigns `found` into `expected` (see `Subst::assign`); on failure
+    /// the message names `what`.
     fn expect(&mut self, span: Span, expected: &Type, found: &Type, what: &str) -> Result<()> {
-        self.subst.unify(expected, found).map_err(|clash| {
+        self.subst.assign(expected, found).map_err(|clash| {
             let detail = solve::mismatch(&self.subst, clash, expected, found);
             error(span, format!("{what}: {detail}"))
         })
