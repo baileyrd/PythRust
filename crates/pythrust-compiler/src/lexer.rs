@@ -75,9 +75,7 @@ impl<'a> Lexer<'a> {
     /// and comment-only lines; otherwise emits `Indent`/`Dedent`.
     fn line_start(&mut self) -> Result<()> {
         let start = self.pos;
-        while self.peek() == Some(b' ') {
-            self.pos += 1;
-        }
+        let width = self.indent_width()?;
         let indent = Span {
             start,
             end: self.pos,
@@ -92,7 +90,30 @@ impl<'a> Lexer<'a> {
             Some(b'\n' | b'\r') => self.skip_blank_line_end(),
             Some(_) => {
                 self.at_line_start = false;
-                self.indent_to(indent)
+                self.indent_to(width, indent)
+            }
+        }
+    }
+
+    /// Counts leading spaces, following `\` line joins as CPython does: the
+    /// first join preceded by spaces fixes the width; otherwise the count
+    /// runs on into the joined line.
+    fn indent_width(&mut self) -> Result<usize> {
+        let mut width = 0;
+        let mut fixed = None;
+        loop {
+            match self.peek() {
+                Some(b' ') => {
+                    width += 1;
+                    self.pos += 1;
+                }
+                Some(b'\\') => {
+                    if width > 0 && fixed.is_none() {
+                        fixed = Some(width);
+                    }
+                    self.continuation()?;
+                }
+                _ => return Ok(fixed.unwrap_or(width)),
             }
         }
     }
@@ -108,8 +129,9 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn indent_to(&mut self, indent: Span) -> Result<()> {
-        let width = indent.end - indent.start;
+    /// Emits layout tokens for a line indented `width` spaces; `indent`
+    /// spans the indentation, `\` joins included.
+    fn indent_to(&mut self, width: usize, indent: Span) -> Result<()> {
         if width > self.top_indent() {
             self.indents.push(width);
             self.push(TokenKind::Indent, indent);
@@ -810,6 +832,49 @@ mod tests {
             line("x = 1 + \\\n        2"),
             vec![name("x"), Assign, Int(1), Plus, Int(2)]
         );
+    }
+
+    #[test]
+    fn join_only_line_keeps_the_joined_lines_indentation() {
+        let src = "if x:\n    pass\n\\\n    y\nz\n";
+        let expected = vec![
+            If,
+            name("x"),
+            Colon,
+            Newline,
+            Indent,
+            Pass,
+            Newline,
+            name("y"),
+            Newline,
+            Dedent,
+            name("z"),
+            Newline,
+            EndMarker,
+        ];
+        assert_eq!(kinds(src), expected);
+        let top = "\\\n    pass\n";
+        assert_eq!(kinds(top), vec![Indent, Pass, Newline, Dedent, EndMarker]);
+    }
+
+    #[test]
+    fn spaces_before_the_first_join_fix_the_indentation() {
+        let stays = "if x:\n    a\n    \\\nb\n";
+        let expected = vec![
+            If,
+            name("x"),
+            Colon,
+            Newline,
+            Indent,
+            name("a"),
+            Newline,
+            name("b"),
+            Newline,
+            Dedent,
+            EndMarker,
+        ];
+        assert_eq!(kinds(stays), expected);
+        assert_err("if x:\n    a\n  \\\n    b\n", 12, 20, "unindent");
     }
 
     #[test]
