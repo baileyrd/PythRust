@@ -1,0 +1,10 @@
+def sign(n):
+    return "neg" if n < 0 else "zero" if n == 0 else "pos"
+
+
+for n in [-2, 0, 2]:
+    print(sign(n))
+
+x = 5
+print("big" if x > 3 else "small")
+print([1] if x else [])

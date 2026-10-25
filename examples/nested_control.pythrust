@@ -1,0 +1,60 @@
+def classify(n):
+    if n < 0:
+        return "negative"
+    elif n == 0:
+        return "zero"
+    elif n < 10:
+        return "small"
+    else:
+        return "large"
+
+
+for n in [-5, 0, 3, 42]:
+    print(n, classify(n))
+
+for i in range(1, 4):
+    for j in range(1, 4):
+        if j == i:
+            continue
+        if i + j == 5:
+            break
+        print(i, j)
+
+found = -1
+for i in range(10):
+    if i * i > 20:
+        found = i
+        break
+else:
+    found = 99
+print(found)
+
+for i in range(3):
+    pass
+else:
+    print("for completed")
+
+n = 0
+while n < 3:
+    n += 1
+else:
+    print("while completed", n)
+
+total = 0
+i = 0
+while True:
+    i += 1
+    if i % 2 == 0:
+        continue
+    if i > 15:
+        break
+    total += i
+print(total)
+
+grid = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+diag = 0
+for r in range(3):
+    for c in range(3):
+        if r == c:
+            diag += grid[r][c]
+print(diag)

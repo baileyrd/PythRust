@@ -1,0 +1,21 @@
+def fib_rec(n):
+    if n < 2:
+        return n
+    return fib_rec(n - 1) + fib_rec(n - 2)
+
+
+def fib_iter(n):
+    # Stops at fib(n): computing fib(n + 1) would overflow i64 at n = 92.
+    if n == 0:
+        return 0
+    a, b = 0, 1
+    for _ in range(n - 1):
+        a, b = b, a + b
+    return b
+
+
+for i in range(15):
+    print(i, fib_rec(i), fib_iter(i))
+
+# fib(92) is the largest Fibonacci number that fits in i64.
+print(fib_iter(92))
