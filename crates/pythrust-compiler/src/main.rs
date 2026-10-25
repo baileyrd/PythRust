@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn execute_surfaces_the_first_stage_error() {
-        let err = execute(Command::Check, "x = 1\n");
+        let err = execute(Command::Check, "x = 1\ny = (2\n");
         assert_eq!(err.map_err(|d| d.kind), Err(DiagKind::Lex));
     }
 

@@ -6,12 +6,13 @@ Notation: EBNF. `A*` zero or more, `A+` one or more, `[A]` optional, `A | B` cho
 
 ## Lexical
 
-- Indentation-sensitive, as in Python. The lexer emits `NEWLINE`, `INDENT`, `DEDENT`. Spaces only; a tab is a lexical error.
+- Indentation-sensitive, as in Python. The lexer emits `NEWLINE`, `INDENT`, `DEDENT`. Spaces only: a tab anywhere outside a string or comment is a lexical error.
+- Line joining: implicit inside `()` and `[]`, explicit with a trailing `\`, as in Python.
 - Comments: `#` to end of line.
 - Tokens: `NAME` (ASCII letters, digits, `_`; not starting with a digit), `INT`, `FLOAT`, `STRING`.
   - `INT`: decimal digits, `_` separators allowed. Ints are `i64`; arithmetic overflow is a runtime error, never a silent wrap. An `INT` literal above `i64::MAX` is a compile error, except `9223372036854775808` directly under unary `-`, which the parser folds to `i64::MIN`. Arbitrary precision may be added later as an opt-in type.
   - `FLOAT`: digits with `.` or exponent.
-  - `STRING`: single or double quoted, with `\` escapes. No f-strings, triple quotes, or byte strings yet.
+  - `STRING`: single or double quoted, with Python's `\` escapes except `\N{...}`. An unknown escape is an error. No string prefixes (`f`, `r`, `b`, `u`) or triple quotes yet; the lexer rejects them by name.
 - Keywords: `def return if elif else while for in break continue pass and or not True False None temper`.
 - Reserved for later (rejected by the lexer so programs stay forward-compatible): `try except finally raise assert class import from as with is lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
 
@@ -123,7 +124,11 @@ Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out
 
 ## Deviations from Python
 
-- Indentation is spaces only; a tab is an error.
+- Spaces only: a tab outside a string or comment is an error, not just in indentation.
+- An unknown string escape (`'\q'`) is an error; CPython keeps the backslash and warns.
+- `\N{name}` escapes are not supported.
+- Strings hold Unicode scalar values: a surrogate escape (`'\uD800'`) is an error.
+- String prefixes and triple quotes are rejected with a dedicated error.
 - `NAME` is ASCII only.
 - Ints are `i64`: overflow is a runtime error, including `i64::MIN // -1` and `-i64::MIN`. An out-of-range literal is a compile error.
 - Lists are homogeneous; tuple subscripts are integer literals.
