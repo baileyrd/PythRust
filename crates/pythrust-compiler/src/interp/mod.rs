@@ -259,7 +259,8 @@ impl<'m> Interp<'m, '_> {
     }
 
     fn unpack(&mut self, targets: &'m [Target], v: Value<'m>, span: Span) -> Result<()> {
-        let values: Vec<Value> = v.iter(span)?.collect();
+        // Take one extra to detect "too many" without draining a long range.
+        let values: Vec<Value> = v.iter(span)?.take(targets.len() + 1).collect();
         if values.len() != targets.len() {
             let (want, got) = (targets.len(), values.len());
             let message = if got > want {

@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use super::rt_err;
-use super::value::{Num, Range, Value};
+use super::value::{str_repr, Num, Range, Value};
 use crate::ast::Ident;
 use crate::diag::Result;
 use crate::span::Span;
@@ -63,7 +63,7 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Resul
         Builtin::Len => len(one(b, pos, span)?, span),
         Builtin::Range => range(pos, span),
         Builtin::Str => Ok(Value::str(
-            &opt(b, pos, span)?.map_or(String::new(), Value::to_str),
+            &opt(b, pos, span)?.map_or(Ok(String::new()), |v| v.to_str(span))?,
         )),
         Builtin::Int => opt(b, pos, span)?.map_or(Ok(Value::Int(0)), |v| to_int(v, span)),
         Builtin::Float => opt(b, pos, span)?.map_or(Ok(Value::Float(0.0)), |v| to_float(v, span)),
@@ -116,7 +116,11 @@ fn print<'m>(args: &Args<'m>, out: &mut dyn Write) -> Result<Value<'m>> {
             *slot = s;
         }
     }
-    let text: Vec<String> = args.positional.iter().map(Value::to_str).collect();
+    let text = args
+        .positional
+        .iter()
+        .map(|v| v.to_str(args.span))
+        .collect::<Result<Vec<String>>>()?;
     let line = text.join(&sep) + &end;
     out.write_all(line.as_bytes())
         .map_err(|e| rt_err(args.span, format!("OSError: cannot write output: {e}")))?;
@@ -235,7 +239,7 @@ fn parse_int<'m>(s: &str, span: Span) -> Result<Value<'m>> {
             span,
             format!(
                 "ValueError: invalid literal for int() with base 10: {}",
-                Value::str(s).repr()
+                str_repr(s)
             ),
         )
     };
@@ -271,7 +275,7 @@ fn to_float<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
                 span,
                 format!(
                     "ValueError: could not convert string to float: {}",
-                    v.repr()
+                    str_repr(s)
                 ),
             )
         })

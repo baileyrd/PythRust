@@ -199,7 +199,12 @@ fn repeat<'m>(l: &Value<'m>, r: &Value<'m>, span: Span) -> Result<Value<'m>> {
         (Some(n), None) => (r, n),
         _ => return Err(unsupported(BinOp::Mul, l, r, span)),
     };
-    let n = usize::try_from(n).unwrap_or(0);
+    // An empty sequence repeats to empty at once, however large `n` is.
+    let n = if seq.truthy() {
+        usize::try_from(n).unwrap_or(0)
+    } else {
+        0
+    };
     match seq {
         Value::Str(s) => {
             let mut out = String::new();

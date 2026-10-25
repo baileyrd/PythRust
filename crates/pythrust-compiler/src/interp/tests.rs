@@ -1060,3 +1060,84 @@ fn builtins_can_be_shadowed() {
     let out = ok(vec![assign("len", int(3)), print(vec![name("len")])]);
     assert_eq!(out, "3\n");
 }
+
+// ---- review fixes: bounds and cycles ------------------------------------
+
+#[test]
+fn unpacking_a_huge_range_stops_early() {
+    let two = || ttuple(vec![tname("a"), tname("b")]);
+    let huge = call("range", vec![int(i64::MAX)]);
+    let msg = fails(vec![assign_to(two(), huge)]);
+    assert_eq!(msg, "ValueError: too many values to unpack (expected 2)");
+    let nested = ttuple(vec![two(), tname("c")]);
+    let value = list(vec![call("range", vec![int(i64::MAX)]), int(1)]);
+    assert_eq!(fails(vec![assign_to(nested, value)]), msg);
+    let exact = assign_to(two(), call("range", vec![int(2)]));
+    assert_eq!(ok(vec![exact, print(vec![name("a"), name("b")])]), "0 1\n");
+}
+
+/// `xs = []; xs.append(xs)`
+fn self_list(n: &str) -> Vec<Stmt> {
+    vec![assign(n, list(vec![])), append(n, name(n))]
+}
+
+#[test]
+fn cyclic_lists_render_as_python_does() {
+    let mut program = self_list("xs");
+    program.push(print(vec![name("xs"), tuple(vec![name("xs")])]));
+    program.extend([
+        assign("a", list(vec![])),
+        assign("b", list(vec![name("a")])),
+        append("a", name("b")),
+        print(vec![name("a"), call("str", vec![name("b")])]),
+    ]);
+    assert_eq!(ok(program), "[[...]] ([[...]],)\n[[[...]]] [[[...]]]\n");
+}
+
+#[test]
+fn cyclic_lists_compare_by_identity_first() {
+    let mut program = self_list("xs");
+    program.push(print(vec![
+        cmp(name("xs"), vec![(CmpOp::Eq, name("xs"))]),
+        cmp(name("xs"), vec![(CmpOp::In, name("xs"))]),
+        cmp(name("xs"), vec![(CmpOp::Lt, name("xs"))]),
+    ]));
+    assert_eq!(ok(program), "True True False\n");
+    let mut distinct = self_list("p");
+    distinct.extend(self_list("q"));
+    distinct.push(print(vec![cmp(name("p"), vec![(CmpOp::Eq, name("q"))])]));
+    assert_eq!(
+        fails(distinct),
+        "RecursionError: maximum recursion depth exceeded in comparison"
+    );
+}
+
+#[test]
+fn deep_nesting_is_a_recursion_error() {
+    // x = []; i = 0; while i < 20000: x = [x]; i += 1
+    let mut program = vec![
+        assign("x", list(vec![])),
+        assign("y", list(vec![])),
+        assign("i", int(0)),
+        while_(
+            cmp(name("i"), vec![(CmpOp::Lt, int(20_000))]),
+            vec![
+                assign("x", list(vec![name("x")])),
+                assign("y", list(vec![name("y")])),
+                aug(tname("i"), Add, int(1)),
+            ],
+            vec![],
+        ),
+    ];
+    let compare = print(vec![cmp(name("x"), vec![(CmpOp::Eq, name("y"))])]);
+    assert!(fails([program.clone(), vec![compare]].concat()).contains("in comparison"));
+    program.push(print(vec![name("x")]));
+    assert!(fails(program).contains("while getting the repr of an object"));
+}
+
+#[test]
+fn repeating_empty_sequences_is_immediate() {
+    assert_eq!(show(tuple(vec![bin(Mul, st(""), int(i64::MAX))])), "('',)");
+    assert_eq!(show(bin(Mul, list(vec![]), int(i64::MAX))), "[]");
+    assert_eq!(show(bin(Mul, int(i64::MAX), tuple(vec![]))), "()");
+}

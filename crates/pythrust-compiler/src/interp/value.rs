@@ -114,31 +114,19 @@ impl<'m> Value<'m> {
     }
 
     /// Python's `str(x)`.
-    pub fn to_str(&self) -> String {
+    pub fn to_str(&self, span: Span) -> Result<String> {
         match self {
-            Value::Str(s) => s.to_string(),
-            other => other.repr(),
+            Value::Str(s) => Ok(s.to_string()),
+            other => other.repr(span),
         }
     }
 
-    /// Python's `repr(x)`.
-    pub fn repr(&self) -> String {
-        match self {
-            Value::None => "None".to_string(),
-            Value::Bool(true) => "True".to_string(),
-            Value::Bool(false) => "False".to_string(),
-            Value::Int(i) => i.to_string(),
-            Value::Float(f) => float_repr(*f),
-            Value::Str(s) => str_repr(s),
-            Value::List(l) => format!("[{}]", join_repr(&l.borrow())),
-            Value::Tuple(t) if t.len() == 1 => format!("({},)", t[0].repr()),
-            Value::Tuple(t) => format!("({})", join_repr(t)),
-            Value::Range(r) if r.step == 1 => format!("range({}, {})", r.start, r.stop),
-            Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
-            Value::Func(f) => format!("<function {}>", f.def.name.name),
-            Value::Builtin(b) => format!("<built-in function {}>", b.name()),
-            Value::Append(_) => "<built-in method append of list object>".to_string(),
-        }
+    /// Python's `repr(x)`. A list that contains itself renders as `[...]`,
+    /// as in Python; nesting deeper than `MAX_NESTING` is an error.
+    pub fn repr(&self, span: Span) -> Result<String> {
+        let mut out = String::new();
+        write_repr(self, &mut Vec::new(), &mut out, span)?;
+        Ok(out)
     }
 
     /// Iterates a value as `for` and unpacking do. A list is read by index
@@ -232,32 +220,58 @@ impl<'m> Iterator for Iter<'m> {
     }
 }
 
+/// How deep containers may nest inside `repr` or a comparison before it
+/// is a `RecursionError`. Bounds the Rust stack those recursions use.
+const MAX_NESTING: usize = 10_000;
+
 /// Python `==`. Numbers compare across `bool`, `int` and `float`.
-pub(super) fn eq<'m>(a: &Value<'m>, b: &Value<'m>) -> bool {
+pub(super) fn eq<'m>(a: &Value<'m>, b: &Value<'m>, span: Span) -> Result<bool> {
+    eq_at(a, b, 0, span)
+}
+
+/// `==` at container depth `depth`. A container is equal to itself
+/// without looking inside, as in Python, so `xs == xs` holds for a list
+/// that contains itself.
+fn eq_at<'m>(a: &Value<'m>, b: &Value<'m>, depth: usize, span: Span) -> Result<bool> {
     if let (Some(x), Some(y)) = (a.num(), b.num()) {
-        return num_cmp(x, y) == Some(Ordering::Equal);
+        return Ok(num_cmp(x, y) == Some(Ordering::Equal));
     }
-    match (a, b) {
+    Ok(match (a, b) {
         (Value::None, Value::None) => true,
         (Value::Str(x), Value::Str(y)) => x == y,
-        (Value::List(x), Value::List(y)) => seq_eq(&x.borrow(), &y.borrow()),
-        (Value::Tuple(x), Value::Tuple(y)) => seq_eq(x, y),
+        (Value::List(x), Value::List(y)) if Rc::ptr_eq(x, y) => true,
+        (Value::List(x), Value::List(y)) => {
+            seq_eq(&x.borrow(), &y.borrow(), deeper(depth, span)?, span)?
+        }
+        (Value::Tuple(x), Value::Tuple(y)) if Rc::ptr_eq(x, y) => true,
+        (Value::Tuple(x), Value::Tuple(y)) => seq_eq(x, y, deeper(depth, span)?, span)?,
         (Value::Range(x), Value::Range(y)) => x.same_sequence(y),
         (Value::Func(x), Value::Func(y)) => Rc::ptr_eq(x, y),
         (Value::Builtin(x), Value::Builtin(y)) => x == y,
         (Value::Append(x), Value::Append(y)) => Rc::ptr_eq(x, y),
         _ => false,
+    })
+}
+
+/// One container level deeper into a comparison.
+fn deeper(depth: usize, span: Span) -> Result<usize> {
+    if depth >= MAX_NESTING {
+        return Err(rt_err(
+            span,
+            "RecursionError: maximum recursion depth exceeded in comparison".to_string(),
+        ));
     }
+    Ok(depth + 1)
 }
 
 /// Evaluates one link of a comparison chain.
 pub(super) fn compare<'m>(op: CmpOp, a: &Value<'m>, b: &Value<'m>, span: Span) -> Result<bool> {
     let ord = match op {
-        CmpOp::Eq => return Ok(eq(a, b)),
-        CmpOp::NotEq => return Ok(!eq(a, b)),
+        CmpOp::Eq => return eq(a, b, span),
+        CmpOp::NotEq => return eq(a, b, span).map(|same| !same),
         CmpOp::In => return contains(b, a, span),
         CmpOp::NotIn => return contains(b, a, span).map(|found| !found),
-        CmpOp::Lt | CmpOp::LtEq | CmpOp::Gt | CmpOp::GtEq => order(op, a, b, span)?,
+        CmpOp::Lt | CmpOp::LtEq | CmpOp::Gt | CmpOp::GtEq => order(op, a, b, 0, span)?,
     };
     Ok(match op {
         CmpOp::Lt => ord == Some(Ordering::Less),
@@ -268,14 +282,22 @@ pub(super) fn compare<'m>(op: CmpOp, a: &Value<'m>, b: &Value<'m>, span: Span) -
 }
 
 /// Orders two values for `op`. `Ok(None)` means unordered (a NaN).
-fn order<'m>(op: CmpOp, a: &Value<'m>, b: &Value<'m>, span: Span) -> Result<Option<Ordering>> {
+fn order<'m>(
+    op: CmpOp,
+    a: &Value<'m>,
+    b: &Value<'m>,
+    depth: usize,
+    span: Span,
+) -> Result<Option<Ordering>> {
     if let (Some(x), Some(y)) = (a.num(), b.num()) {
         return Ok(num_cmp(x, y));
     }
     match (a, b) {
         (Value::Str(x), Value::Str(y)) => Ok(Some(x.cmp(y))),
-        (Value::List(x), Value::List(y)) => seq_order(op, &x.borrow(), &y.borrow(), span),
-        (Value::Tuple(x), Value::Tuple(y)) => seq_order(op, x, y, span),
+        (Value::List(x), Value::List(y)) => {
+            seq_order(op, &x.borrow(), &y.borrow(), deeper(depth, span)?, span)
+        }
+        (Value::Tuple(x), Value::Tuple(y)) => seq_order(op, x, y, deeper(depth, span)?, span),
         _ => Err(rt_err(
             span,
             format!(
@@ -293,16 +315,27 @@ fn seq_order<'m>(
     op: CmpOp,
     a: &[Value<'m>],
     b: &[Value<'m>],
+    depth: usize,
     span: Span,
 ) -> Result<Option<Ordering>> {
-    match a.iter().zip(b).find(|(x, y)| !eq(x, y)) {
-        Some((x, y)) => order(op, x, y, span),
-        None => Ok(Some(a.len().cmp(&b.len()))),
+    for (x, y) in a.iter().zip(b) {
+        if !eq_at(x, y, depth, span)? {
+            return order(op, x, y, depth, span);
+        }
     }
+    Ok(Some(a.len().cmp(&b.len())))
 }
 
-fn seq_eq<'m>(a: &[Value<'m>], b: &[Value<'m>]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| eq(x, y))
+fn seq_eq<'m>(a: &[Value<'m>], b: &[Value<'m>], depth: usize, span: Span) -> Result<bool> {
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    for (x, y) in a.iter().zip(b) {
+        if !eq_at(x, y, depth, span)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Compares numbers. Mixed `int`/`float` compares as `float`, which is
@@ -326,8 +359,8 @@ impl Num {
 /// Python `item in container`.
 fn contains<'m>(container: &Value<'m>, item: &Value<'m>, span: Span) -> Result<bool> {
     match (container, item) {
-        (Value::List(l), _) => Ok(l.borrow().iter().any(|v| eq(v, item))),
-        (Value::Tuple(t), _) => Ok(t.iter().any(|v| eq(v, item))),
+        (Value::List(l), _) => any_eq(&l.borrow(), item, span),
+        (Value::Tuple(t), _) => any_eq(t, item, span),
         (Value::Str(s), Value::Str(sub)) => Ok(s.contains(&**sub)),
         (Value::Str(_), _) => Err(rt_err(
             span,
@@ -345,6 +378,15 @@ fn contains<'m>(container: &Value<'m>, item: &Value<'m>, span: Span) -> Result<b
             ),
         )),
     }
+}
+
+fn any_eq<'m>(items: &[Value<'m>], item: &Value<'m>, span: Span) -> Result<bool> {
+    for v in items {
+        if eq(v, item, span)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn range_contains(r: &Range, item: &Value) -> bool {
@@ -371,13 +413,76 @@ fn cmp_symbol(op: CmpOp) -> &'static str {
     }
 }
 
-fn join_repr(items: &[Value]) -> String {
-    items.iter().map(Value::repr).collect::<Vec<_>>().join(", ")
+/// Writes `v`'s repr. `active` holds the containers being rendered,
+/// outermost first: meeting a list again means a cycle.
+fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Span) -> Result<()> {
+    let text = match v {
+        Value::List(l) => {
+            let id = Rc::as_ptr(l).cast::<()>();
+            if active.contains(&id) {
+                out.push_str("[...]");
+                return Ok(());
+            }
+            return write_items(&l.borrow(), id, ("[", "]"), active, out, span);
+        }
+        Value::Tuple(t) => {
+            let close = if t.len() == 1 { ",)" } else { ")" };
+            return write_items(
+                t,
+                Rc::as_ptr(t).cast::<()>(),
+                ("(", close),
+                active,
+                out,
+                span,
+            );
+        }
+        Value::None => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => float_repr(*f),
+        Value::Str(s) => str_repr(s),
+        Value::Range(r) if r.step == 1 => format!("range({}, {})", r.start, r.stop),
+        Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
+        Value::Func(f) => format!("<function {}>", f.def.name.name),
+        Value::Builtin(b) => format!("<built-in function {}>", b.name()),
+        Value::Append(_) => "<built-in method append of list object>".to_string(),
+    };
+    out.push_str(&text);
+    Ok(())
+}
+
+fn write_items(
+    items: &[Value],
+    id: *const (),
+    (open, close): (&str, &str),
+    active: &mut Vec<*const ()>,
+    out: &mut String,
+    span: Span,
+) -> Result<()> {
+    if active.len() >= MAX_NESTING {
+        return Err(rt_err(
+            span,
+            "RecursionError: maximum recursion depth exceeded while getting the repr of an object"
+                .to_string(),
+        ));
+    }
+    active.push(id);
+    out.push_str(open);
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_repr(item, active, out, span)?;
+    }
+    out.push_str(close);
+    active.pop();
+    Ok(())
 }
 
 /// Python's `repr` of a string: single quotes unless the text holds a
 /// single quote and no double quote.
-fn str_repr(s: &str) -> String {
+pub(super) fn str_repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') {
         '"'
     } else {
