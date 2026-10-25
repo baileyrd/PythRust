@@ -16,9 +16,11 @@ pub struct Token {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Literals and names. Values are decoded: `1_000` is `Int(1000)`,
-    // string escapes are resolved.
+    // string escapes are resolved. `Int` is `u64` so the lexer can carry
+    // `9223372036854775808`; the parser folds it under unary `-` to
+    // `i64::MIN` and rejects any other literal above `i64::MAX`.
     Name(String),
-    Int(i64),
+    Int(u64),
     Float(f64),
     Str(String),
 
@@ -67,6 +69,7 @@ pub enum TokenKind {
     SlashEq,
     DoubleSlashEq,
     PercentEq,
+    DoubleStarEq,
 
     // Delimiters.
     LParen,

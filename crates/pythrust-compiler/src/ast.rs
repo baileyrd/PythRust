@@ -38,13 +38,13 @@ pub enum StmtKind {
         target: Target,
         value: Expr,
     },
-    /// `NAME ':' type ['=' expr]`
+    /// `NAME ':' type '=' expr`
     AnnAssign {
         target: Ident,
         annotation: TypeExpr,
-        value: Option<Expr>,
+        value: Expr,
     },
-    /// `target op= expr`. `op` is never `BinOp::Pow`; the grammar has no `**=`.
+    /// `target op= expr`. `target` is never a `TargetKind::Tuple`.
     AugAssign {
         target: Target,
         op: BinOp,
@@ -113,7 +113,8 @@ pub struct Param {
     pub span: Span,
 }
 
-/// `type = NAME ['[' type (',' type)* ']']`. `args` empty means no brackets.
+/// `type = (NAME | 'None') ['[' type (',' type)* ']']`. `None` is spelled
+/// `name: "None"`. `args` empty means no brackets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeExpr {
     pub name: Ident,
@@ -159,7 +160,7 @@ pub enum ExprKind {
     /// `expr_list` with a comma, `()` or a parenthesized tuple.
     Tuple(Vec<Expr>),
     List(Vec<Expr>),
-    /// `'-' factor` or `'not' not_expr`.
+    /// `'-' factor`, `'+' factor` or `'not' not_expr`.
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -212,6 +213,7 @@ pub struct Arg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
     Neg,
+    Pos,
     Not,
 }
 
