@@ -10,5 +10,6 @@ Python's surface, Rust's guarantees. Code starts loose (inferred, Python-feeling
 - [Roadmap](docs/roadmap.md)
 - [Loose syntax grammar](docs/grammar.md)
 - [Claude Code handoff](docs/handoff.md)
+- Research proposals (undecided): [backend](docs/research/backend.md), [ownership](docs/research/ownership.md), [pause and shared syntax](docs/research/concurrency-syntax.md), [IR](docs/research/ir.md)
 
 Layout: `crates/pythrust-compiler` (compiler, written in Rust), `docs/` (design and roadmap).
