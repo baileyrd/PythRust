@@ -127,6 +127,11 @@ Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out
 - `NAME` is ASCII only.
 - Ints are `i64`: overflow is a runtime error, including `i64::MIN // -1` and `-i64::MIN`. An out-of-range literal is a compile error.
 - Lists are homogeneous; tuple subscripts are integer literals.
+- A variable has one type in its scope. `int` never widens to `float` on assignment: `total = 0` then `total += 0.5` is a type error (write `0.0`). Mixed arithmetic in an expression still promotes, as in Python.
+- `int ** int` is `int`; a negative exponent is a runtime error (Python returns a `float`).
+- `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
+- Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.
+- A function that returns a value on some path must not fall off its end (that would return `None`; there are no unions yet).
 
 ## Deliberate omissions (phase 2)
 
