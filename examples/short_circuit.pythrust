@@ -1,0 +1,21 @@
+def t(label):
+    print("t", label)
+    return True
+
+
+def f(label):
+    print("f", label)
+    return False
+
+
+print(0 or 5)
+print(3 or 5)
+print(0 and 5)
+print(3 and 5)
+print("" or "default")
+print("x" and "")
+print([] or [1])
+print(f(1) and t(2))
+print(t(3) or f(4))
+print(f(5) or t(6) and f(7))
+print(not 0, not 1, not "", not [1])

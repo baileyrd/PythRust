@@ -6,12 +6,13 @@ Notation: EBNF. `A*` zero or more, `A+` one or more, `[A]` optional, `A | B` cho
 
 ## Lexical
 
-- Indentation-sensitive, as in Python. The lexer emits `NEWLINE`, `INDENT`, `DEDENT`. Spaces only; a tab is a lexical error.
+- Indentation-sensitive, as in Python. The lexer emits `NEWLINE`, `INDENT`, `DEDENT`. Spaces only: a tab anywhere outside a string or comment is a lexical error.
+- Line joining: implicit inside `()` and `[]`, explicit with a trailing `\`, as in Python.
 - Comments: `#` to end of line.
 - Tokens: `NAME` (ASCII letters, digits, `_`; not starting with a digit), `INT`, `FLOAT`, `STRING`.
   - `INT`: decimal digits, `_` separators allowed. Ints are `i64`; arithmetic overflow is a runtime error, never a silent wrap. An `INT` literal above `i64::MAX` is a compile error, except `9223372036854775808` directly under unary `-`, which the parser folds to `i64::MIN`. Arbitrary precision may be added later as an opt-in type.
   - `FLOAT`: digits with `.` or exponent.
-  - `STRING`: single or double quoted, with `\` escapes. No f-strings, triple quotes, or byte strings yet.
+  - `STRING`: single or double quoted, with Python's `\` escapes except `\N{...}`. An unknown escape is an error. No string prefixes (`f`, `r`, `b`, `u`) or triple quotes yet; the lexer rejects them by name.
 - Keywords: `def return if elif else while for in break continue pass and or not True False None temper`.
 - Reserved for later (rejected by the lexer so programs stay forward-compatible): `try except finally raise assert class import from as with is lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
 
@@ -123,7 +124,11 @@ Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out
 
 ## Deviations from Python
 
-- Indentation is spaces only; a tab is an error.
+- Spaces only: a tab outside a string or comment is an error, not just in indentation.
+- An unknown string escape (`'\q'`) is an error; CPython keeps the backslash and warns.
+- `\N{name}` escapes are not supported.
+- Strings hold Unicode scalar values: a surrogate escape (`'\uD800'`) is an error.
+- String prefixes and triple quotes are rejected with a dedicated error.
 - `NAME` is ASCII only.
 - Ints are `i64`: overflow is a runtime error, including `i64::MIN // -1` and `-i64::MIN`. An out-of-range literal is a compile error.
 - Lists are homogeneous; tuple subscripts are integer literals.
@@ -132,6 +137,8 @@ Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out
 - `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
 - Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.
 - A function that returns a value on some path must not fall off its end (that would return `None`; there are no unions yet).
+- A negative `float` raised to a fractional power is a runtime error; Python returns a `complex`, which the subset lacks.
+- Mixed `int`/`float` arithmetic and comparison, and `int / int`, go through `f64`, so results can differ from Python's exact math for magnitudes above 2**53.
 
 ## Deliberate omissions (phase 2)
 
@@ -143,9 +150,11 @@ Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts 
 - **Tempering marker:** `temper def f(...)`, a keyword prefix.
 - **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`.
 
+- **Pause marker** (lands with concurrency): `pause <expr>`, a loosely binding prefix covering the whole expression to its right, like Swift's `await`. Required in tempered code at every pause point; it must cover at least one. See [research/concurrency-syntax.md](research/concurrency-syntax.md).
+- **Shared lock** (lands with concurrency): a builtin type `shared[T]`, built with `shared(v)` and accessed through `with x as n:`, where `n` writes through. Not a keyword.
+
+`pause`, `shared` and `with` stay reserved until those features land, so adopting them breaks no programs. `temper` is already live in `func_def`.
+
 ## Open syntax questions (M3 blockers)
 
-1. **Pause marker.** The explicit interleave point required in tempered mode. Candidate: a keyword prefix on the call (`pause fetch(x)`).
-2. **Shared-lock keyword.** One short keyword for the built-in locked wrapper. Candidate: `shared`.
-
-The keywords `pause` and `shared` are reserved so adopting them later breaks no programs. `temper` is already live in `func_def`.
+1. **Source file extension.** Placeholder: `.pythrust`.

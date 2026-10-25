@@ -1,0 +1,6 @@
+# expect-exit: 1
+# Runtime errors stop the program with status 1, as an uncaught CPython exception does.
+xs = [1, 2, 3]
+print(xs[2])
+print(xs[3])
+print("unreachable")

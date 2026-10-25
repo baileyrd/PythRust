@@ -1,0 +1,15 @@
+
+a b c
+None True False
+[1, 2, 3] [] ['x', 'y']
+[[1, 2], [3]]
+12 1.5 True None
+42 -7 7
+1.0 3.5
+False True False True False True
+3 4 2
+10
+7
+4
+1
+[25, 36, 49]

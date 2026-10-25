@@ -1,0 +1,22 @@
+# Conformance corpus
+
+Each `<name>.pythrust` program has a golden `<name>.out`: the exact stdout it must print. The phase-2 subset is Python-compatible, so CPython is the oracle. The harness is `crates/pythrust-compiler/tests/conformance.rs`; it compares stdout and exit status, never stderr.
+
+```sh
+cargo test --test conformance                 # goldens agree with CPython
+cargo test --test conformance -- --ignored    # goldens agree with `pythrust run`
+PYTHRUST_BLESS=1 cargo test --test conformance corpus_matches_cpython   # regenerate goldens
+```
+
+`PYTHON` picks the oracle (default `python3`, baseline 3.12). `PYTHRUST_BIN` picks the binary (default `target/debug/pythrust`).
+
+Directives go in the leading comment block, which Python ignores:
+
+- `# expect-exit: N`: expected exit status (default 0). A runtime error exits 1, as an uncaught CPython exception does.
+- `# deviation: why`: a deviation listed in `docs/grammar.md`. The golden is written by hand and holds Pythrust's output. Blessing skips it, and the harness fails if CPython stops differing.
+
+Blessing creates missing goldens, but it refuses to overwrite one when CPython's exit status differs from `expect-exit`. Each program is killed after 10 seconds, so a hang fails the test instead of stalling CI.
+
+Adding a program: write `<name>.pythrust` in the phase-2 subset, bless, read the `.out` before committing. Keep programs well-typed (homogeneous lists, one type per variable) so `pythrust check` can run over the corpus too.
+
+The `.pythrust` extension is a placeholder until the file extension is decided.

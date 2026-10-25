@@ -1,0 +1,11 @@
+True True False
+True True
+eval a
+eval b
+eval c
+True
+eval d
+eval e
+False
+True
+True False True
