@@ -80,6 +80,8 @@ pub enum TokenKind {
     Colon,
     Dot,
     Arrow,
+    /// `|`, only in `T | None` annotations.
+    Pipe,
 
     // Layout.
     Newline,

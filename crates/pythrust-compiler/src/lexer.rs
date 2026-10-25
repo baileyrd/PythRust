@@ -620,6 +620,7 @@ fn operator(rest: &[u8]) -> Option<(TokenKind, usize)> {
         [b',', ..] => (Comma, 1),
         [b':', ..] => (Colon, 1),
         [b'.', ..] => (Dot, 1),
+        [b'|', ..] => (Pipe, 1),
         _ => return Option::None,
     };
     Some(op)
@@ -1130,6 +1131,14 @@ mod tests {
     }
 
     // ---- Operators ----
+
+    #[test]
+    fn pipe_for_optional_annotations() {
+        assert_eq!(
+            line("x: int | None"),
+            vec![name("x"), Colon, name("int"), Pipe, TokenKind::None]
+        );
+    }
 
     #[test]
     fn operators_longest_match() {
