@@ -1,0 +1,4 @@
+# deviation: a non-str left operand of `in` on a str is a compile error, so nothing runs; CPython prints, then raises TypeError.
+# expect-exit: 1
+print("before")
+print(1 in "abc")
