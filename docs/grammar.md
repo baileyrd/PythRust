@@ -109,7 +109,7 @@ atom        = NAME | INT | FLOAT | STRING
 - `a, b = b, a` evaluates the right side fully before assigning.
 - Lists are homogeneous: every element has one type.
 - A tuple subscript must be an integer literal, optionally negated (`t[-1]`), so the element type is known statically.
-- Subscripts apply to lists, strings, and tuples. A negative index counts from the end: `xs[-1]` is the last element. An index out of range in either direction is a runtime error; on a tuple, whose length and index are both static, it is a compile error. Slicing is not in phase 2.
+- Subscripts apply to lists, strings, and tuples. A negative index counts from the end: `xs[-1]` is the last element. An index out of range in either direction is a runtime error, for tuples too. Slicing is not in phase 2.
 - Indexing a string and iterating over it (`for ch in s`) yield a length-1 `str`, counted in code points, as in CPython. Under UTF-8, indexing a non-ASCII string is O(n); the phase-3 backend deals with that.
 - `in` with a `str` on the right is a substring test. The left operand must be a `str`; anything else is a compile error.
 - List `==` and `!=` compare element-wise. Both lists must have the same element type, otherwise it is a compile error. Scalar `int == float` stays as in Python.

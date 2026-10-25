@@ -1,0 +1,6 @@
+# expect-exit: 1
+# Out of range is a runtime error, so output before it still appears.
+p = (1, "one")
+print(p[1])
+print(p[2])
+print("unreachable")
