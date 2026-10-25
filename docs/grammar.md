@@ -9,11 +9,11 @@ Notation: EBNF. `A*` zero or more, `A+` one or more, `[A]` optional, `A | B` cho
 - Indentation-sensitive, as in Python. The lexer emits `NEWLINE`, `INDENT`, `DEDENT`. Spaces only; a tab is a lexical error.
 - Comments: `#` to end of line.
 - Tokens: `NAME`, `INT`, `FLOAT`, `STRING`.
-  - `INT`: decimal digits, `_` separators allowed. Arbitrary-size ints are a later question; phase 2 uses i64.
+  - `INT`: decimal digits, `_` separators allowed. Ints are `i64`; arithmetic overflow is a runtime error, never a silent wrap. Arbitrary precision may be added later as an opt-in type.
   - `FLOAT`: digits with `.` or exponent.
   - `STRING`: single or double quoted, with `\` escapes. No f-strings, triple quotes, or byte strings yet.
-- Keywords: `def return if elif else while for in break continue pass and or not True False None`.
-- Reserved for later (rejected by the lexer so programs stay forward-compatible): `try except raise class import from as with match lambda async await global nonlocal del temper pause shared`.
+- Keywords: `def return if elif else while for in break continue pass and or not True False None temper`.
+- Reserved for later (rejected by the lexer so programs stay forward-compatible): `try except raise class import from as with match lambda async await global nonlocal del pause shared`.
 
 ## Program
 
@@ -37,7 +37,7 @@ target      = NAME | postfix ;      # postfix must end in a subscript_op (checke
 
 compound_stmt = func_def | if_stmt | while_stmt | for_stmt ;
 
-func_def    = 'def' NAME '(' [params] ')' ['->' type] ':' block ;
+func_def    = ['temper'] 'def' NAME '(' [params] ')' ['->' type] ':' block ;
 params      = param (',' param)* [','] ;
 param       = NAME [':' type] ['=' expr] ;
 
@@ -47,6 +47,7 @@ for_stmt    = 'for' NAME 'in' expr ':' block ['else' ':' block] ;
 ```
 
 Notes:
+- `temper def f(...)` marks a function tempered (see design.md). The keyword is a prefix, not a decorator, so the compiler sees it without resolving names.
 - Annotations are optional everywhere. Loose code infers them; they are hints, never required.
 - Single-line bodies (`if x: y`) are not in phase 2. One way to write a block.
 - Attribute assignment (`a.b = c`) waits for classes.
@@ -96,14 +97,15 @@ Semantic rules (not grammar):
 
 Tuples, dicts, sets, slicing, comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators. Each is additive and none changes the grammar above.
 
+## Decided
+
+- **Integers:** `i64` with checked overflow (runtime error, no silent wrap).
+- **Tempering marker:** `temper def f(...)`, a keyword prefix.
+
 ## Open syntax questions (phase 1 blockers)
 
-These are the three the spec still owes, plus two surfaced while drafting:
+1. **Pause marker.** The explicit interleave point required in tempered mode. Candidate: a keyword prefix on the call (`pause fetch(x)`).
+2. **Shared-lock keyword.** One short keyword for the built-in locked wrapper. Candidate: `shared`.
+3. **Tuples.** Needed almost immediately (multiple returns, `for k, v in ...`). Likely the first addition after the subset.
 
-1. **Tempering annotation.** How a function is marked tempered. Candidates: a decorator-style prefix (`@temper`), a keyword (`temper def f(...)`), or a module-level pragma. Prefer whichever Python tooling already ignores gracefully.
-2. **Pause marker.** The explicit interleave point required in tempered mode. Candidate: a keyword prefix on the call (`pause fetch(x)`).
-3. **Shared-lock keyword.** One short keyword for the built-in locked wrapper. Candidate: `shared`.
-4. **Tuples.** Needed almost immediately (multiple returns, `for k, v in ...`). Likely the first addition after the subset.
-5. **Integer width.** Fixed i64 versus Python-style arbitrary precision. Affects speed claims and loose-mode semantics. Needs an explicit decision.
-
-The keywords `temper`, `pause`, and `shared` are already reserved above so adopting them later breaks no programs.
+The keywords `pause` and `shared` are reserved so adopting them later breaks no programs. `temper` is already live in `func_def`.
