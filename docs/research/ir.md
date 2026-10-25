@@ -1,6 +1,6 @@
 # Research G.4: IR design
 
-**Status: proposal.** Nothing here is decided. Type sketches are illustrative, not code to land.
+**Status: decided 2026-10-25** (Nano accepted the recommendations). Type sketches are illustrative, not code to land.
 
 **Recommendation:** one mid-level IR between the typed AST and the backend: a control-flow graph of basic blocks over typed, monomorphic locals, MIR-style, not in SSA form. Build it in M4. It is the single place for desugaring, checked arithmetic, refcount insertion, and later borrow checking and exception lowering.
 
@@ -66,7 +66,7 @@ Strings, lists, `print`, `len`, `str(...)`, refcounting, and `Fail` reporting li
 - Lowering looks up each expression's type by `Span` (the agreed keying). Two type-bearing nodes must never share a span. A parenthesized `(x)` should return the inner node, not wrap it. Worth a test in thread C.
 - Lowering needs, per function, the inferred signature and, per generic function, the set of instantiations. The typed view should expose both.
 
-## Questions for Nano
+## Decided
 
-1. Build the CFG IR in M4 (recommended), or go AST-to-backend for M4 and add the IR in M5?
-2. Accept a second crate, `pythrust-rt`, with a small `unsafe` FFI surface for the runtime?
+1. The CFG IR is built in M4.
+2. The runtime is a second crate, `pythrust-rt`, with a small, audited `unsafe` FFI surface. The compiler crate keeps `forbid(unsafe_code)`.

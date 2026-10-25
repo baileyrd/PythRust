@@ -1,6 +1,6 @@
 # Research G.1: LLVM vs Cranelift (phase 3)
 
-**Status: proposal.** Nothing here is decided. The backend stays an open decision until Nano picks.
+**Status: decided 2026-10-25.** Nano accepted the recommendation below.
 
 **Recommendation: Cranelift for M4**, behind a backend-neutral IR ([ir.md](ir.md)), with LLVM kept as a possible later release backend if M4 benchmarks show code quality is the bottleneck.
 
@@ -36,11 +36,11 @@ M4 compiles the phase-2 subset to a native binary and benchmarks it against CPyt
 - We inline small functions ourselves in the IR if benchmarks need it.
 - Partial debug info until it matters.
 
-## What Nano is deciding
+## Decided
 
-- The backend for M4: Cranelift (recommended) or LLVM.
-- Accepting the project's first dependencies: the four `cranelift-*` crates (plus their transitive `target-lexicon` and friends). Justification goes in the M4 PR.
-- AOT only for M4 (object file plus system `cc` link), which keeps `unsafe` out of the compiler crate. See the runtime question in [ir.md](ir.md#runtime).
+- The backend for M4 is Cranelift.
+- The four `cranelift-*` crates (plus their transitive `target-lexicon` and friends) are accepted as the project's first dependencies. The M4 PR restates the justification.
+- AOT only for M4 (object file plus system `cc` link). This keeps `unsafe` out of the compiler crate. See the runtime question in [ir.md](ir.md#runtime).
 
 ## Spike before committing (1 to 2 days)
 

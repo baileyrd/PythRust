@@ -1,6 +1,6 @@
 # Research G.3: Pause marker and shared-lock syntax
 
-**Status: proposal.** Both are open M3 questions. `pause` and `shared` stay reserved until Nano decides.
+**Status: decided 2026-10-25.** Nano accepted both recommendations (B and B). `pause`, `shared` and `with` stay reserved until the features land, so phase-2 programs cannot use them as names.
 
 ## Pause marker
 
@@ -39,11 +39,11 @@ The access syntax matters more than the keyword. Implicit per-access locking (`c
 
 Two points for Nano either way:
 
-- **`with` comes out of the reserved list.** Both A and B need `with ... as name:` for scoped access. It is reserved today, so adding it is additive.
+- **`with` leaves the reserved list when the shared lock lands.** Both A and B need `with ... as name:` for scoped access. It is reserved today, so adding it is additive.
 - **`n` writes through.** Inside the block, `n` is an exclusive (`mut`) view of the locked value, so `n += 1` updates the shared value. In Python, rebinding an `as` name is local. Here it is not, which is a deliberate deviation that would go under "Deviations from Python". The alternative, C's `.value`, avoids the deviation at the cost of noise.
 
-## Questions for Nano
+## Decided
 
-1. Pause marker: B (expression-covering `pause`), A (per call), or another?
-2. Shared lock: B (`shared(...)` builtin type) or A (keyword, as design.md says)?
-3. Accept write-through `as` names inside `with` on a shared value?
+1. Pause marker: B, an expression-covering `pause <expr>` that must cover at least one pause point.
+2. Shared lock: B, a builtin type `shared[T]` built with `shared(v)`, not a keyword.
+3. Inside `with x as n:` on a shared value, `n` writes through. Listed as a deviation from Python when it lands.

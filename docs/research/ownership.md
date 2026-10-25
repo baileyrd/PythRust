@@ -1,6 +1,6 @@
 # Research G.2: Ownership inference (phase 4)
 
-**Status: proposal.** Nothing here is decided. Syntax shown is illustrative.
+**Status: decided 2026-10-25** (direction and vocabulary; Nano accepted the recommendations). Exact M5 syntax is still to be written.
 
 **Recommendation:** loose code keeps Python's aliasing meaning, implemented as reference counting that the compiler elides wherever it can prove a single owner. Ownership is inferred per function as a *summary* of how each parameter is used. Tempered code must have every value resolve to a single owner or an explicit borrow; anything that would need a hidden refcount is either spelled out or rejected.
 
@@ -66,8 +66,8 @@ No "borrow", "lifetime", or "move out of" in user-facing text.
 
 Swift (ARC with `borrowing`/`consuming` and the law of exclusivity, checked statically with a dynamic fallback), Mojo (`read`/`mut`/`owned` argument conventions), Lobster (compile-time refcount elision), Koka's Perceus (precise refcounting with reuse), Rust NLL (CFG-based borrow checking).
 
-## Questions for Nano
+## Decided
 
-1. Accept "loose keeps Python aliasing via refcounting" as the semantic baseline? It is forced by the CPython oracle, but it is the biggest design commitment here.
-2. Is the loose-mode error for `f(xs, xs)` against a tempered `mut` parameter acceptable, or should loose code silently copy instead? Recommended: error, since a silent copy changes meaning.
-3. Use the `read` / `mut` / `owned` vocabulary as the starting point for M5 syntax?
+1. Loose code keeps Python aliasing via refcounting, with compile-time elision.
+2. A loose call that passes one value to two parameters of a tempered function, one of them `mut`, is a compile error, not a silent copy.
+3. `read` / `mut` / `owned` is the starting vocabulary for M5 syntax.
