@@ -391,7 +391,10 @@ fn int_accumulator_cannot_widen_to_float() {
         b.assign("total", b.i(0)),
         b.aug("total", BinOp::Add, b.fl(0.5)),
     ];
-    assert_eq!(err(body), "`+` gives float here, but int is expected");
+    assert_eq!(
+        err(body),
+        "`total` is int here, but `+=` makes it float; start `total` as a float, such as `0.0`"
+    );
 }
 
 #[test]
@@ -903,4 +906,28 @@ fn break_in_nested_loop_body_does_not_exit_the_outer_loop() {
     let body = vec![b.while_(b.bl(true), vec![inner, b.ret(b.i(1))])];
     let types = ok(vec![b.def("f", &[], body)]);
     assert_eq!(types.func("f").map(|f| f.ret.clone()), Some(Type::Int));
+}
+
+#[test]
+fn negative_literal_exponent_on_int_base_is_an_error() {
+    let b = B::default();
+    let e = b.bin(BinOp::Pow, b.i(2), b.i(-1));
+    let msg = err(vec![b.ex(e)]);
+    assert!(msg.contains("use a float base"), "{msg}");
+    let e = b.bin(BinOp::Pow, b.i(2), b.neg(b.i(1)));
+    assert!(err(vec![b.ex(e)]).contains("use a float base"));
+}
+
+#[test]
+fn negative_exponent_on_float_base_or_unknown_sign_is_accepted() {
+    let b = B::default();
+    let e = b.bin(BinOp::Pow, b.fl(2.0), b.i(-1));
+    assert_eq!(type_of_value(&b, e), Type::Float);
+    let target = b.t("x");
+    let span = target.span;
+    let types = ok(vec![
+        b.assign("n", b.i(-1)),
+        b.assign_to(target, b.bin(BinOp::Pow, b.i(2), b.n("n"))),
+    ]);
+    assert_eq!(types.at(span), Some(&Type::Int));
 }

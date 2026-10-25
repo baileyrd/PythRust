@@ -4,7 +4,8 @@ use crate::ast::{BinOp, Block, Branch, Expr, Stmt, StmtKind, Target, TargetKind}
 use crate::diag::Result;
 use crate::span::Span;
 
-use super::solve::Need;
+use super::expr::int_literal;
+use super::solve::{Binary, Need};
 use super::ty::Type;
 use super::{error, Checker};
 
@@ -98,12 +99,18 @@ impl Checker {
             }
         };
         let right = self.expr(value)?;
-        let need = Need::Binary {
+        let assigns = match &target.kind {
+            TargetKind::Name(name) => Some(name.clone()),
+            _ => None,
+        };
+        let need = Need::Binary(Binary {
             op,
             left: current.clone(),
             right,
             out: current,
-        };
+            right_literal: int_literal(value),
+            assigns,
+        });
         self.need(need, span);
         Ok(())
     }

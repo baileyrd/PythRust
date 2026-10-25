@@ -17,23 +17,29 @@ use super::ty::{Type, TypeVar};
 /// What a constraint requires.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Need {
-    /// `left op right` has type `out`.
-    Binary {
-        op: BinOp,
-        left: Type,
-        right: Type,
+    Binary(Binary),
+    /// Unary `-x` or `+x` has type `out`.
+    Negate {
+        operand: Type,
         out: Type,
     },
-    /// Unary `-x` or `+x` has type `out`.
-    Negate { operand: Type, out: Type },
     /// `==` / `!=`: the sides can be compared.
-    Equal { left: Type, right: Type },
+    Equal {
+        left: Type,
+        right: Type,
+    },
     /// `<` `<=` `>` `>=`: the sides can be ordered.
-    Order { left: Type, right: Type },
+    Order {
+        left: Type,
+        right: Type,
+    },
     /// `len(x)`.
     Len(Type),
     /// Iterating `iterable` yields `elem` (`for`, `in`).
-    Iter { iterable: Type, elem: Type },
+    Iter {
+        iterable: Type,
+        elem: Type,
+    },
     /// `value[index]` has type `out`. `literal` is the index when it is an
     /// integer literal (required for tuples). `store` for assignment.
     Index {
@@ -44,9 +50,29 @@ pub(super) enum Need {
         store: bool,
     },
     /// Unpacking `value` into one target per `elems` entry.
-    Unpack { value: Type, elems: Vec<Type> },
+    Unpack {
+        value: Type,
+        elems: Vec<Type>,
+    },
     /// `int(x)` / `float(x)`, named by `func`.
-    ToNumber { func: &'static str, arg: Type },
+    ToNumber {
+        func: &'static str,
+        arg: Type,
+    },
+}
+
+/// `left op right` has type `out`.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Binary {
+    pub op: BinOp,
+    pub left: Type,
+    pub right: Type,
+    pub out: Type,
+    /// The right operand when it is an integer literal: a negative one
+    /// under `**` with an int base is rejected at compile time.
+    pub right_literal: Option<i64>,
+    /// The variable an augmented assignment writes the result back to.
+    pub assigns: Option<String>,
 }
 
 /// A requirement at a source span. `via` names the function whose scheme
@@ -101,17 +127,12 @@ pub(super) fn constraint_vars(s: &Subst, c: &Constraint) -> BTreeSet<TypeVar> {
 pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Need {
     let r = |t: &Type| s.rename(t, map);
     match need {
-        Need::Binary {
-            op,
-            left,
-            right,
-            out,
-        } => Need::Binary {
-            op: *op,
-            left: r(left),
-            right: r(right),
-            out: r(out),
-        },
+        Need::Binary(b) => Need::Binary(Binary {
+            left: r(&b.left),
+            right: r(&b.right),
+            out: r(&b.out),
+            ..b.clone()
+        }),
         Need::Negate { operand, out } => Need::Negate {
             operand: r(operand),
             out: r(out),
@@ -153,7 +174,7 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
 /// The diagnostic for a constraint still waiting when nothing is generic.
 pub(super) fn unsolved(c: &Constraint) -> Diagnostic {
     let what = match &c.need {
-        Need::Binary { op, .. } => format!("the operands of `{}`", op_symbol(*op)),
+        Need::Binary(b) => format!("the operands of `{}`", op_symbol(b.op)),
         Need::Negate { .. } => "the operand of unary `-`".to_string(),
         Need::Equal { .. } | Need::Order { .. } => "the sides of this comparison".to_string(),
         Need::Len(_) => "the argument of `len`".to_string(),
@@ -170,9 +191,7 @@ pub(super) fn unsolved(c: &Constraint) -> Diagnostic {
 
 fn need_types(need: &Need) -> Vec<&Type> {
     match need {
-        Need::Binary {
-            left, right, out, ..
-        } => vec![left, right, out],
+        Need::Binary(b) => vec![&b.left, &b.right, &b.out],
         Need::Negate { operand, out } => vec![operand, out],
         Need::Equal { left, right } | Need::Order { left, right } => vec![left, right],
         Need::Len(t) | Need::ToNumber { arg: t, .. } => vec![t],
@@ -186,12 +205,7 @@ fn need_types(need: &Need) -> Vec<&Type> {
 
 fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
     match &c.need {
-        Need::Binary {
-            op,
-            left,
-            right,
-            out,
-        } => binary(s, c, *op, left, right, out),
+        Need::Binary(b) => binary(s, c, b),
         Need::Negate { operand, out } => negate(s, c, operand, out),
         Need::Equal { left, right } => equal(s, c, left, right),
         Need::Order { left, right } => order(s, c, left, right),
@@ -209,17 +223,17 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
     }
 }
 
-fn binary(
-    s: &mut Subst,
-    c: &Constraint,
-    op: BinOp,
-    l: &Type,
-    r: &Type,
-    out: &Type,
-) -> Result<Step> {
-    let (Some(l), Some(r)) = (known(s, l), known(s, r)) else {
+fn binary(s: &mut Subst, c: &Constraint, b: &Binary) -> Result<Step> {
+    let (Some(l), Some(r)) = (known(s, &b.left), known(s, &b.right)) else {
         return Ok(Step::Waiting);
     };
+    let op = b.op;
+    let negative_power = op == BinOp::Pow && b.right_literal.is_some_and(|n| n < 0);
+    if negative_power && l.is_intlike() {
+        let msg =
+            "negative exponent on an int base gives a float; use a float base, as in `2.0 ** -1`";
+        return Err(error(c, msg.to_string()));
+    }
     let result = match (&l, &r) {
         _ if l.is_numeric() && r.is_numeric() => numeric_result(op, &l, &r),
         (Type::Str, Type::Str) if op == BinOp::Add => Type::Str,
@@ -249,20 +263,29 @@ fn binary(
             return Err(error(c, msg));
         }
     };
-    if s.unify(out, &result).is_err() {
-        let msg = format!(
-            "`{}` gives {} here, but {} is expected",
-            op_symbol(op),
-            s.zonk(&result),
-            s.zonk(out)
-        );
+    if s.unify(&b.out, &result).is_err() {
+        let msg = result_mismatch(s, b, &result);
         return Err(error(c, msg));
     }
     Ok(Step::Done(vec![]))
 }
 
+fn result_mismatch(s: &Subst, b: &Binary, result: &Type) -> String {
+    let (expected, found) = (s.zonk(&b.out), s.zonk(result));
+    let symbol = op_symbol(b.op);
+    let Some(name) = &b.assigns else {
+        return format!("`{symbol}` gives {found} here, but {expected} is expected");
+    };
+    let mut msg = format!("`{name}` is {expected} here, but `{symbol}=` makes it {found}");
+    if expected == Type::Int && found == Type::Float {
+        msg.push_str(&format!("; start `{name}` as a float, such as `0.0`"));
+    }
+    msg
+}
+
 /// Python's numeric tower, with `bool` acting as `int`. `int ** int` is
-/// `int`; a negative exponent is a runtime error (a documented deviation).
+/// `int`; a negative exponent is a compile error when it is a literal and
+/// a runtime error otherwise (a documented deviation).
 fn numeric_result(op: BinOp, l: &Type, r: &Type) -> Type {
     let float = *l == Type::Float || *r == Type::Float;
     if op == BinOp::Div || float {

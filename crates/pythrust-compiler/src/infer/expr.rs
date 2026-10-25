@@ -4,7 +4,7 @@ use crate::ast::{Arg, CmpOp, Expr, ExprKind, Ident, LogicalOp, TypeExpr, UnaryOp
 use crate::diag::Result;
 use crate::span::Span;
 
-use super::solve::Need;
+use super::solve::{Binary, Need};
 use super::ty::{FuncType, Type};
 use super::{builtins, error, Checker, Func};
 
@@ -31,14 +31,16 @@ impl Checker {
             ExprKind::List(items) => self.list(items),
             ExprKind::Unary { op, operand } => self.unary(*op, operand, e.span),
             ExprKind::Binary { op, left, right } => {
-                let (left, right) = (self.expr(left)?, self.expr(right)?);
+                let (l, r) = (self.expr(left)?, self.expr(right)?);
                 let out = self.subst.fresh();
-                let need = Need::Binary {
+                let need = Need::Binary(Binary {
                     op: *op,
-                    left,
-                    right,
+                    left: l,
+                    right: r,
                     out: out.clone(),
-                };
+                    right_literal: int_literal(right),
+                    assigns: None,
+                });
                 self.need(need, e.span);
                 Ok(out)
             }
@@ -321,7 +323,7 @@ fn keyword_slot(name: &str, sig: &FuncType, kw: &Ident) -> Result<usize> {
 }
 
 /// An index usable for a tuple: `2` or `-1`.
-fn int_literal(e: &Expr) -> Option<i64> {
+pub(super) fn int_literal(e: &Expr) -> Option<i64> {
     match &e.kind {
         ExprKind::Int(n) => Some(*n),
         ExprKind::Unary {
