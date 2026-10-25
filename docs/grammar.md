@@ -139,9 +139,11 @@ Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts 
 - **Tempering marker:** `temper def f(...)`, a keyword prefix.
 - **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`.
 
+- **Pause marker** (lands with concurrency): `pause <expr>`, a loosely binding prefix covering the whole expression to its right, like Swift's `await`. Required in tempered code at every pause point; it must cover at least one. See [research/concurrency-syntax.md](research/concurrency-syntax.md).
+- **Shared lock** (lands with concurrency): a builtin type `shared[T]`, built with `shared(v)` and accessed through `with x as n:`, where `n` writes through. Not a keyword.
+
+`pause`, `shared` and `with` stay reserved until those features land, so adopting them breaks no programs. `temper` is already live in `func_def`.
+
 ## Open syntax questions (M3 blockers)
 
-1. **Pause marker.** The explicit interleave point required in tempered mode. Candidate: a keyword prefix on the call (`pause fetch(x)`).
-2. **Shared-lock keyword.** One short keyword for the built-in locked wrapper. Candidate: `shared`.
-
-The keywords `pause` and `shared` are reserved so adopting them later breaks no programs. `temper` is already live in `func_def`.
+1. **Source file extension.** Placeholder: `.pythrust`.
