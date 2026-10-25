@@ -139,9 +139,12 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 - `NAME` is ASCII only.
 - **Checked overflow:** ints are `i64`; overflow is a runtime error, including `i64::MIN // -1`, `-i64::MIN` and `2 ** 64`. An out-of-range literal is a compile error (with the unary-minus boundary exception specified above).
 - **Fixed variable types:** a variable cannot be rebound to a different type. Flow-sensitive type-changing rebinding is outside the current subset; `dyn` is the explicit Python-bridge escape hatch.
-- **No int-to-float variable widening:** `total = 0` followed by `total += 1.5` is a compile error, with a fix-it to initialize with `0.0`.
+- **No int-to-float variable widening:** `total = 0` followed by `total += 1.5` is a compile error, with a fix-it to initialize with `0.0`. Mixed arithmetic within an expression still promotes as in Python; the variable's type does not widen.
 - **Negative integer exponents:** `int ** int` returns `int`; a negative exponent is a runtime error. With an integer base, a literal negative exponent (`x ** -1`) is a compile-time error. Both messages say "use a float base". `2.0 ** -1` stays legal.
 - Lists are homogeneous; tuple subscripts are integer literals.
+- `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
+- Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.
+- Current inference rejects a function that returns a value on some path but falls off its end (implicitly returning `None`). Optional is decided for phase 2 but not implemented yet; its interaction with return inference remains pending, not a reason to defer Optional or silently permit arbitrary unions.
 - A negative `float` raised to a fractional power is a runtime error; Python returns a `complex`, which the subset lacks.
 - Mixed `int`/`float` arithmetic and comparison, and `int / int`, go through `f64`, so results can differ from Python's exact math for magnitudes above 2**53.
 
