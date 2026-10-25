@@ -1,0 +1,6 @@
+# deviation: i64 overflow is a runtime error; CPython promotes to a bigint.
+# expect-exit: 1
+x = 9223372036854775807
+print(x)
+print(x + 1)
+print("unreachable")

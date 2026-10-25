@@ -1,0 +1,24 @@
+def area(w: int, h: int) -> int:
+    return w * h
+
+
+def mean(xs: list[int]) -> float:
+    total: int = 0
+    for x in xs:
+        total += x
+    return total / len(xs)
+
+
+def pair(a: int, b: str) -> tuple[int, str]:
+    return a, b
+
+
+def log(msg: str) -> None:
+    print("log:", msg)
+
+
+count: int = 3
+print(area(count, 4))
+print(mean([1, 2, 3, 4]))
+print(pair(1, "one"))
+log("done")

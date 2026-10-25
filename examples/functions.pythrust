@@ -1,0 +1,45 @@
+def greet(name, greeting="Hello", punct="!"):
+    return greeting + ", " + name + punct
+
+
+print(greet("Ada"))
+print(greet("Ada", "Hi"))
+print(greet("Ada", punct="?"))
+print(greet(greeting="Hey", name="Bob"))
+
+
+def nothing():
+    pass
+
+
+print(nothing())
+
+
+def early(n):
+    if n > 0:
+        return "positive"
+    return "not positive"
+
+
+print(early(1), early(-1))
+
+
+def apply_twice(n):
+    return square(square(n))
+
+
+def square(n):
+    return n * n
+
+
+print(apply_twice(3))
+
+
+def append_to(xs, x):
+    xs.append(x)
+
+
+items = [1]
+append_to(items, 2)
+append_to(items, 3)
+print(items, len(items))

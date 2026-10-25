@@ -1,0 +1,5 @@
+# deviation: i64::MIN // -1 overflows i64; CPython promotes to a bigint.
+# expect-exit: 1
+m = -9223372036854775807 - 1
+print(m)
+print(m // -1)

@@ -1,0 +1,11 @@
+# deviation: i64 overflow is a runtime error; CPython promotes to a bigint.
+# expect-exit: 1
+def factorial(n):
+    acc = 1
+    for i in range(2, n + 1):
+        acc *= i
+    return acc
+
+
+for n in range(18, 23):
+    print(n, factorial(n))

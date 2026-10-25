@@ -1,0 +1,34 @@
+def reverse(s):
+    out = ""
+    i = len(s) - 1
+    while i >= 0:
+        out = out + s[i]
+        i -= 1
+    return out
+
+
+def count_char(s, c):
+    n = 0
+    for ch in s:
+        if ch == c:
+            n += 1
+    return n
+
+
+def is_palindrome(s):
+    return s == reverse(s)
+
+
+word = "pythrust"
+print(word)
+print(len(word))
+print(word[0], word[len(word) - 1], word[-1])
+print(reverse(word))
+print(count_char("mississippi", "s"))
+print(is_palindrome("racecar"), is_palindrome("rust"))
+print("con" + "cat" + str(42))
+print("apple" < "banana", "Zebra" < "apple")
+print("tab\there", 'it\'s', "quote\"d", "back\\slash")
+print("line1\nline2")
+print("rust" in "pythrust", "go" in "pythrust")
+print(len(""))
