@@ -59,8 +59,8 @@ pub enum TokenKind {
     Gt,
     GtEq,
 
-    // Assignment.
-    Eq,
+    // Assignment. `Assign` is `=`; `EqEq` is `==`.
+    Assign,
     PlusEq,
     MinusEq,
     StarEq,
