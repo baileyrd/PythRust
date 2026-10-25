@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ast::{Arg, Block, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind};
+use crate::ast::{Arg, Block, CmpOp, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind};
 
 /// Names bound anywhere in `block`, as Python decides locals.
 pub(super) fn assigned(block: &Block) -> BTreeSet<String> {
@@ -257,6 +257,27 @@ impl<'e> Tarjan<'e> {
         group.sort_unstable();
         self.groups.push(group);
     }
+}
+
+/// `x is None` gives `(x, false)`; `x is not None` gives `(x, true)`
+/// (`true`: `x` is not `None` when the test holds). Either order.
+pub(super) fn none_test(test: &Expr) -> Option<(String, bool)> {
+    let ExprKind::Compare { left, rest } = &test.kind else {
+        return None;
+    };
+    let [(op, right)] = rest.as_slice() else {
+        return None;
+    };
+    let not_none = match op {
+        CmpOp::Is => false,
+        CmpOp::IsNot => true,
+        _ => return None,
+    };
+    let name = match (&left.kind, &right.kind) {
+        (ExprKind::Name(n), ExprKind::None) | (ExprKind::None, ExprKind::Name(n)) => n.clone(),
+        _ => return None,
+    };
+    Some((name, not_none))
 }
 
 /// Whether control can reach the end of `block` without a `return`.

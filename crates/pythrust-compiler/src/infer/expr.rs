@@ -66,8 +66,9 @@ impl Checker {
     pub(super) fn variable(&mut self, name: &str, span: Span) -> Result<Type> {
         let found = self
             .frame
-            .locals
+            .narrowed
             .get(name)
+            .or_else(|| self.frame.locals.get(name))
             .or_else(|| self.globals.get(name))
             .cloned();
         if let Some(t) = found {
@@ -118,18 +119,25 @@ impl Checker {
 
     /// Each operand is inferred once; each adjacent pair is checked.
     fn compare(&mut self, left: &Expr, rest: &[(CmpOp, Expr)]) -> Result<Type> {
-        let mut prev = (self.expr(left)?, left.span);
+        let mut prev = (self.expr(left)?, left);
         for (op, next) in rest {
             let t = self.expr(next)?;
-            self.comparison(*op, &prev.0, &t, prev.1.merge(next.span));
-            prev = (t, next.span);
+            let span = prev.1.span.merge(next.span);
+            if matches!(op, CmpOp::Is | CmpOp::IsNot) {
+                is_none_operand(prev.1, next, span)?;
+            } else {
+                self.comparison(*op, &prev.0, &t, span);
+            }
+            prev = (t, next);
         }
         Ok(Type::Bool)
     }
 
+    /// `==`, `<`, `in` and their kin. `is` is checked syntactically.
     fn comparison(&mut self, op: CmpOp, left: &Type, right: &Type, span: Span) {
         let (left, right) = (left.clone(), right.clone());
         let need = match op {
+            CmpOp::Is | CmpOp::IsNot => return,
             CmpOp::Eq | CmpOp::NotEq => Need::Equal { left, right },
             CmpOp::Lt | CmpOp::LtEq | CmpOp::Gt | CmpOp::GtEq => Need::Order { left, right },
             CmpOp::In | CmpOp::NotIn => {
@@ -361,6 +369,15 @@ fn keyword_slot(name: &str, sig: &FuncType, kw: &Ident) -> Result<usize> {
             Err(error(kw.span, msg))
         }
     }
+}
+
+/// Phase 2 allows `is` only with a `None` literal on one side.
+fn is_none_operand(left: &Expr, right: &Expr, span: Span) -> Result<()> {
+    if matches!(left.kind, ExprKind::None) || matches!(right.kind, ExprKind::None) {
+        return Ok(());
+    }
+    let msg = "`is` compares only with None in phase 2; use `==` for values";
+    Err(error(span, msg.to_string()))
 }
 
 /// An index usable for a tuple: `2` or `-1`.

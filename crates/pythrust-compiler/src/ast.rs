@@ -249,4 +249,8 @@ pub enum CmpOp {
     GtEq,
     In,
     NotIn,
+    /// `is` / `is not`. Phase 2 allows them only with `None` (checked by
+    /// inference); they narrow `T | None` to `T` in a branch.
+    Is,
+    IsNot,
 }

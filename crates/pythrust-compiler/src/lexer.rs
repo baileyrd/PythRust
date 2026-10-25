@@ -28,7 +28,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>> {
 
 /// Words reserved for later phases. The lexer rejects them.
 const RESERVED: &[&str] = &[
-    "try", "except", "finally", "raise", "assert", "class", "import", "from", "as", "with", "is",
+    "try", "except", "finally", "raise", "assert", "class", "import", "from", "as", "with",
     "lambda", "yield", "async", "await", "global", "nonlocal", "del", "pause", "shared",
 ];
 
@@ -582,6 +582,7 @@ fn keyword(text: &str) -> Option<TokenKind> {
         "False" => False,
         "None" => None,
         "temper" => Temper,
+        "is" => Is,
         _ => return Option::None,
     };
     Some(kind)

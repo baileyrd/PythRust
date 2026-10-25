@@ -462,6 +462,7 @@ impl<'a> Parser<'a> {
                 span: tok.span,
             },
             args,
+            optional: false,
             span: self.span_from(tok.span),
         })
     }
@@ -994,6 +995,8 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::False => "False",
         TokenKind::None => "None",
         TokenKind::Temper => "temper",
+        TokenKind::Is => "is",
+        TokenKind::Pipe => "|",
         TokenKind::Plus => "+",
         TokenKind::Minus => "-",
         TokenKind::Star => "*",

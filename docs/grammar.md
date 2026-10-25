@@ -13,8 +13,8 @@ Notation: EBNF. `A*` zero or more, `A+` one or more, `[A]` optional, `A | B` cho
   - `INT`: decimal digits, `_` separators allowed. Ints are `i64`; arithmetic overflow is a runtime error, never a silent wrap. An `INT` literal above `i64::MAX` is a compile error, except `9223372036854775808` directly under unary `-`, which the parser folds to `i64::MIN`. Arbitrary precision may be added later as an opt-in type.
   - `FLOAT`: digits with `.` or exponent.
   - `STRING`: single or double quoted, with Python's `\` escapes except `\N{...}`. An unknown escape is an error. No string prefixes (`f`, `r`, `b`, `u`) or triple quotes yet; the lexer rejects them by name.
-- Keywords: `def return if elif else while for in break continue pass and or not True False None temper`.
-- Reserved for later (rejected by the lexer so programs stay forward-compatible): `try except finally raise assert class import from as with is lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
+- Keywords: `def return if elif else while for in break continue pass and or not is True False None temper`.
+- Reserved for later (rejected by the lexer so programs stay forward-compatible): `try except finally raise assert class import from as with lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
 
 ## Program
 
@@ -78,7 +78,8 @@ or_expr     = and_expr ('or' and_expr)* ;
 and_expr    = not_expr ('and' not_expr)* ;
 not_expr    = 'not' not_expr | comparison ;
 comparison  = sum (comp_op sum)* ;                       # chained, as in Python
-comp_op     = '==' | '!=' | '<' | '<=' | '>' | '>=' | 'in' | 'not' 'in' ;
+comp_op     = '==' | '!=' | '<' | '<=' | '>' | '>=' | 'in' | 'not' 'in'
+            | 'is' | 'is' 'not' ;                       # `is` only with a None operand (checked by inference)
 sum         = term (('+' | '-') term)* ;
 term        = factor (('*' | '/' | '//' | '%') factor)* ;
 factor      = ('-' | '+') factor | power ;
@@ -138,6 +139,7 @@ Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out
 - `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
 - Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.
 - A function that returns a value on some path must not fall off its end (that returns `None`) unless its return annotation is `T | None`.
+- `is` / `is not` compare only with `None`. In an `if`/`elif`/`while` whose test is `x is not None`, and in the clauses after an `x is None` test, a `T | None` name `x` has type `T`, unless that block assigns `x`. Narrowing is per block; `if x is None: return` does not narrow the code after it.
 - A variable first bound to `None` has type `None` unless annotated: `x = None` then `x = 5` is a type error; write `x: int | None = None`. `T` and `None` flow into `T | None` (also inside tuples); lists stay invariant.
 - A negative `float` raised to a fractional power is a runtime error; Python returns a `complex`, which the subset lacks.
 - Mixed `int`/`float` arithmetic and comparison, and `int / int`, go through `f64`, so results can differ from Python's exact math for magnitudes above 2**53.

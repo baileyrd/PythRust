@@ -116,6 +116,9 @@ struct Scheme {
 struct Frame {
     locals: HashMap<String, Type>,
     ret: Option<Type>,
+    /// Names known not to be `None` here, with their narrowed type
+    /// (`if x is not None:` on an `int | None` makes `x` an `int`).
+    narrowed: HashMap<String, Type>,
 }
 
 #[derive(Debug, Default)]
@@ -213,6 +216,7 @@ impl Checker {
         self.frame = Frame {
             locals,
             ret: Some(sig.ret.clone()),
+            narrowed: HashMap::new(),
         };
         self.block(&f.body)?;
         self.frame = Frame::default();

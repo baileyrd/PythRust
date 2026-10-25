@@ -5,6 +5,7 @@ use crate::diag::Result;
 use crate::span::Span;
 
 use super::expr::int_literal;
+use super::scope;
 use super::solve::{self, Binary, Need};
 use super::ty::Type;
 use super::{error, Checker};
@@ -53,14 +54,9 @@ impl Checker {
                 branch,
                 elifs,
                 orelse,
-            } => {
-                std::iter::once(branch)
-                    .chain(elifs)
-                    .try_for_each(|b| self.branch(b))?;
-                self.block(orelse)
-            }
+            } => self.if_chain(branch, elifs, orelse),
             StmtKind::While { branch, orelse } => {
-                self.branch(branch)?;
+                self.branch(branch, &[])?;
                 self.block(orelse)
             }
             StmtKind::For {
@@ -83,10 +79,54 @@ impl Checker {
         }
     }
 
+    /// `x is None` tests narrow later clauses; `x is not None` narrows
+    /// its own body.
+    fn if_chain(&mut self, branch: &Branch, elifs: &[Branch], orelse: &Block) -> Result<()> {
+        let mut not_none: Vec<String> = Vec::new();
+        for b in std::iter::once(branch).chain(elifs) {
+            self.branch(b, &not_none)?;
+            if let Some((name, false)) = scope::none_test(&b.test) {
+                not_none.push(name);
+            }
+        }
+        self.narrowed(&not_none, orelse, |c| c.block(orelse))
+    }
+
     /// A test of any type (every value has a truth value) and its block.
-    fn branch(&mut self, b: &Branch) -> Result<()> {
-        self.expr(&b.test)?;
-        self.block(&b.body)
+    /// `not_none` names are narrowed in both, as is the name the test
+    /// itself proves is not `None`.
+    fn branch(&mut self, b: &Branch, not_none: &[String]) -> Result<()> {
+        self.narrowed(not_none, &Block::new(), |c| c.expr(&b.test).map(drop))?;
+        let mut inside = not_none.to_vec();
+        if let Some((name, true)) = scope::none_test(&b.test) {
+            inside.push(name);
+        }
+        self.narrowed(&inside, &b.body, |c| c.block(&b.body))
+    }
+
+    /// Runs `f` with each of `names` narrowed from `T | None` to `T`,
+    /// unless `scope` assigns it (then its type stays `T | None`).
+    fn narrowed(
+        &mut self,
+        names: &[String],
+        scope: &Block,
+        f: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        let assigned = scope::assigned(scope);
+        let saved = self.frame.narrowed.clone();
+        for name in names.iter().filter(|n| !assigned.contains(*n)) {
+            let current = self
+                .frame
+                .locals
+                .get(name)
+                .or_else(|| self.globals.get(name));
+            if let Some(Type::Optional(inner)) = current.map(|t| self.subst.resolve(t)) {
+                self.frame.narrowed.insert(name.clone(), *inner);
+            }
+        }
+        let result = f(self);
+        self.frame.narrowed = saved;
+        result
     }
 
     fn aug_assign(&mut self, target: &Target, op: BinOp, value: &Expr, span: Span) -> Result<()> {

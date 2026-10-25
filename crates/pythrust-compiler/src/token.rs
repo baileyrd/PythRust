@@ -43,6 +43,8 @@ pub enum TokenKind {
     False,
     None,
     Temper,
+    /// `is`, only as `is None` / `is not None`.
+    Is,
 
     // Arithmetic operators.
     Plus,

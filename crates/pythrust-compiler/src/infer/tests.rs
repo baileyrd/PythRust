@@ -1065,3 +1065,99 @@ fn none_or_none_annotation_is_none() {
     })]);
     assert_eq!(types.at(span), Some(&Type::None));
 }
+
+// Narrowing with `is None` / `is not None`.
+
+fn is_none(b: &B, name: &str, op: CmpOp) -> Expr {
+    b.cmp(b.n(name), vec![(op, b.e(ExprKind::None))])
+}
+
+#[test]
+fn is_not_none_narrows_the_branch() {
+    let b = B::default();
+    let target = b.t("y");
+    let span = target.span;
+    let body = vec![b.assign_to(target, b.bin(BinOp::Add, b.n("x"), b.i(1)))];
+    let types = ok(vec![
+        b.ann("x", b.opt("int", vec![]), b.e(ExprKind::None)),
+        b.if_(is_none(&b, "x", CmpOp::IsNot), body, vec![]),
+    ]);
+    assert_eq!(types.at(span), Some(&Type::Int));
+}
+
+#[test]
+fn is_none_narrows_the_else_branch() {
+    let b = B::default();
+    let orelse = vec![b.ex(b.bin(BinOp::Add, b.n("x"), b.i(1)))];
+    ok(vec![
+        b.ann("x", b.opt("int", vec![]), b.e(ExprKind::None)),
+        b.if_(
+            is_none(&b, "x", CmpOp::Is),
+            vec![b.st(StmtKind::Pass)],
+            orelse,
+        ),
+    ]);
+}
+
+#[test]
+fn narrowing_does_not_leak_or_survive_assignment() {
+    let b = B::default();
+    let msg = err(vec![
+        b.ann("x", b.opt("int", vec![]), b.e(ExprKind::None)),
+        b.if_(
+            is_none(&b, "x", CmpOp::IsNot),
+            vec![b.st(StmtKind::Pass)],
+            vec![],
+        ),
+        b.ex(b.bin(BinOp::Add, b.n("x"), b.i(1))),
+    ]);
+    assert_eq!(msg, "unsupported operand types for +: int | None and int");
+    let body = vec![
+        b.assign("x", b.e(ExprKind::None)),
+        b.ex(b.bin(BinOp::Add, b.n("x"), b.i(1))),
+    ];
+    let msg = err(vec![
+        b.ann("x", b.opt("int", vec![]), b.i(1)),
+        b.if_(is_none(&b, "x", CmpOp::IsNot), body, vec![]),
+    ]);
+    assert_eq!(msg, "unsupported operand types for +: int | None and int");
+}
+
+#[test]
+fn narrowed_optional_parameter_returns_its_type() {
+    let b = B::default();
+    let p = b.param("x", Some(b.opt("int", vec![])), Some(b.e(ExprKind::None)));
+    let body = vec![
+        b.if_(
+            is_none(&b, "x", CmpOp::IsNot),
+            vec![b.ret(b.bin(BinOp::Mul, b.n("x"), b.i(2)))],
+            vec![],
+        ),
+        b.ret(b.i(0)),
+    ];
+    let types = ok(vec![b.def_full("f", vec![p], None, body)]);
+    assert_eq!(types.func("f").map(|f| f.ret.clone()), Some(Type::Int));
+}
+
+#[test]
+fn while_is_not_none_narrows_its_body() {
+    let b = B::default();
+    let body = vec![
+        b.ex(b.bin(BinOp::Add, b.n("x"), b.i(1))),
+        b.st(StmtKind::Break),
+    ];
+    ok(vec![
+        b.ann("x", b.opt("int", vec![]), b.i(1)),
+        b.while_(is_none(&b, "x", CmpOp::IsNot), body),
+    ]);
+}
+
+#[test]
+fn is_with_a_non_none_operand_is_an_error() {
+    let b = B::default();
+    let msg = err(vec![b.ex(b.cmp(b.i(1), vec![(CmpOp::Is, b.i(1))]))]);
+    assert_eq!(
+        msg,
+        "`is` compares only with None in phase 2; use `==` for values"
+    );
+}
