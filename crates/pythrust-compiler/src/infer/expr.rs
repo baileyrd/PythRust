@@ -4,7 +4,7 @@ use crate::ast::{Arg, CmpOp, Expr, ExprKind, Ident, LogicalOp, TypeExpr, UnaryOp
 use crate::diag::Result;
 use crate::span::Span;
 
-use super::solve::{Binary, Need};
+use super::solve::{Access, Binary, Need};
 use super::ty::{FuncType, Type};
 use super::{builtins, error, Checker, Func};
 
@@ -54,7 +54,10 @@ impl Checker {
                 Ok(b)
             }
             ExprKind::Call { func, args } => self.call(func, args, e.span),
-            ExprKind::Subscript { value, index } => self.subscript(value, index, false),
+            ExprKind::Subscript { value, index } => {
+                let out = self.subst.fresh();
+                self.subscript(value, index, Access::Read, out)
+            }
             ExprKind::Attr { attr, .. } => {
                 let msg = format!("methods can only be called: `.{}(...)`", attr.name);
                 Err(error(attr.span, msg))
@@ -153,16 +156,22 @@ impl Checker {
         self.need(need, span);
     }
 
-    /// `value[index]`. `store` when it is being assigned to.
-    pub(super) fn subscript(&mut self, value: &Expr, index: &Expr, store: bool) -> Result<Type> {
+    /// `value[index]` used as `access`; `out` is the element read, or
+    /// the value written. Returns `out`.
+    pub(super) fn subscript(
+        &mut self,
+        value: &Expr,
+        index: &Expr,
+        access: Access,
+        out: Type,
+    ) -> Result<Type> {
         let (v, i) = (self.expr(value)?, self.expr(index)?);
-        let out = self.subst.fresh();
         let need = Need::Index {
             value: v,
             index: i,
             literal: int_literal(index),
             out: out.clone(),
-            store,
+            access,
         };
         self.need(need, index.span);
         Ok(out)
@@ -216,8 +225,8 @@ impl Checker {
                 return Err(error(arg.span, msg));
             }
             bound[slot] = true;
-            let t = self.expr(&arg.value)?;
             let param = &sig.params[slot];
+            let t = self.checked(&arg.value, &param.ty)?;
             let what = format!("argument `{}` of `{name}`", param.name);
             self.expect(arg.value.span, &param.ty, &t, &what)?;
         }

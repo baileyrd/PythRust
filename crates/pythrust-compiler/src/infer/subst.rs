@@ -70,16 +70,29 @@ impl Subst {
     /// Like `unify`, but a value may flow into a wider target: `T` and
     /// `None` into `T | None`, and tuples element-wise (they are
     /// immutable). Lists stay invariant, since they are mutable.
-    pub(super) fn assign(&mut self, target: &Type, value: &Type) -> Result<(), Clash> {
+    ///
+    /// A value still unknown under a `T | None` target could be `T`,
+    /// `None` or `T | None`, so that pair is returned unsolved rather than
+    /// guessed; the caller defers it until the value is known.
+    pub(super) fn assign(
+        &mut self,
+        target: &Type,
+        value: &Type,
+    ) -> Result<Vec<(Type, Type)>, Clash> {
         match (self.resolve(target), self.resolve(value)) {
-            (Type::Optional(_), Type::None) => Ok(()),
-            (Type::Optional(inner), v) if !matches!(v, Type::Optional(_) | Type::Var(_)) => {
+            (t @ Type::Optional(_), v @ Type::Var(_)) => Ok(vec![(t, v)]),
+            (Type::Optional(_), Type::None) => Ok(vec![]),
+            (Type::Optional(inner), v) if !matches!(v, Type::Optional(_)) => {
                 self.assign(&inner, &v)
             }
             (Type::Tuple(ts), Type::Tuple(vs)) if ts.len() == vs.len() => {
-                ts.iter().zip(&vs).try_for_each(|(t, v)| self.assign(t, v))
+                let mut deferred = Vec::new();
+                for (t, v) in ts.iter().zip(&vs) {
+                    deferred.extend(self.assign(t, v)?);
+                }
+                Ok(deferred)
             }
-            (t, v) => self.unify(&t, &v),
+            (t, v) => self.unify(&t, &v).map(|()| vec![]),
         }
     }
 
@@ -188,16 +201,27 @@ mod tests {
     fn assign_widens_into_optional_but_not_back() {
         let mut s = Subst::default();
         let opt = Type::Optional(Box::new(Type::Int));
-        assert_eq!(s.assign(&opt, &Type::None), Ok(()));
-        assert_eq!(s.assign(&opt, &Type::Int), Ok(()));
+        assert_eq!(s.assign(&opt, &Type::None), Ok(vec![]));
+        assert_eq!(s.assign(&opt, &Type::Int), Ok(vec![]));
         assert_eq!(s.assign(&opt, &Type::Str), Err(Clash::Mismatch));
         assert_eq!(s.assign(&Type::Int, &opt), Err(Clash::Mismatch));
         let pair = |t: Type| Type::Tuple(vec![t, Type::Str]);
-        assert_eq!(s.assign(&pair(opt.clone()), &pair(Type::None)), Ok(()));
+        assert_eq!(s.assign(&pair(opt.clone()), &pair(Type::None)), Ok(vec![]));
         assert_eq!(
             s.assign(&list(opt), &list(Type::None)),
             Err(Clash::Mismatch)
         );
+    }
+
+    #[test]
+    fn assign_defers_an_unknown_value_under_optional() {
+        let mut s = Subst::default();
+        let opt = Type::Optional(Box::new(Type::Int));
+        let a = s.fresh();
+        let pair = |t: Type| Type::Tuple(vec![t, Type::Str]);
+        let deferred = s.assign(&pair(opt.clone()), &pair(a.clone()));
+        assert_eq!(deferred, Ok(vec![(opt, a.clone())]));
+        assert_eq!(s.resolve(&a), a);
     }
 
     #[test]

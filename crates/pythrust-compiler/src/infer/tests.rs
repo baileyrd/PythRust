@@ -1181,3 +1181,187 @@ fn is_with_a_non_none_operand_is_an_error() {
         "`is` compares only with None in phase 2; use `==` for values"
     );
 }
+
+// Values flowing into `T | None`.
+
+#[test]
+fn computed_values_flow_into_optional() {
+    let b = B::default();
+    let target = b.t("x");
+    let sum = b.bin(BinOp::Add, b.i(1), b.i(2));
+    let sum_span = sum.span;
+    let types = ok(vec![
+        b.ann("x", b.opt("int", vec![]), sum),
+        b.assign_to(target, b.bin(BinOp::Mul, b.i(3), b.i(4))),
+        b.assign("x", b.e(ExprKind::None)),
+    ]);
+    assert_eq!(types.at(sum_span), Some(&Type::Int));
+    let msg = err(vec![b.ann(
+        "x",
+        b.opt("int", vec![]),
+        b.bin(BinOp::Add, b.s("a"), b.s("b")),
+    )]);
+    assert_eq!(
+        msg,
+        "value does not match its annotation: expected int | None, found str"
+    );
+}
+
+#[test]
+fn computed_returns_arguments_and_appends_flow_into_optional() {
+    let b = B::default();
+    let ret = b.ret(b.bin(BinOp::Add, b.i(1), b.i(2)));
+    let p = b.param("y", Some(b.opt("int", vec![])), None);
+    ok(vec![
+        b.def_full("f", vec![], Some(b.opt("int", vec![])), vec![ret]),
+        b.def_full("g", vec![p], None, vec![b.ret(b.i(0))]),
+        b.ex(b.call("g", vec![b.bin(BinOp::Add, b.i(1), b.i(2))])),
+        b.ann(
+            "xs",
+            b.ty("list", vec![b.opt("int", vec![])]),
+            b.list(vec![]),
+        ),
+        b.ex(b.method(b.n("xs"), "append", vec![b.bin(BinOp::Add, b.i(1), b.i(2))])),
+    ]);
+}
+
+#[test]
+fn optional_return_of_a_parameter_is_checked_per_call() {
+    let b = B::default();
+    let def = b.def_full(
+        "f",
+        vec![b.param("a", None, None)],
+        Some(b.opt("int", vec![])),
+        vec![b.ret(b.n("a"))],
+    );
+    ok(vec![
+        def.clone(),
+        b.ex(b.call("f", vec![b.i(1)])),
+        b.ex(b.call("f", vec![b.e(ExprKind::None)])),
+    ]);
+    let msg = err(vec![def, b.ex(b.call("f", vec![b.s("s")]))]);
+    assert_eq!(
+        msg,
+        "in call to `f`: return type mismatch: expected int | None, found str"
+    );
+}
+
+#[test]
+fn stores_check_against_the_element_type() {
+    let b = B::default();
+    let opt_list = || b.ty("list", vec![b.opt("int", vec![])]);
+    let store = |v: Expr| b.assign_to(b.tidx(b.n("xs"), b.i(0)), v);
+    ok(vec![
+        b.ann("xs", opt_list(), b.list(vec![b.e(ExprKind::None)])),
+        store(b.i(1)),
+        store(b.e(ExprKind::None)),
+        store(b.bin(BinOp::Add, b.i(1), b.i(2))),
+    ]);
+    let msg = err(vec![
+        b.ann("xs", opt_list(), b.list(vec![b.e(ExprKind::None)])),
+        store(b.s("a")),
+    ]);
+    assert_eq!(msg, "cannot assign str into list[int | None]");
+}
+
+#[test]
+fn unconstrained_value_takes_the_optional_target() {
+    let b = B::default();
+    let target = b.t("xs");
+    let span = target.span;
+    let types = ok(vec![
+        b.assign_to(target, b.list(vec![])),
+        b.ann("x", b.opt("int", vec![]), b.idx(b.n("xs"), b.i(0))),
+    ]);
+    assert_eq!(types.at(span), Some(&list_of(int_or_none())));
+}
+
+#[test]
+fn literals_take_the_expected_type_at_calls_returns_and_reassignment() {
+    let b = B::default();
+    let opt_list = || b.ty("list", vec![b.opt("int", vec![])]);
+    let mixed = || b.list(vec![b.e(ExprKind::None), b.i(1)]);
+    let nested = b.param("xss", Some(b.ty("list", vec![opt_list()])), None);
+    ok(vec![
+        b.def_full(
+            "f",
+            vec![b.param("xs", Some(opt_list()), None)],
+            None,
+            vec![b.ret(b.i(0))],
+        ),
+        b.def_full("g", vec![], Some(opt_list()), vec![b.ret(mixed())]),
+        b.def_full("h", vec![nested], None, vec![b.ret(b.i(0))]),
+        b.ex(b.call("f", vec![mixed()])),
+        b.ex(b.call(
+            "h",
+            vec![b.list(vec![b.list(vec![b.e(ExprKind::None)]), mixed()])],
+        )),
+        b.ann("ys", opt_list(), b.list(vec![])),
+        b.assign("ys", mixed()),
+    ]);
+}
+
+#[test]
+fn an_existing_list_is_not_coerced_into_optional() {
+    let b = B::default();
+    let opt_list = || b.ty("list", vec![b.opt("int", vec![])]);
+    let msg = err(vec![
+        b.def_full(
+            "f",
+            vec![b.param("xs", Some(opt_list()), None)],
+            None,
+            vec![b.ret(b.i(0))],
+        ),
+        b.assign("ys", b.list(vec![b.i(1)])),
+        b.ex(b.call("f", vec![b.n("ys")])),
+    ]);
+    assert_eq!(
+        msg,
+        "argument `xs` of `f`: expected list[int | None], found list[int]"
+    );
+    let msg = err(vec![
+        b.ann("xs", opt_list(), b.list(vec![])),
+        b.assign("ys", b.list(vec![b.i(1)])),
+        b.assign("xs", b.n("ys")),
+    ]);
+    assert_eq!(
+        msg,
+        "cannot change the type of `xs`: expected list[int | None], found list[int]"
+    );
+}
+
+// Annotated variables are typed before inference reaches them.
+
+#[test]
+fn annotated_global_narrows_in_a_function_wherever_it_is_defined() {
+    let b = B::default();
+    let def = || {
+        let body = vec![
+            b.if_(
+                is_none(&b, "x", CmpOp::IsNot),
+                vec![b.ret(b.bin(BinOp::Add, b.n("x"), b.i(1)))],
+                vec![],
+            ),
+            b.ret(b.i(0)),
+        ];
+        b.def("f", &[], body)
+    };
+    let global = || b.ann("x", b.opt("int", vec![]), b.i(1));
+    for body in [vec![global(), def()], vec![def(), global()]] {
+        let types = ok(body);
+        assert_eq!(types.func("f").map(|f| f.ret.clone()), Some(Type::Int));
+    }
+}
+
+#[test]
+fn conflicting_annotations_are_an_error() {
+    let b = B::default();
+    let msg = err(vec![
+        b.ann("x", b.ty("int", vec![]), b.i(1)),
+        b.ann("x", b.ty("str", vec![]), b.s("a")),
+    ]);
+    assert_eq!(
+        msg,
+        "conflicting annotations for `x`: expected int, found str"
+    );
+}

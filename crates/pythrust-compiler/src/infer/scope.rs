@@ -4,50 +4,64 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ast::{Arg, Block, CmpOp, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind};
+use crate::ast::{
+    Arg, Block, CmpOp, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind, TypeExpr,
+};
 
 /// Names bound anywhere in `block`, as Python decides locals.
 pub(super) fn assigned(block: &Block) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    block.iter().for_each(|s| assigned_stmt(s, &mut out));
-    out
-}
-
-fn assigned_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
-    match &stmt.kind {
-        StmtKind::Assign { target, .. } | StmtKind::AugAssign { target, .. } => {
-            target_names(target, out)
-        }
+    walk(block, &mut |s| match &s.kind {
+        StmtKind::Assign { target, .. }
+        | StmtKind::AugAssign { target, .. }
+        | StmtKind::For { target, .. } => target_names(target, &mut out),
         StmtKind::AnnAssign { target, .. } => {
             out.insert(target.name.clone());
         }
-        StmtKind::For {
-            target,
-            body,
-            orelse,
-            ..
-        } => {
-            target_names(target, out);
-            body.iter()
-                .chain(orelse)
-                .for_each(|s| assigned_stmt(s, out));
-        }
-        StmtKind::If {
-            branch,
-            elifs,
-            orelse,
-        } => {
-            let bodies = std::iter::once(branch).chain(elifs).flat_map(|b| &b.body);
-            bodies.chain(orelse).for_each(|s| assigned_stmt(s, out));
-        }
-        StmtKind::While { branch, orelse } => {
-            branch
-                .body
-                .iter()
-                .chain(orelse)
-                .for_each(|s| assigned_stmt(s, out));
-        }
         _ => {}
+    });
+    out
+}
+
+/// Each annotated assignment in `block`: the name and its annotation.
+pub(super) fn annotated(block: &Block) -> Vec<(&str, &TypeExpr)> {
+    let mut out = Vec::new();
+    walk(block, &mut |s| {
+        if let StmtKind::AnnAssign {
+            target, annotation, ..
+        } = &s.kind
+        {
+            out.push((target.name.as_str(), annotation));
+        }
+    });
+    out
+}
+
+/// Visits every statement of `block` and of the blocks nested in it.
+fn walk<'a>(block: &'a Block, f: &mut impl FnMut(&'a Stmt)) {
+    for s in block {
+        f(s);
+        match &s.kind {
+            StmtKind::For { body, orelse, .. } => {
+                walk(body, f);
+                walk(orelse, f);
+            }
+            StmtKind::While { branch, orelse } => {
+                walk(&branch.body, f);
+                walk(orelse, f);
+            }
+            StmtKind::If {
+                branch,
+                elifs,
+                orelse,
+            } => {
+                std::iter::once(branch)
+                    .chain(elifs)
+                    .for_each(|b| walk(&b.body, f));
+                walk(orelse, f);
+            }
+            _ => {}
+        }
     }
 }
 

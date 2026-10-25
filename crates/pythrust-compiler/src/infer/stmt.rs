@@ -6,7 +6,7 @@ use crate::span::Span;
 
 use super::expr::int_literal;
 use super::scope;
-use super::solve::{self, Binary, Need};
+use super::solve::{self, Access, Binary, Need};
 use super::ty::Type;
 use super::{error, Checker};
 
@@ -22,7 +22,10 @@ impl Checker {
     pub(super) fn stmt(&mut self, stmt: &Stmt) -> Result<()> {
         match &stmt.kind {
             StmtKind::Assign { target, value } => {
-                let t = self.expr(value)?;
+                let t = match self.declared(target) {
+                    Some(current) => self.checked(value, &current)?,
+                    None => self.expr(value)?,
+                };
                 self.bind(target, &t)
             }
             StmtKind::AnnAssign {
@@ -132,7 +135,10 @@ impl Checker {
     fn aug_assign(&mut self, target: &Target, op: BinOp, value: &Expr, span: Span) -> Result<()> {
         let current = match &target.kind {
             TargetKind::Name(name) => self.variable(name, target.span)?,
-            TargetKind::Subscript { value, index } => self.subscript(value, index, true)?,
+            TargetKind::Subscript { value, index } => {
+                let out = self.subst.fresh();
+                self.subscript(value, index, Access::ReadWrite, out)?
+            }
             TargetKind::Tuple(_) => {
                 let msg = "augmented assignment needs a single target".to_string();
                 return Err(error(target.span, msg));
@@ -160,7 +166,7 @@ impl Checker {
             return Err(error(span, "`return` outside a function".to_string()));
         };
         let found = match value {
-            Some(e) => self.expr(e)?,
+            Some(e) => self.checked(e, &expected)?,
             None => Type::None,
         };
         self.expect(span, &expected, &found, "return type mismatch")
@@ -171,8 +177,8 @@ impl Checker {
         match &target.kind {
             TargetKind::Name(name) => self.bind_name(name, target.span, ty),
             TargetKind::Subscript { value, index } => {
-                let slot = self.subscript(value, index, true)?;
-                self.expect(target.span, &slot, ty, "assigned value")
+                self.subscript(value, index, Access::Write, ty.clone())?;
+                Ok(())
             }
             TargetKind::Tuple(items) => {
                 let elems: Vec<Type> = items.iter().map(|_| self.subst.fresh()).collect();
@@ -189,11 +195,22 @@ impl Checker {
         }
     }
 
+    /// The type a name target already has, so a literal assigned to it
+    /// is checked against it (`xs = [None]` on a `list[int | None]`).
+    fn declared(&self, target: &Target) -> Option<Type> {
+        let TargetKind::Name(name) = &target.kind else {
+            return None;
+        };
+        let locals = self.frame.locals.get(name);
+        locals.or_else(|| self.globals.get(name)).cloned()
+    }
+
     fn bind_name(&mut self, name: &str, span: Span, ty: &Type) -> Result<()> {
         let var = self.variable(name, span)?;
-        self.subst.assign(&var, ty).map_err(|clash| {
+        let what = format!("cannot change the type of `{name}`");
+        let deferred = self.subst.assign(&var, ty).map_err(|clash| {
             let detail = solve::mismatch(&self.subst, clash, &var, ty);
-            let mut msg = format!("cannot change the type of `{name}`: {detail}");
+            let mut msg = format!("{what}: {detail}");
             let (was, now) = (self.subst.zonk(&var), self.subst.zonk(ty));
             let other = match (&was, &now) {
                 (Type::None, t) | (t, Type::None) => Some(t),
@@ -205,6 +222,10 @@ impl Checker {
                 ));
             }
             error(span, msg)
-        })
+        })?;
+        for need in solve::assigns(deferred, &what) {
+            self.need(need, span);
+        }
+        Ok(())
     }
 }

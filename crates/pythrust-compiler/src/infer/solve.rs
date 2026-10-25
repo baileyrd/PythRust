@@ -40,14 +40,15 @@ pub(super) enum Need {
         iterable: Type,
         elem: Type,
     },
-    /// `value[index]` has type `out`. `literal` is the index when it is an
-    /// integer literal (required for tuples). `store` for assignment.
+    /// `value[index]` is `out` (read) or receives `out` (write).
+    /// `literal` is the index when it is an integer literal (required for
+    /// tuples).
     Index {
         value: Type,
         index: Type,
         literal: Option<i64>,
         out: Type,
-        store: bool,
+        access: Access,
     },
     /// Unpacking `value` into one target per `elems` entry.
     Unpack {
@@ -59,6 +60,24 @@ pub(super) enum Need {
         func: &'static str,
         arg: Type,
     },
+    /// `value` flows into `target` (see `Subst::assign`), waiting while
+    /// the value is unknown under a `T | None` target. `what` heads the
+    /// error.
+    Assign {
+        target: Type,
+        value: Type,
+        what: String,
+    },
+}
+
+/// How a subscript is used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Access {
+    Read,
+    /// `xs[i] = v`: `v` flows into the element.
+    Write,
+    /// `xs[i] += v`: read, then written back with the same type.
+    ReadWrite,
 }
 
 /// `left op right` has type `out`.
@@ -155,19 +174,28 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             index,
             literal,
             out,
-            store,
+            access,
         } => Need::Index {
             value: r(value),
             index: r(index),
             literal: *literal,
             out: r(out),
-            store: *store,
+            access: *access,
         },
         Need::Unpack { value, elems } => Need::Unpack {
             value: r(value),
             elems: elems.iter().map(r).collect(),
         },
         Need::ToNumber { func, arg } => Need::ToNumber { func, arg: r(arg) },
+        Need::Assign {
+            target,
+            value,
+            what,
+        } => Need::Assign {
+            target: r(target),
+            value: r(value),
+            what: what.clone(),
+        },
     }
 }
 
@@ -178,6 +206,7 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Equal { left, right } | Need::Order { left, right } => vec![left, right],
         Need::Len(t) | Need::ToNumber { arg: t, .. } => vec![t],
         Need::Iter { iterable, elem } => vec![iterable, elem],
+        Need::Assign { target, value, .. } => vec![target, value],
         Need::Index {
             value, index, out, ..
         } => vec![value, index, out],
@@ -198,10 +227,15 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
             index,
             literal,
             out,
-            store,
-        } => index_of(s, c, value, index, *literal, out, *store),
+            access,
+        } => index_of(s, c, value, index, *literal, out, *access),
         Need::Unpack { value, elems } => unpack(s, c, value, elems),
         Need::ToNumber { func, arg } => to_number(s, c, func, arg),
+        Need::Assign {
+            target,
+            value,
+            what,
+        } => assign(s, c, target, value, what),
     }
 }
 
@@ -383,20 +417,25 @@ fn index_of(
     index: &Type,
     literal: Option<i64>,
     out: &Type,
-    store: bool,
+    access: Access,
 ) -> Result<Step> {
     let Some(t) = known(s, value) else {
         return Ok(Step::Waiting);
     };
+    let immutable = matches!(t, Type::Str | Type::Range | Type::Tuple(_));
+    if access != Access::Read && immutable {
+        let kind = match &t {
+            Type::Tuple(_) => "tuple".to_string(),
+            other => s.zonk(other).to_string(),
+        };
+        let msg = format!("{kind} does not support item assignment");
+        return Err(error(c, msg));
+    }
     if let Type::Tuple(items) = &t {
-        return tuple_index(s, c, items, literal, out, store);
+        return tuple_index(s, c, items, literal, out);
     }
     let item = match &t {
         Type::List(item) => (**item).clone(),
-        Type::Str | Type::Range if store => {
-            let msg = format!("{} does not support item assignment", s.zonk(&t));
-            return Err(error(c, msg));
-        }
         Type::Str => Type::Str,
         Type::Range => Type::Int,
         other => {
@@ -407,12 +446,18 @@ fn index_of(
     if !s.resolve(index).is_intlike() {
         expect(s, c, &Type::Int, index)?;
     }
-    if store && s.unify(out, &item).is_err() {
-        let msg = format!("cannot assign {} into {}", s.zonk(out), s.zonk(&t));
-        return Err(error(c, msg));
+    if access != Access::Write {
+        expect(s, c, out, &item)?;
+        return Ok(Step::Done(vec![]));
     }
-    expect(s, c, out, &item)?;
-    Ok(Step::Done(vec![]))
+    let what = format!("cannot assign into {}", s.zonk(&t));
+    match s.assign(&item, out) {
+        Ok(deferred) => Ok(Step::Done(assigns(deferred, &what))),
+        Err(_) => {
+            let msg = format!("cannot assign {} into {}", s.zonk(out), s.zonk(&t));
+            Err(error(c, msg))
+        }
+    }
 }
 
 fn tuple_index(
@@ -421,14 +466,7 @@ fn tuple_index(
     items: &[Type],
     literal: Option<i64>,
     out: &Type,
-    store: bool,
 ) -> Result<Step> {
-    if store {
-        return Err(error(
-            c,
-            "tuple does not support item assignment".to_string(),
-        ));
-    }
     let Some(n) = literal else {
         return Err(error(
             c,
@@ -493,6 +531,50 @@ fn to_number(s: &mut Subst, c: &Constraint, func: &str, arg: &Type) -> Result<St
         s.zonk(&t)
     );
     Err(error(c, msg))
+}
+
+fn assign(s: &mut Subst, c: &Constraint, target: &Type, value: &Type, what: &str) -> Result<Step> {
+    if let (Type::Optional(_), Type::Var(_)) = (s.resolve(target), s.resolve(value)) {
+        return Ok(Step::Waiting);
+    }
+    match s.assign(target, value) {
+        Ok(deferred) => Ok(Step::Done(assigns(deferred, what))),
+        Err(clash) => {
+            let msg = format!("{what}: {}", mismatch(s, clash, target, value));
+            Err(error(c, msg))
+        }
+    }
+}
+
+/// Assignments `Subst::assign` could not decide yet, as constraints.
+pub(super) fn assigns(deferred: Vec<(Type, Type)>, what: &str) -> Vec<Need> {
+    deferred
+        .into_iter()
+        .map(|(target, value)| Need::Assign {
+            target,
+            value,
+            what: what.to_string(),
+        })
+        .collect()
+}
+
+/// Settles the assignments still waiting at module end: a value nothing
+/// else constrains takes its target's type (`x: int | None = xs[0]` with
+/// `xs` never filled makes `xs` a `list[int | None]`). The rest stays
+/// waiting, as in `solve`.
+pub(super) fn default_assigns(s: &mut Subst, pending: Vec<Constraint>) -> Result<Vec<Constraint>> {
+    let mut waiting = solve(s, pending)?;
+    while let Some(i) = waiting
+        .iter()
+        .position(|c| matches!(c.need, Need::Assign { .. }))
+    {
+        let c = waiting.swap_remove(i);
+        if let Need::Assign { target, value, .. } = &c.need {
+            expect(s, &c, target, value)?;
+        }
+        waiting = solve(s, waiting)?;
+    }
+    Ok(waiting)
 }
 
 /// The head-resolved type, or `None` while it is still a variable.

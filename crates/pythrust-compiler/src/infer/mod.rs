@@ -27,7 +27,7 @@ mod tests;
 use std::collections::{BTreeSet, HashMap};
 use std::mem;
 
-use crate::ast::{FuncDef, Module, StmtKind, TypeExpr};
+use crate::ast::{Block, FuncDef, Module, StmtKind, TypeExpr};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 
@@ -72,7 +72,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     // value of those types is ever built (`bubble_sort([])` compares no
     // elements), so the operation never runs. It is accepted, and the
     // variables stay unconstrained in the typed view.
-    solve::solve(&mut c.subst, mem::take(&mut c.pending))?;
+    solve::default_assigns(&mut c.subst, mem::take(&mut c.pending))?;
     c.resolve_schemes()?;
     Ok(c.finish())
 }
@@ -141,6 +141,8 @@ impl Checker {
             let ty = self.subst.fresh();
             self.globals.insert(name, ty);
         }
+        let globals = self.globals.clone();
+        self.declare_annotated(&module.body, &globals)?;
         match defs
             .iter()
             .find(|f| self.globals.contains_key(&f.name.name))
@@ -151,6 +153,26 @@ impl Checker {
             )),
             None => Ok(()),
         }
+    }
+
+    /// Gives each annotated variable in `block` its annotated type up
+    /// front, so code that runs earlier in inference order (a function
+    /// body reading an annotated global) sees it.
+    fn declare_annotated(&mut self, block: &Block, vars: &HashMap<String, Type>) -> Result<()> {
+        for (name, annotation) in scope::annotated(block) {
+            let declared = self.annotation(annotation)?;
+            let Some(var) = vars.get(name) else {
+                continue;
+            };
+            self.subst.unify(var, &declared).map_err(|clash| {
+                let detail = solve::mismatch(&self.subst, clash, var, &declared);
+                error(
+                    annotation.span,
+                    format!("conflicting annotations for `{name}`: {detail}"),
+                )
+            })?;
+        }
+        Ok(())
     }
 
     /// Infers a group of mutually recursive functions, then generalizes.
@@ -214,6 +236,7 @@ impl Checker {
             let fresh = self.subst.fresh();
             locals.entry(name).or_insert(fresh);
         }
+        self.declare_annotated(&f.body, &locals)?;
         self.frame = Frame {
             locals,
             ret: Some(sig.ret.clone()),
@@ -225,7 +248,8 @@ impl Checker {
             return Ok(());
         }
         let name = &f.name.name;
-        self.subst.assign(&sig.ret, &Type::None).map_err(|_| {
+        let none = self.subst.assign(&sig.ret, &Type::None);
+        none.map(drop).map_err(|_| {
             let ret = self.subst.zonk(&sig.ret);
             let msg = format!(
                 "`{name}` returns {ret}, but can reach its end, which returns None; \
@@ -368,10 +392,14 @@ impl Checker {
     /// Assigns `found` into `expected` (see `Subst::assign`); on failure
     /// the message names `what`.
     fn expect(&mut self, span: Span, expected: &Type, found: &Type, what: &str) -> Result<()> {
-        self.subst.assign(expected, found).map_err(|clash| {
+        let deferred = self.subst.assign(expected, found).map_err(|clash| {
             let detail = solve::mismatch(&self.subst, clash, expected, found);
             error(span, format!("{what}: {detail}"))
-        })
+        })?;
+        for need in solve::assigns(deferred, what) {
+            self.need(need, span);
+        }
+        Ok(())
     }
 
     fn finish(self) -> Types {
