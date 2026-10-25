@@ -413,12 +413,19 @@ fn mixed_and_bool_arithmetic_promotes() {
 #[test]
 fn powers() {
     assert_eq!(show(bin(Pow, int(2), int(10))), "1024");
-    assert_eq!(show(bin(Pow, int(2), int(-1))), "0.5");
+    assert_eq!(show(bin(Pow, int(2), int(0))), "1");
+    assert_eq!(show(bin(Pow, float(2.0), int(-1))), "0.5");
+    assert_eq!(
+        show_err(bin(Pow, int(2), int(-1))),
+        "ValueError: negative exponent in int ** int; write 2.0 ** -1 for a float"
+    );
     assert_eq!(show(bin(Pow, int(-1), int(i64::MAX))), "-1");
     assert_eq!(show(bin(Pow, float(4.0), float(0.5))), "2.0");
     assert!(show_err(bin(Pow, int(2), int(63))).contains("OverflowError"));
     assert!(show_err(bin(Pow, int(2), int(i64::MAX))).contains("OverflowError"));
-    assert!(show_err(bin(Pow, int(0), int(-1))).contains("ZeroDivisionError"));
+    assert!(show_err(bin(Pow, int(0), int(-1))).contains("negative exponent"));
+    assert!(show_err(bin(Pow, int(-2), int(-2))).contains("write (-2.0) ** -2"));
+    assert!(show_err(bin(Pow, float(0.0), int(-1))).contains("ZeroDivisionError"));
     assert!(show_err(bin(Pow, float(10.0), float(400.0))).contains("OverflowError"));
     assert!(show_err(bin(Pow, float(-8.0), float(0.5))).contains("ValueError"));
 }

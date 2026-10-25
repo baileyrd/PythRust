@@ -98,10 +98,19 @@ fn int_mod(a: i64, b: i64, span: Span) -> Result<i64> {
     })
 }
 
-/// A negative exponent gives a float, as in Python.
+/// `int ** int` is always `int`, so a negative exponent is an error
+/// (Python returns a float; see `docs/grammar.md`, Deviations).
 fn int_pow<'m>(a: i64, b: i64, span: Span) -> Result<Value<'m>> {
     if b < 0 {
-        return float_op(BinOp::Pow, a as f64, b as f64, span).map(Value::Float);
+        let base = if a < 0 {
+            format!("({a}.0)")
+        } else {
+            format!("{a}.0")
+        };
+        return Err(rt_err(
+            span,
+            format!("ValueError: negative exponent in int ** int; write {base} ** {b} for a float"),
+        ));
     }
     let checked = match u32::try_from(b) {
         Ok(e) => a.checked_pow(e),
