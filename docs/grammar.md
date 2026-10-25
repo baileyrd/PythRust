@@ -132,6 +132,9 @@ Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out
 - `NAME` is ASCII only.
 - Ints are `i64`: overflow is a runtime error, including `i64::MIN // -1` and `-i64::MIN`. An out-of-range literal is a compile error.
 - Lists are homogeneous; tuple subscripts are integer literals.
+- `int ** int` is `int`; a negative exponent is a runtime error (Python returns a `float`).
+- A negative `float` raised to a fractional power is a runtime error; Python returns a `complex`, which the subset lacks.
+- Mixed `int`/`float` arithmetic and comparison, and `int / int`, go through `f64`, so results can differ from Python's exact math for magnitudes above 2**53.
 
 ## Deliberate omissions (phase 2)
 
