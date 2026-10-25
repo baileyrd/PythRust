@@ -109,7 +109,9 @@ fn int_pow<'m>(a: i64, b: i64, span: Span) -> Result<Value<'m>> {
         };
         return Err(rt_err(
             span,
-            format!("ValueError: negative exponent in int ** int; write {base} ** {b} for a float"),
+            format!(
+                "ValueError: negative exponent in int ** int; use a float base, e.g. {base} ** {b}"
+            ),
         ));
     }
     let checked = match u32::try_from(b) {
