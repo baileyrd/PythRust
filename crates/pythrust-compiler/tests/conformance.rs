@@ -16,11 +16,15 @@
 //! Environment:
 //! - `PYTHON` interpreter to use as the oracle (default `python3`).
 //! - `PYTHRUST_BIN` the `pythrust` binary (default `target/debug/pythrust`).
-//! - `PYTHRUST_BLESS=1` rewrite non-deviation goldens from CPython.
+//! - `PYTHRUST_BLESS=1` write non-deviation goldens from CPython, creating
+//!   missing ones; a golden whose exit status disagrees is kept.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 type Res<T> = std::result::Result<T, String>;
 
@@ -100,19 +104,28 @@ fn read(path: &Path) -> Res<String> {
     fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// All `.pythrust` programs in `dir`, sorted, each with a golden.
-fn load_corpus(dir: &Path) -> Res<Vec<Case>> {
+/// All `.pythrust` programs in `dir`, sorted.
+fn list_sources(dir: &Path) -> Res<Vec<PathBuf>> {
     let entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut sources: Vec<PathBuf> = entries
         .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
         .collect::<Res<_>>()?;
     sources.retain(|p| p.extension().is_some_and(|x| x == "pythrust"));
     sources.sort();
-    sources.into_iter().map(load_case).collect()
+    Ok(sources)
+}
+
+/// All programs in `dir`, each with its golden; a missing golden is an error.
+fn load_corpus(dir: &Path) -> Res<Vec<Case>> {
+    list_sources(dir)?.into_iter().map(load_case).collect()
+}
+
+fn load_expect(source: &Path) -> Res<Expect> {
+    parse_expect(&read(source)?).map_err(|e| format!("{}: {e}", source.display()))
 }
 
 fn load_case(source: PathBuf) -> Res<Case> {
-    let expect = parse_expect(&read(&source)?).map_err(|e| format!("{}: {e}", source.display()))?;
+    let expect = load_expect(&source)?;
     let stdout = read(&golden_path(&source))?;
     Ok(Case {
         source,
@@ -121,28 +134,59 @@ fn load_case(source: PathBuf) -> Res<Case> {
     })
 }
 
-fn run(cmd: &mut Command) -> Res<Run> {
-    let out = cmd
-        .output()
+/// Longest a single program may run before it is killed.
+const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runs `cmd` to completion, killing and reaping it after `timeout`.
+fn run(cmd: &mut Command, timeout: Duration) -> Res<Run> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|e| format!("cannot run {cmd:?}: {e}"))?;
-    let status = out
-        .status
-        .code()
-        .ok_or_else(|| format!("{cmd:?} killed by a signal"))?;
-    let stdout = String::from_utf8(out.stdout).map_err(|e| format!("{cmd:?}: {e}"))?;
+    // Drain stdout on a thread so a full pipe cannot stall the child.
+    let mut pipe = child.stdout.take().ok_or("stdout not captured")?;
+    let reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        pipe.read_to_end(&mut buf).map(|_| buf)
+    });
+    let status = wait(&mut child, timeout).map_err(|e| format!("{cmd:?}: {e}"))?;
+    let bytes = reader
+        .join()
+        .map_err(|_| "stdout reader panicked".to_string())?
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8(bytes).map_err(|e| format!("{cmd:?}: {e}"))?;
     Ok(Run { stdout, status })
+}
+
+/// Waits for `child`'s exit code, killing it if it outlives `timeout`.
+fn wait(child: &mut Child, timeout: Duration) -> Res<i32> {
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return status
+                .code()
+                .ok_or_else(|| "killed by a signal".to_string());
+        }
+        if start.elapsed() > timeout {
+            child.kill().map_err(|e| e.to_string())?;
+            child.wait().map_err(|e| e.to_string())?;
+            return Err(format!("timed out after {timeout:?}"));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn run_cpython(source: &Path) -> Res<Run> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
     // -I: isolated mode, so nothing from the environment or cwd leaks in.
-    run(Command::new(python).arg("-I").arg(source))
+    run(Command::new(python).arg("-I").arg(source), TIMEOUT)
 }
 
 fn run_pythrust(source: &Path) -> Res<Run> {
     let default = repo_root()?.join("target/debug/pythrust");
     let bin = std::env::var_os("PYTHRUST_BIN").map_or(default, PathBuf::from);
-    run(Command::new(bin).arg("run").arg(source))
+    run(Command::new(bin).arg("run").arg(source), TIMEOUT)
 }
 
 /// Compares a run against the golden; `None` means it matches.
@@ -164,23 +208,41 @@ fn mismatch(case: &Case, got: &Run) -> Option<String> {
     ))
 }
 
-/// Checks one case against CPython, or blesses its golden.
-fn check_cpython(case: &Case, bless: bool) -> Res<Option<String>> {
+/// Checks one case against CPython. A deviation must still differ.
+fn check_cpython(case: &Case) -> Res<Option<String>> {
     let got = run_cpython(&case.source)?;
-    if let Some(why) = &case.expect.deviation {
-        let stale = got.stdout == case.stdout && got.status == case.expect.status;
-        return Ok(stale.then(|| {
-            format!(
-                "{}: CPython agrees; stale deviation: {why}",
-                case.source.display()
-            )
-        }));
-    }
-    if bless {
-        fs::write(golden_path(&case.source), &got.stdout).map_err(|e| e.to_string())?;
+    let Some(why) = &case.expect.deviation else {
+        return Ok(mismatch(case, &got));
+    };
+    let stale = got.stdout == case.stdout && got.status == case.expect.status;
+    Ok(stale.then(|| {
+        format!(
+            "{}: CPython agrees; stale deviation: {why}",
+            case.source.display()
+        )
+    }))
+}
+
+/// Writes `source`'s golden from CPython; the golden may not exist yet.
+/// Deviations are hand-written and skipped. An unexpected exit status
+/// leaves the old golden in place and is reported.
+fn bless(source: &Path) -> Res<Option<String>> {
+    let expect = load_expect(source)?;
+    if expect.deviation.is_some() {
         return Ok(None);
     }
-    Ok(mismatch(case, &got))
+    let got = run_cpython(source)?;
+    if got.status != expect.status {
+        return Ok(Some(format!(
+            "{}: CPython exited {}, want {}; golden kept",
+            source.display(),
+            got.status,
+            expect.status
+        )));
+    }
+    let golden = golden_path(source);
+    fs::write(&golden, &got.stdout).map_err(|e| format!("{}: {e}", golden.display()))?;
+    Ok(None)
 }
 
 /// Fails with every collected failure at once, not just the first.
@@ -193,14 +255,25 @@ fn report(failures: Vec<String>) {
     );
 }
 
+/// Blesses every program in `dir`, or checks each against CPython.
+fn cpython_failures(dir: &Path, blessing: bool) -> Res<Vec<String>> {
+    let mut failures = Vec::new();
+    if blessing {
+        for source in list_sources(dir)? {
+            failures.extend(bless(&source)?);
+        }
+        return Ok(failures);
+    }
+    for case in load_corpus(dir)? {
+        failures.extend(check_cpython(&case)?);
+    }
+    Ok(failures)
+}
+
 #[test]
 fn corpus_matches_cpython() -> Res<()> {
-    let bless = std::env::var("PYTHRUST_BLESS").is_ok_and(|v| v == "1");
-    let mut failures = Vec::new();
-    for case in load_corpus(&corpus_dir()?)? {
-        failures.extend(check_cpython(&case, bless)?);
-    }
-    report(failures);
+    let blessing = std::env::var("PYTHRUST_BLESS").is_ok_and(|v| v == "1");
+    report(cpython_failures(&corpus_dir()?, blessing)?);
     Ok(())
 }
 
@@ -304,6 +377,70 @@ fn mismatch_reports_status_and_stdout() {
 
 #[test]
 fn run_reports_missing_binary() {
-    let got = run(&mut Command::new("/nonexistent/pythrust-binary"));
+    let got = run(&mut Command::new("/nonexistent/pythrust-binary"), TIMEOUT);
     assert!(got.is_err());
+}
+
+/// A fresh, empty directory under the system temp dir, unique to `name`.
+fn scratch(name: &str) -> Res<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("pythrust-conf-{}-{name}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn cleanup(dir: &Path) -> Res<()> {
+    fs::remove_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
+fn write(path: &Path, text: &str) -> Res<()> {
+    fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[test]
+fn missing_golden_fails_check() -> Res<()> {
+    let dir = scratch("missing")?;
+    write(&dir.join("p.pythrust"), "print(1)\n")?;
+    assert!(cpython_failures(&dir, false).is_err());
+    cleanup(&dir)
+}
+
+#[test]
+fn bless_creates_missing_golden() -> Res<()> {
+    let dir = scratch("create")?;
+    write(&dir.join("p.pythrust"), "print(1)\n")?;
+    assert_eq!(cpython_failures(&dir, true)?, Vec::<String>::new());
+    assert_eq!(read(&dir.join("p.out"))?, "1\n");
+    assert_eq!(cpython_failures(&dir, false)?, Vec::<String>::new());
+    cleanup(&dir)
+}
+
+#[test]
+fn bless_keeps_golden_on_unexpected_exit() -> Res<()> {
+    let dir = scratch("keep")?;
+    write(&dir.join("p.pythrust"), "print(1)\nprint(1 // 0)\n")?;
+    write(&dir.join("p.out"), "old\n")?;
+    assert_eq!(cpython_failures(&dir, true)?.len(), 1);
+    assert_eq!(read(&dir.join("p.out"))?, "old\n");
+    cleanup(&dir)
+}
+
+#[test]
+fn bless_skips_deviations() -> Res<()> {
+    let dir = scratch("deviation")?;
+    write(&dir.join("p.pythrust"), "# deviation: test\nprint(2)\n")?;
+    write(&dir.join("p.out"), "hand\n")?;
+    assert_eq!(cpython_failures(&dir, true)?, Vec::<String>::new());
+    assert_eq!(read(&dir.join("p.out"))?, "hand\n");
+    cleanup(&dir)
+}
+
+#[test]
+fn run_kills_on_timeout() {
+    let mut cmd = Command::new("python3");
+    cmd.args(["-I", "-c", "while True: pass"]);
+    let got = run(&mut cmd, Duration::from_millis(200));
+    assert!(got.is_err_and(|e| e.contains("timed out")));
 }
