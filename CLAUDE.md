@@ -27,7 +27,7 @@ One crate, `crates/pythrust-compiler`, one module per stage. Shared contract typ
 
 ## Open decisions (do not decide silently; propose and ask)
 
-Pause marker (`pause f(x)`?), shared-lock keyword (`shared`?), source file extension (placeholder `.pythrust`), LLVM vs Cranelift.
+Source file extension (placeholder `.pythrust`). Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate.
 
 ## Checks
 

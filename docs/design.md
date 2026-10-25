@@ -42,7 +42,7 @@ Code starts **loose** (Python-feeling, inferred) and is **tempered** (hardened, 
 - I/O concurrency and true CPU parallelism, under one syntax family.
 - Functions are uncolored: no async/sync split. The runtime parks lightweight tasks on blocking calls.
 - Tempered mode requires an explicit marker at pause points (where other tasks could interleave).
-- Shared data has three tiers: (1) default, move into a task or lend read-only; (2) a built-in shared wrapper with a lock, one short keyword; (3) channels, where ownership moves with the message.
+- Shared data has three tiers: (1) default, move into a task or lend read-only; (2) a built-in locked wrapper, the builtin type `shared[T]` with scoped `with` access; (3) channels, where ownership moves with the message.
 - Actors are not a language feature. The owner-object pattern is built from channels.
 
 ## Interop
@@ -53,7 +53,7 @@ Code starts **loose** (Python-feeling, inferred) and is **tempered** (hardened, 
 
 ## Compiler
 
-- Own compiler, not a transpiler to Rust, with a native backend (LLVM or Cranelift, to be chosen).
+- Own compiler, not a transpiler to Rust, with a native backend: Cranelift, behind a backend-neutral IR so LLVM can be added later ([research/backend.md](research/backend.md)).
 - Reasons: own diagnostics (no leaked borrow-checker errors about code the user never wrote), own compile speed, own semantics, compiler-driven tempering hints.
 - Written in Rust. Self-hosting is a long-term goal, attempted only once the language is stable.
 
@@ -77,5 +77,5 @@ Mojo, Nim, Codon, TypeScript (adoption path), Swift (reference counting, error l
 
 - Formal grammar for the loose syntax.
 - Prototype parser and type inferencer for a tiny subset.
-- Decide the backend (LLVM versus Cranelift).
-- Specify syntax for tempering annotations, pause markers, and the shared-lock keyword.
+- Specify syntax for tempering annotations (ownership modes start from `read` / `mut` / `owned`, see [research/ownership.md](research/ownership.md)).
+- Decide the source file extension.
