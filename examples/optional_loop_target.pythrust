@@ -1,0 +1,9 @@
+def first_present(xs: list[int | None]) -> int:
+    for x in xs:
+        if x is not None:
+            return x
+    return -1
+
+
+print(first_present([None, 3, 4]))
+print(first_present([None, None]))
