@@ -1,0 +1,4 @@
+# deviation: [1] == [1.0] is a compile error (element types differ), where CPython prints True.
+# expect-exit: 1
+print("before")
+print([1] == [1.0])

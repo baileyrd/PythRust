@@ -32,3 +32,8 @@ print("tab\there", 'it\'s', "quote\"d", "back\\slash")
 print("line1\nline2")
 print("rust" in "pythrust", "go" in "pythrust")
 print(len(""))
+
+accented = "héllo"
+print(len(accented), accented[1], accented[-1])
+for ch in accented:
+    print(ch)

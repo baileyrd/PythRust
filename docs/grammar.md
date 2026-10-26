@@ -56,6 +56,7 @@ for_stmt    = 'for' target_list 'in' expr ':' block ['else' ':' block] ;
 - Attribute assignment (`a.b = c`) waits for classes.
 - `def` appears only at module top level. Nested functions bring closure capture, which waits for ownership (phase 4).
 - Phase 2 parses and records `temper`; nothing about it is enforced until M5.
+- Rejected by the parser, as CPython rejects them before running: `return` outside a function, `break`/`continue` outside a loop (a loop's `else` is outside it), duplicate parameter names, a parameter without a default after one with a default, a positional argument after a keyword argument, and a repeated keyword argument.
 - Parameters: defaults are evaluated once, when `def` runs, as in Python. A call binds positional arguments first, then keyword arguments by name. An unknown name, a parameter bound twice, or a parameter left unbound is an error.
 
 ## Types (annotation syntax)
@@ -112,7 +113,11 @@ atom        = NAME | INT | FLOAT | STRING
 - Lists are homogeneous: every element has one type. `[1, "a"]` is a type error unless the element type is `dyn`. A variable of type `dyn`, the Python-bridge escape hatch, may hold anything; this does not implicitly turn heterogeneous lists or ordinary variables into `dyn`. The bridge remains phase 5; this decision does not claim `dyn` is implemented in phase 2.
 - A variable has one fixed type, inferred once (or constrained by its annotation); assignment and augmented assignment cannot change it. See [Decided](#decided) for the no-widening diagnostic and Optional boundary.
 - `int ** int` returns `int`. A negative integer exponent is a runtime error, except that a literal negative exponent with an integer base is a compile-time error. Both diagnostics say "use a float base"; `2.0 ** -1` is legal.
-- A tuple subscript must be an integer literal, so the element type is known statically.
+- A tuple subscript must be an integer literal, optionally negated (`t[-1]`), so the element type is known statically.
+- Subscripts apply to lists, strings, and tuples. A negative index counts from the end: `xs[-1]` is the last element. An index out of range in either direction is a runtime error, for tuples too. Slicing is not in phase 2.
+- Indexing a string and iterating over it (`for ch in s`) yield a length-1 `str`, counted in code points, as in CPython. Under UTF-8, indexing a non-ASCII string is O(n); the phase-3 backend deals with that.
+- `in` with a `str` on the right is a substring test. The left operand must be a `str`; anything else is a compile error.
+- List `==` and `!=` compare element-wise. Both lists must have the same element type, otherwise it is a compile error. Scalar `int == float` stays as in Python.
 - An annotation that conflicts with the inferred type is a type error.
 
 ## Builtins (phase 2)
@@ -126,6 +131,8 @@ A closed set. Anything else is a name error.
 ## Runtime errors
 
 Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out of range, unpacking arity, division by zero, ...) stops the program, prints a diagnostic with its source span to stderr, and exits with status 1, as an uncaught CPython exception does.
+
+A compile error (lexical, syntax, or type) is reported before anything runs: `pythrust run` prints the diagnostic to stderr, writes nothing to stdout, and exits with status 1.
 
 ## Deviations from Python
 
@@ -141,7 +148,10 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 - **Fixed variable types:** a variable cannot be rebound to a different type. Flow-sensitive type-changing rebinding is outside the current subset; `dyn` is the explicit Python-bridge escape hatch.
 - **No int-to-float variable widening:** `total = 0` followed by `total += 1.5` is a compile error, with a fix-it to initialize with `0.0`. Mixed arithmetic within an expression still promotes as in Python; the variable's type does not widen.
 - **Negative integer exponents:** `int ** int` returns `int`; a negative exponent is a runtime error. With an integer base, a literal negative exponent (`x ** -1`) is a compile-time error. Both messages say "use a float base". `2.0 ** -1` stays legal.
-- Lists are homogeneous; tuple subscripts are integer literals.
+- Lists are homogeneous; tuple subscripts are integer literals, optionally negated.
+- Type errors are reported before the program runs, so a program with one prints nothing. Python raises the same mistakes as a `TypeError` at runtime, if it raises them at all.
+- `1 in "abc"`: a non-`str` left operand of `in` on a string is a compile error. Python raises a `TypeError`.
+- List equality needs the same element type: `[1] == [1.0]` is a type error, where Python compares element-wise and returns `True`.
 - `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
 - Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.
 - Current inference rejects a function that returns a value on some path but falls off its end (implicitly returning `None`). Optional is decided for phase 2 but not implemented yet; its interaction with return inference remains pending, not a reason to defer Optional or silently permit arbitrary unions.
