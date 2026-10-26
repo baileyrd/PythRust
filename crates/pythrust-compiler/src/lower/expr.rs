@@ -3,13 +3,13 @@
 use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
 use crate::diag::Result;
 use crate::infer::Type;
-use crate::ir::{CmpOp, FloatOp, Inst, IntOp, Operand, Rvalue, Term, Ty};
+use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 use super::vars::runtime;
 use super::{unsupported, FnBuilder};
 
-impl FnBuilder<'_, '_> {
+impl<'a> FnBuilder<'_, 'a> {
     pub(super) fn expr(&mut self, e: &Expr) -> Result<Operand> {
         match &e.kind {
             ExprKind::Int(n) => Ok(Operand::Int(*n)),
@@ -336,9 +336,18 @@ impl FnBuilder<'_, '_> {
         for (op, param) in bound.into_iter().zip(&params) {
             ops.push(self.fit_param(op, param, span)?);
         }
-        let tys = ops.iter().map(|op| self.ty(*op)).collect();
-        let ret = self.ty_at(span)?;
-        let id = self.cx.instance(def, tys, ret, span)?;
+        let tys: Vec<Ty> = ops.iter().map(|op| self.ty(*op)).collect();
+        // In generic code a call's node type may hold variables only the
+        // callee's body decides; its instance then does, and binds them
+        // here for the nodes that share them.
+        let node = self.node_type(span)?;
+        let (id, ret) = match super::is_closed(node, &self.subst) {
+            true => {
+                let ret = self.ty_at(span)?;
+                (self.cx.instance(def, tys, ret, span)?, ret)
+            }
+            false => self.open_call(def, tys, node, span)?,
+        };
         // The callee takes its arguments' references.
         let owned: Vec<Operand> = ops.into_iter().map(|op| self.own(op, span)).collect();
         let result = self.temp(ret, Rvalue::Call(id, owned.clone()), span);
@@ -348,6 +357,25 @@ impl FnBuilder<'_, '_> {
             }
         }
         Ok(result)
+    }
+
+    /// The instance of `def` for `tys` whose result type, open in
+    /// `node`, its body decides. A recursive call before that is
+    /// unsupported, but while this function's own result is undecided
+    /// it is skipped for a second pass ([`FnBuilder::block`]).
+    fn open_call(
+        &mut self,
+        def: &'a FuncDef,
+        tys: Vec<Ty>,
+        node: &Type,
+        span: Span,
+    ) -> Result<(FuncId, Ty)> {
+        let Some((id, ret)) = self.cx.open_instance(def, tys, span)? else {
+            self.stuck = self.open_ret.is_some();
+            return Err(unsupported(span, super::stmt::OPEN_RESULT));
+        };
+        super::bind(node, ret, &self.cx.seqs, &mut self.subst);
+        Ok((id, ret))
     }
 
     /// Whether a call from here to top-level `name` finds it defined. In

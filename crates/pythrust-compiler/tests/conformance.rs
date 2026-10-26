@@ -239,6 +239,8 @@ const NATIVE: &[&str] = &[
     "float_to_int_nan",
     "float_to_int_range",
     "floats",
+    "functions",
+    "generic_results",
     "global_unbound",
     "globals_defaults",
     "hello",

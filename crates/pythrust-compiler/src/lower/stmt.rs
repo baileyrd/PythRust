@@ -4,6 +4,7 @@ use crate::ast::{
     Arg, BinOp, Block, Branch, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::Result;
+use crate::infer::Type;
 use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
@@ -16,11 +17,28 @@ struct Looped<'s> {
     orelse: &'s Block,
 }
 
+/// A generic function's result type that no `return` decides first.
+pub(super) const OPEN_RESULT: &str =
+    "a generic function whose open result type no `return` decides";
+
 impl FnBuilder<'_, '_> {
+    /// Lowers `block`'s statements. In an instance whose result type is
+    /// still undecided, a statement stuck on a recursive call is skipped
+    /// (the instance is lowered again once a `return` decides it).
     pub(super) fn block(&mut self, block: &Block) -> Result<()> {
-        block
-            .iter()
-            .try_for_each(|s| self.pooled_stmt(|b| b.stmt(s)))
+        for s in block {
+            let (pools, loops) = (self.pools.len(), self.loops.len());
+            match self.pooled_stmt(|b| b.stmt(s)) {
+                Err(_) if self.stuck => {
+                    (self.stuck, self.skipped) = (false, true);
+                    self.pools.truncate(pools);
+                    self.loops.truncate(loops);
+                    self.jump_away(Term::Unreachable);
+                }
+                r => r?,
+            }
+        }
+        Ok(())
     }
 
     fn stmt(&mut self, s: &Stmt) -> Result<()> {
@@ -120,6 +138,9 @@ impl FnBuilder<'_, '_> {
             Some(e) => self.expr(e)?,
             None => Operand::None,
         };
+        if let Some(declared) = self.open_ret.clone() {
+            self.decide_ret(&declared, v, span)?;
+        }
         let v = self.fit(v, self.ret, span);
         if self.ty(v) != self.ret {
             return Err(unsupported(
@@ -130,6 +151,30 @@ impl FnBuilder<'_, '_> {
         let slot = self.return_slot();
         self.move_into(slot, v, span);
         self.jump_away(Term::Goto(self.exit));
+        Ok(())
+    }
+
+    /// Decides an open result type from the first `return`'s value `v`:
+    /// its type in the declared shape, so `[x]` returned from a
+    /// `-> list | None` function makes it `list[int] | None`. A `None`
+    /// whose optional's present type is still open decides nothing: the
+    /// statement is skipped for the second pass ([`FnBuilder::block`]).
+    fn decide_ret(&mut self, declared: &Type, v: Operand, span: Span) -> Result<()> {
+        let have = self.ty(v);
+        let open_optional =
+            matches!(declared, Type::Optional(_)) && !super::is_closed(declared, &self.subst);
+        if have == Ty::None && open_optional {
+            self.stuck = true;
+            return Err(unsupported(span, OPEN_RESULT));
+        }
+        let ret = self.shape(declared, have, span)?;
+        if !super::bind(declared, ret, &self.cx.seqs, &mut self.subst) {
+            return Err(super::internal(
+                span,
+                "a result of another shape than declared",
+            ));
+        }
+        (self.ret, self.open_ret) = (ret, None);
         Ok(())
     }
 

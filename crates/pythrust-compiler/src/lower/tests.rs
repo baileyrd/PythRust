@@ -220,15 +220,6 @@ fn defaults_are_stored_when_the_def_runs() {
 }
 
 #[test]
-fn unsupported_calls_name_the_construct() {
-    let src =
-        "def twice(n):\n    return sq(sq(n))\ndef sq(n):\n    return n * n\nprint(twice(3))\n";
-    let (d, text) = rejected(src);
-    assert!(d.message.contains("generic code"), "{}", d.message);
-    assert_eq!(text, "sq(n)");
-}
-
-#[test]
 fn calls_before_a_def_fail_or_are_rejected() {
     let p = lowered("print(f())\ndef f():\n    return 7\n");
     assert_eq!(fails(&p), 1, "a direct early call raises NameError");
@@ -480,4 +471,40 @@ fn an_empty_tuple_loop_binds_nothing() {
     // Only `x = 7` writes `x`: no item is read and the body is not lowered.
     let rv = rvalues(main);
     assert!(!rv.iter().any(|r| matches!(r, Rvalue::Index(..))));
+}
+
+#[test]
+fn an_open_result_type_comes_from_the_instance_body() {
+    let p = lowered("def square(n):\n    return n * n\n\n\ndef twice(n):\n    return square(square(n))\n\n\nprint(twice(3), twice(1.5))\n");
+    let squares = p.funcs.iter().filter(|f| f.name == "square");
+    let mut rets: Vec<Ty> = squares.map(|f| f.ret).collect();
+    rets.sort_by_key(|t| format!("{t:?}"));
+    assert_eq!(rets, vec![Ty::Float, Ty::Int]);
+}
+
+#[test]
+fn recursion_before_the_deciding_return_lowers_in_a_second_pass() {
+    let src = "def rec(n, x):\n    if n > 0:\n        return rec(n - 1, x) + x\n    return x * x\n\n\ndef outer(x):\n    return rec(2, x) + 1\n\n\nprint(outer(3))\n";
+    let p = lowered(src);
+    let recs: Vec<&Func> = p.funcs.iter().filter(|f| f.name == "rec").collect();
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0].ret, Ty::Int);
+    let (d, text) = rejected(
+        "def f(n):\n    return f(n - 1)\n\n\ndef g(x):\n    return f(x)\n\n\nprint(g(1))\n",
+    );
+    assert!(d.message.contains("no `return` decides"), "{}", d.message);
+    assert_eq!(text, "g(1)");
+}
+
+#[test]
+fn open_display_items_decide_the_display_type() {
+    let p = lowered("def squares(n):\n    return [n * n]\n\n\ndef count(n):\n    return len(squares(n))\n\n\nprint(count(3))\n");
+    let squares = p.funcs.iter().find(|f| f.name == "squares");
+    let elem = squares.map(|f| {
+        p.types.get(match f.ret {
+            Ty::List(id) => id.0,
+            _ => usize::MAX,
+        })
+    });
+    assert_eq!(elem, Some(Some(&crate::ir::Compound::List(Ty::Int))));
 }

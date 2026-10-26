@@ -31,6 +31,21 @@ use crate::span::Span;
 /// Concrete types for one instance's type variables.
 type Subst = HashMap<TypeVar, Ty>;
 
+/// An instance lowered with an open result type, and that type.
+type OpenInstance = (FuncId, Ty);
+
+/// Where an instance whose result type its body decides stands.
+#[derive(Clone, Copy)]
+enum Open {
+    /// Being lowered: a call back into it cannot know its result yet.
+    Lowering,
+    /// Lowered with this result type.
+    Done(OpenInstance),
+    /// Every `return` needed a call into an instance still being
+    /// lowered; lowered again, under the same id, when called again.
+    Undecided(FuncId),
+}
+
 /// Lowers `module`, typed by `types`, to IR.
 pub fn lower(module: &Module, types: &Types) -> Result<Program> {
     let mut defs = HashMap::new();
@@ -47,6 +62,7 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         funcs: Vec::new(),
         queue: Vec::new(),
         seqs: types::SeqTypes::default(),
+        open: HashMap::new(),
     };
     let main = cx.reserve();
     let mut b = FnBuilder::new(
@@ -60,7 +76,9 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
     let func = b.finish("<module>", Vec::new());
     cx.funcs[main.0] = Some(func);
     while let Some(job) = cx.queue.pop() {
-        let func = cx.instance_body(&job)?;
+        let lowered = cx.instance_body(&job)?;
+        let (func, _) =
+            lowered.ok_or_else(|| internal(module.span, "a queued instance undecided"))?;
         cx.funcs[job.id.0] = Some(func);
     }
     let funcs = std::mem::take(&mut cx.funcs);
@@ -88,6 +106,9 @@ struct Cx<'a> {
     queue: Vec<Job<'a>>,
     seqs: types::SeqTypes,
     globals: globals::Globals,
+    /// Instances lowered by [`Cx::open_instance`], by function name and
+    /// argument types; `None` while being lowered.
+    open: HashMap<(String, Vec<Ty>), Open>,
 }
 
 /// An instance waiting to be lowered.
@@ -96,7 +117,8 @@ struct Job<'a> {
     def: &'a FuncDef,
     subst: Subst,
     args: Vec<Ty>,
-    ret: Ty,
+    /// `None`: decided by the body's first `return`.
+    ret: Option<Ty>,
 }
 
 impl<'a> Cx<'a> {
@@ -125,23 +147,109 @@ impl<'a> Cx<'a> {
         {
             return Err(internal(span, &format!("call does not match `{name}`")));
         }
-        let id = self.reserve();
+        let id = self.take_undecided(name, &args);
         self.instances.insert(key, id);
         self.queue.push(Job {
             id,
             def,
             subst,
             args,
-            ret,
+            ret: Some(ret),
         });
         Ok(id)
     }
 
-    fn instance_body(&mut self, job: &Job<'a>) -> Result<Func> {
+    /// The instance of `def` for `args` when the call's result type is
+    /// open: in generic code, a call's node type is in the callee's
+    /// variables, and the signature may not fix it (`n * n` gives a
+    /// type of its own). The instance is lowered now, and its first
+    /// `return` decides the result type; inference made every `return`
+    /// agree.
+    ///
+    /// `None` while the result type is unknown: for a call back into an
+    /// instance still being lowered, or into one whose every `return`
+    /// needed such a call. The caller then skips the statement if it can
+    /// ([`FnBuilder::block`]); a body that skipped one is lowered again
+    /// once a `return` has decided the result type.
+    fn open_instance(
+        &mut self,
+        def: &'a FuncDef,
+        args: Vec<Ty>,
+        span: Span,
+    ) -> Result<Option<OpenInstance>> {
+        let name = &def.name.name;
+        let key = (name.clone(), args.clone());
+        let id = match self.open.get(&key) {
+            Some(Open::Done(found)) => return Ok(Some(*found)),
+            Some(Open::Lowering) => return Ok(None),
+            Some(Open::Undecided(id)) => *id,
+            None => self.reserve(),
+        };
+        let sig = self
+            .types
+            .func(name)
+            .ok_or_else(|| internal(span, &format!("`{name}` has no signature")))?;
+        let mut subst = Subst::new();
+        let params = sig.params.iter().map(|p| &p.ty);
+        if !params
+            .zip(&args)
+            .all(|(t, ty)| bind(t, *ty, &self.seqs, &mut subst))
+        {
+            return Err(internal(span, &format!("call does not match `{name}`")));
+        }
+        self.open.insert(key.clone(), Open::Lowering);
+        let mut job = Job {
+            id,
+            def,
+            subst,
+            args: args.clone(),
+            ret: None,
+        };
+        let Some((mut func, skipped)) = self.instance_body(&job)? else {
+            self.open.insert(key, Open::Undecided(id));
+            return Ok(None);
+        };
+        let ret = func.ret;
+        self.instances.insert((name.clone(), args, ret), id);
+        self.open.insert(key, Open::Done((id, ret)));
+        if skipped {
+            bind(&sig.ret, ret, &self.seqs, &mut job.subst);
+            job.ret = Some(ret);
+            func = self
+                .instance_body(&job)?
+                .ok_or_else(|| internal(span, "an instance undecided with its result known"))?
+                .0;
+        }
+        self.funcs[id.0] = Some(func);
+        Ok(Some((id, ret)))
+    }
+
+    /// The id an instance of `name` for `args` lowered undecided holds,
+    /// so it is not left empty, or a new one.
+    fn take_undecided(&mut self, name: &str, args: &[Ty]) -> FuncId {
+        let key = (name.to_string(), args.to_vec());
+        match self.open.get(&key) {
+            Some(Open::Undecided(id)) => {
+                let id = *id;
+                self.open.remove(&key);
+                id
+            }
+            _ => self.reserve(),
+        }
+    }
+
+    /// The function `job` asks for, and whether a statement was skipped
+    /// for a call whose result was unknown; `None` if no `return`
+    /// decided an open result type.
+    fn instance_body(&mut self, job: &Job<'a>) -> Result<Option<(Func, bool)>> {
         let f = job.def;
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
-        let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret);
+        let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret.unwrap_or(Ty::None));
+        if job.ret.is_none() {
+            let sig = b.cx.types.func(&f.name.name);
+            b.open_ret = Some(sig.map_or(Type::None, |sig| sig.ret.clone()));
+        }
         let mut params = Vec::new();
         for (p, ty) in f.params.iter().zip(&job.args) {
             let id = b.new_local(*ty);
@@ -155,7 +263,21 @@ impl<'a> Cx<'a> {
             params.push(id);
         }
         b.block(&f.body)?;
-        Ok(b.finish(&f.name.name, params))
+        if b.skipped && b.open_ret.is_some() {
+            return Ok(None);
+        }
+        let skipped = b.skipped;
+        Ok(Some((b.finish(&f.name.name, params), skipped)))
+    }
+}
+
+/// Whether `t` has no variables `subst` leaves unbound.
+fn is_closed(t: &Type, subst: &Subst) -> bool {
+    match t {
+        Type::Var(v) => subst.contains_key(v),
+        Type::List(t) | Type::Optional(t) => is_closed(t, subst),
+        Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
+        Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
     }
 }
 
@@ -235,6 +357,13 @@ struct FnBuilder<'c, 'a> {
     cur: BlockId,
     loops: Vec<Loop>,
     ret: Ty,
+    /// When the first `return` decides `ret`: the signature's result
+    /// type, whose variables it binds, so later recursive calls resolve.
+    open_ret: Option<Type>,
+    /// Set by a recursive call met while `open_ret` is undecided; the
+    /// statement holding it is then skipped and `skipped` set.
+    stuck: bool,
+    skipped: bool,
     /// Where `return` leaves its value, created by the first `return`.
     ret_slot: Option<LocalId>,
     /// Where every `return` goes: it releases the function's strings.
@@ -259,6 +388,9 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             cur: BlockId(0),
             loops: Vec::new(),
             ret,
+            open_ret: None,
+            stuck: false,
+            skipped: false,
             ret_slot: None,
             exit: BlockId(1),
             pools: vec![Vec::new()],
@@ -426,48 +558,56 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
 
     /// The concrete type of the node at `span`.
     fn ty_at(&mut self, span: Span) -> Result<Ty> {
-        let t = self
-            .cx
-            .types
-            .at(span)
-            .ok_or_else(|| internal(span, "node has no type"))?;
+        let t = self.node_type(span)?;
         self.concrete(t, span)
     }
 
+    /// The inferred type of the node at `span`.
+    fn node_type(&self, span: Span) -> Result<&'a Type> {
+        self.cx
+            .types
+            .at(span)
+            .ok_or_else(|| internal(span, "node has no type"))
+    }
+
     fn concrete(&mut self, t: &Type, span: Span) -> Result<Ty> {
-        match t {
-            // An element type nothing constrains, as in `not []`: the list
-            // stays empty, so any slot type will do.
-            Type::List(elem) if matches!(**elem, Type::Var(v) if !self.subst.contains_key(&v)) => {
-                Ok(self.cx.seqs.list(Ty::None))
-            }
-            Type::List(elem) => {
-                let elem = self.concrete(elem, span)?;
-                Ok(self.cx.seqs.list(elem))
-            }
-            Type::Tuple(ts) => {
-                let fields = ts
-                    .iter()
-                    .map(|t| self.concrete(t, span))
-                    .collect::<Result<Vec<Ty>>>()?;
-                Ok(self.cx.seqs.tuple(fields))
-            }
-            Type::Optional(present) => {
-                let present = self.concrete(present, span)?;
-                Ok(self.cx.seqs.optional(present))
-            }
-            Type::Int => Ok(Ty::Int),
-            Type::Float => Ok(Ty::Float),
-            Type::Bool => Ok(Ty::Bool),
-            Type::None => Ok(Ty::None),
-            Type::Str => Ok(Ty::Str),
-            Type::Var(v) => self
-                .subst
-                .get(v)
-                .copied()
-                .ok_or_else(|| unsupported(span, "a value whose type depends on generic code")),
-            other => Err(unsupported(span, &format!("values of type `{other}`"))),
+        concrete(t, &self.subst, &mut self.cx.seqs, span)
+    }
+}
+
+/// The IR type of `t`, its type variables bound by `subst`.
+fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> Result<Ty> {
+    match t {
+        // An element type nothing constrains, as in `not []`: the list
+        // stays empty, so any slot type will do.
+        Type::List(elem) if matches!(**elem, Type::Var(v) if !subst.contains_key(&v)) => {
+            Ok(seqs.list(Ty::None))
         }
+        Type::List(elem) => {
+            let elem = concrete(elem, subst, seqs, span)?;
+            Ok(seqs.list(elem))
+        }
+        Type::Tuple(ts) => {
+            let fields = ts
+                .iter()
+                .map(|t| concrete(t, subst, seqs, span))
+                .collect::<Result<Vec<Ty>>>()?;
+            Ok(seqs.tuple(fields))
+        }
+        Type::Optional(present) => {
+            let present = concrete(present, subst, seqs, span)?;
+            Ok(seqs.optional(present))
+        }
+        Type::Int => Ok(Ty::Int),
+        Type::Float => Ok(Ty::Float),
+        Type::Bool => Ok(Ty::Bool),
+        Type::None => Ok(Ty::None),
+        Type::Str => Ok(Ty::Str),
+        Type::Var(v) => subst
+            .get(v)
+            .copied()
+            .ok_or_else(|| unsupported(span, "a value whose type depends on generic code")),
+        other => Err(unsupported(span, &format!("values of type `{other}`"))),
     }
 }
 
