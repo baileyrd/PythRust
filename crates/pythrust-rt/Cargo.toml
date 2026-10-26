@@ -1,0 +1,11 @@
+[package]
+name = "pythrust-rt"
+description = "Runtime library linked into native Pythrust programs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# Linked into every program `pythrust build` compiles.
+crate-type = ["staticlib"]
