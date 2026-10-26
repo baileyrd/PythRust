@@ -1,0 +1,14 @@
+7 None None
+3 None 8
+dflt None
+set
+(None, 'a') (1, 'b')
+(None, 'a')
+(2, 'cc') False
+(None, [1, 2]) None
+n/1 None/2 none
+[('a', 1), None, (None, 3), ('zz', 0)] 4
+a/1
+none
+None/3
+zz/0

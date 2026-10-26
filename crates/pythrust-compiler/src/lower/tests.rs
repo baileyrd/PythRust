@@ -111,6 +111,42 @@ fn falling_off_an_optional_function_returns_its_null_slot() {
 }
 
 #[test]
+fn and_or_wrap_the_operand_they_select() {
+    let p = lowered("x: int | None = None\nprint(x or 7)\n");
+    let wraps = all_rvalues(&p);
+    let wraps = wraps
+        .iter()
+        .filter(|r| matches!(r, Rvalue::Wrap(_)))
+        .count();
+    // The `None` stored in `x`, and the 7.
+    assert_eq!(wraps, 2);
+}
+
+#[test]
+fn arguments_take_their_parameters_optional_fields() {
+    let p = lowered(
+        "def f(x: tuple[int | None, str]) -> str:\n    return str(x)\nprint(f((None, \"a\")))\n",
+    );
+    let f = p.funcs.iter().find(|f| f.name == "f").expect("f");
+    let param = f.locals[f.params[0].0];
+    let Some(Compound::Tuple(fields)) = p.compound(param) else {
+        panic!("a tuple parameter");
+    };
+    assert!(matches!(fields[0], Ty::Opt(_)));
+}
+
+#[test]
+fn a_tuple_is_rebuilt_before_wrapping_into_an_optional() {
+    let p = lowered("t: tuple[int | None, str] | None = (None, \"a\")\nprint(t)\n");
+    let rv = all_rvalues(&p);
+    // The `None` field, then the rebuilt tuple.
+    assert_eq!(
+        rv.iter().filter(|r| matches!(r, Rvalue::Wrap(_))).count(),
+        2
+    );
+}
+
+#[test]
 fn optional_tuples_are_rebuilt_to_the_declared_type() {
     let p = lowered("t: tuple[int | None, str] = (None, \"a\")\nprint(t)\n");
     let rv = all_rvalues(&p);

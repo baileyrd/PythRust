@@ -9,24 +9,31 @@ use crate::span::Span;
 use super::{unsupported, FnBuilder};
 
 impl FnBuilder<'_, '_> {
-    /// `v` as type `want`: wrapped when `want` is an optional of `v`'s
-    /// type, or `v` is `None`. Any other `v` is left for the caller's
-    /// own type check.
-    ///
-    /// A tuple whose fields fit `want`'s is rebuilt as `want`, as for
-    /// `t: tuple[int | None, str] = (None, "a")`.
+    /// `v` as type `want`, adapted structurally: wrapped where `want`
+    /// is an optional of what `v` adapts to (or `v` is `None`), and a
+    /// tuple rebuilt field by field, as for
+    /// `t: tuple[int | None, str] | None = (None, "a")`. A `v` that does
+    /// not adapt is returned as is, for the caller's own type check.
     pub(super) fn fit(&mut self, v: Operand, want: Ty, span: Span) -> Operand {
         let ty = self.ty(v);
-        if let (Ty::Tuple(_), Ty::Tuple(_)) = (ty, want) {
-            return self.fit_tuple(v, want, span);
-        }
-        if ty == want || !matches!(want, Ty::Opt(_)) {
+        if ty == want {
             return v;
         }
-        if ty == Ty::None || self.cx.seqs.present(want) == Some(ty) {
-            return self.temp(want, Rvalue::Wrap(v), span);
+        match (ty, want) {
+            (Ty::None, Ty::Opt(_)) => self.temp(want, Rvalue::Wrap(v), span),
+            (_, Ty::Opt(_)) => {
+                let Some(present) = self.cx.seqs.present(want) else {
+                    return v;
+                };
+                let inner = self.fit(v, present, span);
+                match self.ty(inner) == present {
+                    true => self.temp(want, Rvalue::Wrap(inner), span),
+                    false => v,
+                }
+            }
+            (Ty::Tuple(_), Ty::Tuple(_)) => self.fit_tuple(v, want, span),
+            _ => v,
         }
-        v
     }
 
     fn fit_tuple(&mut self, v: Operand, want: Ty, span: Span) -> Operand {
@@ -35,7 +42,7 @@ impl FnBuilder<'_, '_> {
         let (Some(have), Some(wanted)) = (have, wanted) else {
             return v;
         };
-        if have == wanted || have.len() != wanted.len() {
+        if have.len() != wanted.len() {
             return v;
         }
         let mut items = Vec::new();
@@ -50,22 +57,38 @@ impl FnBuilder<'_, '_> {
         self.temp(want, Rvalue::NewSeq(items), span)
     }
 
-    /// Argument `v` for a parameter of declared type `param`: wrapped if
-    /// the parameter is optional.
+    /// Argument `v` adapted to a parameter of declared type `param`.
     pub(super) fn fit_param(&mut self, v: Operand, param: &Type, span: Span) -> Result<Operand> {
-        if !matches!(param, Type::Optional(_)) {
-            return Ok(v);
-        }
-        let want = match self.ty(v) {
-            Ty::Opt(_) => return Ok(v),
-            // The present type comes from the callee's signature, which
-            // must not depend on its other arguments.
-            Ty::None => self.concrete(param, span).map_err(|_| {
-                unsupported(span, "`None` for a parameter of generic optional type")
-            })?,
-            ty => self.cx.seqs.optional(ty),
-        };
+        let want = self.shape(param, self.ty(v), span)?;
         Ok(self.fit(v, want, span))
+    }
+
+    /// The concrete type a value of type `have` takes as declared type
+    /// `t`: `have`, with optionals added where `t` declares them. The
+    /// callee's type variables take what `have` holds there.
+    fn shape(&mut self, t: &Type, have: Ty, span: Span) -> Result<Ty> {
+        match t {
+            Type::Optional(_) if have == Ty::None => self
+                .concrete(t, span)
+                .map_err(|_| unsupported(span, "`None` for a parameter of generic optional type")),
+            Type::Optional(present) => {
+                let have = self.cx.seqs.present(have).unwrap_or(have);
+                let present = self.shape(present, have, span)?;
+                Ok(self.cx.seqs.optional(present))
+            }
+            Type::Tuple(ts) => {
+                let fields = self.cx.seqs.fields(have).map(<[Ty]>::to_vec);
+                let Some(fields) = fields.filter(|f| f.len() == ts.len()) else {
+                    return Ok(have);
+                };
+                let mut shaped = Vec::new();
+                for (t, f) in ts.iter().zip(fields) {
+                    shaped.push(self.shape(t, f, span)?);
+                }
+                Ok(self.cx.seqs.tuple(shaped))
+            }
+            _ => Ok(have),
+        }
     }
 
     /// A read of optional `v` where inference narrowed it to its present

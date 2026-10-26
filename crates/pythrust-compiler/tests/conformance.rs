@@ -259,6 +259,8 @@ const NATIVE: &[&str] = &[
     "optional_loop_target",
     "optional_narrowing",
     "optional_ownership",
+    "optional_shapes",
+    "optional_short_circuit",
     "overflow_add",
     "overflow_factorial",
     "overflow_min_floordiv",

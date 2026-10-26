@@ -99,17 +99,11 @@ impl FnBuilder<'_, '_> {
         }
     }
 
-    /// `and` / `or`: the result is one of the operands, so all three
-    /// types must agree.
+    /// `and` / `or`: the result is one of the operands, adapted to the
+    /// result's type (`x or 7` on an `int | None` wraps the 7).
     fn logical(&mut self, op: LogicalOp, left: &Expr, right: &Expr, span: Span) -> Result<Operand> {
         let ty = self.ty_at(span)?;
         let l = self.expr(left)?;
-        if self.ty(l) != ty {
-            return Err(unsupported(
-                span,
-                "`and` / `or` on operands of different types",
-            ));
-        }
         let dest = self.pooled(ty);
         let test = self.truthy(l, span);
         let (short, rhs, end) = (self.new_block(), self.new_block(), self.new_block());
@@ -123,10 +117,18 @@ impl FnBuilder<'_, '_> {
             orelse,
         });
         self.switch_to(short);
+        let l = self.fit(l, ty, span);
+        if self.ty(l) != ty {
+            return Err(unsupported(
+                span,
+                "`and` / `or` on operands of different types",
+            ));
+        }
         self.move_into(dest, l, span);
         self.terminate(Term::Goto(end));
         self.switch_to(rhs);
         let r = self.expr(right)?;
+        let r = self.fit(r, ty, span);
         if self.ty(r) != ty {
             return Err(unsupported(
                 span,

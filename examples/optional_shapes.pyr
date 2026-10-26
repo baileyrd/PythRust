@@ -1,0 +1,38 @@
+# Optionals inside tuples, and/or results, and optional tuples across calls, returns and list slots.
+def show(x: tuple[int | None, str]) -> str:
+    return str(x)
+
+
+def maybe(flag: bool) -> tuple[str | None, list[int]] | None:
+    if flag:
+        return (None, [1, 2])
+    return None
+
+
+def name_of(p: tuple[str | None, int] | None) -> str:
+    if p is None:
+        return "none"
+    return str(p[0]) + "/" + str(p[1])
+
+
+x: int | None = None
+print(x or 7, x and None, x or None)
+x = 3
+print(x or 7, x and None, x and 8)
+s: str | None = None
+print(s or "dflt", s and "x")
+s = "set"
+print(s or "dflt")
+
+print(show((None, "a")), show((1, "b")))
+t: tuple[int | None, str] | None = (None, "a")
+print(t)
+t = (2, "c" * 2)
+print(t, t is None)
+print(maybe(True), maybe(False))
+print(name_of(("n", 1)), name_of((None, 2)), name_of(None))
+rows: list[tuple[str | None, int] | None] = [("a", 1), None, (None, 3)]
+rows.append(("z" + "z", 0))
+print(rows, len(rows))
+for r in rows:
+    print(name_of(r))
