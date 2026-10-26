@@ -1365,3 +1365,86 @@ fn conflicting_annotations_are_an_error() {
         "conflicting annotations for `x`: expected int, found str"
     );
 }
+
+#[test]
+fn literals_under_optional_take_the_inner_type() {
+    let b = B::default();
+    let opt_list = || b.ty("list", vec![b.opt("int", vec![])]);
+    let mixed = || b.list(vec![b.e(ExprKind::None), b.i(1)]);
+    let literal = mixed();
+    let span = literal.span;
+    let outer = TypeExpr {
+        optional: true,
+        ..opt_list()
+    };
+    let nested = b.ty(
+        "list",
+        vec![TypeExpr {
+            optional: true,
+            ..opt_list()
+        }],
+    );
+    let pair = b.ty("tuple", vec![b.opt("int", vec![]), b.ty("str", vec![])]);
+    let opt_pair = TypeExpr {
+        optional: true,
+        ..pair
+    };
+    let types = ok(vec![
+        b.ann("xs", outer, literal),
+        b.ann("xss", nested, b.list(vec![mixed(), b.e(ExprKind::None)])),
+        b.ann("p", opt_pair, b.tuple(vec![b.e(ExprKind::None), b.s("a")])),
+    ]);
+    assert_eq!(types.at(span), Some(&list_of(int_or_none())));
+}
+
+#[test]
+fn literals_take_the_element_type_at_stores_and_appends() {
+    let b = B::default();
+    let nested = || b.ty("list", vec![b.ty("list", vec![b.opt("int", vec![])])]);
+    let mixed = || b.list(vec![b.e(ExprKind::None), b.i(1)]);
+    ok(vec![
+        b.ann("xss", nested(), b.list(vec![b.list(vec![])])),
+        b.assign_to(b.tidx(b.n("xss"), b.i(0)), mixed()),
+        b.ex(b.method(b.n("xss"), "append", vec![mixed()])),
+        b.assign_to(
+            b.tidx(b.idx(b.n("xss"), b.i(0)), b.i(0)),
+            b.e(ExprKind::None),
+        ),
+    ]);
+    let msg = err(vec![
+        b.ann("xss", nested(), b.list(vec![])),
+        b.assign("ys", b.list(vec![b.i(1)])),
+        b.ex(b.method(b.n("xss"), "append", vec![b.n("ys")])),
+    ]);
+    assert_eq!(
+        msg,
+        "appended value does not match the list: expected list[int | None], found list[int]"
+    );
+    let msg = err(vec![
+        b.ann("xss", nested(), b.list(vec![])),
+        b.assign("ys", b.list(vec![b.i(1)])),
+        b.assign_to(b.tidx(b.n("xss"), b.i(0)), b.n("ys")),
+    ]);
+    assert_eq!(msg, "cannot assign list[int] into list[list[int | None]]");
+}
+
+#[test]
+fn numeric_slots_never_widen() {
+    let b = B::default();
+    let floats = || b.ty("list", vec![b.ty("float", vec![])]);
+    let msg = err(vec![
+        b.ann("xs", floats(), b.list(vec![b.fl(1.0)])),
+        b.assign_to(b.tidx(b.n("xs"), b.i(0)), b.i(1)),
+    ]);
+    assert_eq!(msg, "cannot assign int into list[float]");
+    let msg = err(vec![b.ann("x", b.opt("float", vec![]), b.i(1))]);
+    assert_eq!(
+        msg,
+        "value does not match its annotation: expected float | None, found int"
+    );
+    let msg = err(vec![b.ann("xs", floats(), b.list(vec![b.i(1)]))]);
+    assert_eq!(
+        msg,
+        "element does not match the annotation: expected float, found int"
+    );
+}

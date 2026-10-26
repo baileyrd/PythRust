@@ -65,16 +65,38 @@ impl Checker {
         }
     }
 
-    /// The type of variable `name`, recorded at `span`.
-    pub(super) fn variable(&mut self, name: &str, span: Span) -> Result<Type> {
-        let found = self
-            .frame
+    /// The type `e` is already known to have, without inferring it: a
+    /// variable, or an element of one (`xss[0]`). Gives assignment
+    /// targets their expected type.
+    pub(super) fn known_type(&self, e: &Expr) -> Option<Type> {
+        match &e.kind {
+            ExprKind::Name(name) => self.lookup(name),
+            ExprKind::Subscript { value, .. } => self.element_of(value),
+            _ => None,
+        }
+    }
+
+    /// The element type of `container` when it is a known list.
+    pub(super) fn element_of(&self, container: &Expr) -> Option<Type> {
+        match self.subst.resolve(&self.known_type(container)?) {
+            Type::List(elem) => Some(*elem),
+            _ => None,
+        }
+    }
+
+    /// The type of variable `name` here, if it has one.
+    pub(super) fn lookup(&self, name: &str) -> Option<Type> {
+        self.frame
             .narrowed
             .get(name)
             .or_else(|| self.frame.locals.get(name))
             .or_else(|| self.globals.get(name))
-            .cloned();
-        if let Some(t) = found {
+            .cloned()
+    }
+
+    /// The type of variable `name`, recorded at `span`.
+    pub(super) fn variable(&mut self, name: &str, span: Span) -> Result<Type> {
+        if let Some(t) = self.lookup(name) {
             self.nodes.insert(span, t.clone());
             return Ok(t);
         }
@@ -264,10 +286,10 @@ impl Checker {
                 "`append` takes no keyword arguments".to_string(),
             ));
         }
-        let item = self.expr(&arg.value)?;
         let elem = self.subst.fresh();
         let list = Type::List(Box::new(elem.clone()));
         self.expect(value.span, &list, &receiver, "`append` needs a list")?;
+        let item = self.checked(&arg.value, &elem)?;
         let what = "appended value does not match the list";
         self.expect(arg.value.span, &elem, &item, what)?;
         Ok(Type::None)
@@ -276,12 +298,15 @@ impl Checker {
     /// Infers `e` against a known `expected` type, so list and tuple
     /// literals take their element types from it: with
     /// `xs: list[int | None] = [None, 1]` the elements need not agree.
+    /// Under `T | None` a literal is checked against `T`, and keeps that
+    /// type (it is not `None`).
     pub(super) fn checked(&mut self, e: &Expr, expected: &Type) -> Result<Type> {
         let items = match &e.kind {
             ExprKind::List(items) | ExprKind::Tuple(items) => items,
             _ => return self.expr(e),
         };
         let slots: Vec<Type> = match (&e.kind, self.subst.resolve(expected)) {
+            (_, Type::Optional(inner)) => return self.checked(e, &inner),
             (ExprKind::List(_), Type::List(elem)) => vec![*elem; items.len()],
             (ExprKind::Tuple(_), Type::Tuple(elems)) if elems.len() == items.len() => elems,
             _ => return self.expr(e),

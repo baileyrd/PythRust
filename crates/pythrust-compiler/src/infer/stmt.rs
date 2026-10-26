@@ -195,14 +195,15 @@ impl Checker {
         }
     }
 
-    /// The type a name target already has, so a literal assigned to it
-    /// is checked against it (`xs = [None]` on a `list[int | None]`).
+    /// The type a target already has, so a literal assigned to it is
+    /// checked against it (`xs = [None]` on a `list[int | None]`, or
+    /// `xss[0] = [None, 1]` on a `list[list[int | None]]`).
     fn declared(&self, target: &Target) -> Option<Type> {
-        let TargetKind::Name(name) = &target.kind else {
-            return None;
-        };
-        let locals = self.frame.locals.get(name);
-        locals.or_else(|| self.globals.get(name)).cloned()
+        match &target.kind {
+            TargetKind::Name(name) => self.lookup(name),
+            TargetKind::Subscript { value, .. } => self.element_of(value),
+            TargetKind::Tuple(_) => None,
+        }
     }
 
     fn bind_name(&mut self, name: &str, span: Span, ty: &Type) -> Result<()> {
