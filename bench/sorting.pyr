@@ -1,0 +1,36 @@
+# List sorting: in-place quicksort of pseudo-random ints.
+def quicksort(xs: list[int], lo: int, hi: int) -> None:
+    while lo < hi:
+        pivot = xs[(lo + hi) // 2]
+        i = lo
+        j = hi
+        while i <= j:
+            while xs[i] < pivot:
+                i += 1
+            while xs[j] > pivot:
+                j -= 1
+            if i <= j:
+                t = xs[i]
+                xs[i] = xs[j]
+                xs[j] = t
+                i += 1
+                j -= 1
+        if j - lo < hi - i:
+            quicksort(xs, lo, j)
+            lo = i
+        else:
+            quicksort(xs, i, hi)
+            hi = j
+
+
+xs = []
+seed = 12345
+for _ in range(300000):
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    xs.append(seed % 1000000)
+quicksort(xs, 0, len(xs) - 1)
+ok = True
+for k in range(1, len(xs)):
+    if xs[k - 1] > xs[k]:
+        ok = False
+print(ok, xs[0], xs[len(xs) // 2], xs[len(xs) - 1])

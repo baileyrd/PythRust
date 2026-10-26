@@ -1,0 +1,29 @@
+# Control for tuples.pyr: the same scan, calls and parameter divisor, with
+# no tuple. div_mod becomes two calls (one more call per digit than
+# tuples.pyr), and digits packs its two results into one int.
+def quot(a: int, b: int) -> int:
+    return a // b
+
+
+def rem(a: int, b: int) -> int:
+    return a % b
+
+
+def digits(n: int) -> int:
+    count = 0
+    total = 0
+    while n > 0:
+        d = rem(n, 10)
+        n = quot(n, 10)
+        count += 1
+        total += d
+    return count * 1000 + total
+
+
+all_count = 0
+all_total = 0
+for i in range(1000000):
+    packed = digits(i)
+    all_count += packed // 1000
+    all_total += packed % 1000
+print(all_count, all_total)

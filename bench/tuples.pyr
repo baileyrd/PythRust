@@ -1,0 +1,22 @@
+# Multiple return plus unpacking: every call allocates a tuple.
+def div_mod(a: int, b: int) -> tuple[int, int]:
+    return (a // b, a % b)
+
+
+def digits(n: int) -> tuple[int, int]:
+    count = 0
+    total = 0
+    while n > 0:
+        n, d = div_mod(n, 10)
+        count += 1
+        total += d
+    return (count, total)
+
+
+all_count = 0
+all_total = 0
+for i in range(1000000):
+    c, t = digits(i)
+    all_count += c
+    all_total += t
+print(all_count, all_total)
