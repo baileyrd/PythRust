@@ -8,7 +8,9 @@
 //! `DiagKind::Backend` error naming the construct, never a guess.
 
 mod expr;
+mod seq;
 mod stmt;
+mod types;
 mod vars;
 
 #[cfg(test)]
@@ -35,6 +37,7 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         instances: HashMap::new(),
         funcs: Vec::new(),
         queue: Vec::new(),
+        seqs: types::SeqTypes::default(),
     };
     for s in &module.body {
         if let StmtKind::FuncDef(f) = &s.kind {
@@ -56,9 +59,14 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         let func = cx.instance_body(&job)?;
         cx.funcs[job.id.0] = Some(func);
     }
-    let funcs = cx.funcs.into_iter().collect::<Option<Vec<Func>>>();
+    let funcs = std::mem::take(&mut cx.funcs);
+    let funcs = funcs.into_iter().collect::<Option<Vec<Func>>>();
     let funcs = funcs.ok_or_else(|| internal(module.span, "an instance was never lowered"))?;
-    Ok(Program { funcs, main })
+    Ok(Program {
+        funcs,
+        main,
+        types: cx.seqs.into_vec(),
+    })
 }
 
 /// Program-wide lowering state.
@@ -70,6 +78,7 @@ struct Cx<'a> {
     /// `None` until the instance is lowered.
     funcs: Vec<Option<Func>>,
     queue: Vec<Job<'a>>,
+    seqs: types::SeqTypes,
 }
 
 /// An instance waiting to be lowered.
@@ -101,7 +110,10 @@ impl<'a> Cx<'a> {
         let mut subst = Subst::new();
         let params = sig.params.iter().map(|p| &p.ty);
         let bound = params.zip(&args).chain([(&sig.ret, &ret)]);
-        if !bound.into_iter().all(|(t, ty)| bind(t, *ty, &mut subst)) {
+        if !bound
+            .into_iter()
+            .all(|(t, ty)| bind(t, *ty, &self.seqs, &mut subst))
+        {
             return Err(internal(span, &format!("call does not match `{name}`")));
         }
         let id = self.reserve();
@@ -159,9 +171,14 @@ fn reach<'a>(defs: &HashMap<&'a str, &'a FuncDef>, name: &'a str) -> BTreeSet<&'
 }
 
 /// Binds the variables of `t` so that it becomes `ty`. False on a clash.
-fn bind(t: &Type, ty: Ty, subst: &mut Subst) -> bool {
+fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
     match (t, ty) {
         (Type::Var(v), _) => *subst.entry(*v).or_insert(ty) == ty,
+        (Type::List(t), Ty::List(_)) => seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst)),
+        (Type::Tuple(ts), Ty::Tuple(_)) => {
+            let fields = seqs.fields(ty).map(<[Ty]>::to_vec).unwrap_or_default();
+            ts.len() == fields.len() && ts.iter().zip(fields).all(|(t, f)| bind(t, f, seqs, subst))
+        }
         (Type::Int, Ty::Int)
         | (Type::Float, Ty::Float)
         | (Type::Bool, Ty::Bool)
@@ -254,7 +271,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             _ => Operand::None,
         };
         let strs = (0..self.locals.len()).map(LocalId);
-        let owned = strs.filter(|l| self.locals[l.0] == Ty::Str && Some(*l) != self.ret_slot);
+        let owned = strs.filter(|l| self.locals[l.0].is_rc() && Some(*l) != self.ret_slot);
         let exit = &mut self.blocks[self.exit.0];
         exit.insts = owned.map(Inst::Release).collect();
         exit.term = Some(Term::Return(value));
@@ -324,7 +341,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
     /// A fresh local, owned by the current statement if a `Str`.
     fn pooled(&mut self, ty: Ty) -> LocalId {
         let dest = self.new_local(ty);
-        if ty == Ty::Str {
+        if ty.is_rc() {
             if let Some(pool) = self.pools.last_mut() {
                 pool.push(dest);
             }
@@ -352,10 +369,11 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
 
     /// A temporary owning a reference to `op`: `op` itself if it is one.
     fn own(&mut self, op: Operand, span: Span) -> Operand {
-        if self.ty(op) != Ty::Str || self.is_temp(op) {
+        let ty = self.ty(op);
+        if !ty.is_rc() || self.is_temp(op) {
             return op;
         }
-        let t = self.temp(Ty::Str, Rvalue::Use(op), span);
+        let t = self.temp(ty, Rvalue::Use(op), span);
         if let Operand::Local(l) = t {
             self.emit(Inst::Retain(l));
         }
@@ -366,7 +384,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
     /// reference if `v` is a temporary, else adds one.
     fn move_into(&mut self, dest: LocalId, v: Operand, span: Span) {
         self.assign(dest, Rvalue::Use(v), span);
-        if self.ty(v) != Ty::Str {
+        if !self.ty(v).is_rc() {
             return;
         }
         match v {
@@ -380,7 +398,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
     }
 
     /// The concrete type of the node at `span`.
-    fn ty_at(&self, span: Span) -> Result<Ty> {
+    fn ty_at(&mut self, span: Span) -> Result<Ty> {
         let t = self
             .cx
             .types
@@ -389,8 +407,24 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
         self.concrete(t, span)
     }
 
-    fn concrete(&self, t: &Type, span: Span) -> Result<Ty> {
+    fn concrete(&mut self, t: &Type, span: Span) -> Result<Ty> {
         match t {
+            // An element type nothing constrains, as in `not []`: the list
+            // stays empty, so any slot type will do.
+            Type::List(elem) if matches!(**elem, Type::Var(v) if !self.subst.contains_key(&v)) => {
+                Ok(self.cx.seqs.list(Ty::None))
+            }
+            Type::List(elem) => {
+                let elem = self.concrete(elem, span)?;
+                Ok(self.cx.seqs.list(elem))
+            }
+            Type::Tuple(ts) => {
+                let fields = ts
+                    .iter()
+                    .map(|t| self.concrete(t, span))
+                    .collect::<Result<Vec<Ty>>>()?;
+                Ok(self.cx.seqs.tuple(fields))
+            }
             Type::Int => Ok(Ty::Int),
             Type::Float => Ok(Ty::Float),
             Type::Bool => Ok(Ty::Bool),

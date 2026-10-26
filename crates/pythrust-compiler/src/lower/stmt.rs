@@ -11,8 +11,7 @@ use super::{unsupported, FnBuilder, Loop};
 
 /// A `for` loop's parts other than what it iterates.
 struct Looped<'s> {
-    name: &'s str,
-    target: Span,
+    target: &'s Target,
     body: &'s Block,
     orelse: &'s Block,
 }
@@ -55,16 +54,13 @@ impl FnBuilder<'_, '_> {
         }
     }
 
-    /// `x = v`, or `a, b = v1, v2` from a tuple display: every value is
-    /// evaluated, and snapshotted, before any name is bound.
+    /// `target = value`. Unpacking a tuple display evaluates, and
+    /// snapshots, every value before binding any target.
     fn assign_stmt(&mut self, target: &Target, value: &Expr) -> Result<()> {
-        if let TargetKind::Name(name) = &target.kind {
-            let v = self.expr(value)?;
-            return self.write(name, v, target.span);
-        }
         let (TargetKind::Tuple(targets), ExprKind::Tuple(values)) = (&target.kind, &value.kind)
         else {
-            return Err(unsupported(target.span, "this assignment target"));
+            let v = self.expr(value)?;
+            return self.bind(target, v);
         };
         if targets.len() != values.len() {
             return Err(unsupported(
@@ -76,28 +72,45 @@ impl FnBuilder<'_, '_> {
         for v in values {
             let op = self.expr(v)?;
             let snapshot = match self.ty(op) {
-                Ty::Str => self.own(op, v.span),
+                ty if ty.is_rc() => self.own(op, v.span),
                 ty => self.temp(ty, Rvalue::Use(op), v.span),
             };
             ops.push(snapshot);
         }
-        for (t, op) in targets.iter().zip(ops) {
-            let TargetKind::Name(name) = &t.kind else {
-                return Err(unsupported(t.span, "nested or indexed unpacking"));
-            };
-            self.write(name, op, t.span)?;
-        }
-        Ok(())
+        targets
+            .iter()
+            .zip(ops)
+            .try_for_each(|(t, op)| self.bind(t, op))
     }
 
+    /// `x op= v`, or `list[i] op= v` with the list and index evaluated
+    /// once.
     fn aug_assign(&mut self, target: &Target, op: BinOp, value: &Expr, span: Span) -> Result<()> {
-        let TargetKind::Name(name) = &target.kind else {
-            return Err(unsupported(target.span, "augmented assignment to an index"));
-        };
-        let l = self.read(name, target.span)?;
-        let r = self.expr(value)?;
-        let v = self.arith(op, l, r, span)?;
-        self.write(name, v, target.span)
+        match &target.kind {
+            TargetKind::Name(name) => {
+                let l = self.read(name, target.span)?;
+                let r = self.expr(value)?;
+                let v = self.arith(op, l, r, span)?;
+                self.write(name, v, target.span)
+            }
+            TargetKind::Subscript { value: list, index } => {
+                let list = self.expr(list)?;
+                let index = self.expr(index)?;
+                let ty = self.ty(list);
+                if !matches!(ty, Ty::List(_)) {
+                    return Err(unsupported(
+                        target.span,
+                        "augmented assignment to this item",
+                    ));
+                }
+                let elem = self.slot_ty(ty, 0, target.span)?;
+                let l = self.temp(elem, Rvalue::Index(list, index), target.span);
+                let r = self.expr(value)?;
+                let v = self.arith(op, l, r, span)?;
+                self.store_item(list, index, v, target.span)
+            }
+            TargetKind::Tuple(_) => Err(unsupported(target.span, "augmented unpacking")),
+        }
     }
 
     /// Leaves the value in the return slot and goes to the exit block,
@@ -224,12 +237,8 @@ impl FnBuilder<'_, '_> {
         body: &Block,
         orelse: &Block,
     ) -> Result<()> {
-        let TargetKind::Name(name) = &target.kind else {
-            return Err(unsupported(target.span, "unpacking in a `for` target"));
-        };
         let looped = Looped {
-            name,
-            target: target.span,
+            target,
             body,
             orelse,
         };
@@ -237,19 +246,24 @@ impl FnBuilder<'_, '_> {
             return self.for_range(&looped, args, iter.span);
         }
         let s = self.expr(iter)?;
-        if self.ty(s) != Ty::Str {
-            return Err(unsupported(
-                iter.span,
-                "`for` over anything but `range(...)` or a string",
-            ));
-        }
-        self.for_str(&looped, s, iter.span)
+        let item = match self.ty(s) {
+            Ty::Str => Ty::Str,
+            ty @ Ty::List(_) => self.slot_ty(ty, 0, iter.span)?,
+            _ => {
+                return Err(unsupported(
+                    iter.span,
+                    "`for` over anything but `range(...)`, a string or a list",
+                ))
+            }
+        };
+        self.for_seq(&looped, s, item, iter.span)
     }
 
-    /// `for x in s`: over a snapshot of `s`, one char at a time.
-    fn for_str(&mut self, l: &Looped, s: Operand, span: Span) -> Result<()> {
+    /// `for x in s` over a string or list: by index, re-reading the
+    /// length each time as Python does, so appending in the body extends
+    /// the loop. The loop holds its own reference to `s`.
+    fn for_seq(&mut self, l: &Looped, s: Operand, item: Ty, span: Span) -> Result<()> {
         let s = self.own(s, span);
-        let n = self.temp(Ty::Int, Rvalue::Len(s), span);
         let counter = self.new_local(Ty::Int);
         self.assign(counter, Rvalue::Use(Operand::Int(0)), span);
         let cur = Operand::Local(counter);
@@ -257,6 +271,7 @@ impl FnBuilder<'_, '_> {
         let (other, end) = (self.new_block(), self.new_block());
         self.terminate(Term::Goto(head));
         self.switch_to(head);
+        let n = self.temp(Ty::Int, Rvalue::Len(s), span);
         let going = self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Lt, cur, n), span);
         self.terminate(Term::Branch {
             cond: going,
@@ -264,9 +279,12 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        let ch = self.temp(Ty::Str, Rvalue::Index(s, cur), span);
-        self.declare(l.name, Ty::Str, l.target);
-        self.write(l.name, ch, l.target)?;
+        let x = self.temp(item, Rvalue::Index(s, cur), span);
+        self.bind(l.target, x)?;
+        // Binding a name moved `x`; unpacking only read it.
+        if let (Operand::Local(x), true) = (x, item.is_rc()) {
+            self.emit(Inst::Release(x));
+        }
         self.loop_body(l.body, latch, end)?;
         self.switch_to(latch);
         let next = Rvalue::Int(IntOp::Add, cur, Operand::Int(1));
@@ -308,7 +326,7 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        self.write(l.name, cur, l.target)?;
+        self.bind(l.target, cur)?;
         self.loop_body(l.body, latch, end)?;
         self.switch_to(latch);
         let over = self.temp(Ty::Bool, Rvalue::AddOverflows(cur, step), iter_span);

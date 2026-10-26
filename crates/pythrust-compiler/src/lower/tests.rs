@@ -73,10 +73,8 @@ fn code_after_return_and_break_lowers() {
 
 #[test]
 fn unsupported_values_name_the_construct() {
-    let (d, _) = rejected("xs = [1]\n");
-    assert!(d.message.contains("lists"), "{}", d.message);
-    let (d, _) = rejected("def f(xs):\n    return 1\nprint(f([]))\n");
-    assert!(d.message.contains("lists"), "{}", d.message);
+    let (d, _) = rejected("x: int | None = None\nprint(x)\n");
+    assert!(d.message.contains("int | None"), "{}", d.message);
 }
 
 #[test]
@@ -85,12 +83,9 @@ fn unsupported_operations_name_the_construct() {
     assert_eq!(text, "int(True)");
     let (d, _) = rejected("print(1, end='')\n");
     assert!(d.message.contains("keyword arguments"));
-    let (d, _) = rejected("print(len([1]))\n");
-    assert!(
-        d.message.contains("lists") || d.message.contains("list[int]"),
-        "{}",
-        d.message
-    );
+    let (d, text) = rejected("a, b = [1, 2]\n");
+    assert!(d.message.contains("unpacking"), "{}", d.message);
+    assert_eq!(text, "a, b");
 }
 
 #[test]
@@ -206,8 +201,9 @@ fn writes_own_the_new_string_before_releasing_the_old() {
 fn string_operations_outside_the_subset_are_rejected() {
     let (d, _) = rejected("print('a' * True)\n");
     assert!(d.message.contains("non-number"), "{}", d.message);
-    let (d, _) = rejected("for x in [1]:\n    print(x)\n");
-    assert!(d.message.contains("lists"), "{}", d.message);
+    let (d, text) = rejected("for x in (1, 2):\n    print(x)\n");
+    assert!(d.message.contains("`for` over"), "{}", d.message);
+    assert_eq!(text, "(1, 2)");
 }
 
 #[test]
@@ -274,4 +270,31 @@ fn conversions_pick_their_rvalue_by_type() {
     assert!(has(|v| matches!(v, Rvalue::ParseInt(_))));
     assert!(has(|v| matches!(v, Rvalue::ParseFloat(_))));
     assert!(has(|v| matches!(v, Rvalue::ToStr(_))));
+}
+
+#[test]
+fn unpacking_a_loop_item_releases_it_each_iteration() {
+    // Binding a name moves the item; unpacking only reads its fields, so
+    // the item is released in the loop, at the statement's end and at exit.
+    let p = lowered("for a, b in [(1, 'x')]:\n    print(a, b)\n");
+    let main = &p.funcs[p.main.0];
+    let insts = || main.blocks.iter().flat_map(|b| &b.insts);
+    let item = insts().find_map(|i| match i {
+        Inst::Assign {
+            dest,
+            value: crate::ir::Rvalue::Index(..),
+            ..
+        } => Some(*dest),
+        _ => None,
+    });
+    let Some(item) = item else {
+        panic!("no item");
+    };
+    assert_eq!(insts().filter(|i| **i == Inst::Release(item)).count(), 3);
+}
+
+#[test]
+fn an_unconstrained_empty_list_lowers() {
+    let p = lowered("print(not [], [])\n");
+    assert_eq!(p.types, vec![crate::ir::Compound::List(Ty::None)]);
 }

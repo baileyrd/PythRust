@@ -23,10 +23,9 @@ impl FnBuilder<'_, '_> {
             ExprKind::Call { func, args } => self.call(func, args, e.span),
             ExprKind::Float(f) => Ok(Operand::Float(*f)),
             ExprKind::Str(text) => Ok(self.temp(Ty::Str, Rvalue::StrLit(text.clone()), e.span)),
-            ExprKind::Tuple(_) => Err(unsupported(e.span, "tuples")),
-            ExprKind::List(_) => Err(unsupported(e.span, "lists")),
+            ExprKind::Tuple(items) | ExprKind::List(items) => self.display(items, e.span),
             ExprKind::Subscript { value, index } => self.subscript(value, index, e.span),
-            ExprKind::Attr { .. } => Err(unsupported(e.span, "methods")),
+            ExprKind::Attr { .. } => Err(unsupported(e.span, "attributes other than methods")),
         }
     }
 
@@ -91,7 +90,7 @@ impl FnBuilder<'_, '_> {
     }
 
     /// `v`, an int, bool or float, as a float.
-    fn as_float(&mut self, v: Operand, span: Span) -> Operand {
+    pub(super) fn as_float(&mut self, v: Operand, span: Span) -> Operand {
         match (v, self.ty(v)) {
             (_, Ty::Float) => v,
             (Operand::Int(n), _) => Operand::Float(n as f64),
@@ -196,31 +195,24 @@ impl FnBuilder<'_, '_> {
         }
     }
 
-    /// `l in r` and `l not in r`, on strings.
+    /// `l in r` and `l not in r`: a substring of a string, or an element
+    /// of a list.
     fn contains(&mut self, op: ast::CmpOp, l: Operand, r: Operand, span: Span) -> Result<Operand> {
-        if (self.ty(l), self.ty(r)) != (Ty::Str, Ty::Str) {
-            return Err(unsupported(span, "`in` on anything but strings"));
-        }
-        let found = Rvalue::Contains { hay: r, needle: l };
+        let needle = match (self.ty(l), self.ty(r)) {
+            (Ty::Str, Ty::Str) => l,
+            (_, ty @ Ty::List(_)) => {
+                let elem = self.slot_ty(ty, 0, span)?;
+                self.coerce(l, elem, span)?
+            }
+            _ => return Err(unsupported(span, "`in` on anything but strings and lists")),
+        };
+        let found = Rvalue::Contains { hay: r, needle };
         let found = self.temp(Ty::Bool, found, span);
         if op == ast::CmpOp::In {
             return Ok(found);
         }
         let not = Rvalue::Cmp(CmpOp::Eq, found, Operand::Bool(false));
         Ok(self.temp(Ty::Bool, not, span))
-    }
-
-    /// `s[i]` on a string.
-    fn subscript(&mut self, value: &Expr, index: &Expr, span: Span) -> Result<Operand> {
-        let s = self.expr(value)?;
-        let i = self.expr(index)?;
-        if (self.ty(s), self.ty(i)) != (Ty::Str, Ty::Int) {
-            return Err(unsupported(
-                span,
-                "indexing anything but a string by an int",
-            ));
-        }
-        Ok(self.temp(Ty::Str, Rvalue::Index(s, i), span))
     }
 
     fn if_exp(&mut self, test: &Expr, body: &Expr, orelse: &Expr, span: Span) -> Result<Operand> {
@@ -260,7 +252,7 @@ impl FnBuilder<'_, '_> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
-            Ty::Str => {
+            Ty::Str | Ty::List(_) | Ty::Tuple(_) => {
                 let n = self.temp(Ty::Int, Rvalue::Len(v), span);
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, n, Operand::Int(0)), span)
             }
@@ -268,8 +260,10 @@ impl FnBuilder<'_, '_> {
     }
 
     fn call(&mut self, func: &Expr, args: &[Arg], span: Span) -> Result<Operand> {
-        let ExprKind::Name(name) = &func.kind else {
-            return Err(unsupported(span, "calling this kind of expression"));
+        let name = match &func.kind {
+            ExprKind::Name(name) => name,
+            ExprKind::Attr { value, attr } => return self.method(value, &attr.name, args, span),
+            _ => return Err(unsupported(span, "calling this kind of expression")),
         };
         if args.iter().any(|a| a.name.is_some()) {
             return Err(unsupported(span, "keyword arguments"));
@@ -292,7 +286,8 @@ impl FnBuilder<'_, '_> {
         }
         if def.is_some() && !self.callable(name, func.span)? {
             // Python looks the callee up before evaluating arguments.
-            return Ok(Operand::Local(self.new_local(self.ty_at(span)?)));
+            let ty = self.ty_at(span)?;
+            return Ok(Operand::Local(self.new_local(ty)));
         }
         let mut ops = Vec::new();
         for a in args {
@@ -311,7 +306,7 @@ impl FnBuilder<'_, '_> {
         let owned: Vec<Operand> = ops.into_iter().map(|op| self.own(op, span)).collect();
         let result = self.temp(ret, Rvalue::Call(id, owned.clone()), span);
         for op in owned {
-            if let (Operand::Local(l), Ty::Str) = (op, self.ty(op)) {
+            if let (Operand::Local(l), true) = (op, self.ty(op).is_rc()) {
                 self.emit(Inst::Forget(l));
             }
         }
@@ -348,12 +343,12 @@ impl FnBuilder<'_, '_> {
                 self.emit(Inst::Print(args));
                 Ok(Operand::None)
             }
-            "len" | "str" | "int" | "float" => self.unary_builtin(name, &args, span),
+            "len" | "str" | "int" | "float" | "bool" => self.unary_builtin(name, &args, span),
             other => Err(unsupported(span, &format!("`{other}`"))),
         }
     }
 
-    /// `len`, `str`, `int` and `float` of one argument.
+    /// `len`, `str`, `int`, `float` and `bool` of one argument.
     fn unary_builtin(&mut self, name: &str, args: &[Operand], span: Span) -> Result<Operand> {
         let [arg] = args else {
             return Err(unsupported(
@@ -365,7 +360,8 @@ impl FnBuilder<'_, '_> {
         let (ty, value) = match (name, self.ty(arg)) {
             ("str", Ty::Str) | ("int", Ty::Int) | ("float", Ty::Float) => return Ok(arg),
             ("float", Ty::Int | Ty::Bool) => return Ok(self.as_float(arg, span)),
-            ("len", Ty::Str) => (Ty::Int, Rvalue::Len(arg)),
+            ("bool", _) => return Ok(self.truthy(arg, span)),
+            ("len", Ty::Str | Ty::List(_) | Ty::Tuple(_)) => (Ty::Int, Rvalue::Len(arg)),
             ("str", _) => (Ty::Str, Rvalue::ToStr(arg)),
             ("int", Ty::Float) => (Ty::Int, Rvalue::FloatToInt(arg)),
             ("int", Ty::Str) => (Ty::Int, Rvalue::ParseInt(arg)),
