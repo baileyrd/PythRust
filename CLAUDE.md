@@ -12,7 +12,7 @@ Pythrust: Python's surface, Rust's guarantees. Code starts *loose* (inferred) an
 
 ## Layout
 
-One crate, `crates/pythrust-compiler`, one module per stage. Shared contract types: `span`, `diag`, `token`, `ast`. Stages: `lexer`, `parser`, `infer`, `interp`. Stages meet only at the contract types.
+`crates/pythrust-compiler`, one module per stage. Shared contract types: `span`, `diag`, `token`, `ast`, `ir`. Stages: `lexer`, `parser`, `infer`, `interp`, and for native code `lower`, `codegen` (`docs/native.md`). Stages meet only at the contract types. `crates/pythrust-rt` is the runtime native programs link against.
 
 ## Engineering rules
 
@@ -20,7 +20,7 @@ One crate, `crates/pythrust-compiler`, one module per stage. Shared contract typ
 - Explicit over implicit. Types everywhere. Flat control flow: guard clauses, early returns, at most 3 levels of nesting. Short single-purpose functions.
 - `Result` and `?`. No `unwrap()`/`expect()` outside tests. Never swallow errors; propagate with context.
 - Domain logic free of I/O. Immutable data; make illegal states unrepresentable.
-- Zero dependencies unless justified in the PR. No `unsafe` (`forbid(unsafe_code)`).
+- Zero dependencies unless justified in the PR (the `cranelift-*` crates are accepted). No `unsafe` (`forbid(unsafe_code)`), except the audited C ABI surface of `pythrust-rt`.
 - Tests for all non-trivial logic: happy path plus failure and boundary cases.
 - Ask before large or hard-to-reverse changes (public API, dependency bumps, deletions). Keep diffs focused. State the why for non-obvious choices.
 - One branch and one PR per thread. Commit small.

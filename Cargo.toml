@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pythrust-compiler"]
+members = ["crates/pythrust-compiler", "crates/pythrust-rt"]
 
 [workspace.package]
 version = "0.0.0"

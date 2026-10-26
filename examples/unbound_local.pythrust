@@ -1,0 +1,9 @@
+# expect-exit: 1
+def f(flag):
+    if flag:
+        x = 1
+    return x
+
+
+print(f(True))
+print(f(False))

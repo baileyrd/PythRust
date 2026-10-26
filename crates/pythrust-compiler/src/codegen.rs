@@ -1,0 +1,562 @@
+//! Cranelift backend: an [`ir::Program`] to a relocatable object file.
+//!
+//! One Cranelift function per IR function; IR locals become
+//! `cranelift_frontend` variables, which build the SSA form. The module's
+//! top-level code is exported as `pythrust_main`, which `pythrust-rt`'s
+//! `main` calls; everything else has local linkage. A runtime error
+//! calls `pt_fail` with its diagnostic, rendered at compile time and
+//! stored as read-only data. `None` has no machine representation: a
+//! function returning it returns nothing.
+//!
+//! Calls are counted in a module-private depth counter so recursion past
+//! the interpreter's limit is a `RecursionError`, as in `run`, rather
+//! than a native stack overflow.
+
+use std::collections::HashMap;
+
+use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::{
+    types, AbiParam, InstBuilder, MemFlagsData, Signature, TrapCode, Value,
+};
+use cranelift_codegen::{isa, settings, settings::Configurable, Context};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
+use cranelift_module::{
+    default_libcall_names, DataDescription, DataId, FuncId as ClifFunc, Linkage, Module,
+};
+use cranelift_object::{ObjectBuilder, ObjectModule};
+
+use crate::diag::{DiagKind, Diagnostic, Result};
+use crate::ir::{
+    self, BlockId, CmpOp, Func, Inst, IntOp, LocalId, Operand, Program, Rvalue, Term, Ty,
+};
+use crate::span::Span;
+
+/// Symbol the runtime's `main` calls.
+pub const ENTRY: &str = "pythrust_main";
+
+/// Compiles `program` for the host. `render` turns a runtime error into
+/// the exact text the program prints to stderr when it happens.
+pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result<Vec<u8>> {
+    let mut cg = Codegen::new(render)?;
+    let ids = cg.declare(program)?;
+    for (func, id) in program.funcs.iter().zip(&ids) {
+        cg.define(func, *id, &ids)?;
+    }
+    cg.module
+        .finish()
+        .emit()
+        .map_err(|e| backend(format!("cannot write object: {e}")))
+}
+
+/// Runtime functions generated code calls.
+#[derive(Clone, Copy)]
+enum Rt {
+    WriteInt,
+    WriteBool,
+    WriteNone,
+    WriteByte,
+    Fail,
+}
+
+impl Rt {
+    const ALL: [Rt; 5] = [
+        Rt::WriteInt,
+        Rt::WriteBool,
+        Rt::WriteNone,
+        Rt::WriteByte,
+        Rt::Fail,
+    ];
+
+    fn symbol(self) -> &'static str {
+        match self {
+            Rt::WriteInt => "pt_write_int",
+            Rt::WriteBool => "pt_write_bool",
+            Rt::WriteNone => "pt_write_none",
+            Rt::WriteByte => "pt_write_byte",
+            Rt::Fail => "pt_fail",
+        }
+    }
+
+    fn params(self, ptr: types::Type) -> Vec<types::Type> {
+        match self {
+            Rt::WriteInt => vec![types::I64],
+            Rt::WriteBool | Rt::WriteByte => vec![types::I8],
+            Rt::WriteNone => vec![],
+            Rt::Fail => vec![ptr, ptr],
+        }
+    }
+}
+
+struct Codegen<'r> {
+    module: ObjectModule,
+    render: &'r dyn Fn(&Diagnostic) -> String,
+    rt: HashMap<&'static str, ClifFunc>,
+    /// The `i64` count of active Pythrust calls.
+    depth: DataId,
+    /// Rendered failure messages, deduplicated.
+    messages: HashMap<String, (DataId, usize)>,
+}
+
+impl<'r> Codegen<'r> {
+    fn new(render: &'r dyn Fn(&Diagnostic) -> String) -> Result<Self> {
+        let mut flags = settings::builder();
+        // PIC, because system linkers default to position-independent
+        // executables.
+        for (name, value) in [("opt_level", "speed"), ("is_pic", "true")] {
+            flags.set(name, value).map_err(|e| backend(e.to_string()))?;
+        }
+        let isa = isa::lookup(target_lexicon::Triple::host())
+            .map_err(|e| backend(format!("unsupported host: {e}")))?
+            .finish(settings::Flags::new(flags))
+            .map_err(|e| backend(e.to_string()))?;
+        let builder =
+            ObjectBuilder::new(isa, "pythrust", default_libcall_names()).map_err(module_err)?;
+        let mut module = ObjectModule::new(builder);
+        let depth = module
+            .declare_data("pythrust_depth", Linkage::Local, true, false)
+            .map_err(module_err)?;
+        let mut zero = DataDescription::new();
+        zero.define_zeroinit(8);
+        module.define_data(depth, &zero).map_err(module_err)?;
+        let mut cg = Codegen {
+            module,
+            render,
+            depth,
+            rt: HashMap::new(),
+            messages: HashMap::new(),
+        };
+        let ptr = cg.module.target_config().pointer_type();
+        for rt in Rt::ALL {
+            let mut sig = cg.module.make_signature();
+            sig.params
+                .extend(rt.params(ptr).into_iter().map(AbiParam::new));
+            let id = cg
+                .module
+                .declare_function(rt.symbol(), Linkage::Import, &sig)
+                .map_err(module_err)?;
+            cg.rt.insert(rt.symbol(), id);
+        }
+        Ok(cg)
+    }
+
+    fn declare(&mut self, program: &Program) -> Result<Vec<ClifFunc>> {
+        let mut ids = Vec::new();
+        for (i, f) in program.funcs.iter().enumerate() {
+            let sig = self.signature(f);
+            let (name, linkage) = match i == program.main.0 {
+                true => (ENTRY.to_string(), Linkage::Export),
+                false => (format!("py{i}_{}", f.name), Linkage::Local),
+            };
+            ids.push(
+                self.module
+                    .declare_function(&name, linkage, &sig)
+                    .map_err(module_err)?,
+            );
+        }
+        Ok(ids)
+    }
+
+    fn signature(&self, f: &Func) -> Signature {
+        let mut sig = self.module.make_signature();
+        for p in &f.params {
+            sig.params.push(AbiParam::new(clif_ty(f.locals[p.0])));
+        }
+        if f.ret != Ty::None {
+            sig.returns.push(AbiParam::new(clif_ty(f.ret)));
+        }
+        sig
+    }
+
+    /// The data object holding `diag`'s rendered text, and its length.
+    fn message(&mut self, diag: &Diagnostic) -> Result<(DataId, usize)> {
+        let text = (self.render)(diag);
+        if let Some(found) = self.messages.get(&text) {
+            return Ok(*found);
+        }
+        let id = self
+            .module
+            .declare_anonymous_data(false, false)
+            .map_err(module_err)?;
+        let mut data = DataDescription::new();
+        data.define(text.clone().into_bytes().into_boxed_slice());
+        self.module.define_data(id, &data).map_err(module_err)?;
+        let entry = (id, text.len());
+        self.messages.insert(text, entry);
+        Ok(entry)
+    }
+
+    fn define(&mut self, func: &Func, id: ClifFunc, ids: &[ClifFunc]) -> Result<()> {
+        let mut ctx = Context::new();
+        ctx.func.signature = self.signature(func);
+        FnGen::build(
+            self,
+            func,
+            ids,
+            &mut ctx,
+            &mut FunctionBuilderContext::new(),
+        )?;
+        self.module
+            .define_function(id, &mut ctx)
+            .map_err(module_err)
+    }
+}
+
+/// Translates one function.
+struct FnGen<'b, 'c, 'r> {
+    cg: &'c mut Codegen<'r>,
+    b: FunctionBuilder<'b>,
+    func: &'c Func,
+    ids: &'c [ClifFunc],
+    vars: Vec<Variable>,
+    blocks: Vec<cranelift_codegen::ir::Block>,
+}
+
+impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
+    fn build(
+        cg: &'c mut Codegen<'r>,
+        func: &'c Func,
+        ids: &'c [ClifFunc],
+        ctx: &'b mut Context,
+        fctx: &'b mut FunctionBuilderContext,
+    ) -> Result<()> {
+        let mut b = FunctionBuilder::new(&mut ctx.func, fctx);
+        let blocks: Vec<_> = func.blocks.iter().map(|_| b.create_block()).collect();
+        let vars: Vec<_> = func
+            .locals
+            .iter()
+            .map(|t| b.declare_var(clif_ty(*t)))
+            .collect();
+        let entry = *blocks
+            .first()
+            .ok_or_else(|| backend(format!("`{}` has no blocks", func.name)))?;
+        b.append_block_params_for_function_params(entry);
+        b.switch_to_block(entry);
+        let params = b.block_params(entry).to_vec();
+        for (i, var) in vars.iter().enumerate() {
+            let v = match func.params.iter().position(|p| p.0 == i) {
+                Some(k) => params[k],
+                None => b.ins().iconst(clif_ty(func.locals[i]), 0),
+            };
+            b.def_var(*var, v);
+        }
+        let mut g = FnGen {
+            cg,
+            b,
+            func,
+            ids,
+            vars,
+            blocks,
+        };
+        for (i, block) in func.blocks.iter().enumerate() {
+            if i > 0 {
+                g.b.switch_to_block(g.blocks[i]);
+            }
+            for inst in &block.insts {
+                g.inst(inst)?;
+            }
+            g.term(&block.term)?;
+        }
+        g.b.seal_all_blocks();
+        let config = g.cg.module.target_config();
+        g.b.finalize(config);
+        Ok(())
+    }
+
+    fn inst(&mut self, inst: &Inst) -> Result<()> {
+        match inst {
+            Inst::Assign { dest, value, span } => {
+                let v = self.rvalue(value, *dest, *span)?;
+                self.b.def_var(self.vars[dest.0], v);
+            }
+            Inst::Print(args) => {
+                for (i, op) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.write_byte(b' ');
+                    }
+                    self.write(*op);
+                }
+                self.write_byte(b'\n');
+            }
+        }
+        Ok(())
+    }
+
+    fn write(&mut self, op: Operand) {
+        let (rt, args) = match self.func.ty(op) {
+            Ty::Int => (Rt::WriteInt, vec![self.operand(op)]),
+            Ty::Bool => (Rt::WriteBool, vec![self.operand(op)]),
+            Ty::None => (Rt::WriteNone, vec![]),
+        };
+        self.call_rt(rt, &args);
+    }
+
+    fn write_byte(&mut self, byte: u8) {
+        let v = self.b.ins().iconst(types::I8, i64::from(byte));
+        self.call_rt(Rt::WriteByte, &[v]);
+    }
+
+    fn call_rt(&mut self, rt: Rt, args: &[Value]) {
+        let id = self.cg.rt[rt.symbol()];
+        let fref = self.cg.module.declare_func_in_func(id, self.b.func);
+        self.b.ins().call(fref, args);
+    }
+
+    fn operand(&mut self, op: Operand) -> Value {
+        match op {
+            Operand::Local(LocalId(i)) => self.b.use_var(self.vars[i]),
+            Operand::Int(n) => self.b.ins().iconst(types::I64, n),
+            Operand::Bool(v) => self.b.ins().iconst(types::I8, i64::from(v)),
+            Operand::None => self.b.ins().iconst(types::I8, 0),
+        }
+    }
+
+    fn rvalue(&mut self, value: &Rvalue, dest: LocalId, span: Span) -> Result<Value> {
+        match value {
+            Rvalue::Use(op) => Ok(self.operand(*op)),
+            Rvalue::Int(op, a, b) => {
+                let (a, b) = (self.operand(*a), self.operand(*b));
+                self.int_op(*op, a, b, span)
+            }
+            Rvalue::Neg(a) => {
+                let a = self.operand(*a);
+                let min = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
+                self.fail_if(min, span, OVERFLOW)?;
+                Ok(self.b.ins().ineg(a))
+            }
+            Rvalue::Cmp(op, a, b) => {
+                let (a, b) = (self.operand(*a), self.operand(*b));
+                Ok(self.b.ins().icmp(int_cc(*op), a, b))
+            }
+            Rvalue::AddOverflows(a, b) => {
+                let (a, b) = (self.operand(*a), self.operand(*b));
+                Ok(self.b.ins().sadd_overflow(a, b).1)
+            }
+            Rvalue::Call(callee, args) => self.call(*callee, args, dest, span),
+        }
+    }
+
+    /// Calls `callee`, failing at `span` if `MAX_DEPTH` calls are active.
+    fn call(
+        &mut self,
+        callee: ir::FuncId,
+        args: &[Operand],
+        dest: LocalId,
+        span: Span,
+    ) -> Result<Value> {
+        let id = *self
+            .ids
+            .get(callee.0)
+            .ok_or_else(|| backend("call to an unknown function".to_string()))?;
+        let fref = self.cg.module.declare_func_in_func(id, self.b.func);
+        let args: Vec<Value> = args.iter().map(|op| self.operand(*op)).collect();
+        let ptr = self.cg.module.target_config().pointer_type();
+        let gv = self
+            .cg
+            .module
+            .declare_data_in_func(self.cg.depth, self.b.func);
+        let addr = self.b.ins().symbol_value(ptr, gv);
+        let flags = MemFlagsData::trusted();
+        let depth = self.b.ins().load(types::I64, flags, addr, 0);
+        let full = self
+            .b
+            .ins()
+            .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, depth, MAX_DEPTH);
+        self.fail_if(full, span, RECURSION)?;
+        let deeper = self.b.ins().iadd_imm_s(depth, 1);
+        self.b.ins().store(flags, deeper, addr, 0);
+        let call = self.b.ins().call(fref, &args);
+        self.b.ins().store(flags, depth, addr, 0);
+        match self.b.inst_results(call).first() {
+            Some(v) => Ok(*v),
+            None => Ok(self.b.ins().iconst(clif_ty(self.func.locals[dest.0]), 0)),
+        }
+    }
+
+    /// Checked `a op b` with Python's floor semantics for `//` and `%`.
+    fn int_op(&mut self, op: IntOp, a: Value, b: Value, span: Span) -> Result<Value> {
+        let (v, overflow) = match op {
+            IntOp::Add => self.b.ins().sadd_overflow(a, b),
+            IntOp::Sub => self.b.ins().ssub_overflow(a, b),
+            IntOp::Mul => self.b.ins().smul_overflow(a, b),
+            IntOp::FloorDiv => return self.floor_div(a, b, span),
+            IntOp::Mod => return self.modulo(a, b, span),
+        };
+        self.fail_if(overflow, span, OVERFLOW)?;
+        Ok(v)
+    }
+
+    fn floor_div(&mut self, a: Value, b: Value, span: Span) -> Result<Value> {
+        self.check_divisor(b, span)?;
+        let min = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
+        let neg1 = self.b.ins().icmp_imm_s(IntCC::Equal, b, -1);
+        let overflow = self.b.ins().band(min, neg1);
+        self.fail_if(overflow, span, OVERFLOW)?;
+        let q = self.b.ins().sdiv(a, b);
+        let r = self.b.ins().srem(a, b);
+        let adjust = self.floor_adjust(r, b);
+        let adjust = self.b.ins().uextend(types::I64, adjust);
+        Ok(self.b.ins().isub(q, adjust))
+    }
+
+    fn modulo(&mut self, a: Value, b: Value, span: Span) -> Result<Value> {
+        self.check_divisor(b, span)?;
+        // `i64::MIN % -1` traps in hardware; any `x % -1` is 0, as is `x % 1`.
+        let neg1 = self.b.ins().icmp_imm_s(IntCC::Equal, b, -1);
+        let one = self.b.ins().iconst(types::I64, 1);
+        let safe = self.b.ins().select(neg1, one, b);
+        let r = self.b.ins().srem(a, safe);
+        let adjust = self.floor_adjust(r, safe);
+        let zero = self.b.ins().iconst(types::I64, 0);
+        let add = self.b.ins().select(adjust, safe, zero);
+        Ok(self.b.ins().iadd(r, add))
+    }
+
+    /// Whether a truncating remainder `r` of a division by `b` has the
+    /// wrong sign for flooring: nonzero, and of the opposite sign to `b`.
+    fn floor_adjust(&mut self, r: Value, b: Value) -> Value {
+        let nonzero = self.b.ins().icmp_imm_s(IntCC::NotEqual, r, 0);
+        let signs = self.b.ins().bxor(r, b);
+        let differ = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, signs, 0);
+        self.b.ins().band(nonzero, differ)
+    }
+
+    fn check_divisor(&mut self, b: Value, span: Span) -> Result<()> {
+        let zero = self.b.ins().icmp_imm_s(IntCC::Equal, b, 0);
+        self.fail_if(zero, span, ZERO_DIV)
+    }
+
+    /// Branches to a cold failure block when `cond` is nonzero.
+    fn fail_if(&mut self, cond: Value, span: Span, message: &str) -> Result<()> {
+        let (fail, ok) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(fail);
+        self.b.ins().brif(cond, fail, &[], ok, &[]);
+        self.b.switch_to_block(fail);
+        self.fail(&runtime(span, message))?;
+        self.b.switch_to_block(ok);
+        Ok(())
+    }
+
+    fn fail(&mut self, diag: &Diagnostic) -> Result<()> {
+        let (data, len) = self.cg.message(diag)?;
+        let ptr = self.cg.module.target_config().pointer_type();
+        let gv = self.cg.module.declare_data_in_func(data, self.b.func);
+        let addr = self.b.ins().symbol_value(ptr, gv);
+        let len = self.b.ins().iconst(ptr, len as i64);
+        self.call_rt(Rt::Fail, &[addr, len]);
+        self.b.ins().trap(TrapCode::unwrap_user(1));
+        Ok(())
+    }
+
+    fn term(&mut self, term: &Term) -> Result<()> {
+        match term {
+            Term::Goto(to) => {
+                let to = self.block(*to);
+                self.b.ins().jump(to, &[]);
+            }
+            Term::Branch { cond, then, orelse } => {
+                let c = self.operand(*cond);
+                let (t, e) = (self.block(*then), self.block(*orelse));
+                self.b.ins().brif(c, t, &[], e, &[]);
+            }
+            Term::Return(op) => {
+                let vals = match self.func.ret {
+                    Ty::None => vec![],
+                    _ => vec![self.operand(*op)],
+                };
+                self.b.ins().return_(&vals);
+            }
+            Term::Fail(diag) => self.fail(diag)?,
+            Term::Unreachable => {
+                self.b.ins().trap(TrapCode::unwrap_user(2));
+            }
+        }
+        Ok(())
+    }
+
+    fn block(&self, id: BlockId) -> cranelift_codegen::ir::Block {
+        self.blocks[id.0]
+    }
+}
+
+const OVERFLOW: &str = "OverflowError: integer overflow";
+const RECURSION: &str = "RecursionError: maximum recursion depth exceeded";
+/// Active calls allowed, as in the interpreter.
+const MAX_DEPTH: i64 = crate::interp::MAX_DEPTH as i64;
+const ZERO_DIV: &str = "ZeroDivisionError: integer division or modulo by zero";
+
+fn clif_ty(ty: Ty) -> types::Type {
+    match ty {
+        Ty::Int => types::I64,
+        Ty::Bool | Ty::None => types::I8,
+    }
+}
+
+fn int_cc(op: CmpOp) -> IntCC {
+    match op {
+        CmpOp::Eq => IntCC::Equal,
+        CmpOp::Ne => IntCC::NotEqual,
+        CmpOp::Lt => IntCC::SignedLessThan,
+        CmpOp::Le => IntCC::SignedLessThanOrEqual,
+        CmpOp::Gt => IntCC::SignedGreaterThan,
+        CmpOp::Ge => IntCC::SignedGreaterThanOrEqual,
+    }
+}
+
+fn runtime(span: Span, message: &str) -> Diagnostic {
+    Diagnostic {
+        span,
+        message: message.to_string(),
+        kind: DiagKind::Runtime,
+    }
+}
+
+fn backend(message: String) -> Diagnostic {
+    Diagnostic {
+        span: Span { start: 0, end: 0 },
+        message: format!("internal: {message}"),
+        kind: DiagKind::Backend,
+    }
+}
+
+fn module_err(e: cranelift_module::ModuleError) -> Diagnostic {
+    backend(e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+    use crate::{infer, lexer, lower, parser};
+
+    /// Compiles `src`, returning the object and every diagnostic rendered.
+    fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
+        let rendered = RefCell::new(Vec::new());
+        let render = |d: &Diagnostic| {
+            rendered.borrow_mut().push(d.message.clone());
+            d.message.clone()
+        };
+        let module = parser::parse(&lexer::lex(src).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = lower::lower(&module, &types).expect("lower");
+        let object = emit(&program, &render).expect("emit");
+        (object, rendered.into_inner())
+    }
+
+    #[test]
+    fn emits_an_object_with_the_entry_symbol() {
+        let (object, _) = compile("def f(n):\n    return n * 2\nprint(f(21), True, None)\n");
+        assert!(object.len() > 64);
+        let entry = ENTRY.as_bytes();
+        assert!(object.windows(entry.len()).any(|w| w == entry));
+    }
+
+    #[test]
+    fn renders_each_failure_site_once_at_compile_time() {
+        let (_, rendered) = compile("x = 5\nprint(x + 1, x // 2, -x)\n");
+        let count = |m: &str| rendered.iter().filter(|r| r.as_str() == m).count();
+        // `+`, `//` and `-` can overflow; `//` can also divide by zero.
+        assert_eq!(count(OVERFLOW), 3);
+        assert_eq!(count(ZERO_DIV), 1);
+    }
+}

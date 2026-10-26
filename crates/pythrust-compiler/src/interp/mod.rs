@@ -27,7 +27,12 @@ use builtins::{Args, Builtin};
 use value::{Func, Value};
 
 /// Python's default recursion limit.
-const MAX_DEPTH: usize = 1000;
+pub(crate) const MAX_DEPTH: usize = 1000;
+
+/// Whether `name` is a builtin when no global shadows it.
+pub(crate) fn is_builtin(name: &str) -> bool {
+    builtins::Builtin::lookup(name).is_some()
+}
 
 /// Stack for the interpreter thread. A Python call costs several Rust
 /// frames (up to ~16 KiB in debug builds), so `MAX_DEPTH` calls need far

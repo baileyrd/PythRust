@@ -9,7 +9,7 @@ use crate::ast::{
 };
 
 /// Names bound anywhere in `block`, as Python decides locals.
-pub(super) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
+pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     walk(block, &mut |s| match &s.kind {
         StmtKind::Assign { target, .. }
@@ -109,7 +109,7 @@ pub(super) fn groups<'a>(funcs: &[&'a FuncDef]) -> Vec<Vec<&'a FuncDef>> {
 /// Names `f` reads that are not its own locals: candidates for calls to
 /// other top-level functions. Defaults run in module scope, so all of
 /// their names count.
-fn references(f: &FuncDef) -> BTreeSet<String> {
+pub(crate) fn references(f: &FuncDef) -> BTreeSet<String> {
     let mut locals = assigned(&f.body);
     locals.extend(f.params.iter().map(|p| p.name.name.clone()));
     let mut names = BTreeSet::new();

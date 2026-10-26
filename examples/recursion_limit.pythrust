@@ -1,0 +1,9 @@
+# expect-exit: 1
+def down(n):
+    if n == 0:
+        return 0
+    return down(n - 1)
+
+
+print(down(900))
+print(down(5000))

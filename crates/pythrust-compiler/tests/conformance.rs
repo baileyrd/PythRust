@@ -4,6 +4,10 @@
 //! stdout it must print. The phase-2 subset is Python-compatible, so CPython
 //! is the oracle: `corpus_matches_cpython` checks each golden against
 //! `python3`, and `corpus_matches_pythrust` checks it against `pythrust run`.
+//! `corpus_matches_native` builds each program with `pythrust build` and
+//! checks the executable too; programs outside the native subset must fail
+//! with a backend "does not support" error, and `NATIVE` must build. A
+//! native program that fails must also print `run`'s exact diagnostic.
 //! Stdout and exit status are compared; stderr is not, because diagnostics
 //! and tracebacks differ by design.
 //!
@@ -205,10 +209,103 @@ fn run_cpython(source: &Path) -> Res<Run> {
     run(Command::new(python).arg("-I").arg(source), TIMEOUT)
 }
 
-fn run_pythrust(source: &Path) -> Res<Run> {
+fn pythrust_bin() -> Res<PathBuf> {
     let default = PathBuf::from(env!("CARGO_BIN_EXE_pythrust"));
-    let bin = std::env::var_os("PYTHRUST_BIN").map_or(default, PathBuf::from);
-    run(Command::new(bin).arg("run").arg(source), TIMEOUT)
+    Ok(std::env::var_os("PYTHRUST_BIN").map_or(default, PathBuf::from))
+}
+
+fn run_pythrust(source: &Path) -> Res<Run> {
+    run(
+        Command::new(pythrust_bin()?).arg("run").arg(source),
+        TIMEOUT,
+    )
+}
+
+/// Programs the native backend must compile; it grows with the subset.
+const NATIVE: &[&str] = &[
+    "call_before_def",
+    "collatz",
+    "fibonacci",
+    "int_control",
+    "overflow_min_floordiv",
+    "recursion_limit",
+    "shadow_builtin_late",
+    "unbound_augassign",
+    "unbound_local",
+    "unbound_loop_target",
+];
+
+/// What the native backend says about a program outside its subset.
+const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";
+
+/// Builds the runtime library `pythrust build` links against, with the
+/// profile and target of the `pythrust` under test so it lands beside it.
+/// `cargo test` builds the compiler but not this static library.
+fn build_runtime() -> Res<()> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let args = runtime_build_args(&pythrust_bin()?, &|dir| dir.join("CACHEDIR.TAG").is_file())?;
+    let status = Command::new(cargo)
+        .args(&args)
+        .status()
+        .map_err(|e| format!("cannot run cargo: {e}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("building pythrust-rt failed: {status}"))
+}
+
+/// Cargo arguments that build `pythrust-rt` into the directory of `exe`,
+/// laid out as `<target-dir>[/<triple>]/<profile-dir>/pythrust`. Cargo
+/// marks a target directory with `CACHEDIR.TAG`; `is_target_dir` checks it.
+fn runtime_build_args(exe: &Path, is_target_dir: &dyn Fn(&Path) -> bool) -> Res<Vec<String>> {
+    let parent = |p: &Path| {
+        p.parent()
+            .map(Path::to_path_buf)
+            .ok_or(format!("{} has no parent", p.display()))
+    };
+    let name = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or(format!("{} has no name", p.display()))
+    };
+    let profile_dir = parent(exe)?;
+    let profile = match name(&profile_dir)?.as_str() {
+        "debug" => "dev".to_string(),
+        other => other.to_string(),
+    };
+    let mut root = parent(&profile_dir)?;
+    let mut args: Vec<String> = ["build", "--quiet", "-p", "pythrust-rt", "--profile"]
+        .map(String::from)
+        .into();
+    args.push(profile);
+    if !is_target_dir(&root) {
+        args.extend(["--target".to_string(), name(&root)?]);
+        root = parent(&root)?;
+    }
+    args.extend([
+        "--target-dir".to_string(),
+        root.to_string_lossy().into_owned(),
+    ]);
+    Ok(args)
+}
+
+/// Builds a copy of `source` in `dir`: the executable, or `None` when
+/// the program is outside the native subset.
+fn build_native(source: &Path, dir: &Path) -> Res<Option<PathBuf>> {
+    let name = source.file_name().ok_or("source has no file name")?;
+    let copy = dir.join(name);
+    fs::copy(source, &copy).map_err(|e| format!("{}: {e}", source.display()))?;
+    let out = Command::new(pythrust_bin()?)
+        .arg("build")
+        .arg(&copy)
+        .output()
+        .map_err(|e| format!("cannot run pythrust build: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    match (out.status.success(), stderr.contains(NATIVE_UNSUPPORTED)) {
+        (true, _) => Ok(Some(copy.with_extension(""))),
+        (false, true) => Ok(None),
+        (false, false) => Err(format!("{}: build failed:\n{stderr}", source.display())),
+    }
 }
 
 /// Compares a run against the golden; `None` means it matches.
@@ -354,6 +451,64 @@ fn corpus_matches_pythrust() -> Res<()> {
     Ok(())
 }
 
+/// A native program that failed must print exactly what `pythrust run`
+/// prints for the same file: the error, its location and its carets. Only
+/// called once the program is known to terminate.
+fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
+    let stderr = |cmd: &mut Command| -> Res<String> {
+        let out = cmd
+            .output()
+            .map_err(|e| format!("cannot run {cmd:?}: {e}"))?;
+        Ok(String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let source = exe.with_extension("pythrust");
+    let native = stderr(&mut Command::new(exe))?;
+    let interp = stderr(Command::new(pythrust_bin()?).arg("run").arg(&source))?;
+    Ok((native != interp).then(|| {
+        format!(
+            "{}\n  run stderr:\n{interp}\n  native stderr:\n{native}",
+            source.display()
+        )
+    }))
+}
+
+#[test]
+fn corpus_matches_native() -> Res<()> {
+    build_runtime()?;
+    let dir = std::env::temp_dir().join(format!("pythrust-native-{}", std::process::id()));
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut failures = Vec::new();
+    let mut built = Vec::new();
+    for case in load_corpus(&corpus_dir()?)? {
+        if case.expect.check_error.is_some() {
+            continue;
+        }
+        let Some(exe) = build_native(&case.source, &dir)? else {
+            continue;
+        };
+        let got = run(&mut Command::new(&exe), TIMEOUT)?;
+        let failed = mismatch(&case, &got);
+        let errored = failed.is_none() && got.status != 0;
+        failures.extend(failed);
+        if errored {
+            failures.extend(stderr_mismatch(&exe)?);
+        }
+        built.extend(
+            case.source
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned()),
+        );
+    }
+    fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    for name in NATIVE {
+        if !built.iter().any(|b| b == name) {
+            failures.push(format!("{name}: must build natively"));
+        }
+    }
+    report(failures);
+    Ok(())
+}
+
 #[test]
 fn corpus_is_complete() -> Res<()> {
     let dir = corpus_dir()?;
@@ -370,6 +525,25 @@ fn corpus_is_complete() -> Res<()> {
             && !path.with_extension("pythrust").exists();
         assert!(!orphan, "golden without a program: {}", path.display());
     }
+    Ok(())
+}
+
+#[test]
+fn runtime_follows_the_profile_and_target_under_test() -> Res<()> {
+    let root = |dir: &Path| dir.ends_with("target");
+    let tail = |args: Vec<String>| args[4..].join(" ");
+    let dev = runtime_build_args(Path::new("/w/target/debug/pythrust"), &root)?;
+    assert_eq!(tail(dev), "--profile dev --target-dir /w/target");
+    let release = runtime_build_args(Path::new("/w/target/release/pythrust"), &root)?;
+    assert_eq!(tail(release), "--profile release --target-dir /w/target");
+    let cross = runtime_build_args(
+        Path::new("/w/target/x86_64-unknown-linux-gnu/bench/pythrust"),
+        &root,
+    )?;
+    assert_eq!(
+        tail(cross),
+        "--profile bench --target x86_64-unknown-linux-gnu --target-dir /w/target"
+    );
     Ok(())
 }
 

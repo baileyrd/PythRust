@@ -1,0 +1,7 @@
+# expect-exit: 1
+print(1)
+print(f())
+
+
+def f():
+    return 7
