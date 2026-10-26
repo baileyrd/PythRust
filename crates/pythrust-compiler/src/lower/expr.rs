@@ -257,7 +257,8 @@ impl<'a> FnBuilder<'_, 'a> {
                 let elem = self.slot_ty(ty, 0, span)?;
                 let needle = self.fit(l, elem, span);
                 if self.ty(needle) != elem {
-                    return Err(unsupported(span, "`in` on a list of another type"));
+                    let found = self.scan(l, r, span)?;
+                    return Ok(self.negate_if(op, found, span));
                 }
                 needle
             }
@@ -271,11 +272,67 @@ impl<'a> FnBuilder<'_, 'a> {
         };
         let found = Rvalue::Contains { hay: r, needle };
         let found = self.temp(Ty::Bool, found, span);
+        Ok(self.negate_if(op, found, span))
+    }
+
+    /// `found` for `in`, its negation for `not in`.
+    fn negate_if(&mut self, op: ast::CmpOp, found: Operand, span: Span) -> Operand {
         if op == ast::CmpOp::In {
-            return Ok(found);
+            return found;
         }
         let not = Rvalue::Cmp(CmpOp::Eq, found, Operand::Bool(false));
-        Ok(self.temp(Ty::Bool, not, span))
+        self.temp(Ty::Bool, not, span)
+    }
+
+    /// `needle in list` for a needle of another type than the elements
+    /// (`1 in [True]`, `True in [1.0, None]`): a loop comparing each
+    /// element with `==`, so the needle meets each as `==` would.
+    fn scan(&mut self, needle: Operand, list: Operand, span: Span) -> Result<Operand> {
+        let item = self.slot_ty(self.ty(list), 0, span)?;
+        let (found, counter) = (self.pooled(Ty::Bool), self.new_local(Ty::Int));
+        self.assign(found, Rvalue::Use(Operand::Bool(false)), span);
+        self.assign(counter, Rvalue::Use(Operand::Int(0)), span);
+        let cur = Operand::Local(counter);
+        let (head, body, next, end) = (
+            self.new_block(),
+            self.new_block(),
+            self.new_block(),
+            self.new_block(),
+        );
+        self.terminate(Term::Goto(head));
+        self.switch_to(head);
+        let n = self.temp(Ty::Int, Rvalue::Len(list), span);
+        let going = self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Lt, cur, n), span);
+        self.terminate(Term::Branch {
+            cond: going,
+            then: body,
+            orelse: end,
+        });
+        self.switch_to(body);
+        self.pooled_stmt(|b| {
+            let x = b.temp(item, Rvalue::Index(list, cur), span);
+            let eq = b.equal(needle, x, span)?;
+            b.assign(found, Rvalue::Use(eq), span);
+            Ok(())
+        })?;
+        self.terminate(Term::Branch {
+            cond: Operand::Local(found),
+            then: end,
+            orelse: next,
+        });
+        self.switch_to(next);
+        self.assign(counter, Rvalue::Int(IntOp::Add, cur, Operand::Int(1)), span);
+        self.terminate(Term::Goto(head));
+        self.switch_to(end);
+        Ok(Operand::Local(found))
+    }
+
+    /// `l == r`, either side optional or not.
+    fn equal(&mut self, l: Operand, r: Operand, span: Span) -> Result<Operand> {
+        if matches!(self.ty(l), Ty::Opt(_)) || matches!(self.ty(r), Ty::Opt(_)) {
+            return self.opt_eq(CmpOp::Eq, l, r, span);
+        }
+        self.cmp_values(CmpOp::Eq, l, r, span)
     }
 
     fn if_exp(&mut self, test: &Expr, body: &Expr, orelse: &Expr, span: Span) -> Result<Operand> {

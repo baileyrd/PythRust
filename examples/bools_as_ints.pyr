@@ -23,3 +23,10 @@ for i in range(t, 3, t + t):
 ys: list[bool | None] = [True, None]
 print(True in ys, False in ys, True not in ys, False not in ys, t in ys, f not in ys)
 print(t in [False, True], f not in [True])
+# Numbers meet bool elements as ints, and optional elements as `==` does.
+bs = [True]
+print(1 in bs, 1.0 in bs, 2 in bs, 0 not in bs, 1 in [False], 0.5 in bs)
+zs: list[float | None] = [1.0, None]
+print(True in zs, False in zs, 1 in zs, t not in zs, f not in zs)
+ws: list[int | None] = [None, 0]
+print(False in ws, True in ws, 0.0 in ws)
