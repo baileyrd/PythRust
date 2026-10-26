@@ -146,12 +146,10 @@ impl FnBuilder<'_, '_> {
     }
 
     /// A top-level `def` (inference rejects nested ones). Its body is
-    /// lowered per instance; here it only becomes callable. Defaults
-    /// would run now, which is not supported yet.
+    /// lowered per instance; here its defaults are evaluated, then it
+    /// becomes callable.
     fn def_stmt(&mut self, f: &FuncDef) -> Result<()> {
-        if let Some(default) = f.params.iter().find_map(|p| p.default.as_ref()) {
-            return Err(unsupported(default.span, "default arguments"));
-        }
+        self.store_defaults(f)?;
         if let Some(defined) = &mut self.defined {
             defined.insert(f.name.name.clone());
         }

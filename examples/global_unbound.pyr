@@ -1,0 +1,10 @@
+# expect-exit: 1
+# A function reading a module variable before the module assigns it
+# raises NameError, as in Python.
+def read() -> int:
+    return total
+
+
+print("before")
+print(read())
+total = 1

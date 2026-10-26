@@ -1,0 +1,39 @@
+# Functions read module variables, seeing each rebinding and in-place
+# change; defaults are evaluated once, when the `def` runs, so a list
+# default is shared across calls.
+LIMIT = 3
+names = ["a"]
+
+
+def show(prefix: str, sep: str = "-", times: int = LIMIT) -> str:
+    return prefix + sep * times + str(len(names))
+
+
+def grow() -> int:
+    names.append("b")
+    return len(names) + LIMIT
+
+
+def collect(x: int, acc: list[int] = []) -> list[int]:
+    acc.append(x)
+    return acc
+
+
+print(show("x"), show("y", times=1), show("z", "+"))
+print(grow(), names)
+LIMIT = 10
+print(grow(), show("w"))
+names = ["fresh"]
+print(grow(), names)
+print(collect(1), collect(2), collect(3, [0]), collect(4))
+for word in ["p", "q"]:
+    LIMIT = len(word) * 100
+    print(show(word, sep="."), grow())
+
+
+def late() -> int:
+    return later
+
+
+later = 5
+print(late())
