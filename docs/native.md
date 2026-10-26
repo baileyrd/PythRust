@@ -68,6 +68,7 @@ M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.m
 ## Known gaps
 
 - **Reference ownership** is checked for leaks in CI (the debug runtime's count) but for use-after-free only by running the examples under valgrind by hand.
+- **Bools as ints** in `range` bounds and indexes (`range(True)`, `xs[True]`), which inference and `run` accept, are backend errors.
 - **Binary size** is dominated by the runtime and Rust's standard library (about 5 MB in debug builds).
 - **Targets:** CI covers Linux x86-64 only. macOS and AArch64 are expected to work (Cranelift and `cc` serve them) but are untested.
 - **Diagnostics:** for a native program that fails, `corpus_matches_native` requires its stderr to equal `run`'s byte for byte (message, location, carets). This is only checked on Linux x86-64 in CI.

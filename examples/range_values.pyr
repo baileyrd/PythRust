@@ -28,3 +28,25 @@ n = 3
 print(len(range(n * n)), range(n)[n - 1])
 big = range(-9223372036854775807 - 1, 9223372036854775807)
 print(big[-1], big[2 ** 62], -1 in big, bool(big))
+
+
+# Ranges returned, directly and inside a list and a tuple.
+def make(n):
+    return range(n)
+
+
+def nest(n):
+    return [range(n), range(1, n)]
+
+
+def split(n):
+    return (range(n), n)
+
+
+def via(n):
+    return make(n)
+
+
+print(make(3), len(make(4)), nest(3), split(2), via(2) == range(0, 2))
+for x in make(2):
+    print(x)

@@ -317,7 +317,8 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         | (Type::Float, Ty::Float)
         | (Type::Bool, Ty::Bool)
         | (Type::None, Ty::None)
-        | (Type::Str, Ty::Str) => true,
+        | (Type::Str, Ty::Str)
+        | (Type::Range, Ty::Range) => true,
         _ => false,
     }
 }
