@@ -7,7 +7,7 @@ use crate::span::Span;
 use super::scope;
 use super::solve::{Access, Binary, Need};
 use super::ty::{FuncType, Type};
-use super::{builtins, error, Checker, Func};
+use super::{builtins, error, Checker, Func, TruthUse};
 
 impl Checker {
     /// Infers `e` and records its type at its span.
@@ -34,15 +34,27 @@ impl Checker {
             ExprKind::Binary { op, left, right } => {
                 let (l, r) = (self.expr(left)?, self.expr(right)?);
                 let out = self.subst.fresh();
-                let need = Need::Binary(Binary {
+                let need = Binary {
                     op: *op,
                     left: l,
                     right: r,
                     out: out.clone(),
                     right_literal: int_literal(right),
                     assigns: None,
+                };
+                self.truth_use(left, e.span, |t| {
+                    Need::Binary(Binary {
+                        left: t,
+                        ..need.clone()
+                    })
                 });
-                self.need(need, e.span);
+                self.truth_use(right, e.span, |t| {
+                    Need::Binary(Binary {
+                        right: t,
+                        ..need.clone()
+                    })
+                });
+                self.need(Need::Binary(need), e.span);
                 Ok(out)
             }
             ExprKind::Logical { op, left, right } => self.logical(*op, left, right),
@@ -124,12 +136,35 @@ impl Checker {
             return Ok(Type::Bool);
         }
         let out = self.subst.fresh();
-        let need = Need::Negate {
-            operand: t,
+        let negate = |operand: Type| Need::Negate {
+            operand,
             out: out.clone(),
         };
-        self.need(need, span);
+        self.truth_use(operand, span, negate);
+        self.need(negate(t), span);
         Ok(out)
+    }
+
+    /// Records the constraint `narrow` builds at `span` when `operand`
+    /// reads a name tested only for truth that is still `T | None`, with
+    /// the present type in its place: if that solves, the error at `span`
+    /// can suggest `x is not None`.
+    fn truth_use(&mut self, operand: &Expr, span: Span, narrow: impl FnOnce(Type) -> Need) {
+        let ExprKind::Name(name) = &operand.kind else {
+            return;
+        };
+        if !self.frame.truthy.contains(name) {
+            return;
+        }
+        let Some(Type::Optional(present)) = self.lookup(name).map(|t| self.subst.resolve(&t))
+        else {
+            return;
+        };
+        self.frame.truth_uses.push(TruthUse {
+            span,
+            name: name.clone(),
+            narrowed: narrow(*present),
+        });
     }
 
     /// `and`/`or` return an operand, so both sides share one type. The
@@ -155,9 +190,16 @@ impl Checker {
             let span = prev.1.span.merge(next.span);
             if matches!(op, CmpOp::Is | CmpOp::IsNot) {
                 is_none_operand(prev.1, next, span)?;
-            } else {
-                self.comparison(*op, &prev.0, &t, span);
+                prev = (t, next);
+                continue;
             }
+            if matches!(op, CmpOp::Lt | CmpOp::LtEq | CmpOp::Gt | CmpOp::GtEq) {
+                let right = t.clone();
+                self.truth_use(prev.1, span, |left| Need::Order { left, right });
+                let left = prev.0.clone();
+                self.truth_use(next, span, |right| Need::Order { left, right });
+            }
+            self.comparison(*op, &prev.0, &t, span);
             prev = (t, next);
         }
         Ok(Type::Bool)

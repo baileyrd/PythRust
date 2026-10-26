@@ -120,6 +120,21 @@ struct Frame {
     /// Names known not to be `None` here, with their narrowed type
     /// (`if x is not None:` on an `int | None` makes `x` an `int`).
     narrowed: HashMap<String, Type>,
+    /// Names an enclosing `if x:` or `while x:` tests only for truth,
+    /// which does not narrow them.
+    truthy: BTreeSet<String>,
+    /// Operations on `truthy` names that were still `T | None`, so an
+    /// error on one can suggest `x is not None`.
+    truth_uses: Vec<TruthUse>,
+}
+
+/// A constraint at `span` with a `truthy` name as a direct operand, and
+/// the same constraint with that operand narrowed to its present type.
+#[derive(Debug)]
+struct TruthUse {
+    span: Span,
+    name: String,
+    narrowed: Need,
 }
 
 #[derive(Debug, Default)]
@@ -241,6 +256,8 @@ impl Checker {
             locals,
             ret: Some(sig.ret.clone()),
             narrowed: HashMap::new(),
+            truthy: BTreeSet::new(),
+            truth_uses: Vec::new(),
         };
         self.block(&f.body)?;
         self.frame = Frame::default();

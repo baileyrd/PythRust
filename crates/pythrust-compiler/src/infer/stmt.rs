@@ -3,14 +3,16 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{BinOp, Block, Branch, Expr, Stmt, StmtKind, Target, TargetKind};
-use crate::diag::Result;
+use crate::diag::{Diagnostic, Result};
 use crate::span::Span;
 
 use super::expr::int_literal;
 use super::scope;
-use super::solve::{self, Access, Binary, Need};
+use super::solve::{self, Access, Binary, Constraint, Need};
 use super::ty::Type;
-use super::{error, Checker};
+use super::{error, Checker, TruthUse};
+
+const TRUTH_HINT: &str = "a truth test does not narrow";
 
 impl Checker {
     /// Infers `block` in order. After a guard (`if x is None: return`),
@@ -110,7 +112,42 @@ impl Checker {
         self.narrowed(not_none, &[], |c| c.expr(&b.test).map(drop))?;
         let mut inside = not_none.clone();
         inside.extend(scope::not_none(&b.test, true));
-        self.narrowed(&inside, &b.body, |c| c.block(&b.body))
+        // Names the test checks only for truth, unless the body assigns
+        // them: `is not None` would not narrow those either.
+        let assigned = scope::assigned(&b.body);
+        let tested = scope::truth_tested(&b.test);
+        let saved = (self.frame.truthy.clone(), self.frame.truth_uses.len());
+        let fixable = tested.into_iter().filter(|n| !assigned.contains(n));
+        self.frame.truthy.extend(fixable);
+        let result = self
+            .narrowed(&inside, &b.body, |c| c.block(&b.body))
+            .map_err(|e| self.truth_hint(e));
+        self.frame.truthy = saved.0;
+        self.frame.truth_uses.truncate(saved.1);
+        result
+    }
+
+    /// Adds a fix-it to `err` when it comes from an operation on a name
+    /// tested only for truth, and narrowing that name would fix it.
+    fn truth_hint(&self, mut err: Diagnostic) -> Diagnostic {
+        if err.message.contains(TRUTH_HINT) {
+            return err;
+        }
+        let fixes = |u: &&TruthUse| {
+            let narrowed = Constraint {
+                need: u.narrowed.clone(),
+                span: u.span,
+                via: None,
+            };
+            let solved = solve::solve(&mut self.subst.clone(), vec![narrowed]);
+            u.span == err.span && matches!(solved, Ok(rest) if rest.is_empty())
+        };
+        let Some(TruthUse { name, .. }) = self.frame.truth_uses.iter().find(fixes) else {
+            return err;
+        };
+        let hint = format!("; {TRUTH_HINT} `{name}`: write `{name} is not None`");
+        err.message.push_str(&hint);
+        err
     }
 
     /// Runs `f` with each of `names` narrowed from `T | None` to `T`,

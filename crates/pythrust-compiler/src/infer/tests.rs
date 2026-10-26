@@ -1318,6 +1318,76 @@ fn not_flips_what_a_test_proves() {
     assert_eq!(err(with_optionals(&b, body)), UNNARROWED);
 }
 
+/// The type error in `body`, after `x: int | None` and `y: int | None`.
+/// Parsed, so that spans nest as the truth-test hint needs.
+fn optionals_err(body: &str) -> String {
+    let src = format!("x: int | None = None\ny: int | None = None\n{body}");
+    let parsed = crate::lexer::lex(&src).and_then(|t| crate::parser::parse(&t));
+    match parsed.map(|m| infer(&m)) {
+        Ok(Err(e)) => e.message,
+        Ok(Ok(_)) => "no error".to_string(),
+        Err(e) => format!("does not parse: {}", e.message),
+    }
+}
+
+#[test]
+fn truth_tests_do_not_narrow_but_suggest_is_not_none() {
+    let hint = |n: &str| {
+        format!("{UNNARROWED}; a truth test does not narrow `{n}`: write `{n} is not None`")
+    };
+    let cases = [
+        "if x:\n    print(x + 1)\n",
+        "while x:\n    print(x + 1)\n",
+        "if x:\n    if x:\n        print(x + 1)\n",
+        "if x:\n    if y:\n        print(x + 1)\n",
+        "if y and x:\n    print(x + 1)\n",
+    ];
+    for body in cases {
+        assert_eq!(optionals_err(body), hint("x"), "{body}");
+    }
+    let fix = "; a truth test does not narrow `x`: write `x is not None`";
+    for body in ["1 + x", "-x", "x > 0", "0 < x"] {
+        let msg = optionals_err(&format!("if x:\n    print({body})\n"));
+        assert!(msg.ends_with(fix), "{body}: {msg}");
+    }
+}
+
+#[test]
+fn truth_test_hint_names_only_a_fixable_failing_use() {
+    let cases = [
+        // Another name, even one the body reads harmlessly.
+        "if y:\n    print(y)\n    print(x + 1)\n",
+        // `x is not None` would not narrow an `x` the body assigns.
+        "if x:\n    x = None\n    print(x + 1)\n",
+        // After the truth test's body.
+        "if x:\n    pass\nprint(x + 1)\n",
+    ];
+    for body in cases {
+        assert_eq!(optionals_err(body), UNNARROWED, "{body}");
+    }
+    // The failing operand is not the truth-tested read, or narrowing it
+    // would not fix the error.
+    let unfixable = [
+        (
+            "if x:\n    print(print(x) + 1)\n",
+            "unsupported operand types for +: None and int",
+        ),
+        (
+            "if y:\n    print(bool(y) + x)\n",
+            "unsupported operand types for +: bool and int | None",
+        ),
+        (
+            "if x:\n    print(x + \"a\")\n",
+            "unsupported operand types for +: int | None and str",
+        ),
+    ];
+    for (body, msg) in unfixable {
+        assert_eq!(optionals_err(body), msg, "{body}");
+    }
+    let narrowed = "if x:\n    if x is not None:\n        print(x + 1)\n";
+    assert_eq!(optionals_err(narrowed), "no error");
+}
+
 #[test]
 fn is_with_a_non_none_operand_is_an_error() {
     let b = B::default();
