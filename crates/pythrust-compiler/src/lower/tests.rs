@@ -161,9 +161,16 @@ fn optional_tuples_are_rebuilt_to_the_declared_type() {
 fn unsupported_operations_name_the_construct() {
     let (_, text) = rejected("print(int(True))\n");
     assert_eq!(text, "int(True)");
-    let (d, text) = rejected("a, b = [1, 2]\n");
-    assert!(d.message.contains("unpacking"), "{}", d.message);
-    assert_eq!(text, "a, b");
+    let (d, text) = rejected("a, b = range(2)\nprint(a)\n");
+    assert!(d.message.contains("`range`"), "{}", d.message);
+    assert_eq!(text, "range(2)");
+}
+
+#[test]
+fn list_unpacking_checks_every_short_length() {
+    let p = lowered("a, b, c = [1, 2, 3]\nprint(a, b, c)\n");
+    // One check for too many items, one per shorter length (0, 1, 2).
+    assert_eq!(fails(&p), 4);
 }
 
 #[test]
@@ -324,9 +331,13 @@ fn writes_own_the_new_string_before_releasing_the_old() {
 fn string_operations_outside_the_subset_are_rejected() {
     let (d, _) = rejected("print('a' * True)\n");
     assert!(d.message.contains("non-number"), "{}", d.message);
-    let (d, text) = rejected("for x in (1, 2):\n    print(x)\n");
-    assert!(d.message.contains("`for` over"), "{}", d.message);
-    assert_eq!(text, "(1, 2)");
+}
+
+#[test]
+fn for_over_a_tuple_indexes_it() {
+    let p = lowered("for x in (1, 2):\n    print(x)\n");
+    let rv = rvalues(&p.funcs[p.main.0]);
+    assert!(rv.iter().any(|r| matches!(r, Rvalue::Index(..))));
 }
 
 #[test]
@@ -460,4 +471,13 @@ fn print_keeps_sep_and_end_apart_from_its_values() {
             _ => None,
         });
     assert_eq!(print, Some((2, true, true)));
+}
+
+#[test]
+fn an_empty_tuple_loop_binds_nothing() {
+    let p = lowered("x = 7\nfor x in ():\n    pass\nelse:\n    print(x)\n");
+    let main = &p.funcs[p.main.0];
+    // Only `x = 7` writes `x`: no item is read and the body is not lowered.
+    let rv = rvalues(main);
+    assert!(!rv.iter().any(|r| matches!(r, Rvalue::Index(..))));
 }

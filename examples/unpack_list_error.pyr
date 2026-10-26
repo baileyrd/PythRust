@@ -1,0 +1,7 @@
+# expect-exit: 1
+# Unpacking a list of the wrong length is a runtime ValueError.
+a, b = [1, 2]
+print(a, b)
+xs = [3]
+c, d = xs
+print("unreachable")

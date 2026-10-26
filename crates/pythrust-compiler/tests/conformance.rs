@@ -232,6 +232,7 @@ const NATIVE: &[&str] = &[
     "conditional_expr",
     "default_eval_error",
     "fibonacci",
+    "empty_tuple_loop",
     "fizzbuzz",
     "float_parse_error",
     "float_semantics",
@@ -276,10 +277,12 @@ const NATIVE: &[&str] = &[
     "str_loop_exits",
     "str_repeat_error",
     "strings",
+    "tuple_loops",
     "tuples",
     "unbound_augassign",
     "unbound_local",
     "unbound_loop_target",
+    "unpack_list_error",
     "zero_division",
 ];
 
