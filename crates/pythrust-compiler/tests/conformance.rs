@@ -232,6 +232,7 @@ const NATIVE: &[&str] = &[
     "conditional_expr",
     "default_eval_error",
     "fibonacci",
+    "empty_tuple_loop",
     "fizzbuzz",
     "float_parse_error",
     "float_semantics",

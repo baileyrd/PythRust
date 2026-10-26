@@ -1,0 +1,34 @@
+# expect-exit: 1
+# A `for` over an empty tuple never binds its target: it keeps its value,
+# or stays unbound, and only `else` runs.
+x = 7
+for x in ():
+    print("never")
+else:
+    print("else", x)
+
+name = "a" + "b"
+for name in ():
+    pass
+print(name)
+
+p, q = 1, "q"
+for p, q in ():
+    print("never")
+else:
+    print(p, q * 2)
+
+for k in range(2):
+    for z in ():
+        break
+    else:
+        print("inner else", k)
+
+
+def unbound() -> int:
+    for fresh in ():
+        pass
+    return fresh
+
+
+print(unbound())

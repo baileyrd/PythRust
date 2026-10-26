@@ -472,3 +472,12 @@ fn print_keeps_sep_and_end_apart_from_its_values() {
         });
     assert_eq!(print, Some((2, true, true)));
 }
+
+#[test]
+fn an_empty_tuple_loop_binds_nothing() {
+    let p = lowered("x = 7\nfor x in ():\n    pass\nelse:\n    print(x)\n");
+    let main = &p.funcs[p.main.0];
+    // Only `x = 7` writes `x`: no item is read and the body is not lowered.
+    let rv = rvalues(main);
+    assert!(!rv.iter().any(|r| matches!(r, Rvalue::Index(..))));
+}
