@@ -6,7 +6,8 @@
 //! `python3`, and `corpus_matches_pythrust` checks it against `pythrust run`.
 //! `corpus_matches_native` builds each program with `pythrust build` and
 //! checks the executable too; programs outside the native subset must fail
-//! with a backend "does not support" error, and `NATIVE` must build.
+//! with a backend "does not support" error, and `NATIVE` must build. A
+//! native program that fails must also print `run`'s exact diagnostic.
 //! Stdout and exit status are compared; stderr is not, because diagnostics
 //! and tracebacks differ by design.
 //!
@@ -449,6 +450,27 @@ fn corpus_matches_pythrust() -> Res<()> {
     Ok(())
 }
 
+/// A native program that failed must print exactly what `pythrust run`
+/// prints for the same file: the error, its location and its carets. Only
+/// called once the program is known to terminate.
+fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
+    let stderr = |cmd: &mut Command| -> Res<String> {
+        let out = cmd
+            .output()
+            .map_err(|e| format!("cannot run {cmd:?}: {e}"))?;
+        Ok(String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let source = exe.with_extension("pythrust");
+    let native = stderr(&mut Command::new(exe))?;
+    let interp = stderr(Command::new(pythrust_bin()?).arg("run").arg(&source))?;
+    Ok((native != interp).then(|| {
+        format!(
+            "{}\n  run stderr:\n{interp}\n  native stderr:\n{native}",
+            source.display()
+        )
+    }))
+}
+
 #[test]
 fn corpus_matches_native() -> Res<()> {
     build_runtime()?;
@@ -463,7 +485,13 @@ fn corpus_matches_native() -> Res<()> {
         let Some(exe) = build_native(&case.source, &dir)? else {
             continue;
         };
-        failures.extend(mismatch(&case, &run(&mut Command::new(&exe), TIMEOUT)?));
+        let got = run(&mut Command::new(&exe), TIMEOUT)?;
+        let failed = mismatch(&case, &got);
+        let errored = failed.is_none() && got.status != 0;
+        failures.extend(failed);
+        if errored {
+            failures.extend(stderr_mismatch(&exe)?);
+        }
         built.extend(
             case.source
                 .file_stem()

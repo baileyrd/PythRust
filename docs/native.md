@@ -49,4 +49,4 @@ Everything else is a compile error, `backend error: the native backend does not 
 
 - **Binary size** is dominated by the runtime and Rust's standard library (about 5 MB in debug builds).
 - **Targets:** CI covers Linux x86-64 only. macOS and AArch64 are expected to work (Cranelift and `cc` serve them) but are untested.
-- **Diagnostics:** the conformance harness compares stdout and exit status, not stderr, so native error text and spans are not yet checked against `run`.
+- **Diagnostics:** for a native program that fails, `corpus_matches_native` requires its stderr to equal `run`'s byte for byte (message, location, carets). This is only checked on Linux x86-64 in CI.
