@@ -67,7 +67,7 @@ M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.m
 
 ## Known gaps
 
-M4 closed with these open; [roadmap.md](roadmap.md#phase-3-native-status-m4-done) tracks them as follow-ups.
+M4 closed with these open, and with generic functions where no `return` decides the result type (see the monomorphization note above); [roadmap.md](roadmap.md#phase-3-native-status-m4-done) tracks them as follow-ups.
 
 - **Reference ownership** is checked for leaks in CI (the debug runtime's count) but for use-after-free only by running the examples under valgrind by hand.
 - **Binary size** is dominated by the runtime and Rust's standard library (about 5 MB in debug builds).

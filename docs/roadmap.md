@@ -44,9 +44,9 @@ Status against main `1202fc46e2a14527f1002fd757f4291443fabec3` (including merged
 
 ## Phase-3 native status (M4 done)
 
-M4 is done, as Nano chose (2026-10-26): once the last two subset gaps were fixed, close it and list the polish as follow-ups. Both exit criteria hold:
+M4 is done, as Nano chose (2026-10-26): fix the last subset gaps (#29, #30, #31, and bools as ints in #32), then close it with the follow-ups below. Both exit criteria hold:
 
-- [x] **The subset compiles to a native binary.** `pythrust build` (Cranelift lowering and codegen, `pythrust-rt`) covers ints, floats, bools, `None`, strings, lists, tuples, ranges, Optional (`T | None`), functions with keyword and default arguments, generic instances (#30), module variables read from functions, and the subset's control flow (#18 to #25, #29 to #31). Every corpus program that type-checks builds natively and matches `run`'s stdout, exit status and diagnostics (`corpus_matches_native`); the programs outside `NATIVE` are the compile-error fixtures. This is corpus parity, not proof that every valid program builds: [native.md](native.md#known-gaps) lists what is still a backend error.
+- [x] **The subset compiles to a native binary.** `pythrust build` (Cranelift lowering and codegen, `pythrust-rt`) covers ints, floats, bools, `None`, strings, lists, tuples, ranges, Optional (`T | None`), functions with keyword and default arguments, bools computing as ints (#32), generic instances (#30), module variables read from functions, and the subset's control flow (#18 to #25, #29 to #32). Every corpus program that type-checks builds natively and matches `run`'s stdout, exit status and diagnostics (`corpus_matches_native`); the programs outside `NATIVE` are the compile-error fixtures. This is corpus parity, not proof that every valid program builds: [native.md](native.md#known-gaps) lists what is still a backend error.
 - [x] **Benchmarked against CPython on four programs** (#28): numeric loop about 20x, list sorting about 8x, string building about 1.3x, multiple return with tuple unpacking about 1.8x, with method, spread and confounders in [benchmarks.md](benchmarks.md).
 
 Follow-ups, none blocking M4:
@@ -54,7 +54,6 @@ Follow-ups, none blocking M4:
 - [ ] **Targets:** CI is Linux x86-64 only; macOS and AArch64 are untested.
 - [ ] **Use-after-free checking** is valgrind by hand; CI checks only for leaks (the debug runtime's count).
 - [ ] **Binary size** (about 5 MB in debug builds, mostly the runtime and Rust's standard library).
-- [ ] **Bools as ints** in `range` bounds and indexes are backend errors.
-- [ ] **Generic functions** whose every `return` needs an unknown result are backend errors (see the monomorphization note in [native.md](native.md)).
+- [ ] **Generic functions where no `return` decides the result type** are backend errors, such as one declared `-> list | None` that only ever returns `None`, or one whose every `return` needs a recursive call first (see the monomorphization note in [native.md](native.md)). Nano accepted deferring it at closure (2026-10-26).
 
 Native validation evidence is Linux x86-64 only, including the required native corpus subset and diagnostics compared with `run`; macOS and AArch64 are untested. Preserve the wider interpreter language decisions when extending the backend; a backend limitation is not a new language restriction.
