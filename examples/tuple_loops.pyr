@@ -1,0 +1,40 @@
+# `for` over tuples, and unpacking lists into names, items and loop targets.
+total = 0
+for n in (3, 4, 5):
+    total += n * n
+print(total)
+
+words = ("ab", "c" * 3, "d")
+for w in words:
+    print(w, len(w))
+
+for pair in ((1, "one"), (2, "two")):
+    k, name = pair
+    print(k, name + "!")
+
+for a, b in ((1, 2), (3, 4)):
+    print(a * b)
+
+x, y = [10, 20]
+x, y = [y, x]
+print(x, y)
+
+first, second = ["p" + "q", "r"]
+print(first, second)
+
+grid = [[1, 2], [3, 4], [5, 6]]
+for left, right in grid:
+    print(left + right)
+
+names = ["x", "y"]
+slots = ["-", "-"]
+slots[0], slots[1] = names
+print(slots)
+
+nested = [["a", "b"], ["c", "d"]]
+for row in nested:
+    u, v = row
+    print(v + u)
+
+c1, c2 = "h" + "i"
+print(c2, c1)

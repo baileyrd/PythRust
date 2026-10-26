@@ -244,17 +244,30 @@ impl FnBuilder<'_, '_> {
         let item = match self.ty(s) {
             Ty::Str => Ty::Str,
             ty @ Ty::List(_) => self.slot_ty(ty, 0, iter.span)?,
+            ty @ Ty::Tuple(_) => self.tuple_item(ty, iter.span)?,
             _ => {
                 return Err(unsupported(
                     iter.span,
-                    "`for` over anything but `range(...)`, a string or a list",
+                    "`for` over anything but `range(...)`, a string, a list or a tuple",
                 ))
             }
         };
         self.for_seq(&looped, s, item, iter.span)
     }
 
-    /// `for x in s` over a string or list: by index, re-reading the
+    /// The one field type of a tuple `for` iterates: inference requires
+    /// every field to have it.
+    fn tuple_item(&self, ty: Ty, span: Span) -> Result<Ty> {
+        let fields = self.cx.seqs.fields(ty).unwrap_or_default();
+        match fields.split_first() {
+            Some((first, rest)) if rest.iter().all(|f| f == first) => Ok(*first),
+            Some(_) => Err(unsupported(span, "`for` over a tuple of mixed types")),
+            // An empty tuple: the body never runs.
+            None => Ok(Ty::None),
+        }
+    }
+
+    /// `for x in s` over a string, list or tuple: by index, re-reading the
     /// length each time as Python does, so appending in the body extends
     /// the loop. The loop holds its own reference to `s`.
     fn for_seq(&mut self, l: &Looped, s: Operand, item: Ty, span: Span) -> Result<()> {

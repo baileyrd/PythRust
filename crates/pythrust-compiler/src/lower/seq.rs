@@ -3,7 +3,7 @@
 
 use crate::ast::{Arg, Expr, ExprKind, Target, TargetKind, UnaryOp};
 use crate::diag::Result;
-use crate::ir::{Inst, Operand, Rvalue, Ty};
+use crate::ir::{CmpOp, Inst, Operand, Rvalue, Ty};
 use crate::span::Span;
 
 use super::{internal, unsupported, FnBuilder};
@@ -172,24 +172,56 @@ impl FnBuilder<'_, '_> {
         }
     }
 
-    /// `a, b = t` for a tuple `t` of as many fields: all fields are read
-    /// before any target is bound.
-    fn unpack(&mut self, targets: &[Target], t: Operand, span: Span) -> Result<()> {
-        let ty = self.ty(t);
-        let n = self.cx.seqs.fields(ty).map(<[Ty]>::len);
-        if n != Some(targets.len()) {
-            return Err(unsupported(
-                span,
-                "unpacking anything but a tuple of as many fields",
-            ));
-        }
-        let mut fields = Vec::new();
-        for k in 0..targets.len() {
-            fields.push(self.field(t, k, span)?);
+    /// `a, b = s` for a tuple `s` of as many fields, or a list or string
+    /// of as many items (checked at run time): all items are read before
+    /// any target is bound.
+    fn unpack(&mut self, targets: &[Target], s: Operand, span: Span) -> Result<()> {
+        let ty = self.ty(s);
+        let mut items = Vec::new();
+        if let Ty::List(_) | Ty::Str = ty {
+            self.check_unpack_len(s, targets.len(), span);
+            let elem = match ty {
+                Ty::Str => Ty::Str,
+                _ => self.slot_ty(ty, 0, span)?,
+            };
+            for k in 0..targets.len() {
+                let i = Operand::Int(i64::try_from(k).unwrap_or(i64::MAX));
+                items.push(self.temp(elem, Rvalue::Index(s, i), span));
+            }
+        } else {
+            let n = self.cx.seqs.fields(ty).map(<[Ty]>::len);
+            if n != Some(targets.len()) {
+                return Err(unsupported(
+                    span,
+                    "unpacking anything but a tuple of as many fields, a list or a string",
+                ));
+            }
+            for k in 0..targets.len() {
+                items.push(self.field(s, k, span)?);
+            }
         }
         targets
             .iter()
-            .zip(fields)
+            .zip(items)
             .try_for_each(|(target, v)| self.bind(target, v))
+    }
+
+    /// Fails as Python does unless list or string `s` has exactly `want`
+    /// items.
+    /// The shortfall is in the message, so each possible length below
+    /// `want` gets its own check.
+    fn check_unpack_len(&mut self, s: Operand, want: usize, span: Span) {
+        let n = self.temp(Ty::Int, Rvalue::Len(s), span);
+        let want_i = i64::try_from(want).unwrap_or(i64::MAX);
+        let more = Rvalue::Cmp(CmpOp::Gt, n, Operand::Int(want_i));
+        let message = format!("ValueError: too many values to unpack (expected {want})");
+        self.fail_if(more, span, &message);
+        for got in 0..want {
+            let got_i = i64::try_from(got).unwrap_or(i64::MAX);
+            let short = Rvalue::Cmp(CmpOp::Eq, n, Operand::Int(got_i));
+            let message =
+                format!("ValueError: not enough values to unpack (expected {want}, got {got})");
+            self.fail_if(short, span, &message);
+        }
     }
 }

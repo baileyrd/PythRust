@@ -276,10 +276,12 @@ const NATIVE: &[&str] = &[
     "str_loop_exits",
     "str_repeat_error",
     "strings",
+    "tuple_loops",
     "tuples",
     "unbound_augassign",
     "unbound_local",
     "unbound_loop_target",
+    "unpack_list_error",
     "zero_division",
 ];
 
