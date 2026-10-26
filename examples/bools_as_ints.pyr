@@ -1,0 +1,21 @@
+# Bools are ints in arithmetic, comparisons, conversions and indexes.
+t, f = True, False
+print(t + 1, t + t, f * 3, t - 2.5, t / 2, t // 1, t % 2, t ** 2, 2 ** t)
+print(-t, +t, -f, int(t), int(f), float(t))
+print(t < 2, t == 1, f == 0, 1.0 == t, t > f, t != 2)
+print("ab" * t, "ab" * f + "|", t * "cd")
+xs = [10, 20]
+print(xs[t], xs[-t], xs[f])
+xs[t] = 5
+xs[f] += t
+print(xs)
+print(t in [1, 2], f in [1, 2], t in [0.5, 1.0], t in range(2), range(t), range(t, 3))
+n = 0
+for flag in [True, False, True]:
+    n += flag
+print(n)
+total = 0.5
+total += t
+print(total)
+for i in range(t, 3, t + t):
+    print(i)

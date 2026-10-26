@@ -96,6 +96,7 @@ impl FnBuilder<'_, '_> {
             return self.field(s, k, span);
         }
         let i = self.expr(index)?;
+        let i = self.as_int(i, span);
         let item = self.item_ty(ty, span)?;
         if self.ty(i) != Ty::Int {
             return Err(unsupported(span, "an index that is not an int"));
@@ -179,6 +180,7 @@ impl FnBuilder<'_, '_> {
         span: Span,
     ) -> Result<()> {
         let ty = self.ty(list);
+        let index = self.as_int(index, span);
         if !matches!(ty, Ty::List(_)) || self.ty(index) != Ty::Int {
             return Err(unsupported(
                 span,

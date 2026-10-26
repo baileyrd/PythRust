@@ -117,8 +117,9 @@ impl FnBuilder<'_, '_> {
             TargetKind::Subscript { value: list, index } => {
                 let list = self.expr(list)?;
                 let index = self.expr(index)?;
+                let index = self.as_int(index, target.span);
                 let ty = self.ty(list);
-                if !matches!(ty, Ty::List(_)) {
+                if !matches!(ty, Ty::List(_)) || self.ty(index) != Ty::Int {
                     return Err(unsupported(
                         target.span,
                         "augmented assignment to this item",
@@ -447,10 +448,11 @@ impl FnBuilder<'_, '_> {
             if a.name.is_some() {
                 return Err(unsupported(a.span, "keyword arguments"));
             }
-            if self.ty(*op) != Ty::Int {
+            let op = self.as_int(*op, a.span);
+            if self.ty(op) != Ty::Int {
                 return Err(unsupported(a.span, "`range` over a non-int"));
             }
-            snap.push(self.temp(Ty::Int, Rvalue::Use(*op), a.span));
+            snap.push(self.temp(Ty::Int, Rvalue::Use(op), a.span));
         }
         let ops = snap;
         let (start, stop, step) = match ops[..] {

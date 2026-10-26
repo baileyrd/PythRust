@@ -169,12 +169,6 @@ fn optional_tuples_are_rebuilt_to_the_declared_type() {
 }
 
 #[test]
-fn unsupported_operations_name_the_construct() {
-    let (_, text) = rejected("print(int(True))\n");
-    assert_eq!(text, "int(True)");
-}
-
-#[test]
 fn list_unpacking_checks_every_short_length() {
     let p = lowered("a, b, c = [1, 2, 3]\nprint(a, b, c)\n");
     // One check for too many items, one per shorter length (0, 1, 2).
@@ -262,13 +256,19 @@ fn reads_check_boundness_unless_known() {
 }
 
 #[test]
-fn bool_int_mixing_is_rejected_not_miscompiled() {
-    let (d, _) = rejected("print(True + 1)\n");
-    assert!(d.message.contains("non-number"), "{}", d.message);
-    let (d, _) = rejected("print(True + 1.5)\n");
-    assert!(d.message.contains("non-number"), "{}", d.message);
-    let (d, _) = rejected("print(True == 1)\n");
-    assert!(d.message.contains("different types"), "{}", d.message);
+fn bools_meet_numbers_as_ints() {
+    let p = lowered("t = True\nprint(t + 1, t == 1, 'a' * t, -t, int(t))\n");
+    let rv = all_rvalues(&p);
+    let widened = rv
+        .iter()
+        .filter(|r| matches!(r, Rvalue::BoolToInt(_)))
+        .count();
+    assert_eq!(widened, 5);
+    // A literal folds to its int.
+    let p = lowered("print(True + 1)\n");
+    assert!(!all_rvalues(&p)
+        .iter()
+        .any(|r| matches!(r, Rvalue::BoolToInt(_))));
 }
 
 /// The function named `name`.
@@ -324,12 +324,6 @@ fn writes_own_the_new_string_before_releasing_the_old() {
         _ => false,
     });
     assert!(moved, "retain the copy, release `x`, move: {insts:?}");
-}
-
-#[test]
-fn string_operations_outside_the_subset_are_rejected() {
-    let (d, _) = rejected("print('a' * True)\n");
-    assert!(d.message.contains("non-number"), "{}", d.message);
 }
 
 #[test]
