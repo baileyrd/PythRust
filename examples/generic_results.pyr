@@ -1,0 +1,61 @@
+# Generic functions whose result type their signature leaves open: the
+# native backend takes it from each instance's body.
+def square(n):
+    return n * n
+
+
+def apply_twice(n):
+    return square(square(n))
+
+
+def mean(a, b):
+    total = a + b
+    return total / 2
+
+
+def pair(x):
+    return [x, x]
+
+
+def swap(a, b):
+    return (b, a)
+
+
+def total(xs, i):
+    if i == len(xs):
+        return 0
+    return xs[i] + total(xs, i + 1)
+
+
+def label(x):
+    s = str(x)
+    return s + "!" if len(s) > 1 else s
+
+
+print(apply_twice(3), apply_twice(1.5))
+print(mean(1, 2), mean(1.5, 2.5))
+print(pair(3), pair("a"), len(pair([1])))
+print(swap(1, "b"), swap(square(2), square(0.5)))
+print(total([1, 2, 3], 0))
+print(label(7), label(12), label(2.5))
+
+
+def fact(n):
+    if n > 1:
+        return n * fact(n - 1)
+    return 1
+
+
+def is_even(n):
+    if n == 0:
+        return True
+    return is_odd(n - 1)
+
+
+def is_odd(n):
+    if n == 0:
+        return False
+    return is_even(n - 1)
+
+
+print(fact(5), is_even(10), is_odd(7))

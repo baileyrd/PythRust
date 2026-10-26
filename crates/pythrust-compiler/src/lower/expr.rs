@@ -336,9 +336,13 @@ impl FnBuilder<'_, '_> {
         for (op, param) in bound.into_iter().zip(&params) {
             ops.push(self.fit_param(op, param, span)?);
         }
-        let tys = ops.iter().map(|op| self.ty(*op)).collect();
-        let ret = self.ty_at(span)?;
-        let id = self.cx.instance(def, tys, ret, span)?;
+        let tys: Vec<Ty> = ops.iter().map(|op| self.ty(*op)).collect();
+        // A call in generic code may have no concrete node type; its
+        // instance then decides it (any other failure recurs there).
+        let (id, ret) = match self.ty_at(span) {
+            Ok(ret) => (self.cx.instance(def, tys, ret, span)?, ret),
+            Err(_) => self.cx.open_instance(def, tys, span)?,
+        };
         // The callee takes its arguments' references.
         let owned: Vec<Operand> = ops.into_iter().map(|op| self.own(op, span)).collect();
         let result = self.temp(ret, Rvalue::Call(id, owned.clone()), span);

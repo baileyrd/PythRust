@@ -120,6 +120,10 @@ impl FnBuilder<'_, '_> {
             Some(e) => self.expr(e)?,
             None => Operand::None,
         };
+        if let Some(declared) = self.open_ret.take() {
+            self.ret = self.ty(v);
+            super::bind(&declared, self.ret, &self.cx.seqs, &mut self.subst);
+        }
         let v = self.fit(v, self.ret, span);
         if self.ty(v) != self.ret {
             return Err(unsupported(
