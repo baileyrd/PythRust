@@ -992,3 +992,53 @@ fn source_is_with_a_non_none_operand_is_a_type_error() {
         "`is` compares only with None in phase 2; use `==` for values"
     );
 }
+
+#[test]
+fn source_guard_narrows_what_follows() {
+    let src =
+        "def f(x: int | None = None):\n    if x is None:\n        return 0\n    return x + 1\n";
+    let ret = types(src).func("f").map(|f| f.ret.clone());
+    assert_eq!(ret, Some(Type::Int));
+    let src = "ys: list[int | None] = [None, 1]\ntotal = 0\nfor y in ys:\n    if y is None:\n        continue\n    total += y\n";
+    types(src);
+    let falls = "x: int | None = None\nif x is None:\n    pass\nx + 1\n";
+    let msg = "unsupported operand types for +: int | None and int";
+    assert_eq!(type_err(falls), msg);
+}
+
+#[test]
+fn source_guard_with_break_narrows_the_loop_body() {
+    types(
+        "x: int | None = 1\nwhile True:\n    if x is None:\n        break\n    x + 1\n    break\n",
+    );
+}
+
+#[test]
+fn source_guard_exits_through_a_loop_else() {
+    let head = "ys: list[int | None] = [None, 1]\ntotal = 0\nfor x in ys:\n    if x is None:\n";
+    let tail = "    total += x\n";
+    let msg = "unsupported operand types for +: int and int | None";
+    let exits = [
+        "        while False:\n            pass\n        else:\n            continue\n",
+        "        for z in ys:\n            pass\n        else:\n            break\n",
+        "        while True:\n            pass\n",
+    ];
+    for inner in exits {
+        types(&format!("{head}{inner}{tail}"));
+    }
+    let stays = [
+        "        for z in ys:\n            continue\n",
+        "        for z in ys:\n            break\n        else:\n            continue\n",
+        "        while True:\n            break\n",
+    ];
+    for inner in stays {
+        assert_eq!(type_err(&format!("{head}{inner}{tail}")), msg, "{inner}");
+    }
+}
+
+#[test]
+fn source_loop_else_return_does_not_fall_through() {
+    let src = "def f(xs):\n    for x in xs:\n        pass\n    else:\n        return 1\n";
+    let ret = types(src).func("f").map(|f| f.ret.clone());
+    assert_eq!(ret, Some(Type::Int));
+}
