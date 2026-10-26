@@ -78,4 +78,3 @@ Mojo, Nim, Codon, TypeScript (adoption path), Swift (reference counting, error l
 - Formal grammar for the loose syntax.
 - Prototype parser and type inferencer for a tiny subset.
 - Specify syntax for tempering annotations (ownership modes start from `read` / `mut` / `owned`, see [research/ownership.md](research/ownership.md)).
-- Decide the source file extension.

@@ -14,7 +14,7 @@ source -> lex -> parse -> infer -> lower -> ir::Program -> codegen -> object -> 
 | Lowering | `src/lower/` | Typed AST to IR. Monomorphizes generic functions per call-site types; desugars `for`/`range`, chained compares, `and`/`or`, tuple-display assignment. |
 | Codegen | `src/codegen.rs` | IR to an object file with Cranelift (`opt_level=speed`, PIC). Checked arithmetic and Python floor `//` and `%` are emitted inline. |
 | Runtime | `crates/pythrust-rt` | Static library: `main`, buffered stdout, `print` formatting, `pt_fail`. The project's only `unsafe`, each item marked `allow(unsafe_code)` with its reason. |
-| Driver | `src/main.rs` | `pythrust build f.pythrust` writes `f`, linking with the system `cc`. |
+| Driver | `src/main.rs` | `pythrust build f.pyr` writes `f`, linking with the system `cc`. |
 
 The compiled binary prints what `pythrust run` prints. A runtime error's message is rendered at compile time (`path:line:col`, source line, carets) and stored in the binary, then printed by `pt_fail`, which flushes stdout and exits 1.
 

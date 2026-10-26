@@ -42,7 +42,7 @@ enum Command {
     /// Lex, parse, and infer. Never executes the program.
     Check,
     /// Compile to a native executable beside the source, without its
-    /// extension: `fib.pythrust` builds `fib`.
+    /// extension: `fib.pyr` builds `fib`.
     Build,
 }
 
@@ -312,12 +312,12 @@ mod tests {
 
     #[test]
     fn parse_args_accepts_each_command() {
-        let run = args(&["run", "a.pythrust"]);
-        let check = args(&["check", "b.pythrust"]);
-        assert_eq!(parse_args(&run), Ok((Command::Run, "a.pythrust")));
-        assert_eq!(parse_args(&check), Ok((Command::Check, "b.pythrust")));
-        let build = args(&["build", "c.pythrust"]);
-        assert_eq!(parse_args(&build), Ok((Command::Build, "c.pythrust")));
+        let run = args(&["run", "a.pyr"]);
+        let check = args(&["check", "b.pyr"]);
+        assert_eq!(parse_args(&run), Ok((Command::Run, "a.pyr")));
+        assert_eq!(parse_args(&check), Ok((Command::Check, "b.pyr")));
+        let build = args(&["build", "c.pyr"]);
+        assert_eq!(parse_args(&build), Ok((Command::Build, "c.pyr")));
     }
 
     #[test]
@@ -371,9 +371,9 @@ mod tests {
     #[test]
     fn compile_reports_unsupported_code_as_a_backend_error() {
         let src = "x = print(7)\ndef print(n):\n    return 1\n";
-        let err = compile("f.pythrust", src).map(drop);
+        let err = compile("f.pyr", src).map(drop);
         assert_eq!(err.map_err(|d| d.kind), Err(DiagKind::Backend));
-        assert!(compile("f.pythrust", "print(1 + 2)\n").is_ok());
+        assert!(compile("f.pyr", "print(1 + 2)\n").is_ok());
     }
 
     #[test]
@@ -419,11 +419,8 @@ mod tests {
     #[test]
     fn render_underlines_the_span() {
         let src = "x = 1\ny = (2\n";
-        let out = render("f.pythrust", src, &diag(10, 12));
-        assert_eq!(
-            out,
-            "f.pythrust:2:5: parse error: bad\n  y = (2\n      ^^\n"
-        );
+        let out = render("f.pyr", src, &diag(10, 12));
+        assert_eq!(out, "f.pyr:2:5: parse error: bad\n  y = (2\n      ^^\n");
     }
 
     #[test]

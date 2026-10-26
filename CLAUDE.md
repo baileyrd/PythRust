@@ -27,7 +27,7 @@ Pythrust: Python's surface, Rust's guarantees. Code starts *loose* (inferred) an
 
 ## Open decisions (do not decide silently; propose and ask)
 
-Source file extension (placeholder `.pythrust`). Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate.
+None. Source file extension: `.pyr`. Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate.
 
 ## Checks
 
