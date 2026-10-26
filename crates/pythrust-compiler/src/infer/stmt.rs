@@ -1,5 +1,7 @@
 //! Statements and assignment targets.
 
+use std::collections::BTreeSet;
+
 use crate::ast::{BinOp, Block, Branch, Expr, Stmt, StmtKind, Target, TargetKind};
 use crate::diag::Result;
 use crate::span::Span;
@@ -17,11 +19,12 @@ impl Checker {
         for (i, s) in block.iter().enumerate() {
             self.stmt(s)?;
             self.settle()?;
-            let Some(name) = scope::guard(s) else {
+            let names = scope::guard(s);
+            if names.is_empty() {
                 continue;
-            };
+            }
             let rest = &block[i + 1..];
-            return self.narrowed(&[name], rest, |c| c.block(rest));
+            return self.narrowed(&names, rest, |c| c.block(rest));
         }
         Ok(())
     }
@@ -66,7 +69,7 @@ impl Checker {
                 orelse,
             } => self.if_chain(branch, elifs, orelse),
             StmtKind::While { branch, orelse } => {
-                self.branch(branch, &[])?;
+                self.branch(branch, &BTreeSet::new())?;
                 self.block(orelse)
             }
             StmtKind::For {
@@ -89,15 +92,13 @@ impl Checker {
         }
     }
 
-    /// `x is None` tests narrow later clauses; `x is not None` narrows
-    /// its own body.
+    /// A clause's test narrows its body by holding and the later
+    /// clauses by failing (`x is not None`, `x is None`).
     fn if_chain(&mut self, branch: &Branch, elifs: &[Branch], orelse: &Block) -> Result<()> {
-        let mut not_none: Vec<String> = Vec::new();
+        let mut not_none: BTreeSet<String> = BTreeSet::new();
         for b in std::iter::once(branch).chain(elifs) {
             self.branch(b, &not_none)?;
-            if let Some((name, false)) = scope::none_test(&b.test) {
-                not_none.push(name);
-            }
+            not_none.extend(scope::not_none(&b.test, false));
         }
         self.narrowed(&not_none, orelse, |c| c.block(orelse))
     }
@@ -105,23 +106,21 @@ impl Checker {
     /// A test of any type (every value has a truth value) and its block.
     /// `not_none` names are narrowed in both, as is the name the test
     /// itself proves is not `None`.
-    fn branch(&mut self, b: &Branch, not_none: &[String]) -> Result<()> {
+    fn branch(&mut self, b: &Branch, not_none: &BTreeSet<String>) -> Result<()> {
         self.narrowed(not_none, &[], |c| c.expr(&b.test).map(drop))?;
-        let mut inside = not_none.to_vec();
-        if let Some((name, true)) = scope::none_test(&b.test) {
-            inside.push(name);
-        }
+        let mut inside = not_none.clone();
+        inside.extend(scope::not_none(&b.test, true));
         self.narrowed(&inside, &b.body, |c| c.block(&b.body))
     }
 
     /// Runs `f` with each of `names` narrowed from `T | None` to `T`,
     /// unless `scope` assigns it (then its type stays `T | None`).
-    fn narrowed(
+    pub(super) fn narrowed<T>(
         &mut self,
-        names: &[String],
+        names: &BTreeSet<String>,
         scope: &[Stmt],
-        f: impl FnOnce(&mut Self) -> Result<()>,
-    ) -> Result<()> {
+        f: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
         // Solve first: a name's `T | None` may still sit in a pending
         // constraint (a `for` target's element type).
         self.settle()?;

@@ -1,0 +1,43 @@
+def best_of(xs: list[int]) -> int | None:
+    best: int | None = None
+    for k in xs:
+        if best is None or k > best:
+            best = k
+    return best
+
+
+def both(a: int | None, b: int | None) -> int:
+    if a is not None and b is not None:
+        return a + b
+    return 0
+
+
+def either_missing(a: int | None, b: int | None) -> int:
+    if a is None or b is None:
+        return -1
+    return a * b
+
+
+def or_zero(x: int | None) -> int:
+    return x + 1 if x is not None else 0
+
+
+def describe(x: int | None) -> str:
+    return "nothing" if x is None else "value " + str(x)
+
+
+def small(x: int | None) -> bool:
+    return x is not None and x < 10
+
+
+def present(x: int | None) -> bool:
+    return not (x is None) and not x < 0
+
+
+print(best_of([3, 9, 2]), best_of([]))
+print(both(1, 2), both(None, 2), both(1, None))
+print(either_missing(3, 4), either_missing(None, 4))
+print(or_zero(5), or_zero(None))
+print(describe(7), describe(None))
+print(small(3), small(30), small(None))
+print(present(1), present(-1), present(None))

@@ -1172,6 +1172,152 @@ fn while_is_not_none_narrows_its_body() {
     ]);
 }
 
+// Narrowing inside `and`, `or`, `not` and `x if c else y`.
+
+const UNNARROWED: &str = "unsupported operand types for +: int | None and int";
+
+/// `x: int | None = None` and `y: int | None = None`.
+fn two_optionals(b: &B) -> Vec<Stmt> {
+    ["x", "y"]
+        .iter()
+        .map(|n| b.ann(n, b.opt("int", vec![]), b.e(ExprKind::None)))
+        .collect()
+}
+
+fn plus_one(b: &B, name: &str) -> Expr {
+    b.bin(BinOp::Add, b.n(name), b.i(1))
+}
+
+fn positive(b: &B, name: &str) -> Expr {
+    b.cmp(plus_one(b, name), vec![(CmpOp::Gt, b.i(0))])
+}
+
+fn with_optionals(b: &B, rest: Vec<Stmt>) -> Vec<Stmt> {
+    two_optionals(b).into_iter().chain(rest).collect()
+}
+
+#[test]
+fn short_circuit_narrows_the_right_operand() {
+    let b = B::default();
+    for (op, test) in [(LogicalOp::And, CmpOp::IsNot), (LogicalOp::Or, CmpOp::Is)] {
+        let e = b.logic(op, is_none(&b, "x", test), positive(&b, "x"));
+        ok(with_optionals(&b, vec![b.ex(e)]));
+    }
+    for (op, test) in [(LogicalOp::And, CmpOp::Is), (LogicalOp::Or, CmpOp::IsNot)] {
+        let e = b.logic(op, is_none(&b, "x", test), positive(&b, "x"));
+        assert_eq!(err(with_optionals(&b, vec![b.ex(e)])), UNNARROWED);
+    }
+}
+
+#[test]
+fn short_circuit_narrowing_does_not_leak() {
+    let b = B::default();
+    let e = b.logic(
+        LogicalOp::And,
+        is_none(&b, "x", CmpOp::IsNot),
+        positive(&b, "x"),
+    );
+    let body = with_optionals(&b, vec![b.ex(e), b.ex(plus_one(&b, "x"))]);
+    assert_eq!(err(body), UNNARROWED);
+    let left = b.logic(
+        LogicalOp::And,
+        positive(&b, "x"),
+        is_none(&b, "x", CmpOp::IsNot),
+    );
+    assert_eq!(err(with_optionals(&b, vec![b.ex(left)])), UNNARROWED);
+}
+
+#[test]
+fn conditional_expression_narrows_each_branch() {
+    let b = B::default();
+    let e = b.ifexp(is_none(&b, "x", CmpOp::IsNot), plus_one(&b, "x"), b.i(0));
+    let target = b.t("z");
+    let span = target.span;
+    let types = ok(with_optionals(&b, vec![b.assign_to(target, e)]));
+    assert_eq!(types.at(span), Some(&Type::Int));
+    let e = b.ifexp(is_none(&b, "x", CmpOp::Is), b.i(0), plus_one(&b, "x"));
+    ok(with_optionals(&b, vec![b.ex(e)]));
+    let e = b.ifexp(is_none(&b, "x", CmpOp::Is), plus_one(&b, "x"), b.i(0));
+    assert_eq!(err(with_optionals(&b, vec![b.ex(e)])), UNNARROWED);
+}
+
+#[test]
+fn compound_tests_narrow_if_clauses() {
+    let b = B::default();
+    let both = || {
+        let (x, y) = (
+            is_none(&b, "x", CmpOp::IsNot),
+            is_none(&b, "y", CmpOp::IsNot),
+        );
+        b.logic(LogicalOp::And, x, y)
+    };
+    let sum = || b.ex(b.bin(BinOp::Add, b.n("x"), b.n("y")));
+    ok(with_optionals(&b, vec![b.if_(both(), vec![sum()], vec![])]));
+    let either = || {
+        let (x, y) = (is_none(&b, "x", CmpOp::Is), is_none(&b, "y", CmpOp::Is));
+        b.logic(LogicalOp::Or, x, y)
+    };
+    let pass = || vec![b.st(StmtKind::Pass)];
+    ok(with_optionals(
+        &b,
+        vec![b.if_(either(), pass(), vec![sum()])],
+    ));
+    // `and` failing proves neither side; `or` holding proves neither.
+    let neither = b.if_(both(), pass(), vec![b.ex(plus_one(&b, "x"))]);
+    assert_eq!(err(with_optionals(&b, vec![neither])), UNNARROWED);
+    let neither = b.if_(either(), vec![b.ex(plus_one(&b, "x"))], vec![]);
+    assert_eq!(err(with_optionals(&b, vec![neither])), UNNARROWED);
+}
+
+#[test]
+fn or_test_narrows_later_clauses_and_guards() {
+    let b = B::default();
+    let best_test = || {
+        b.logic(
+            LogicalOp::Or,
+            is_none(&b, "x", CmpOp::Is),
+            positive(&b, "x"),
+        )
+    };
+    let chain = b.st(StmtKind::If {
+        branch: b.branch(best_test(), vec![b.st(StmtKind::Pass)]),
+        elifs: vec![b.branch(b.bl(true), vec![b.ex(plus_one(&b, "x"))])],
+        orelse: vec![b.ex(plus_one(&b, "x"))],
+    });
+    ok(with_optionals(&b, vec![chain]));
+    let either = b.logic(
+        LogicalOp::Or,
+        is_none(&b, "x", CmpOp::Is),
+        is_none(&b, "y", CmpOp::Is),
+    );
+    let body = vec![
+        b.if_(either, vec![b.ret(b.i(0))], vec![]),
+        b.ret(b.bin(BinOp::Add, b.n("x"), b.n("y"))),
+    ];
+    let p = |n: &str| b.param(n, Some(b.opt("int", vec![])), Some(b.e(ExprKind::None)));
+    let types = ok(vec![b.def_full("f", vec![p("x"), p("y")], None, body)]);
+    assert_eq!(types.func("f").map(|f| f.ret.clone()), Some(Type::Int));
+}
+
+#[test]
+fn not_flips_what_a_test_proves() {
+    let b = B::default();
+    let not = |e: Expr| {
+        b.e(ExprKind::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(e),
+        })
+    };
+    let test = not(is_none(&b, "x", CmpOp::Is));
+    ok(with_optionals(
+        &b,
+        vec![b.if_(test, vec![b.ex(plus_one(&b, "x"))], vec![])],
+    ));
+    let test = not(is_none(&b, "x", CmpOp::IsNot));
+    let body = vec![b.if_(test, vec![b.ex(plus_one(&b, "x"))], vec![])];
+    assert_eq!(err(with_optionals(&b, body)), UNNARROWED);
+}
+
 #[test]
 fn is_with_a_non_none_operand_is_an_error() {
     let b = B::default();
