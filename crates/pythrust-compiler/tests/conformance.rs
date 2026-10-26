@@ -4,6 +4,9 @@
 //! stdout it must print. The phase-2 subset is Python-compatible, so CPython
 //! is the oracle: `corpus_matches_cpython` checks each golden against
 //! `python3`, and `corpus_matches_pythrust` checks it against `pythrust run`.
+//! `corpus_matches_native` builds each program with `pythrust build` and
+//! checks the executable too; programs outside the native subset must fail
+//! with a backend "does not support" error, and `NATIVE` must build.
 //! Stdout and exit status are compared; stderr is not, because diagnostics
 //! and tracebacks differ by design.
 //!
@@ -204,10 +207,60 @@ fn run_cpython(source: &Path) -> Res<Run> {
     run(Command::new(python).arg("-I").arg(source), TIMEOUT)
 }
 
-fn run_pythrust(source: &Path) -> Res<Run> {
+fn pythrust_bin() -> Res<PathBuf> {
     let default = repo_root()?.join("target/debug/pythrust");
-    let bin = std::env::var_os("PYTHRUST_BIN").map_or(default, PathBuf::from);
-    run(Command::new(bin).arg("run").arg(source), TIMEOUT)
+    Ok(std::env::var_os("PYTHRUST_BIN").map_or(default, PathBuf::from))
+}
+
+fn run_pythrust(source: &Path) -> Res<Run> {
+    run(
+        Command::new(pythrust_bin()?).arg("run").arg(source),
+        TIMEOUT,
+    )
+}
+
+/// Programs the native backend must compile; it grows with the subset.
+const NATIVE: &[&str] = &[
+    "collatz",
+    "fibonacci",
+    "int_control",
+    "overflow_min_floordiv",
+];
+
+/// What the native backend says about a program outside its subset.
+const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";
+
+/// Builds the runtime library `pythrust build` links against. `cargo
+/// test` builds the compiler but not this static library.
+fn build_runtime() -> Res<()> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let status = Command::new(cargo)
+        .args(["build", "--quiet", "-p", "pythrust-rt"])
+        .status()
+        .map_err(|e| format!("cannot run cargo: {e}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("building pythrust-rt failed: {status}"))
+}
+
+/// Builds a copy of `source` in `dir`: the executable, or `None` when
+/// the program is outside the native subset.
+fn build_native(source: &Path, dir: &Path) -> Res<Option<PathBuf>> {
+    let name = source.file_name().ok_or("source has no file name")?;
+    let copy = dir.join(name);
+    fs::copy(source, &copy).map_err(|e| format!("{}: {e}", source.display()))?;
+    let out = Command::new(pythrust_bin()?)
+        .arg("build")
+        .arg(&copy)
+        .output()
+        .map_err(|e| format!("cannot run pythrust build: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    match (out.status.success(), stderr.contains(NATIVE_UNSUPPORTED)) {
+        (true, _) => Ok(Some(copy.with_extension(""))),
+        (false, true) => Ok(None),
+        (false, false) => Err(format!("{}: build failed:\n{stderr}", source.display())),
+    }
 }
 
 /// Compares a run against the golden; `None` means it matches.
@@ -349,6 +402,37 @@ fn corpus_matches_pythrust() -> Res<()> {
     for case in load_corpus(&corpus_dir()?)? {
         let got = run_pythrust(&case.source)?;
         failures.extend(mismatch(&case, &got));
+    }
+    report(failures);
+    Ok(())
+}
+
+#[test]
+fn corpus_matches_native() -> Res<()> {
+    build_runtime()?;
+    let dir = std::env::temp_dir().join(format!("pythrust-native-{}", std::process::id()));
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut failures = Vec::new();
+    let mut built = Vec::new();
+    for case in load_corpus(&corpus_dir()?)? {
+        if case.expect.check_error.is_some() {
+            continue;
+        }
+        let Some(exe) = build_native(&case.source, &dir)? else {
+            continue;
+        };
+        failures.extend(mismatch(&case, &run(&mut Command::new(&exe), TIMEOUT)?));
+        built.extend(
+            case.source
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned()),
+        );
+    }
+    fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    for name in NATIVE {
+        if !built.iter().any(|b| b == name) {
+            failures.push(format!("{name}: must build natively"));
+        }
     }
     report(failures);
     Ok(())
