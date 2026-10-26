@@ -318,13 +318,6 @@ pub(super) fn truth_tested(test: &Expr) -> BTreeSet<String> {
     }
 }
 
-/// Names `block` reads.
-pub(super) fn block_reads(block: &[Stmt]) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    block.iter().for_each(|s| stmt_names(s, &mut out));
-    out
-}
-
 /// `x is None` gives `(x, false)`; `x is not None` gives `(x, true)`
 /// (`true`: `x` is not `None` when the test holds). Either order.
 fn none_test(test: &Expr) -> Option<(String, bool)> {

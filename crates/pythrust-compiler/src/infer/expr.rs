@@ -99,6 +99,10 @@ impl Checker {
     /// The type of variable `name`, recorded at `span`.
     pub(super) fn variable(&mut self, name: &str, span: Span) -> Result<Type> {
         if let Some(t) = self.lookup(name) {
+            let optional = matches!(self.subst.resolve(&t), Type::Optional(_));
+            if optional && self.frame.truthy.contains(name) {
+                self.frame.truth_reads.push((span, name.to_string()));
+            }
             self.nodes.insert(span, t.clone());
             return Ok(t);
         }

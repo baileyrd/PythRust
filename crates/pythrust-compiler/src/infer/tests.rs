@@ -1318,30 +1318,50 @@ fn not_flips_what_a_test_proves() {
     assert_eq!(err(with_optionals(&b, body)), UNNARROWED);
 }
 
+/// The type error in `body`, after `x: int | None` and `y: int | None`.
+/// Parsed, so that spans nest as the truth-test hint needs.
+fn optionals_err(body: &str) -> String {
+    let src = format!("x: int | None = None\ny: int | None = None\n{body}");
+    let parsed = crate::lexer::lex(&src).and_then(|t| crate::parser::parse(&t));
+    match parsed.map(|m| infer(&m)) {
+        Ok(Err(e)) => e.message,
+        Ok(Ok(_)) => "no error".to_string(),
+        Err(e) => format!("does not parse: {}", e.message),
+    }
+}
+
 #[test]
 fn truth_tests_do_not_narrow_but_suggest_is_not_none() {
-    let b = B::default();
-    let hinted = format!("{UNNARROWED}; a truth test does not narrow `x`: write `x is not None`");
-    let body = vec![b.if_(b.n("x"), vec![b.ex(plus_one(&b, "x"))], vec![])];
-    assert_eq!(err(with_optionals(&b, body)), hinted);
-    let nested = b.if_(b.n("x"), vec![b.ex(plus_one(&b, "x"))], vec![]);
-    let body = vec![b.if_(b.n("x"), vec![nested], vec![])];
-    assert_eq!(err(with_optionals(&b, body)), hinted);
-    let test = b.logic(LogicalOp::And, b.n("y"), b.n("x"));
-    let body = vec![b.if_(test, vec![b.ex(plus_one(&b, "x"))], vec![])];
-    assert_eq!(err(with_optionals(&b, body)), hinted);
-    // No hint for a name the error is not about, or one already narrowed.
-    let body = vec![b.if_(b.n("y"), vec![b.ex(plus_one(&b, "x"))], vec![])];
-    assert_eq!(err(with_optionals(&b, body)), UNNARROWED);
-    let inner = b.if_(
-        is_none(&b, "x", CmpOp::IsNot),
-        vec![b.ex(plus_one(&b, "x"))],
-        vec![],
-    );
-    ok(with_optionals(
-        &b,
-        vec![b.if_(b.n("x"), vec![inner], vec![])],
-    ));
+    let hint = |n: &str| {
+        format!("{UNNARROWED}; a truth test does not narrow `{n}`: write `{n} is not None`")
+    };
+    let cases = [
+        "if x:\n    print(x + 1)\n",
+        "while x:\n    print(x + 1)\n",
+        "if x:\n    if x:\n        print(x + 1)\n",
+        "if x:\n    if y:\n        print(x + 1)\n",
+        "if y and x:\n    print(x + 1)\n",
+    ];
+    for body in cases {
+        assert_eq!(optionals_err(body), hint("x"), "{body}");
+    }
+}
+
+#[test]
+fn truth_test_hint_names_only_a_fixable_failing_use() {
+    let cases = [
+        // Another name, even one the body reads harmlessly.
+        "if y:\n    print(y)\n    print(x + 1)\n",
+        // `x is not None` would not narrow an `x` the body assigns.
+        "if x:\n    x = None\n    print(x + 1)\n",
+        // After the truth test's body.
+        "if x:\n    pass\nprint(x + 1)\n",
+    ];
+    for body in cases {
+        assert_eq!(optionals_err(body), UNNARROWED, "{body}");
+    }
+    let narrowed = "if x:\n    if x is not None:\n        print(x + 1)\n";
+    assert_eq!(optionals_err(narrowed), "no error");
 }
 
 #[test]

@@ -12,6 +12,8 @@ use super::solve::{self, Access, Binary, Need};
 use super::ty::Type;
 use super::{error, Checker};
 
+const TRUTH_HINT: &str = "a truth test does not narrow";
+
 impl Checker {
     /// Infers `block` in order. After a guard (`if x is None: return`),
     /// the rest of the block sees `x` narrowed.
@@ -110,30 +112,32 @@ impl Checker {
         self.narrowed(not_none, &[], |c| c.expr(&b.test).map(drop))?;
         let mut inside = not_none.clone();
         inside.extend(scope::not_none(&b.test, true));
+        // Names the test checks only for truth, unless the body assigns
+        // them: `is not None` would not narrow those either.
+        let assigned = scope::assigned(&b.body);
         let tested = scope::truth_tested(&b.test);
-        self.narrowed(&inside, &b.body, |c| c.block(&b.body))
-            .map_err(|e| self.truth_hint(e, &tested, &scope::block_reads(&b.body)))
+        let saved = (self.frame.truthy.clone(), self.frame.truth_reads.len());
+        let fixable = tested.into_iter().filter(|n| !assigned.contains(n));
+        self.frame.truthy.extend(fixable);
+        let result = self
+            .narrowed(&inside, &b.body, |c| c.block(&b.body))
+            .map_err(|e| self.truth_hint(e));
+        self.frame.truthy = saved.0;
+        self.frame.truth_reads.truncate(saved.1);
+        result
     }
 
-    /// Adds a fix-it to `err` when it is about a name of `tested` (tested
-    /// only for truth) that `reads` uses and that is still `T | None`.
-    fn truth_hint(
-        &self,
-        mut err: Diagnostic,
-        tested: &BTreeSet<String>,
-        reads: &BTreeSet<String>,
-    ) -> Diagnostic {
-        if err.message.contains("a truth test does not narrow") {
+    /// Adds a fix-it to `err` when it covers a read of a name tested only
+    /// for truth that was still `T | None` there.
+    fn truth_hint(&self, mut err: Diagnostic) -> Diagnostic {
+        if err.message.contains(TRUTH_HINT) {
             return err;
         }
-        let still_optional = |name: &&String| match self.lookup(name).map(|t| self.subst.zonk(&t)) {
-            Some(t @ Type::Optional(_)) => err.message.contains(&t.to_string()),
-            _ => false,
-        };
-        let Some(name) = tested.intersection(reads).find(still_optional).cloned() else {
+        let inside = |s: &Span| err.span.start <= s.start && s.end <= err.span.end;
+        let Some((_, name)) = self.frame.truth_reads.iter().find(|(s, _)| inside(s)) else {
             return err;
         };
-        let hint = format!("; a truth test does not narrow `{name}`: write `{name} is not None`");
+        let hint = format!("; {TRUTH_HINT} `{name}`: write `{name} is not None`");
         err.message.push_str(&hint);
         err
     }
