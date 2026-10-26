@@ -1042,3 +1042,12 @@ fn source_loop_else_return_does_not_fall_through() {
     let ret = types(src).func("f").map(|f| f.ret.clone());
     assert_eq!(ret, Some(Type::Int));
 }
+
+#[test]
+fn source_for_target_narrows_before_its_element_type_is_settled() {
+    let src = "def first_present(xs: list[int | None]) -> int:\n    for x in xs:\n        if x is not None:\n            return x\n    return -1\n";
+    let ret = types(src).func("first_present").map(|f| f.ret.clone());
+    assert_eq!(ret, Some(Type::Int));
+    let src = "def f(xs: list[int | None]):\n    for x in xs:\n        if x is None:\n            return 0\n        return x\n    return 1\n";
+    types(src);
+}

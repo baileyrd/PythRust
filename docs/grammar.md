@@ -115,7 +115,7 @@ atom        = NAME | INT | FLOAT | STRING
 - A variable has one fixed type, inferred once (or constrained by its annotation); assignment and augmented assignment cannot change it. See [Decided](#decided) for the no-widening diagnostic and Optional boundary.
 - `int ** int` returns `int`. A negative integer exponent is a runtime error, except that a literal negative exponent with an integer base is a compile-time error. Both diagnostics say "use a float base"; `2.0 ** -1` is legal.
 - A tuple subscript must be an integer literal, optionally negated (`t[-1]`), so the element type is known statically.
-- Subscripts apply to lists, strings, and tuples. A negative index counts from the end: `xs[-1]` is the last element. An index out of range in either direction is a runtime error, for tuples too. Slicing is not in phase 2.
+- Subscripts apply to lists, strings, and tuples. A negative index counts from the end: `xs[-1]` is the last element. An index out of range in either direction is a runtime error, except on a tuple: there the index and the length are both static, so it is a compile error, like an unpacking arity mismatch. Slicing is not in phase 2.
 - Indexing a string and iterating over it (`for ch in s`) yield a length-1 `str`, counted in code points, as in CPython. Under UTF-8, indexing a non-ASCII string is O(n); the phase-3 backend deals with that.
 - `in` with a `str` on the right is a substring test. The left operand must be a `str`; anything else is a compile error.
 - List `==` and `!=` compare element-wise. Both lists must have the same element type, otherwise it is a compile error. Scalar `int == float` stays as in Python.
@@ -150,6 +150,7 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 - **No int-to-float variable widening:** `total = 0` followed by `total += 1.5` is a compile error, with a fix-it to initialize with `0.0`. Mixed arithmetic within an expression still promotes as in Python; the variable's type does not widen.
 - **Negative integer exponents:** `int ** int` returns `int`; a negative exponent is a runtime error. With an integer base, a literal negative exponent (`x ** -1`) is a compile-time error. Both messages say "use a float base". `2.0 ** -1` stays legal.
 - Lists are homogeneous; tuple subscripts are integer literals, optionally negated.
+- An out-of-range tuple index (`(1, 2)[2]`) is a compile error, so nothing runs. Python raises an `IndexError` at that point.
 - Type errors are reported before the program runs, so a program with one prints nothing. Python raises the same mistakes as a `TypeError` at runtime, if it raises them at all.
 - `1 in "abc"`: a non-`str` left operand of `in` on a string is a compile error. Python raises a `TypeError`.
 - List equality needs the same element type: `[1] == [1.0]` is a type error, where Python compares element-wise and returns `True`.
@@ -174,7 +175,7 @@ Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts 
 - **Lists and dyn (Nano):** homogeneous element types; `[1, "a"]` is an error unless the element type is `dyn`. A `dyn` variable may hold anything. `dyn` is the explicit Python-bridge escape hatch, not an implicit fallback.
 - **Integer powers (Nano):** `int ** int` returns `int`; negative exponents fail at runtime. A literal negative exponent with an integer base fails at compile time. Both diagnostics say "use a float base". `2.0 ** -1` remains legal. Checked overflow already makes `2 ** 64` a runtime error.
 - **Tempering marker:** `temper def f(...)`, a keyword prefix.
-- **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`.
+- **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`. **Tuple bounds confirmed by Nano (#12):** an out-of-range tuple index is a compile error because index and length are static, so nothing runs; list/string out-of-range indexes remain runtime errors.
 
 - **Pause marker** (lands with concurrency): `pause <expr>`, a loosely binding prefix covering the whole expression to its right, like Swift's `await`. Required in tempered code at every pause point; it must cover at least one. See [research/concurrency-syntax.md](research/concurrency-syntax.md).
 - **Shared lock** (lands with concurrency): a builtin type `shared[T]`, built with `shared(v)` and accessed through `with x as n:`, where `n` writes through. Not a keyword.

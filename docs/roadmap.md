@@ -14,7 +14,7 @@ Gut estimate: phases 1-3 (a prototype) about a quarter; a language trusted for r
 
 ## Phase-2 open implementation work
 
-Status against main `851e3fdf9c6cb9984065e8cf067cb92d361b92d6` (PRs #6/#7/#8/#10/#11/#13/#14 merged): checked items describe module-level implementation and tests, not an end-to-end compiler. Unchecked items remain work from Nano's [recorded decisions](grammar.md#decided). Use the [canonical CPython-deviations list](grammar.md#deviations-from-python) for expected differences.
+Status against main `1d27d4d30eef72dff9ac474340ce9b639dcd65a7` (including merged #12 and #15): checked items describe module-level implementation and tests, not an end-to-end compiler. Unchecked items remain work from Nano's [recorded decisions](grammar.md#decided). Use the [canonical CPython-deviations list](grammar.md#deviations-from-python) for expected differences.
 
 - [x] **A/C/D: Optional module support.** PR #10 implements the `|`/`is` token and type/compare contracts, Optional inference, contextual literals, per-block None narrowing and interpreter None comparisons. Parser completion and pending CLI/conformance work are tracked separately below.
 - [x] **None-first annotation decision and module diagnostic.** Nano confirmed PR #10: a None-first variable that later holds a value requires an explicit annotation (`x: int | None = None`). The module test `none_first_without_annotation_asks_for_one` asserts the fix-it. Do not relax loose-mode inference yet; revisit after corpus evidence.
@@ -29,7 +29,8 @@ Status against main `851e3fdf9c6cb9984065e8cf067cb92d361b92d6` (PRs #6/#7/#8/#10
 - [x] **C: Optional return interaction (module level).** An explicit `T | None` return annotation permits fall-through to `None`; PR #10's `optional_return_may_fall_through` covers this. No arbitrary union inference is implied.
 
 - [x] **E: index/string/list-equality spec and corpus.** PR #11 records negative list/string/tuple indexing, Unicode code-point strings, substring membership, same-element-type list equality and compile-error-before-output behavior. Its 29-program corpus includes `tuple_index_error`, `tuple_index_error_negative`, `str_in_non_str`, `list_eq_mismatch` and `list_eq_int_float`; see [corpus instructions](../examples/README.md). This is spec/fixture completion, not Pythrust end-to-end validation.
-- [ ] **C/F/E: tuple bounds and diagnostic gap.** Preserve the specified runtime error for out-of-range tuple indexes in either direction. Current inference rejects statically out-of-range tuple indexes before runtime; reconcile implementation with the spec without silently changing the rule. The two tuple fixtures must retain output printed before the runtime error. Keep `corpus_matches_pythrust` pending until CLI integration; add targeted diagnostic assertions because stdout/status alone cannot establish which error fired.
+- [x] **C/E: tuple-bounds decision/spec/corpus alignment.** Nano explicitly confirmed #12: out-of-range tuple indexes in either direction are compile errors, so nothing runs. Merged #12 aligns the grammar with existing inference and changes `tuple_index_error` / `tuple_index_error_negative` to documented deviations with empty stdout goldens. The prior tuple timing mismatch is resolved; list/string bounds remain runtime errors.
+- [ ] **F/E: integrated diagnostics.** Keep `corpus_matches_pythrust` pending until CLI integration. Add targeted diagnostic assertions because empty stdout/status alone cannot establish which compile error fired; tuple fixture/spec alignment is not evidence that the CLI executes the full pipeline.
 
 ### Optional follow-ups in order
 
