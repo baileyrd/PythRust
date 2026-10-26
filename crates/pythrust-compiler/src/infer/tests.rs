@@ -1345,6 +1345,11 @@ fn truth_tests_do_not_narrow_but_suggest_is_not_none() {
     for body in cases {
         assert_eq!(optionals_err(body), hint("x"), "{body}");
     }
+    let fix = "; a truth test does not narrow `x`: write `x is not None`";
+    for body in ["1 + x", "-x", "x > 0", "0 < x"] {
+        let msg = optionals_err(&format!("if x:\n    print({body})\n"));
+        assert!(msg.ends_with(fix), "{body}: {msg}");
+    }
 }
 
 #[test]
@@ -1359,6 +1364,25 @@ fn truth_test_hint_names_only_a_fixable_failing_use() {
     ];
     for body in cases {
         assert_eq!(optionals_err(body), UNNARROWED, "{body}");
+    }
+    // The failing operand is not the truth-tested read, or narrowing it
+    // would not fix the error.
+    let unfixable = [
+        (
+            "if x:\n    print(print(x) + 1)\n",
+            "unsupported operand types for +: None and int",
+        ),
+        (
+            "if y:\n    print(bool(y) + x)\n",
+            "unsupported operand types for +: bool and int | None",
+        ),
+        (
+            "if x:\n    print(x + \"a\")\n",
+            "unsupported operand types for +: int | None and str",
+        ),
+    ];
+    for (body, msg) in unfixable {
+        assert_eq!(optionals_err(body), msg, "{body}");
     }
     let narrowed = "if x:\n    if x is not None:\n        print(x + 1)\n";
     assert_eq!(optionals_err(narrowed), "no error");

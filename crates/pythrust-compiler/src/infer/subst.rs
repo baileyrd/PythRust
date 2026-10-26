@@ -14,7 +14,7 @@ pub(super) enum Clash {
 
 /// Bindings for every variable created so far. A variable is bound at
 /// most once; `resolve` follows chains.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct Subst {
     bindings: Vec<Option<Type>>,
 }

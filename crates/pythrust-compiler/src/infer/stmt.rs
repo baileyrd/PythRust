@@ -8,9 +8,9 @@ use crate::span::Span;
 
 use super::expr::int_literal;
 use super::scope;
-use super::solve::{self, Access, Binary, Need};
+use super::solve::{self, Access, Binary, Constraint, Need};
 use super::ty::Type;
-use super::{error, Checker};
+use super::{error, Checker, TruthUse};
 
 const TRUTH_HINT: &str = "a truth test does not narrow";
 
@@ -116,25 +116,33 @@ impl Checker {
         // them: `is not None` would not narrow those either.
         let assigned = scope::assigned(&b.body);
         let tested = scope::truth_tested(&b.test);
-        let saved = (self.frame.truthy.clone(), self.frame.truth_reads.len());
+        let saved = (self.frame.truthy.clone(), self.frame.truth_uses.len());
         let fixable = tested.into_iter().filter(|n| !assigned.contains(n));
         self.frame.truthy.extend(fixable);
         let result = self
             .narrowed(&inside, &b.body, |c| c.block(&b.body))
             .map_err(|e| self.truth_hint(e));
         self.frame.truthy = saved.0;
-        self.frame.truth_reads.truncate(saved.1);
+        self.frame.truth_uses.truncate(saved.1);
         result
     }
 
-    /// Adds a fix-it to `err` when it covers a read of a name tested only
-    /// for truth that was still `T | None` there.
+    /// Adds a fix-it to `err` when it comes from an operation on a name
+    /// tested only for truth, and narrowing that name would fix it.
     fn truth_hint(&self, mut err: Diagnostic) -> Diagnostic {
         if err.message.contains(TRUTH_HINT) {
             return err;
         }
-        let inside = |s: &Span| err.span.start <= s.start && s.end <= err.span.end;
-        let Some((_, name)) = self.frame.truth_reads.iter().find(|(s, _)| inside(s)) else {
+        let fixes = |u: &&TruthUse| {
+            let narrowed = Constraint {
+                need: u.narrowed.clone(),
+                span: u.span,
+                via: None,
+            };
+            let solved = solve::solve(&mut self.subst.clone(), vec![narrowed]);
+            u.span == err.span && matches!(solved, Ok(rest) if rest.is_empty())
+        };
+        let Some(TruthUse { name, .. }) = self.frame.truth_uses.iter().find(fixes) else {
             return err;
         };
         let hint = format!("; {TRUTH_HINT} `{name}`: write `{name} is not None`");
