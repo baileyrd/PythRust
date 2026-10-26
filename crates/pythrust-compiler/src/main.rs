@@ -369,6 +369,14 @@ mod tests {
     }
 
     #[test]
+    fn compile_reports_unsupported_code_as_a_backend_error() {
+        let src = "x = print(7)\ndef print(n):\n    return 1\n";
+        let err = compile("f.pythrust", src).map(drop);
+        assert_eq!(err.map_err(|d| d.kind), Err(DiagKind::Backend));
+        assert!(compile("f.pythrust", "print(1 + 2)\n").is_ok());
+    }
+
+    #[test]
     fn private_dirs_are_fresh_and_owner_only() {
         let (a, b) = (private_dir().unwrap(), private_dir().unwrap());
         assert_ne!(a, b);

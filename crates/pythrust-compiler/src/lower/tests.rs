@@ -127,6 +127,10 @@ fn builtins_stay_callable_until_a_shadowing_def_runs() {
     assert_eq!(fails(&p), 0);
     // The builtin call before the def, then the user's `print` after it.
     assert_eq!(p.funcs.len(), 2);
+    // Typed by the later `def` as int, but the builtin gives None.
+    let (d, text) = rejected("x = print(7)\ndef print(n):\n    return 1\n");
+    assert!(d.message.contains("shadows"), "{}", d.message);
+    assert_eq!(text, "print(7)");
 }
 
 #[test]

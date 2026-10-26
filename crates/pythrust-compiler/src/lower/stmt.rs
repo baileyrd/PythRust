@@ -20,9 +20,7 @@ impl FnBuilder<'_, '_> {
             StmtKind::Assign { target, value } => self.assign_stmt(target, value),
             StmtKind::AnnAssign { target, value, .. } => {
                 let v = self.expr(value)?;
-                let dest = self.write(&target.name, target.span)?;
-                self.assign(dest, Rvalue::Use(v), s.span);
-                Ok(())
+                self.write(&target.name, v, target.span)
             }
             StmtKind::AugAssign { target, op, value } => {
                 self.aug_assign(target, *op, value, s.span)
@@ -59,9 +57,7 @@ impl FnBuilder<'_, '_> {
     fn assign_stmt(&mut self, target: &Target, value: &Expr) -> Result<()> {
         if let TargetKind::Name(name) = &target.kind {
             let v = self.expr(value)?;
-            let dest = self.write(name, target.span)?;
-            self.assign(dest, Rvalue::Use(v), target.span);
-            return Ok(());
+            return self.write(name, v, target.span);
         }
         let (TargetKind::Tuple(targets), ExprKind::Tuple(values)) = (&target.kind, &value.kind)
         else {
@@ -82,8 +78,7 @@ impl FnBuilder<'_, '_> {
             let TargetKind::Name(name) = &t.kind else {
                 return Err(unsupported(t.span, "nested or indexed unpacking"));
             };
-            let dest = self.write(name, t.span)?;
-            self.assign(dest, Rvalue::Use(op), t.span);
+            self.write(name, op, t.span)?;
         }
         Ok(())
     }
@@ -95,9 +90,7 @@ impl FnBuilder<'_, '_> {
         let l = self.read(name, target.span)?;
         let r = self.expr(value)?;
         let v = self.int_op(op, l, r, span)?;
-        let dest = self.write(name, target.span)?;
-        self.assign(dest, Rvalue::Use(v), span);
-        Ok(())
+        self.write(name, v, target.span)
     }
 
     /// A top-level `def` (inference rejects nested ones). Its body is
@@ -221,8 +214,7 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        let dest = self.write(name, target.span)?;
-        self.assign(dest, Rvalue::Use(cur), target.span);
+        self.write(name, cur, target.span)?;
         self.loop_body(body, latch, end)?;
         self.switch_to(latch);
         let over = self.temp(Ty::Bool, Rvalue::AddOverflows(cur, step), iter.span);

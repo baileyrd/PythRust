@@ -212,11 +212,18 @@ impl FnBuilder<'_, '_> {
         }
         let mut def = self.cx.defs.get(name.as_str()).copied();
         // Before a shadowing `def` runs, the name still finds the builtin.
-        let pending = self
-            .defined
-            .as_ref()
-            .is_some_and(|d| !d.contains(name.as_str()));
+        let pending = def.is_some()
+            && self
+                .defined
+                .as_ref()
+                .is_some_and(|d| !d.contains(name.as_str()));
         if pending && crate::interp::is_builtin(name) {
+            // Inference typed the call by the later `def`; the builtin's
+            // result must agree, or the program is outside the subset.
+            if name != "print" || self.ty_at(span)? != Ty::None {
+                let what = format!("calling builtin `{name}` before a `def` that shadows it");
+                return Err(unsupported(span, &what));
+            }
             def = None;
         }
         if def.is_some() && !self.callable(name, func.span)? {

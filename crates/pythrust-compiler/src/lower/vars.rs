@@ -36,10 +36,16 @@ impl FnBuilder<'_, '_> {
         Ok(Operand::Local(var.local))
     }
 
-    /// The local to assign `name` to; marks it bound from here on. Call
-    /// it after the assigned value is computed.
-    pub(super) fn write(&mut self, name: &str, span: Span) -> Result<LocalId> {
+    /// Assigns `value` to `name` and marks it bound from here on. The
+    /// value must have the variable's type: the IR is typed, and a
+    /// mismatch (inference and lowering disagreeing) is refused here
+    /// rather than miscompiled.
+    pub(super) fn write(&mut self, name: &str, value: Operand, span: Span) -> Result<()> {
         let var = self.var(name, span)?;
+        if self.ty(value) != self.locals[var.local.0] {
+            let what = format!("assigning `{name}` a value of another type than inferred");
+            return Err(unsupported(span, &what));
+        }
         if let Some(flag) = var.flag {
             self.assign(flag, Rvalue::Use(Operand::Bool(true)), span);
         }
@@ -47,7 +53,8 @@ impl FnBuilder<'_, '_> {
             self.always_bound.insert(var.local);
         }
         self.block_bound.insert(var.local);
-        Ok(var.local)
+        self.assign(var.local, Rvalue::Use(value), span);
+        Ok(())
     }
 
     fn unbound_message(&self, name: &str) -> String {
