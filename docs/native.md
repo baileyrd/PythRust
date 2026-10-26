@@ -50,7 +50,7 @@ Everything else is a compile error, `backend error: the native backend does not 
 - **`Retain`/`Release`/`Forget` instead of ir.md's `Copy`/`Move` operands with `RcInc`/`Drop`.** The same information: a move is a `Use` then a `Forget`, a copy a `Use` then a `Retain`. Keeping operands plain kept every existing int rvalue unchanged, and M5's ownership pass can still delete the pairs it proves unnecessary.
 - **Numeric semantics are copied into the runtime, not shared with the interpreter.** Float `repr`, floor division, `**` and number parsing exist in `interp` and in `pythrust-rt/src/num.rs`. Sharing them needs a crate both depend on (the runtime cannot be a library of the compiler: it defines `main`). The copies are small and the native corpus test holds them to the same output; a shared crate is a follow-up if they grow.
 - **Fallible runtime calls report a status byte** through a stack slot rather than returning a pair, which keeps the C ABI to scalars and pointers.
-- **Tuples are boxed**, not unboxed as planned: one runtime object like a list, so a tuple in a list slot, a tuple argument and a tuple result need no multi-value ABI. A tuple's fields are read by literal index (inference requires one), so unboxing stays an optimization M5 can make without changing the IR's types.
+- **Tuples are boxed**, not unboxed as planned: one runtime object like a list, so a tuple in a list slot, a tuple argument and a tuple result need no multi-value ABI. A tuple's fields are read by literal index (inference requires one), so unboxing stays an optimization M5 can make without changing the IR's types. Nano accepted this on the condition that the layout stays out of every ABI (`pythrust-rt`'s C surface and future Rust interop see no tuple representation), and asked for a tuple-heavy benchmark to measure its allocation cost.
 - **List and tuple types are interned** in `Program::types`, so `ir::Ty` stays `Copy`. An empty list whose element type nothing constrains (`not []`) gets `None` slots; it never holds an element.
 - **`None` has no machine value.** A function returning `None` returns nothing. (ir.md: zero-sized.)
 - **Monomorphization from signatures.** An instance's type variables are bound by matching the generic signature against the call's argument and result types. A generic body whose inner types are not determined by its signature is a backend error for now; the fix is for inference to expose per-instance types, which ir.md anticipated.
@@ -61,7 +61,7 @@ Everything else is a compile error, `backend error: the native backend does not 
 ## Next, in order (one small PR each)
 
 1. **The rest of the subset.** Globals read from functions, default and keyword arguments, `T | None`, `print(sep=, end=)`.
-2. **Benchmarks** against CPython: a numeric loop, string building, list sorting; numbers reported honestly, including where the gain is small.
+2. **Benchmarks** against CPython: a numeric loop, string building, list sorting, and a tuple-heavy one (multiple return plus unpacking) to measure boxed tuples' allocation cost; numbers reported honestly, including where the gain is small.
 
 ## Known gaps
 

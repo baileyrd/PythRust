@@ -153,6 +153,7 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 - An out-of-range tuple index (`(1, 2)[2]`) is a compile error, so nothing runs. Python raises an `IndexError` at that point.
 - Type errors are reported before the program runs, so a program with one prints nothing. Python raises the same mistakes as a `TypeError` at runtime, if it raises them at all.
 - `1 in "abc"`: a non-`str` left operand of `in` on a string is a compile error. Python raises a `TypeError`.
+- **NaN in containers (Nano):** list and tuple `==`, `!=`, ordering and `in` use value equality only, with no identity shortcut, so a NaN never equals itself inside a list or tuple: for `x = float('nan')`, `[x] == [x]`, `(x,) == (x,)` and `x in [x]` are all `False`. CPython checks identity first and returns `True`; it agrees with Pythrust only when the NaNs are different objects.
 - List equality needs the same element type: `[1] == [1.0]` is a type error, where Python compares element-wise and returns `True`.
 - `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
 - Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.

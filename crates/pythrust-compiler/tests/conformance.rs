@@ -247,6 +247,7 @@ const NATIVE: &[&str] = &[
     "list_semantics",
     "list_set_error",
     "lists",
+    "nan_container_eq",
     "nested_control",
     "overflow_add",
     "overflow_factorial",
