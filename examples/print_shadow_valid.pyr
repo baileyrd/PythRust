@@ -1,0 +1,8 @@
+# The builtin `print` serves calls until a shadowing `def` runs; later
+# calls reach the user's function with the same keywords.
+print("builtin", end="!\n")
+print("again", end="")
+print("", end="\n")
+def print(a: str, end: str) -> None:
+    pass
+print("user", end="?")

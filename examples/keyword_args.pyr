@@ -1,0 +1,24 @@
+# Keyword arguments bind by name after the positional ones; every
+# argument is evaluated in the order written. `print` takes `sep` and
+# `end`.
+def trace(tag: str, n: int) -> int:
+    print("eval", tag, end="; ")
+    return n
+
+def span(lo: int, hi: int, step: int) -> list[int]:
+    out = []
+    i = lo
+    while i < hi:
+        out.append(i)
+        i += step
+    return out
+
+print(span(hi=trace("hi", 9), step=trace("step", 3), lo=trace("lo", 0)))
+print(span(1, step=2, hi=6))
+print("a", "b", "c", sep="-")
+print("no newline", end="")
+print(" then", 1, 2.5, [True], sep=", ", end="!\n")
+sep = "+"
+print(sep="", end=sep * 2)
+print()
+print("done", end="\n", sep="?")

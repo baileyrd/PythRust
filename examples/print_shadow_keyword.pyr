@@ -1,0 +1,7 @@
+# expect-exit: 1
+# Before a shadowing `def print` runs, `print` is still the builtin,
+# which has no `x` keyword: a runtime TypeError, though inference typed
+# the call against the later `def`.
+print(x=1)
+def print(x: int) -> None:
+    pass
