@@ -242,7 +242,10 @@ impl<'a> FnBuilder<'_, 'a> {
     fn contains(&mut self, op: ast::CmpOp, l: Operand, r: Operand, span: Span) -> Result<Operand> {
         let needle = match (self.ty(l), self.ty(r)) {
             (Ty::Str, Ty::Str) => l,
-            (Ty::Bool, ty @ Ty::List(_)) if self.slot_ty(ty, 0, span)? != Ty::Bool => {
+            // A bool meets a number element as the int it is.
+            (Ty::Bool, ty @ Ty::List(_))
+                if matches!(self.slot_ty(ty, 0, span)?, Ty::Int | Ty::Float) =>
+            {
                 let l = self.as_int(l, span);
                 return self.contains(op, l, r, span);
             }

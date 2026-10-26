@@ -19,3 +19,7 @@ total += t
 print(total)
 for i in range(t, 3, t + t):
     print(i)
+# A bool needle keeps matching bool elements, optional or not.
+ys: list[bool | None] = [True, None]
+print(True in ys, False in ys, True not in ys, False not in ys, t in ys, f not in ys)
+print(t in [False, True], f not in [True])
