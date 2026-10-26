@@ -81,8 +81,6 @@ fn unsupported_values_name_the_construct() {
 fn unsupported_operations_name_the_construct() {
     let (_, text) = rejected("print(int(True))\n");
     assert_eq!(text, "int(True)");
-    let (d, _) = rejected("print(1, end='')\n");
-    assert!(d.message.contains("keyword arguments"));
     let (d, text) = rejected("a, b = [1, 2]\n");
     assert!(d.message.contains("unpacking"), "{}", d.message);
     assert_eq!(text, "a, b");
@@ -300,4 +298,41 @@ fn loop_bindings_release_what_they_create_each_iteration() {
 fn an_unconstrained_empty_list_lowers() {
     let p = lowered("print(not [], [])\n");
     assert_eq!(p.types, vec![crate::ir::Compound::List(Ty::None)]);
+}
+
+#[test]
+fn keyword_arguments_bind_in_parameter_order() {
+    let p = lowered("def f(a: int, b: str) -> int:\n    return a\nprint(f(b='x', a=2))\n");
+    let main = &p.funcs[p.main.0];
+    let call = main
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .find_map(|i| match i {
+            Inst::Assign {
+                value: crate::ir::Rvalue::Call(_, args),
+                ..
+            } => Some(args.clone()),
+            _ => None,
+        });
+    let Some(args) = call else {
+        panic!("no call");
+    };
+    let tys: Vec<Ty> = args.iter().map(|a| main.ty(*a)).collect();
+    assert_eq!(tys, vec![Ty::Int, Ty::Str]);
+}
+
+#[test]
+fn print_keeps_sep_and_end_apart_from_its_values() {
+    let p = lowered("print(1, 2, end='!', sep='-')\n");
+    let main = &p.funcs[p.main.0];
+    let print = main
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .find_map(|i| match i {
+            Inst::Print { args, sep, end } => Some((args.len(), sep.is_some(), end.is_some())),
+            _ => None,
+        });
+    assert_eq!(print, Some((2, true, true)));
 }

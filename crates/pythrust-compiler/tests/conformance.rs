@@ -246,6 +246,7 @@ const NATIVE: &[&str] = &[
     "list_ownership",
     "list_semantics",
     "list_set_error",
+    "keyword_args",
     "lists",
     "loop_target_ownership",
     "nan_container_eq",

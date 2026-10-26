@@ -104,8 +104,13 @@ pub enum Inst {
         value: Rvalue,
         span: Span,
     },
-    /// `print(args...)` with the default separator and line end.
-    Print(Vec<Operand>),
+    /// `print(args..., sep=sep, end=end)`; `sep` and `end` are `Str`s,
+    /// or `None` for `' '` and `'\n'`.
+    Print {
+        args: Vec<Operand>,
+        sep: Option<Operand>,
+        end: Option<Operand>,
+    },
     /// Adds a reference to the `Str` in the local (null: nothing).
     Retain(LocalId),
     /// Drops the local's reference (null: nothing) and nulls the local.

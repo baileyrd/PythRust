@@ -435,14 +435,14 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let v = self.rvalue(value, *dest, *span)?;
                 self.b.def_var(self.vars[dest.0], v);
             }
-            Inst::Print(args) => {
+            Inst::Print { args, sep, end } => {
                 for (i, op) in args.iter().enumerate() {
                     if i > 0 {
-                        self.write_byte(b' ');
+                        self.write_text(*sep, b' ');
                     }
                     self.write(*op);
                 }
-                self.write_byte(b'\n');
+                self.write_text(*end, b'\n');
             }
             Inst::Retain(l) => {
                 let (inc, _) = rc_fns(self.func.locals[l.0]);
@@ -485,6 +485,14 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::List(_) | Ty::Tuple(_) => (Rt::WriteSeq, vec![self.operand(op)]),
         };
         self.call_rt(rt, &args);
+    }
+
+    /// Writes the string `text`, or `default` if there is none.
+    fn write_text(&mut self, text: Option<Operand>, default: u8) {
+        match text {
+            Some(s) => self.write(s),
+            None => self.write_byte(default),
+        }
     }
 
     fn write_byte(&mut self, byte: u8) {

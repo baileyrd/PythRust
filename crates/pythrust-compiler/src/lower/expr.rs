@@ -1,6 +1,6 @@
 //! Expressions: each lowers to an operand, emitting what it needs first.
 
-use crate::ast::{self, Arg, BinOp, Expr, ExprKind, LogicalOp, UnaryOp};
+use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
 use crate::diag::Result;
 use crate::ir::{CmpOp, FloatOp, Inst, IntOp, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
@@ -266,9 +266,6 @@ impl FnBuilder<'_, '_> {
             ExprKind::Attr { value, attr } => return self.method(value, &attr.name, args, span),
             _ => return Err(unsupported(span, "calling this kind of expression")),
         };
-        if args.iter().any(|a| a.name.is_some()) {
-            return Err(unsupported(span, "keyword arguments"));
-        }
         let mut def = self.cx.defs.get(name.as_str()).copied();
         // Before a shadowing `def` runs, the name still finds the builtin.
         let pending = def.is_some()
@@ -290,16 +287,15 @@ impl FnBuilder<'_, '_> {
             let ty = self.ty_at(span)?;
             return Ok(Operand::Local(self.new_local(ty)));
         }
+        // Python evaluates arguments as written, then binds them.
         let mut ops = Vec::new();
         for a in args {
             ops.push(self.expr(&a.value)?);
         }
         let Some(def) = def else {
-            return self.builtin(name, ops, span);
+            return self.builtin(name, args, ops, span);
         };
-        if def.params.len() != ops.len() {
-            return Err(unsupported(span, "default arguments"));
-        }
+        let ops = bind_params(def, args, ops, span)?;
         let tys = ops.iter().map(|op| self.ty(*op)).collect();
         let ret = self.ty_at(span)?;
         let id = self.cx.instance(def, tys, ret, span)?;
@@ -338,15 +334,43 @@ impl FnBuilder<'_, '_> {
         }
     }
 
-    fn builtin(&mut self, name: &str, args: Vec<Operand>, span: Span) -> Result<Operand> {
+    /// A builtin call; `ops` are `args`' values. Inference allows
+    /// keywords only for `print`.
+    fn builtin(
+        &mut self,
+        name: &str,
+        args: &[Arg],
+        ops: Vec<Operand>,
+        span: Span,
+    ) -> Result<Operand> {
+        if name == "print" {
+            return Ok(self.print(args, ops));
+        }
+        if args.iter().any(|a| a.name.is_some()) {
+            return Err(unsupported(span, "keyword arguments"));
+        }
         match name {
-            "print" => {
-                self.emit(Inst::Print(args));
-                Ok(Operand::None)
-            }
-            "len" | "str" | "int" | "float" | "bool" => self.unary_builtin(name, &args, span),
+            "len" | "str" | "int" | "float" | "bool" => self.unary_builtin(name, &ops, span),
             other => Err(unsupported(span, &format!("`{other}`"))),
         }
+    }
+
+    /// `print`, its `sep` and `end` keywords split from the values.
+    fn print(&mut self, args: &[Arg], ops: Vec<Operand>) -> Operand {
+        let (mut values, mut sep, mut end) = (Vec::new(), None, None);
+        for (a, op) in args.iter().zip(ops) {
+            match a.name.as_ref().map(|n| n.name.as_str()) {
+                Some("sep") => sep = Some(op),
+                Some(_) => end = Some(op),
+                None => values.push(op),
+            }
+        }
+        self.emit(Inst::Print {
+            args: values,
+            sep,
+            end,
+        });
+        Operand::None
     }
 
     /// `len`, `str`, `int`, `float` and `bool` of one argument.
@@ -374,6 +398,30 @@ impl FnBuilder<'_, '_> {
         };
         Ok(self.temp(ty, value, span))
     }
+}
+
+/// `ops`, the values of `args`, in `def`'s parameter order: positional
+/// first, then keywords by name. Inference rejected every other shape.
+fn bind_params(def: &FuncDef, args: &[Arg], ops: Vec<Operand>, span: Span) -> Result<Vec<Operand>> {
+    let mut slots: Vec<Option<Operand>> = vec![None; def.params.len()];
+    for (next, (a, op)) in args.iter().zip(ops).enumerate() {
+        let k = match &a.name {
+            Some(kw) => def.params.iter().position(|p| p.name.name == kw.name),
+            None => Some(next),
+        };
+        let slot = k.and_then(|k| slots.get_mut(k));
+        let Some(slot) = slot.filter(|s| s.is_none()) else {
+            return Err(super::internal(
+                a.span,
+                "an argument inference did not bind",
+            ));
+        };
+        *slot = Some(op);
+    }
+    slots
+        .into_iter()
+        .collect::<Option<Vec<Operand>>>()
+        .ok_or_else(|| unsupported(span, "default arguments"))
 }
 
 /// The int operation for `op`; `/` and `**` are not one.
