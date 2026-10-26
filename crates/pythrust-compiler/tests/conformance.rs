@@ -18,7 +18,8 @@
 //!
 //! Environment:
 //! - `PYTHON` interpreter to use as the oracle (default `python3`).
-//! - `PYTHRUST_BIN` the `pythrust` binary (default `target/debug/pythrust`).
+//! - `PYTHRUST_BIN` the `pythrust` binary (default: the one Cargo built for
+//!   this test run).
 //! - `PYTHRUST_BLESS=1` write non-deviation goldens from CPython, creating
 //!   missing ones; a golden whose exit status disagrees is kept.
 
@@ -205,7 +206,7 @@ fn run_cpython(source: &Path) -> Res<Run> {
 }
 
 fn run_pythrust(source: &Path) -> Res<Run> {
-    let default = repo_root()?.join("target/debug/pythrust");
+    let default = PathBuf::from(env!("CARGO_BIN_EXE_pythrust"));
     let bin = std::env::var_os("PYTHRUST_BIN").map_or(default, PathBuf::from);
     run(Command::new(bin).arg("run").arg(source), TIMEOUT)
 }
@@ -343,7 +344,6 @@ fn corpus_matches_cpython() -> Res<()> {
 }
 
 #[test]
-#[ignore = "needs `pythrust run` end to end (threads A, B, D, F)"]
 fn corpus_matches_pythrust() -> Res<()> {
     let mut failures = Vec::new();
     for case in load_corpus(&corpus_dir()?)? {

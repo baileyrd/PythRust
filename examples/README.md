@@ -3,12 +3,11 @@
 Each `<name>.pythrust` program has a golden `<name>.out`: the exact stdout it must print. The phase-2 subset is Python-compatible, so CPython is the oracle. The harness is `crates/pythrust-compiler/tests/conformance.rs`; it compares stdout and exit status, never stderr.
 
 ```sh
-cargo test --test conformance                 # goldens agree with CPython
-cargo test --test conformance -- --ignored    # goldens agree with `pythrust run`
+cargo test --test conformance                 # goldens agree with CPython and `pythrust run`
 PYTHRUST_BLESS=1 cargo test --test conformance corpus_matches_cpython   # regenerate goldens
 ```
 
-`PYTHON` picks the oracle (default `python3`, baseline 3.12). `PYTHRUST_BIN` picks the binary (default `target/debug/pythrust`).
+`PYTHON` picks the oracle (default `python3`, baseline 3.12). `PYTHRUST_BIN` picks the binary (default: the one Cargo built for the test run).
 
 Directives go in the leading comment block, which Python ignores:
 
