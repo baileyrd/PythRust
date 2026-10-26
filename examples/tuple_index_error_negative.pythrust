@@ -1,5 +1,5 @@
+# deviation: an out-of-range tuple index is a compile error, so nothing runs; CPython prints, then raises IndexError.
 # expect-exit: 1
-# Out of range is a runtime error, so output before it still appears.
 p = (1, "one")
 print(p[-2])
 print(p[-3])
