@@ -1148,3 +1148,14 @@ fn repeating_empty_sequences_is_immediate() {
     assert_eq!(show(bin(Mul, list(vec![]), int(i64::MAX))), "[]");
     assert_eq!(show(bin(Mul, int(i64::MAX), tuple(vec![]))), "()");
 }
+
+#[test]
+fn is_compares_only_with_none() {
+    let c = |l: Expr, op: CmpOp, r: Expr| show(cmp(l, vec![(op, r)]));
+    assert_eq!(c(none(), CmpOp::Is, none()), "True");
+    assert_eq!(c(int(1), CmpOp::Is, none()), "False");
+    assert_eq!(c(none(), CmpOp::IsNot, int(1)), "True");
+    assert!(
+        show_err(cmp(int(1), vec![(CmpOp::Is, int(1))])).contains("`is` compares only with None")
+    );
+}

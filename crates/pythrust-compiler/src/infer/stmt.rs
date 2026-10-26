@@ -5,7 +5,8 @@ use crate::diag::Result;
 use crate::span::Span;
 
 use super::expr::int_literal;
-use super::solve::{Binary, Need};
+use super::scope;
+use super::solve::{self, Access, Binary, Need};
 use super::ty::Type;
 use super::{error, Checker};
 
@@ -21,7 +22,10 @@ impl Checker {
     pub(super) fn stmt(&mut self, stmt: &Stmt) -> Result<()> {
         match &stmt.kind {
             StmtKind::Assign { target, value } => {
-                let t = self.expr(value)?;
+                let t = match self.declared(target) {
+                    Some(current) => self.checked(value, &current)?,
+                    None => self.expr(value)?,
+                };
                 self.bind(target, &t)
             }
             StmtKind::AnnAssign {
@@ -30,7 +34,7 @@ impl Checker {
                 value,
             } => {
                 let declared = self.annotation(annotation)?;
-                let t = self.expr(value)?;
+                let t = self.checked(value, &declared)?;
                 self.expect(
                     value.span,
                     &declared,
@@ -53,14 +57,9 @@ impl Checker {
                 branch,
                 elifs,
                 orelse,
-            } => {
-                std::iter::once(branch)
-                    .chain(elifs)
-                    .try_for_each(|b| self.branch(b))?;
-                self.block(orelse)
-            }
+            } => self.if_chain(branch, elifs, orelse),
             StmtKind::While { branch, orelse } => {
-                self.branch(branch)?;
+                self.branch(branch, &[])?;
                 self.block(orelse)
             }
             StmtKind::For {
@@ -83,16 +82,63 @@ impl Checker {
         }
     }
 
+    /// `x is None` tests narrow later clauses; `x is not None` narrows
+    /// its own body.
+    fn if_chain(&mut self, branch: &Branch, elifs: &[Branch], orelse: &Block) -> Result<()> {
+        let mut not_none: Vec<String> = Vec::new();
+        for b in std::iter::once(branch).chain(elifs) {
+            self.branch(b, &not_none)?;
+            if let Some((name, false)) = scope::none_test(&b.test) {
+                not_none.push(name);
+            }
+        }
+        self.narrowed(&not_none, orelse, |c| c.block(orelse))
+    }
+
     /// A test of any type (every value has a truth value) and its block.
-    fn branch(&mut self, b: &Branch) -> Result<()> {
-        self.expr(&b.test)?;
-        self.block(&b.body)
+    /// `not_none` names are narrowed in both, as is the name the test
+    /// itself proves is not `None`.
+    fn branch(&mut self, b: &Branch, not_none: &[String]) -> Result<()> {
+        self.narrowed(not_none, &Block::new(), |c| c.expr(&b.test).map(drop))?;
+        let mut inside = not_none.to_vec();
+        if let Some((name, true)) = scope::none_test(&b.test) {
+            inside.push(name);
+        }
+        self.narrowed(&inside, &b.body, |c| c.block(&b.body))
+    }
+
+    /// Runs `f` with each of `names` narrowed from `T | None` to `T`,
+    /// unless `scope` assigns it (then its type stays `T | None`).
+    fn narrowed(
+        &mut self,
+        names: &[String],
+        scope: &Block,
+        f: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        let assigned = scope::assigned(scope);
+        let saved = self.frame.narrowed.clone();
+        for name in names.iter().filter(|n| !assigned.contains(*n)) {
+            let current = self
+                .frame
+                .locals
+                .get(name)
+                .or_else(|| self.globals.get(name));
+            if let Some(Type::Optional(inner)) = current.map(|t| self.subst.resolve(t)) {
+                self.frame.narrowed.insert(name.clone(), *inner);
+            }
+        }
+        let result = f(self);
+        self.frame.narrowed = saved;
+        result
     }
 
     fn aug_assign(&mut self, target: &Target, op: BinOp, value: &Expr, span: Span) -> Result<()> {
         let current = match &target.kind {
             TargetKind::Name(name) => self.variable(name, target.span)?,
-            TargetKind::Subscript { value, index } => self.subscript(value, index, true)?,
+            TargetKind::Subscript { value, index } => {
+                let out = self.subst.fresh();
+                self.subscript(value, index, Access::ReadWrite, out)?
+            }
             TargetKind::Tuple(_) => {
                 let msg = "augmented assignment needs a single target".to_string();
                 return Err(error(target.span, msg));
@@ -120,7 +166,7 @@ impl Checker {
             return Err(error(span, "`return` outside a function".to_string()));
         };
         let found = match value {
-            Some(e) => self.expr(e)?,
+            Some(e) => self.checked(e, &expected)?,
             None => Type::None,
         };
         self.expect(span, &expected, &found, "return type mismatch")
@@ -131,8 +177,8 @@ impl Checker {
         match &target.kind {
             TargetKind::Name(name) => self.bind_name(name, target.span, ty),
             TargetKind::Subscript { value, index } => {
-                let slot = self.subscript(value, index, true)?;
-                self.expect(target.span, &slot, ty, "assigned value")
+                self.subscript(value, index, Access::Write, ty.clone())?;
+                Ok(())
             }
             TargetKind::Tuple(items) => {
                 let elems: Vec<Type> = items.iter().map(|_| self.subst.fresh()).collect();
@@ -149,9 +195,38 @@ impl Checker {
         }
     }
 
+    /// The type a target already has, so a literal assigned to it is
+    /// checked against it (`xs = [None]` on a `list[int | None]`, or
+    /// `xss[0] = [None, 1]` on a `list[list[int | None]]`).
+    fn declared(&self, target: &Target) -> Option<Type> {
+        match &target.kind {
+            TargetKind::Name(name) => self.lookup(name),
+            TargetKind::Subscript { value, .. } => self.element_of(value),
+            TargetKind::Tuple(_) => None,
+        }
+    }
+
     fn bind_name(&mut self, name: &str, span: Span, ty: &Type) -> Result<()> {
         let var = self.variable(name, span)?;
         let what = format!("cannot change the type of `{name}`");
-        self.expect(span, &var, ty, &what)
+        let deferred = self.subst.assign(&var, ty).map_err(|clash| {
+            let detail = solve::mismatch(&self.subst, clash, &var, ty);
+            let mut msg = format!("{what}: {detail}");
+            let (was, now) = (self.subst.zonk(&var), self.subst.zonk(ty));
+            let other = match (&was, &now) {
+                (Type::None, t) | (t, Type::None) => Some(t),
+                _ => None,
+            };
+            if let Some(t) = other {
+                msg.push_str(&format!(
+                    "; to allow None, annotate it, as in `{name}: {t} | None = None`"
+                ));
+            }
+            error(span, msg)
+        })?;
+        for need in solve::assigns(deferred, &what) {
+            self.need(need, span);
+        }
+        Ok(())
     }
 }

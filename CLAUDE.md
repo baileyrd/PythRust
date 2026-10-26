@@ -29,11 +29,13 @@ One crate, `crates/pythrust-compiler`, one module per stage. Shared contract typ
 
 Follow `docs/grammar.md#decided`: one fixed type per variable, no int-to-float variable widening, homogeneous lists with the explicit `dyn` bridge escape hatch, phase-2 `T | None`, and checked integer powers. Type-changing flow-sensitive rebinding is out of scope. The `total = 0` / `total += 1.5` error must suggest `0.0`; negative integer exponent errors must say "use a float base". Check a literal negative exponent at compile time only when the base is integer; `2.0 ** -1` stays legal.
 
+None-first Optional is decided: require `x: int | None = None` and offer that annotation as the fix-it for an unannotated None-first binding that later receives a value. Do not relax loose-mode Optional inference yet. Follow the ordered parser, post-terminator narrowing (separate PR), and conformance work in `docs/roadmap.md#optional-follow-ups-in-order`; module implementation is not parser/CLI completion.
+
 The single CPython-deviations list is `docs/grammar.md#deviations-from-python`; Thread E records these as expected diffs, not bugs. Pending implementation and regression coverage are in `docs/roadmap.md#phase-2-open-implementation-work`. A recorded language decision is not evidence that code implements it.
 
 ## Open decisions (do not decide silently; propose and ask)
 
-Source file extension (placeholder `.pythrust`); how None-first inference obtains a fixed Optional type without flow-sensitive rebinding. Do not silently infer new widening rules. Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate.
+Source file extension (placeholder `.pythrust`). Do not silently infer new widening rules. Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate.
 
 ## Checks
 

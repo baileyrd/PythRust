@@ -20,6 +20,8 @@ pub enum Type {
     List(Box<Type>),
     /// Fixed length, positionally typed.
     Tuple(Vec<Type>),
+    /// `T | None`. `T` is never `None` or itself optional.
+    Optional(Box<Type>),
     Var(TypeVar),
 }
 
@@ -62,6 +64,7 @@ impl fmt::Display for Type {
             Type::List(elem) => write!(f, "list[{elem}]"),
             Type::Tuple(elems) if elems.is_empty() => f.write_str("tuple[()]"),
             Type::Tuple(elems) => write!(f, "tuple[{}]", join(elems)),
+            Type::Optional(inner) => write!(f, "{inner} | None"),
             Type::Var(TypeVar(n)) => write!(f, "T{n}"),
         }
     }
@@ -93,6 +96,8 @@ mod tests {
         assert_eq!(t.to_string(), "tuple[list[int], str]");
         assert_eq!(Type::Tuple(vec![]).to_string(), "tuple[()]");
         assert_eq!(Type::Var(TypeVar(3)).to_string(), "T3");
+        let opt = Type::Optional(Box::new(Type::Int));
+        assert_eq!(Type::List(Box::new(opt)).to_string(), "list[int | None]");
     }
 
     #[test]
