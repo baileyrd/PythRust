@@ -72,9 +72,20 @@ fn code_after_return_and_break_lowers() {
 }
 
 #[test]
-fn unsupported_values_name_the_construct() {
-    let (d, _) = rejected("r = range(3)\nprint(len(r))\n");
-    assert!(d.message.contains("range"), "{}", d.message);
+fn a_range_value_holds_its_bounds_and_loops_over_them() {
+    let p = lowered("r = range(3)\nfor x in r:\n    print(x)\nprint(len(r), r[0], 1 in r)\n");
+    // Only `len`, for a range too long for an int.
+    assert_eq!(fails(&p), 1);
+    let rv = all_rvalues(&p);
+    let n = |pred: fn(&Rvalue) -> bool| rv.iter().filter(|r| pred(r)).count();
+    assert_eq!(
+        n(|r| matches!(r, Rvalue::NewSeq(items) if items.len() == 3)),
+        1
+    );
+    assert_eq!(n(|r| matches!(r, Rvalue::Field(_, _))), 3);
+    assert_eq!(n(|r| matches!(r, Rvalue::Index(_, _))), 1);
+    let p = lowered("s = 2\nr = range(0, 3, s)\nprint(r)\n");
+    assert_eq!(fails(&p), 1);
 }
 
 /// Every rvalue of every function of `p`.
@@ -161,9 +172,6 @@ fn optional_tuples_are_rebuilt_to_the_declared_type() {
 fn unsupported_operations_name_the_construct() {
     let (_, text) = rejected("print(int(True))\n");
     assert_eq!(text, "int(True)");
-    let (d, text) = rejected("a, b = range(2)\nprint(a)\n");
-    assert!(d.message.contains("`range`"), "{}", d.message);
-    assert_eq!(text, "range(2)");
 }
 
 #[test]

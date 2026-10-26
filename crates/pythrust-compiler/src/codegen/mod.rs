@@ -97,10 +97,14 @@ enum Rt {
     ListContains,
     WriteSeq,
     StrFromSeq,
+    RangeLen,
+    RangeGet,
+    RangeContains,
+    RangeContainsFloat,
 }
 
 impl Rt {
-    const ALL: [Rt; 41] = [
+    const ALL: [Rt; 45] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -142,6 +146,10 @@ impl Rt {
         Rt::ListContains,
         Rt::WriteSeq,
         Rt::StrFromSeq,
+        Rt::RangeLen,
+        Rt::RangeGet,
+        Rt::RangeContains,
+        Rt::RangeContainsFloat,
     ];
 
     fn symbol(self) -> &'static str {
@@ -187,6 +195,10 @@ impl Rt {
             Rt::ListContains => "pt_list_contains",
             Rt::WriteSeq => "pt_write_seq",
             Rt::StrFromSeq => "pt_str_from_seq",
+            Rt::RangeLen => "pt_range_len",
+            Rt::RangeGet => "pt_range_get",
+            Rt::RangeContains => "pt_range_contains",
+            Rt::RangeContainsFloat => "pt_range_contains_float",
         }
     }
 
@@ -227,6 +239,10 @@ impl Rt {
             Rt::SeqCmp => (vec![ptr, ptr], Some(I64)),
             Rt::ListContains => (vec![ptr, I64], Some(I8)),
             Rt::StrFromSeq => (vec![ptr], Some(ptr)),
+            Rt::RangeLen => (vec![ptr], Some(I64)),
+            Rt::RangeGet => (vec![ptr, I64, ptr], Some(I64)),
+            Rt::RangeContains => (vec![ptr, I64], Some(I8)),
+            Rt::RangeContainsFloat => (vec![ptr, F64], Some(I8)),
         }
     }
 }
@@ -336,7 +352,7 @@ impl<'r> Codegen<'r> {
             Ty::Int => types::I64,
             Ty::Float => types::F64,
             Ty::Bool | Ty::None => types::I8,
-            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) => self.ptr,
+            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => self.ptr,
         }
     }
 
@@ -549,7 +565,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::None => return self.write_none(),
             Ty::Str => Rt::WriteStr,
             Ty::Float => Rt::WriteFloat,
-            Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) => Rt::WriteSeq,
+            Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => Rt::WriteSeq,
         };
         self.call_rt(rt, &[v]);
     }
@@ -633,7 +649,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let order = self.rt_on(Rt::StrCmp, &[*a, *b])?;
                 Ok(self.b.ins().icmp_imm_s(int_cc(*op), order, 0))
             }
-            Rvalue::Cmp(op, a, b) if is_seq(self.func.ty(*a)) => self.seq_cmp(*op, *a, *b),
+            Rvalue::Cmp(op, a, b) if is_seq(self.func.ty(*a)) || self.func.ty(*a) == Ty::Range => {
+                self.seq_cmp(*op, *a, *b)
+            }
             Rvalue::Cmp(op, a, b) if self.func.ty(*a) == Ty::Float => {
                 let (a, b) = (self.operand(*a), self.operand(*b));
                 Ok(self.b.ins().fcmp(num::float_cc(*op), a, b))
@@ -651,12 +669,17 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Concat(a, b) => self.rt_on(Rt::StrConcat, &[*a, *b]),
             Rvalue::Repeat(s, n) => self.rt_nonnull(Rt::StrRepeat, &[*s, *n], span, TOO_LARGE),
             Rvalue::Index(s, i) if is_seq(self.func.ty(*s)) => self.item(*s, *i, dest, span),
+            Rvalue::Index(s, i) if self.func.ty(*s) == Ty::Range => self.range_item(*s, *i, span),
             Rvalue::Index(s, i) => self.rt_nonnull(Rt::StrIndex, &[*s, *i], span, STR_INDEX),
             Rvalue::Len(s) if is_seq(self.func.ty(*s)) => self.rt_on(Rt::SeqLen, &[*s]),
+            Rvalue::Len(s) if self.func.ty(*s) == Ty::Range => self.rt_on(Rt::RangeLen, &[*s]),
             Rvalue::Len(s) => self.rt_on(Rt::StrLen, &[*s]),
             Rvalue::Contains { hay, needle } if is_seq(self.func.ty(*hay)) => {
                 let (s, v) = (self.operand(*hay), self.slot(*needle));
                 self.call_rt_value(Rt::ListContains, &[s, v])
+            }
+            Rvalue::Contains { hay, needle } if self.func.ty(*hay) == Ty::Range => {
+                self.range_contains(*hay, *needle)
             }
             Rvalue::Contains { hay, needle } => self.rt_on(Rt::StrContains, &[*hay, *needle]),
             Rvalue::ToStr(op) => match self.func.ty(*op) {
@@ -703,7 +726,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::Bool => Rt::StrFromBool,
             Ty::None => return self.call_rt_value(Rt::StrNone, &[]),
             Ty::Float => Rt::StrFromFloat,
-            Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) => Rt::StrFromSeq,
+            Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => Rt::StrFromSeq,
             Ty::Str => {
                 self.call_rt(Rt::StrInc, &[v]);
                 return Ok(v);

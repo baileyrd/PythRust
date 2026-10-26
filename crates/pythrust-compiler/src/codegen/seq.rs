@@ -11,6 +11,7 @@ use crate::ir::{CmpOp, Compound, LocalId, Operand, Ty};
 use crate::span::Span;
 
 const LIST_INDEX: &str = "IndexError: list index out of range";
+const RANGE_INDEX: &str = "IndexError: range object index out of range";
 
 impl FnGen<'_, '_, '_> {
     /// A new sequence of type `ty` holding `items`.
@@ -70,6 +71,24 @@ impl FnGen<'_, '_, '_> {
         Ok(self.unslot(v, self.func.locals[dest.0]))
     }
 
+    /// `r[i]` of range `r`.
+    pub(super) fn range_item(&mut self, r: Operand, i: Operand, span: Span) -> Result<Value> {
+        let (r, i) = (self.operand(r), self.operand(i));
+        let (v, status) = self.with_status(Rt::RangeGet, &[r, i])?;
+        self.fail_on(status, 1, span, RANGE_INDEX)?;
+        Ok(v)
+    }
+
+    /// `x in r` of range `r` and a number `x`.
+    pub(super) fn range_contains(&mut self, r: Operand, x: Operand) -> Result<Value> {
+        let r = self.operand(r);
+        let (rt, x) = match self.func.ty(x) {
+            Ty::Float => (Rt::RangeContainsFloat, self.operand(x)),
+            _ => (Rt::RangeContains, self.slot(x)),
+        };
+        self.call_rt_value(rt, &[r, x])
+    }
+
     pub(super) fn set_item(
         &mut self,
         list: Operand,
@@ -114,6 +133,7 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::Bool => 'b',
         Ty::None => 'n',
         Ty::Str => 's',
+        Ty::Range => 'r',
         Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => {
             let compound = types
                 .get(id.0)

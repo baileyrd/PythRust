@@ -317,7 +317,8 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         | (Type::Float, Ty::Float)
         | (Type::Bool, Ty::Bool)
         | (Type::None, Ty::None)
-        | (Type::Str, Ty::Str) => true,
+        | (Type::Str, Ty::Str)
+        | (Type::Range, Ty::Range) => true,
         _ => false,
     }
 }
@@ -603,11 +604,11 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::Bool => Ok(Ty::Bool),
         Type::None => Ok(Ty::None),
         Type::Str => Ok(Ty::Str),
+        Type::Range => Ok(Ty::Range),
         Type::Var(v) => subst
             .get(v)
             .copied()
             .ok_or_else(|| unsupported(span, "a value whose type depends on generic code")),
-        other => Err(unsupported(span, &format!("values of type `{other}`"))),
     }
 }
 

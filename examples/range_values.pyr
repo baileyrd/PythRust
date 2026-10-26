@@ -1,0 +1,52 @@
+# `range` as a value: stored, passed, measured, indexed, searched,
+# unpacked, compared, printed and iterated outside a `for` header.
+def total(r):
+    s = 0
+    for x in r:
+        s += x
+    return s
+
+r = range(10, 0, -3)
+print(r, len(r), r[0], r[-1])
+print(total(r), total(range(5)))
+print(4 in r, 7 in r, 0 in r, 7.0 in r, 7.5 in r, True in range(2))
+print(5 not in range(0, 10, 2))
+a, b, c, d = r
+print(a, b, c, d)
+print(range(0) == range(3, 1), range(1, 2) == range(1, 3, 5), r == range(10, -1, -3))
+print(range(3) != range(4))
+empty = range(4, 4)
+if not empty:
+    print("empty", len(empty), bool(range(1)))
+rs = [range(3), range(1, 9, 2)]
+print(rs, str(range(-2, 2)))
+print(rs[1][2], len(rs[0]))
+for x in rs[1]:
+    print(x, end=" ")
+print()
+n = 3
+print(len(range(n * n)), range(n)[n - 1])
+big = range(-9223372036854775807 - 1, 9223372036854775807)
+print(big[-1], big[2 ** 62], -1 in big, bool(big))
+
+
+# Ranges returned, directly and inside a list and a tuple.
+def make(n):
+    return range(n)
+
+
+def nest(n):
+    return [range(n), range(1, n)]
+
+
+def split(n):
+    return (range(n), n)
+
+
+def via(n):
+    return make(n)
+
+
+print(make(3), len(make(4)), nest(3), split(2), via(2) == range(0, 2))
+for x in make(2):
+    print(x)

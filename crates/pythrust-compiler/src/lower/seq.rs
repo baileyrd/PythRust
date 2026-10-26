@@ -1,5 +1,5 @@
-//! Lists and tuples: displays, indexing, `append`, item assignment and
-//! unpacking.
+//! Lists, tuples and ranges: displays, indexing, `append`, item
+//! assignment and unpacking.
 
 use crate::ast::{Arg, Expr, ExprKind, Target, TargetKind, UnaryOp};
 use crate::diag::Result;
@@ -44,6 +44,15 @@ impl FnBuilder<'_, '_> {
         Ok(())
     }
 
+    /// `len(r)` of range `r`, failing as `run` does when it does not fit
+    /// in an int.
+    pub(super) fn range_len(&mut self, r: Operand, span: Span) -> Operand {
+        let n = self.temp(Ty::Int, Rvalue::Len(r), span);
+        let message = "OverflowError: length does not fit in an int";
+        self.fail_if(Rvalue::Cmp(CmpOp::Lt, n, Operand::Int(0)), span, message);
+        n
+    }
+
     /// The type of slot `k` of sequence type `ty`.
     pub(super) fn slot_ty(&self, ty: Ty, k: usize, span: Span) -> Result<Ty> {
         let slot = match ty {
@@ -52,6 +61,16 @@ impl FnBuilder<'_, '_> {
             _ => None,
         };
         slot.ok_or_else(|| internal(span, "a sequence slot of no type"))
+    }
+
+    /// The item type of a string, list or range `ty`, as indexing reads.
+    fn item_ty(&self, ty: Ty, span: Span) -> Result<Ty> {
+        match ty {
+            Ty::Str => Ok(Ty::Str),
+            Ty::Range => Ok(Ty::Int),
+            Ty::List(_) => self.slot_ty(ty, 0, span),
+            _ => Err(unsupported(span, "indexing this type")),
+        }
     }
 
     /// `v`, which must have type `want`: inference gives every slot its
@@ -68,7 +87,7 @@ impl FnBuilder<'_, '_> {
         Ok(v)
     }
 
-    /// `value[index]` on a string, list or tuple.
+    /// `value[index]` on a string, list, tuple or range.
     pub(super) fn subscript(&mut self, value: &Expr, index: &Expr, span: Span) -> Result<Operand> {
         let s = self.expr(value)?;
         let ty = self.ty(s);
@@ -77,11 +96,7 @@ impl FnBuilder<'_, '_> {
             return self.field(s, k, span);
         }
         let i = self.expr(index)?;
-        let item = match ty {
-            Ty::Str => Ty::Str,
-            Ty::List(_) => self.slot_ty(ty, 0, span)?,
-            _ => return Err(unsupported(span, "indexing this type")),
-        };
+        let item = self.item_ty(ty, span)?;
         if self.ty(i) != Ty::Int {
             return Err(unsupported(span, "an index that is not an int"));
         }
@@ -195,18 +210,15 @@ impl FnBuilder<'_, '_> {
         }
     }
 
-    /// `a, b = s` for a tuple `s` of as many fields, or a list or string
-    /// of as many items (checked at run time): all items are read before
-    /// any target is bound.
+    /// `a, b = s` for a tuple `s` of as many fields, or a list, string
+    /// or range of as many items (checked at run time): all items are
+    /// read before any target is bound.
     fn unpack(&mut self, targets: &[Target], s: Operand, span: Span) -> Result<()> {
         let ty = self.ty(s);
         let mut items = Vec::new();
-        if let Ty::List(_) | Ty::Str = ty {
+        if let Ty::List(_) | Ty::Str | Ty::Range = ty {
             self.check_unpack_len(s, targets.len(), span);
-            let elem = match ty {
-                Ty::Str => Ty::Str,
-                _ => self.slot_ty(ty, 0, span)?,
-            };
+            let elem = self.item_ty(ty, span)?;
             for k in 0..targets.len() {
                 let i = Operand::Int(i64::try_from(k).unwrap_or(i64::MAX));
                 items.push(self.temp(elem, Rvalue::Index(s, i), span));
@@ -216,7 +228,7 @@ impl FnBuilder<'_, '_> {
             if n != Some(targets.len()) {
                 return Err(unsupported(
                     span,
-                    "unpacking anything but a tuple of as many fields, a list or a string",
+                    "unpacking anything but a tuple of as many fields, a list, a string or a range",
                 ));
             }
             for k in 0..targets.len() {
@@ -229,16 +241,23 @@ impl FnBuilder<'_, '_> {
             .try_for_each(|(target, v)| self.bind(target, v))
     }
 
-    /// Fails as Python does unless list or string `s` has exactly `want`
-    /// items.
+    /// Fails as Python does unless list, string or range `s` has exactly
+    /// `want` items.
     /// The shortfall is in the message, so each possible length below
-    /// `want` gets its own check.
+    /// `want` gets its own check. A range too long for an int has length
+    /// -1 here: too many.
     fn check_unpack_len(&mut self, s: Operand, want: usize, span: Span) {
         let n = self.temp(Ty::Int, Rvalue::Len(s), span);
         let want_i = i64::try_from(want).unwrap_or(i64::MAX);
-        let more = Rvalue::Cmp(CmpOp::Gt, n, Operand::Int(want_i));
         let message = format!("ValueError: too many values to unpack (expected {want})");
-        self.fail_if(more, span, &message);
+        self.fail_if(
+            Rvalue::Cmp(CmpOp::Gt, n, Operand::Int(want_i)),
+            span,
+            &message,
+        );
+        if self.ty(s) == Ty::Range {
+            self.fail_if(Rvalue::Cmp(CmpOp::Lt, n, Operand::Int(0)), span, &message);
+        }
         for got in 0..want {
             let got_i = i64::try_from(got).unwrap_or(i64::MAX);
             let short = Rvalue::Cmp(CmpOp::Eq, n, Operand::Int(got_i));

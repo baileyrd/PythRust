@@ -1,0 +1,5 @@
+# expect-exit: 1
+# Indexing a range past either end is a runtime IndexError.
+r = range(1, 10, 4)
+print(r[-3], r[2])
+print(r[3])

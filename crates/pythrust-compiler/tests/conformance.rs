@@ -271,6 +271,8 @@ const NATIVE: &[&str] = &[
     "print_shadow_end_type",
     "print_shadow_keyword",
     "print_shadow_valid",
+    "range_index_error",
+    "range_values",
     "recursion_limit",
     "shadow_builtin_late",
     "short_circuit",

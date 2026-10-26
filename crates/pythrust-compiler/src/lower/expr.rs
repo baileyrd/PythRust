@@ -211,7 +211,7 @@ impl<'a> FnBuilder<'_, 'a> {
     }
 
     /// `l in r` and `l not in r`: a substring of a string, or an element
-    /// of a list.
+    /// of a list or range.
     fn contains(&mut self, op: ast::CmpOp, l: Operand, r: Operand, span: Span) -> Result<Operand> {
         let needle = match (self.ty(l), self.ty(r)) {
             (Ty::Str, Ty::Str) => l,
@@ -227,7 +227,13 @@ impl<'a> FnBuilder<'_, 'a> {
                 }
                 needle
             }
-            _ => return Err(unsupported(span, "`in` on anything but strings and lists")),
+            (Ty::Int | Ty::Bool | Ty::Float, Ty::Range) => l,
+            _ => {
+                return Err(unsupported(
+                    span,
+                    "`in` on anything but strings, lists and ranges",
+                ))
+            }
         };
         let found = Rvalue::Contains { hay: r, needle };
         let found = self.temp(Ty::Bool, found, span);
@@ -276,7 +282,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
-            Ty::Str | Ty::List(_) | Ty::Tuple(_) => {
+            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Range => {
                 let n = self.temp(Ty::Int, Rvalue::Len(v), span);
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, n, Operand::Int(0)), span)
             }
@@ -419,6 +425,11 @@ impl<'a> FnBuilder<'_, 'a> {
         }
         match name {
             "len" | "str" | "int" | "float" | "bool" => self.unary_builtin(name, &ops, span),
+            "range" => {
+                let (start, stop, step) = self.range_bounds(args, &ops, span)?;
+                let items = vec![start, stop, step];
+                Ok(self.temp(Ty::Range, Rvalue::NewSeq(items), span))
+            }
             other => Err(unsupported(span, &format!("`{other}`"))),
         }
     }
@@ -479,6 +490,7 @@ impl<'a> FnBuilder<'_, 'a> {
             ("str", Ty::Str) | ("int", Ty::Int) | ("float", Ty::Float) => return Ok(arg),
             ("float", Ty::Int | Ty::Bool) => return Ok(self.as_float(arg, span)),
             ("bool", _) => return Ok(self.truthy(arg, span)),
+            ("len", Ty::Range) => return Ok(self.range_len(arg, span)),
             ("len", Ty::Str | Ty::List(_) | Ty::Tuple(_)) => (Ty::Int, Rvalue::Len(arg)),
             ("str", _) => (Ty::Str, Rvalue::ToStr(arg)),
             ("int", Ty::Float) => (Ty::Int, Rvalue::FloatToInt(arg)),
@@ -504,6 +516,7 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::List(_) => "list",
         Ty::Tuple(_) => "tuple",
         Ty::Opt(_) => "optional",
+        Ty::Range => "range",
     }
 }
 

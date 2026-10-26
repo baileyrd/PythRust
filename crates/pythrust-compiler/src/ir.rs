@@ -40,12 +40,19 @@ pub enum Ty {
     /// otherwise a reference to the value, or for an `Int`, `Float` or
     /// `Bool` to a one-field tuple boxing it.
     Opt(TypeId),
+    /// An immutable, reference-counted `range`: a runtime sequence of
+    /// three ints, `start`, `stop` and a nonzero `step` ([`Rvalue::Field`]
+    /// reads them), whose elements are the ints they produce.
+    Range,
 }
 
 impl Ty {
     /// Whether values of this type are reference-counted pointers.
     pub fn is_rc(self) -> bool {
-        matches!(self, Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_))
+        matches!(
+            self,
+            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range
+        )
     }
 }
 
@@ -179,7 +186,8 @@ pub enum Rvalue {
     /// `s[i]` on a `Str` (a one-char `Str`) or a list (an element).
     /// Fails when `i` is out of range.
     Index(Operand, Operand),
-    /// `len(s)` of a `Str` (in chars), list or tuple: an `Int`.
+    /// `len(s)` of a `Str` (in chars), list, tuple or range: an `Int`.
+    /// For a range whose length does not fit in one, -1.
     Len(Operand),
     /// `needle in hay`: a substring of a `Str`, or an element of a list.
     /// Gives a `Bool`.
