@@ -43,6 +43,8 @@ pub enum TokenKind {
     False,
     None,
     Temper,
+    /// `is`, only as `is None` / `is not None`.
+    Is,
 
     // Arithmetic operators.
     Plus,
@@ -80,6 +82,8 @@ pub enum TokenKind {
     Colon,
     Dot,
     Arrow,
+    /// `|`, only in `T | None` annotations.
+    Pipe,
 
     // Layout.
     Newline,

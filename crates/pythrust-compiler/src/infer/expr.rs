@@ -4,7 +4,7 @@ use crate::ast::{Arg, CmpOp, Expr, ExprKind, Ident, LogicalOp, TypeExpr, UnaryOp
 use crate::diag::Result;
 use crate::span::Span;
 
-use super::solve::{Binary, Need};
+use super::solve::{Access, Binary, Need};
 use super::ty::{FuncType, Type};
 use super::{builtins, error, Checker, Func};
 
@@ -54,7 +54,10 @@ impl Checker {
                 Ok(b)
             }
             ExprKind::Call { func, args } => self.call(func, args, e.span),
-            ExprKind::Subscript { value, index } => self.subscript(value, index, false),
+            ExprKind::Subscript { value, index } => {
+                let out = self.subst.fresh();
+                self.subscript(value, index, Access::Read, out)
+            }
             ExprKind::Attr { attr, .. } => {
                 let msg = format!("methods can only be called: `.{}(...)`", attr.name);
                 Err(error(attr.span, msg))
@@ -62,15 +65,38 @@ impl Checker {
         }
     }
 
+    /// The type `e` is already known to have, without inferring it: a
+    /// variable, or an element of one (`xss[0]`). Gives assignment
+    /// targets their expected type.
+    pub(super) fn known_type(&self, e: &Expr) -> Option<Type> {
+        match &e.kind {
+            ExprKind::Name(name) => self.lookup(name),
+            ExprKind::Subscript { value, .. } => self.element_of(value),
+            _ => None,
+        }
+    }
+
+    /// The element type of `container` when it is a known list.
+    pub(super) fn element_of(&self, container: &Expr) -> Option<Type> {
+        match self.subst.resolve(&self.known_type(container)?) {
+            Type::List(elem) => Some(*elem),
+            _ => None,
+        }
+    }
+
+    /// The type of variable `name` here, if it has one.
+    pub(super) fn lookup(&self, name: &str) -> Option<Type> {
+        self.frame
+            .narrowed
+            .get(name)
+            .or_else(|| self.frame.locals.get(name))
+            .or_else(|| self.globals.get(name))
+            .cloned()
+    }
+
     /// The type of variable `name`, recorded at `span`.
     pub(super) fn variable(&mut self, name: &str, span: Span) -> Result<Type> {
-        let found = self
-            .frame
-            .locals
-            .get(name)
-            .or_else(|| self.globals.get(name))
-            .cloned();
-        if let Some(t) = found {
+        if let Some(t) = self.lookup(name) {
             self.nodes.insert(span, t.clone());
             return Ok(t);
         }
@@ -118,18 +144,25 @@ impl Checker {
 
     /// Each operand is inferred once; each adjacent pair is checked.
     fn compare(&mut self, left: &Expr, rest: &[(CmpOp, Expr)]) -> Result<Type> {
-        let mut prev = (self.expr(left)?, left.span);
+        let mut prev = (self.expr(left)?, left);
         for (op, next) in rest {
             let t = self.expr(next)?;
-            self.comparison(*op, &prev.0, &t, prev.1.merge(next.span));
-            prev = (t, next.span);
+            let span = prev.1.span.merge(next.span);
+            if matches!(op, CmpOp::Is | CmpOp::IsNot) {
+                is_none_operand(prev.1, next, span)?;
+            } else {
+                self.comparison(*op, &prev.0, &t, span);
+            }
+            prev = (t, next);
         }
         Ok(Type::Bool)
     }
 
+    /// `==`, `<`, `in` and their kin. `is` is checked syntactically.
     fn comparison(&mut self, op: CmpOp, left: &Type, right: &Type, span: Span) {
         let (left, right) = (left.clone(), right.clone());
         let need = match op {
+            CmpOp::Is | CmpOp::IsNot => return,
             CmpOp::Eq | CmpOp::NotEq => Need::Equal { left, right },
             CmpOp::Lt | CmpOp::LtEq | CmpOp::Gt | CmpOp::GtEq => Need::Order { left, right },
             CmpOp::In | CmpOp::NotIn => {
@@ -145,16 +178,22 @@ impl Checker {
         self.need(need, span);
     }
 
-    /// `value[index]`. `store` when it is being assigned to.
-    pub(super) fn subscript(&mut self, value: &Expr, index: &Expr, store: bool) -> Result<Type> {
+    /// `value[index]` used as `access`; `out` is the element read, or
+    /// the value written. Returns `out`.
+    pub(super) fn subscript(
+        &mut self,
+        value: &Expr,
+        index: &Expr,
+        access: Access,
+        out: Type,
+    ) -> Result<Type> {
         let (v, i) = (self.expr(value)?, self.expr(index)?);
-        let out = self.subst.fresh();
         let need = Need::Index {
             value: v,
             index: i,
             literal: int_literal(index),
             out: out.clone(),
-            store,
+            access,
         };
         self.need(need, index.span);
         Ok(out)
@@ -208,8 +247,8 @@ impl Checker {
                 return Err(error(arg.span, msg));
             }
             bound[slot] = true;
-            let t = self.expr(&arg.value)?;
             let param = &sig.params[slot];
+            let t = self.checked(&arg.value, &param.ty)?;
             let what = format!("argument `{}` of `{name}`", param.name);
             self.expect(arg.value.span, &param.ty, &t, &what)?;
         }
@@ -247,14 +286,58 @@ impl Checker {
                 "`append` takes no keyword arguments".to_string(),
             ));
         }
-        let item = self.expr(&arg.value)?;
-        let list = Type::List(Box::new(item));
+        let elem = self.subst.fresh();
+        let list = Type::List(Box::new(elem.clone()));
         self.expect(value.span, &list, &receiver, "`append` needs a list")?;
+        let item = self.checked(&arg.value, &elem)?;
+        let what = "appended value does not match the list";
+        self.expect(arg.value.span, &elem, &item, what)?;
         Ok(Type::None)
     }
 
-    /// The type an annotation spells.
+    /// Infers `e` against a known `expected` type, so list and tuple
+    /// literals take their element types from it: with
+    /// `xs: list[int | None] = [None, 1]` the elements need not agree.
+    /// Under `T | None` a literal is checked against `T`, and keeps that
+    /// type (it is not `None`).
+    pub(super) fn checked(&mut self, e: &Expr, expected: &Type) -> Result<Type> {
+        let items = match &e.kind {
+            ExprKind::List(items) | ExprKind::Tuple(items) => items,
+            _ => return self.expr(e),
+        };
+        let slots: Vec<Type> = match (&e.kind, self.subst.resolve(expected)) {
+            (_, Type::Optional(inner)) => return self.checked(e, &inner),
+            (ExprKind::List(_), Type::List(elem)) => vec![*elem; items.len()],
+            (ExprKind::Tuple(_), Type::Tuple(elems)) if elems.len() == items.len() => elems,
+            _ => return self.expr(e),
+        };
+        let mut found = Vec::new();
+        for (x, slot) in items.iter().zip(&slots) {
+            let t = self.checked(x, slot)?;
+            self.expect(x.span, slot, &t, "element does not match the annotation")?;
+            found.push(t);
+        }
+        let t = match &e.kind {
+            ExprKind::List(_) => expected.clone(),
+            _ => Type::Tuple(found),
+        };
+        self.nodes.insert(e.span, t.clone());
+        Ok(t)
+    }
+
+    /// The type an annotation spells, with its `| None` suffix.
     pub(super) fn annotation(&mut self, t: &TypeExpr) -> Result<Type> {
+        let atom = self.annotation_atom(t)?;
+        if !t.optional {
+            return Ok(atom);
+        }
+        Ok(match atom {
+            Type::None | Type::Optional(_) => atom,
+            other => Type::Optional(Box::new(other)),
+        })
+    }
+
+    fn annotation_atom(&mut self, t: &TypeExpr) -> Result<Type> {
         let args = t
             .args
             .iter()
@@ -320,6 +403,15 @@ fn keyword_slot(name: &str, sig: &FuncType, kw: &Ident) -> Result<usize> {
             Err(error(kw.span, msg))
         }
     }
+}
+
+/// Phase 2 allows `is` only with a `None` literal on one side.
+fn is_none_operand(left: &Expr, right: &Expr, span: Span) -> Result<()> {
+    if matches!(left.kind, ExprKind::None) || matches!(right.kind, ExprKind::None) {
+        return Ok(());
+    }
+    let msg = "`is` compares only with None in phase 2; use `==` for values";
+    Err(error(span, msg.to_string()))
 }
 
 /// An index usable for a tuple: `2` or `-1`.
