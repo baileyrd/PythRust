@@ -62,10 +62,11 @@ for_stmt    = 'for' target_list 'in' expr ':' block ['else' ':' block] ;
 ## Types (annotation syntax)
 
 ```ebnf
-type        = (NAME | 'None') ['[' type (',' type)* ']'] ;
+type        = type_atom ['|' 'None'] ;                  # `None | None` is rejected (checked after parsing)
+type_atom   = (NAME | 'None') ['[' type (',' type)* ']'] ;
 ```
 
-Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`, `None`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. `A | B` unions and `T | None` are a later addition.
+Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`, `None`, `int | None`, `list[str | None]`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. General `A | B` unions are a later addition.
 
 ## Expressions
 
@@ -155,7 +156,7 @@ A compile error (lexical, syntax, or type) is reported before anything runs: `py
 
 ## Deliberate omissions (phase 2)
 
-Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators, chained assignment (`a = b = 1`), bare declarations (`x: int` with no value), `tuple[int, ...]`, `A | B` unions. Each is additive: existing phase-2 programs keep their meaning.
+Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators, chained assignment (`a = b = 1`), bare declarations (`x: int` with no value), `tuple[int, ...]`, `A | B` unions beyond `T | None`. Each is additive: existing phase-2 programs keep their meaning.
 
 ## Decided
 
