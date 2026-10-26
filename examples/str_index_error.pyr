@@ -1,0 +1,5 @@
+# expect-exit: 1
+word = "héllo"
+print(word[-5], word[4])
+print(word[5])
+print("unreachable")

@@ -42,10 +42,15 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         }
     }
     let main = cx.reserve();
-    let mut b = FnBuilder::new(&mut cx, Subst::new(), scope::assigned(&module.body));
+    let mut b = FnBuilder::new(
+        &mut cx,
+        Subst::new(),
+        scope::assigned(&module.body),
+        Ty::None,
+    );
     b.defined = Some(HashSet::new());
     b.block(&module.body)?;
-    let func = b.finish("<module>", Vec::new(), Ty::None);
+    let func = b.finish("<module>", Vec::new());
     cx.funcs[main.0] = Some(func);
     while let Some(job) = cx.queue.pop() {
         let func = cx.instance_body(&job)?;
@@ -115,7 +120,7 @@ impl<'a> Cx<'a> {
         let f = job.def;
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
-        let mut b = FnBuilder::new(self, job.subst.clone(), scope);
+        let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret);
         let mut params = Vec::new();
         for (p, ty) in f.params.iter().zip(&job.args) {
             let id = b.new_local(*ty);
@@ -129,7 +134,7 @@ impl<'a> Cx<'a> {
             params.push(id);
         }
         b.block(&f.body)?;
-        Ok(b.finish(&f.name.name, params, job.ret))
+        Ok(b.finish(&f.name.name, params))
     }
 }
 
@@ -157,7 +162,10 @@ fn reach<'a>(defs: &HashMap<&'a str, &'a FuncDef>, name: &'a str) -> BTreeSet<&'
 fn bind(t: &Type, ty: Ty, subst: &mut Subst) -> bool {
     match (t, ty) {
         (Type::Var(v), _) => *subst.entry(*v).or_insert(ty) == ty,
-        (Type::Int, Ty::Int) | (Type::Bool, Ty::Bool) | (Type::None, Ty::None) => true,
+        (Type::Int, Ty::Int)
+        | (Type::Bool, Ty::Bool)
+        | (Type::None, Ty::None)
+        | (Type::Str, Ty::Str) => true,
         _ => false,
     }
 }
@@ -173,6 +181,9 @@ struct Pending {
 struct Loop {
     next: BlockId,
     exit: BlockId,
+    /// How many statement pools were open outside the body: a jump out
+    /// of the body releases the ones above.
+    pools: usize,
 }
 
 /// Builds one function's IR.
@@ -193,10 +204,18 @@ struct FnBuilder<'c, 'a> {
     blocks: Vec<Pending>,
     cur: BlockId,
     loops: Vec<Loop>,
+    ret: Ty,
+    /// Where `return` leaves its value, created by the first `return`.
+    ret_slot: Option<LocalId>,
+    /// Where every `return` goes: it releases the function's strings.
+    exit: BlockId,
+    /// Per statement (innermost last), the `Str` temporaries it owns,
+    /// released when it ends.
+    pools: Vec<Vec<LocalId>>,
 }
 
 impl<'c, 'a> FnBuilder<'c, 'a> {
-    fn new(cx: &'c mut Cx<'a>, subst: Subst, scope: BTreeSet<String>) -> Self {
+    fn new(cx: &'c mut Cx<'a>, subst: Subst, scope: BTreeSet<String>, ret: Ty) -> Self {
         let mut b = FnBuilder {
             cx,
             subst,
@@ -209,19 +228,35 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             blocks: Vec::new(),
             cur: BlockId(0),
             loops: Vec::new(),
+            ret,
+            ret_slot: None,
+            exit: BlockId(1),
+            pools: vec![Vec::new()],
         };
         b.cur = b.new_block();
+        b.exit = b.new_block();
         b
     }
 
     /// Closes the current block (falling off the end returns `None`) and
-    /// any unreachable ones, and assembles the function.
-    fn finish(mut self, name: &str, params: Vec<LocalId>, ret: Ty) -> Func {
-        let end = match ret {
-            Ty::None => Term::Return(Operand::None),
+    /// any unreachable ones, fills in the exit block, and assembles the
+    /// function.
+    fn finish(mut self, name: &str, params: Vec<LocalId>) -> Func {
+        let end = match self.ret {
+            Ty::None => Term::Goto(self.exit),
             _ => Term::Unreachable,
         };
         self.terminate(end);
+        let ret = self.ret;
+        let value = match self.ret_slot {
+            Some(slot) if ret != Ty::None => Operand::Local(slot),
+            _ => Operand::None,
+        };
+        let strs = (0..self.locals.len()).map(LocalId);
+        let owned = strs.filter(|l| self.locals[l.0] == Ty::Str && Some(*l) != self.ret_slot);
+        let exit = &mut self.blocks[self.exit.0];
+        exit.insts = owned.map(Inst::Release).collect();
+        exit.term = Some(Term::Return(value));
         let blocks = self.blocks.into_iter().map(|p| Block {
             insts: p.insts,
             term: p.term.unwrap_or(Term::Unreachable),
@@ -276,11 +311,67 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
         self.emit(Inst::Assign { dest, value, span });
     }
 
-    /// A fresh temporary holding `value`.
+    /// A fresh temporary holding `value`. A `Str` one owns its value,
+    /// so `value` must make a new reference, and the statement releases
+    /// it.
     fn temp(&mut self, ty: Ty, value: Rvalue, span: Span) -> Operand {
-        let dest = self.new_local(ty);
+        let dest = self.pooled(ty);
         self.assign(dest, value, span);
         Operand::Local(dest)
+    }
+
+    /// A fresh local, owned by the current statement if a `Str`.
+    fn pooled(&mut self, ty: Ty) -> LocalId {
+        let dest = self.new_local(ty);
+        if ty == Ty::Str {
+            if let Some(pool) = self.pools.last_mut() {
+                pool.push(dest);
+            }
+        }
+        dest
+    }
+
+    /// Runs `f` as one statement: the `Str` temporaries it creates are
+    /// released where it ends.
+    fn pooled_stmt<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.pools.push(Vec::new());
+        let out = f(self);
+        let pool = self.pools.pop().unwrap_or_default();
+        pool.into_iter().for_each(|t| self.emit(Inst::Release(t)));
+        out
+    }
+
+    /// Whether `op` is a temporary whose reference may be moved out.
+    fn is_temp(&self, op: Operand) -> bool {
+        let Operand::Local(l) = op else {
+            return false;
+        };
+        self.pools.iter().any(|p| p.contains(&l))
+    }
+
+    /// A temporary owning a reference to `op`: `op` itself if it is one.
+    fn own(&mut self, op: Operand, span: Span) -> Operand {
+        if self.ty(op) != Ty::Str || self.is_temp(op) {
+            return op;
+        }
+        let t = self.temp(Ty::Str, Rvalue::Use(op), span);
+        if let Operand::Local(l) = t {
+            self.emit(Inst::Retain(l));
+        }
+        t
+    }
+
+    /// `dest = v`, where `dest` holds no reference: moves `v`'s
+    /// reference if `v` is a temporary, else adds one.
+    fn move_into(&mut self, dest: LocalId, v: Operand, span: Span) {
+        self.assign(dest, Rvalue::Use(v), span);
+        if self.ty(v) != Ty::Str {
+            return;
+        }
+        match v {
+            Operand::Local(l) if self.is_temp(v) => self.emit(Inst::Forget(l)),
+            _ => self.emit(Inst::Retain(dest)),
+        }
     }
 
     fn ty(&self, op: Operand) -> Ty {
@@ -302,6 +393,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             Type::Int => Ok(Ty::Int),
             Type::Bool => Ok(Ty::Bool),
             Type::None => Ok(Ty::None),
+            Type::Str => Ok(Ty::Str),
             Type::Var(v) => self
                 .subst
                 .get(v)

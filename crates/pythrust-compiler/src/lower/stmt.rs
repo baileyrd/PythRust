@@ -4,14 +4,24 @@ use crate::ast::{
     Arg, BinOp, Block, Branch, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::Result;
-use crate::ir::{BlockId, CmpOp, IntOp, Operand, Rvalue, Term, Ty};
+use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 use super::{unsupported, FnBuilder, Loop};
 
+/// A `for` loop's parts other than what it iterates.
+struct Looped<'s> {
+    name: &'s str,
+    target: Span,
+    body: &'s Block,
+    orelse: &'s Block,
+}
+
 impl FnBuilder<'_, '_> {
     pub(super) fn block(&mut self, block: &Block) -> Result<()> {
-        block.iter().try_for_each(|s| self.stmt(s))
+        block
+            .iter()
+            .try_for_each(|s| self.pooled_stmt(|b| b.stmt(s)))
     }
 
     fn stmt(&mut self, s: &Stmt) -> Result<()> {
@@ -25,14 +35,7 @@ impl FnBuilder<'_, '_> {
             StmtKind::AugAssign { target, op, value } => {
                 self.aug_assign(target, *op, value, s.span)
             }
-            StmtKind::Return(value) => {
-                let v = match value {
-                    Some(e) => self.expr(e)?,
-                    None => Operand::None,
-                };
-                self.jump_away(Term::Return(v));
-                Ok(())
-            }
+            StmtKind::Return(value) => self.return_stmt(value.as_ref(), s.span),
             StmtKind::Break => self.loop_jump(s.span, |l| l.exit),
             StmtKind::Continue => self.loop_jump(s.span, |l| l.next),
             StmtKind::Pass => Ok(()),
@@ -72,7 +75,11 @@ impl FnBuilder<'_, '_> {
         let mut ops = Vec::new();
         for v in values {
             let op = self.expr(v)?;
-            ops.push(self.temp(self.ty(op), Rvalue::Use(op), v.span));
+            let snapshot = match self.ty(op) {
+                Ty::Str => self.own(op, v.span),
+                ty => self.temp(ty, Rvalue::Use(op), v.span),
+            };
+            ops.push(snapshot);
         }
         for (t, op) in targets.iter().zip(ops) {
             let TargetKind::Name(name) = &t.kind else {
@@ -89,8 +96,40 @@ impl FnBuilder<'_, '_> {
         };
         let l = self.read(name, target.span)?;
         let r = self.expr(value)?;
-        let v = self.int_op(op, l, r, span)?;
+        let v = self.arith(op, l, r, span)?;
         self.write(name, v, target.span)
+    }
+
+    /// Leaves the value in the return slot and goes to the exit block,
+    /// which releases the function's strings.
+    fn return_stmt(&mut self, value: Option<&Expr>, span: Span) -> Result<()> {
+        let v = match value {
+            Some(e) => self.expr(e)?,
+            None => Operand::None,
+        };
+        if self.ty(v) != self.ret {
+            return Err(unsupported(
+                span,
+                "returning a value of another type than inferred",
+            ));
+        }
+        let ret = self.ret;
+        let slot = *self.ret_slot.get_or_insert_with(|| {
+            self.locals.push(ret);
+            LocalId(self.locals.len() - 1)
+        });
+        self.move_into(slot, v, span);
+        self.jump_away(Term::Goto(self.exit));
+        Ok(())
+    }
+
+    /// A loop or branch condition, as a `Bool`. Its strings are released
+    /// before the branch.
+    fn cond(&mut self, test: &Expr) -> Result<Operand> {
+        self.pooled_stmt(|b| {
+            let t = b.expr(test)?;
+            Ok(b.truthy(t, test.span))
+        })
     }
 
     /// A top-level `def` (inference rejects nested ones). Its body is
@@ -113,6 +152,10 @@ impl FnBuilder<'_, '_> {
                 "`break` or `continue` outside a loop",
             ));
         };
+        // The statements being left end here: release their temporaries.
+        // From a nested loop's `else`, that includes its snapshot.
+        let left: Vec<LocalId> = self.pools[l.pools..].concat();
+        left.into_iter().for_each(|t| self.emit(Inst::Release(t)));
         self.jump_away(Term::Goto(to(l)));
         Ok(())
     }
@@ -121,8 +164,7 @@ impl FnBuilder<'_, '_> {
         let end = self.new_block();
         for b in std::iter::once(branch).chain(elifs) {
             let (then, next) = (self.new_block(), self.new_block());
-            let t = self.expr(&b.test)?;
-            let cond = self.truthy(t, b.test.span);
+            let cond = self.cond(&b.test)?;
             self.terminate(Term::Branch {
                 cond,
                 then,
@@ -148,8 +190,7 @@ impl FnBuilder<'_, '_> {
         );
         self.terminate(Term::Goto(head));
         self.switch_to(head);
-        let t = self.expr(&branch.test)?;
-        let cond = self.truthy(t, branch.test.span);
+        let cond = self.cond(&branch.test)?;
         self.terminate(Term::Branch {
             cond,
             then: body,
@@ -167,7 +208,8 @@ impl FnBuilder<'_, '_> {
     /// Lowers `body` with `break` to `exit` and `continue` to `next`, then
     /// jumps to `next`.
     fn loop_body(&mut self, body: &Block, next: BlockId, exit: BlockId) -> Result<()> {
-        self.loops.push(Loop { next, exit });
+        let pools = self.pools.len();
+        self.loops.push(Loop { next, exit, pools });
         let lowered = self.block(body);
         self.loops.pop();
         lowered?;
@@ -175,9 +217,6 @@ impl FnBuilder<'_, '_> {
         Ok(())
     }
 
-    /// `for x in range(...)`. The bounds are evaluated once. The counter
-    /// steps until it passes `stop`; a step that would overflow `i64` has
-    /// passed it too, since `stop` fits in one.
     fn for_stmt(
         &mut self,
         target: &Target,
@@ -188,15 +227,70 @@ impl FnBuilder<'_, '_> {
         let TargetKind::Name(name) = &target.kind else {
             return Err(unsupported(target.span, "unpacking in a `for` target"));
         };
-        let Some(args) = self.range_args(iter) else {
+        let looped = Looped {
+            name,
+            target: target.span,
+            body,
+            orelse,
+        };
+        if let Some(args) = self.range_args(iter) {
+            return self.for_range(&looped, args, iter.span);
+        }
+        let s = self.expr(iter)?;
+        if self.ty(s) != Ty::Str {
             return Err(unsupported(
                 iter.span,
-                "`for` over anything but `range(...)`",
+                "`for` over anything but `range(...)` or a string",
             ));
-        };
-        let (start, stop, step) = self.range_bounds(args, iter.span)?;
+        }
+        self.for_str(&looped, s, iter.span)
+    }
+
+    /// `for x in s`: over a snapshot of `s`, one char at a time.
+    fn for_str(&mut self, l: &Looped, s: Operand, span: Span) -> Result<()> {
+        let s = self.own(s, span);
+        let n = self.temp(Ty::Int, Rvalue::Len(s), span);
         let counter = self.new_local(Ty::Int);
-        self.assign(counter, Rvalue::Use(start), iter.span);
+        self.assign(counter, Rvalue::Use(Operand::Int(0)), span);
+        let cur = Operand::Local(counter);
+        let (head, enter, latch) = (self.new_block(), self.new_block(), self.new_block());
+        let (other, end) = (self.new_block(), self.new_block());
+        self.terminate(Term::Goto(head));
+        self.switch_to(head);
+        let going = self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Lt, cur, n), span);
+        self.terminate(Term::Branch {
+            cond: going,
+            then: enter,
+            orelse: other,
+        });
+        self.switch_to(enter);
+        let ch = self.temp(Ty::Str, Rvalue::Index(s, cur), span);
+        self.declare(l.name, Ty::Str, l.target);
+        self.write(l.name, ch, l.target)?;
+        self.loop_body(l.body, latch, end)?;
+        self.switch_to(latch);
+        let next = Rvalue::Int(IntOp::Add, cur, Operand::Int(1));
+        self.assign(counter, next, span);
+        self.terminate(Term::Goto(head));
+        self.finish_loop(l.orelse, other, end)
+    }
+
+    /// Lowers the `else` of a loop in `other`, then continues at `end`.
+    fn finish_loop(&mut self, orelse: &Block, other: BlockId, end: BlockId) -> Result<()> {
+        self.switch_to(other);
+        self.block(orelse)?;
+        self.terminate(Term::Goto(end));
+        self.switch_to(end);
+        Ok(())
+    }
+
+    /// `for x in range(...)`. The bounds are evaluated once. The counter
+    /// steps until it passes `stop`; a step that would overflow `i64` has
+    /// passed it too, since `stop` fits in one.
+    fn for_range(&mut self, l: &Looped, args: &[Arg], iter_span: Span) -> Result<()> {
+        let (start, stop, step) = self.range_bounds(args, iter_span)?;
+        let counter = self.new_local(Ty::Int);
+        self.assign(counter, Rvalue::Use(start), iter_span);
         let cur = Operand::Local(counter);
         let (head, enter, latch, step_on) = (
             self.new_block(),
@@ -207,30 +301,26 @@ impl FnBuilder<'_, '_> {
         let (other, end) = (self.new_block(), self.new_block());
         self.terminate(Term::Goto(head));
         self.switch_to(head);
-        let going = self.range_going(cur, stop, step, iter.span);
+        let going = self.range_going(cur, stop, step, iter_span);
         self.terminate(Term::Branch {
             cond: going,
             then: enter,
             orelse: other,
         });
         self.switch_to(enter);
-        self.write(name, cur, target.span)?;
-        self.loop_body(body, latch, end)?;
+        self.write(l.name, cur, l.target)?;
+        self.loop_body(l.body, latch, end)?;
         self.switch_to(latch);
-        let over = self.temp(Ty::Bool, Rvalue::AddOverflows(cur, step), iter.span);
+        let over = self.temp(Ty::Bool, Rvalue::AddOverflows(cur, step), iter_span);
         self.terminate(Term::Branch {
             cond: over,
             then: other,
             orelse: step_on,
         });
         self.switch_to(step_on);
-        self.assign(counter, Rvalue::Int(IntOp::Add, cur, step), iter.span);
+        self.assign(counter, Rvalue::Int(IntOp::Add, cur, step), iter_span);
         self.terminate(Term::Goto(head));
-        self.switch_to(other);
-        self.block(orelse)?;
-        self.terminate(Term::Goto(end));
-        self.switch_to(end);
-        Ok(())
+        self.finish_loop(l.orelse, other, end)
     }
 
     /// The arguments of `iter` if it is a call to the builtin `range`.

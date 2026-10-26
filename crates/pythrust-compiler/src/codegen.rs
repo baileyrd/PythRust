@@ -55,16 +55,42 @@ enum Rt {
     WriteBool,
     WriteNone,
     WriteByte,
+    WriteStr,
     Fail,
+    StrNew,
+    StrInc,
+    StrDec,
+    StrConcat,
+    StrRepeat,
+    StrIndex,
+    StrLen,
+    StrCmp,
+    StrContains,
+    StrFromInt,
+    StrFromBool,
+    StrNone,
 }
 
 impl Rt {
-    const ALL: [Rt; 5] = [
+    const ALL: [Rt; 18] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
         Rt::WriteByte,
+        Rt::WriteStr,
         Rt::Fail,
+        Rt::StrNew,
+        Rt::StrInc,
+        Rt::StrDec,
+        Rt::StrConcat,
+        Rt::StrRepeat,
+        Rt::StrIndex,
+        Rt::StrLen,
+        Rt::StrCmp,
+        Rt::StrContains,
+        Rt::StrFromInt,
+        Rt::StrFromBool,
+        Rt::StrNone,
     ];
 
     fn symbol(self) -> &'static str {
@@ -73,16 +99,40 @@ impl Rt {
             Rt::WriteBool => "pt_write_bool",
             Rt::WriteNone => "pt_write_none",
             Rt::WriteByte => "pt_write_byte",
+            Rt::WriteStr => "pt_write_str",
             Rt::Fail => "pt_fail",
+            Rt::StrNew => "pt_str_new",
+            Rt::StrInc => "pt_str_inc",
+            Rt::StrDec => "pt_str_dec",
+            Rt::StrConcat => "pt_str_concat",
+            Rt::StrRepeat => "pt_str_repeat",
+            Rt::StrIndex => "pt_str_index",
+            Rt::StrLen => "pt_str_len",
+            Rt::StrCmp => "pt_str_cmp",
+            Rt::StrContains => "pt_str_contains",
+            Rt::StrFromInt => "pt_str_from_int",
+            Rt::StrFromBool => "pt_str_from_bool",
+            Rt::StrNone => "pt_str_none",
         }
     }
 
-    fn params(self, ptr: types::Type) -> Vec<types::Type> {
+    /// Parameter and result types; `ptr` is a pointer, such as a string.
+    fn sig(self, ptr: types::Type) -> (Vec<types::Type>, Option<types::Type>) {
+        use types::{I64, I8};
         match self {
-            Rt::WriteInt => vec![types::I64],
-            Rt::WriteBool | Rt::WriteByte => vec![types::I8],
-            Rt::WriteNone => vec![],
-            Rt::Fail => vec![ptr, ptr],
+            Rt::WriteInt => (vec![I64], None),
+            Rt::WriteBool | Rt::WriteByte => (vec![I8], None),
+            Rt::WriteNone => (vec![], None),
+            Rt::WriteStr | Rt::StrInc | Rt::StrDec => (vec![ptr], None),
+            Rt::Fail => (vec![ptr, ptr], None),
+            Rt::StrNew | Rt::StrConcat => (vec![ptr, ptr], Some(ptr)),
+            Rt::StrRepeat | Rt::StrIndex => (vec![ptr, I64], Some(ptr)),
+            Rt::StrLen => (vec![ptr], Some(I64)),
+            Rt::StrCmp => (vec![ptr, ptr], Some(I64)),
+            Rt::StrContains => (vec![ptr, ptr], Some(I8)),
+            Rt::StrFromInt => (vec![I64], Some(ptr)),
+            Rt::StrFromBool => (vec![I8], Some(ptr)),
+            Rt::StrNone => (vec![], Some(ptr)),
         }
     }
 }
@@ -93,8 +143,9 @@ struct Codegen<'r> {
     rt: HashMap<&'static str, ClifFunc>,
     /// The `i64` count of active Pythrust calls.
     depth: DataId,
-    /// Rendered failure messages, deduplicated.
-    messages: HashMap<String, (DataId, usize)>,
+    /// Read-only byte strings (failure messages, literals), deduplicated.
+    bytes: HashMap<String, (DataId, usize)>,
+    ptr: types::Type,
 }
 
 impl<'r> Codegen<'r> {
@@ -118,18 +169,20 @@ impl<'r> Codegen<'r> {
         let mut zero = DataDescription::new();
         zero.define_zeroinit(8);
         module.define_data(depth, &zero).map_err(module_err)?;
+        let ptr = module.target_config().pointer_type();
         let mut cg = Codegen {
             module,
             render,
             depth,
             rt: HashMap::new(),
-            messages: HashMap::new(),
+            bytes: HashMap::new(),
+            ptr,
         };
-        let ptr = cg.module.target_config().pointer_type();
         for rt in Rt::ALL {
             let mut sig = cg.module.make_signature();
-            sig.params
-                .extend(rt.params(ptr).into_iter().map(AbiParam::new));
+            let (params, ret) = rt.sig(ptr);
+            sig.params.extend(params.into_iter().map(AbiParam::new));
+            sig.returns.extend(ret.map(AbiParam::new));
             let id = cg
                 .module
                 .declare_function(rt.symbol(), Linkage::Import, &sig)
@@ -159,18 +212,25 @@ impl<'r> Codegen<'r> {
     fn signature(&self, f: &Func) -> Signature {
         let mut sig = self.module.make_signature();
         for p in &f.params {
-            sig.params.push(AbiParam::new(clif_ty(f.locals[p.0])));
+            sig.params.push(AbiParam::new(self.clif_ty(f.locals[p.0])));
         }
         if f.ret != Ty::None {
-            sig.returns.push(AbiParam::new(clif_ty(f.ret)));
+            sig.returns.push(AbiParam::new(self.clif_ty(f.ret)));
         }
         sig
     }
 
-    /// The data object holding `diag`'s rendered text, and its length.
-    fn message(&mut self, diag: &Diagnostic) -> Result<(DataId, usize)> {
-        let text = (self.render)(diag);
-        if let Some(found) = self.messages.get(&text) {
+    fn clif_ty(&self, ty: Ty) -> types::Type {
+        match ty {
+            Ty::Int => types::I64,
+            Ty::Bool | Ty::None => types::I8,
+            Ty::Str => self.ptr,
+        }
+    }
+
+    /// The data object holding `text`, and its length.
+    fn bytes(&mut self, text: String) -> Result<(DataId, usize)> {
+        if let Some(found) = self.bytes.get(&text) {
             return Ok(*found);
         }
         let id = self
@@ -181,7 +241,7 @@ impl<'r> Codegen<'r> {
         data.define(text.clone().into_bytes().into_boxed_slice());
         self.module.define_data(id, &data).map_err(module_err)?;
         let entry = (id, text.len());
-        self.messages.insert(text, entry);
+        self.bytes.insert(text, entry);
         Ok(entry)
     }
 
@@ -224,7 +284,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         let vars: Vec<_> = func
             .locals
             .iter()
-            .map(|t| b.declare_var(clif_ty(*t)))
+            .map(|t| b.declare_var(cg.clif_ty(*t)))
             .collect();
         let entry = *blocks
             .first()
@@ -235,7 +295,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         for (i, var) in vars.iter().enumerate() {
             let v = match func.params.iter().position(|p| p.0 == i) {
                 Some(k) => params[k],
-                None => b.ins().iconst(clif_ty(func.locals[i]), 0),
+                None => b.ins().iconst(cg.clif_ty(func.locals[i]), 0),
             };
             b.def_var(*var, v);
         }
@@ -277,8 +337,23 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 }
                 self.write_byte(b'\n');
             }
+            Inst::Retain(l) => {
+                let s = self.b.use_var(self.vars[l.0]);
+                self.call_rt(Rt::StrInc, &[s]);
+            }
+            Inst::Release(l) => {
+                let s = self.b.use_var(self.vars[l.0]);
+                self.call_rt(Rt::StrDec, &[s]);
+                self.forget(*l);
+            }
+            Inst::Forget(l) => self.forget(*l),
         }
         Ok(())
+    }
+
+    fn forget(&mut self, l: LocalId) {
+        let null = self.b.ins().iconst(self.cg.ptr, 0);
+        self.b.def_var(self.vars[l.0], null);
     }
 
     fn write(&mut self, op: Operand) {
@@ -286,6 +361,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::Int => (Rt::WriteInt, vec![self.operand(op)]),
             Ty::Bool => (Rt::WriteBool, vec![self.operand(op)]),
             Ty::None => (Rt::WriteNone, vec![]),
+            Ty::Str => (Rt::WriteStr, vec![self.operand(op)]),
         };
         self.call_rt(rt, &args);
     }
@@ -295,10 +371,32 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         self.call_rt(Rt::WriteByte, &[v]);
     }
 
-    fn call_rt(&mut self, rt: Rt, args: &[Value]) {
+    /// Calls `rt`, giving its result if it has one.
+    fn call_rt(&mut self, rt: Rt, args: &[Value]) -> Option<Value> {
         let id = self.cg.rt[rt.symbol()];
         let fref = self.cg.module.declare_func_in_func(id, self.b.func);
-        self.b.ins().call(fref, args);
+        let call = self.b.ins().call(fref, args);
+        self.b.inst_results(call).first().copied()
+    }
+
+    /// Calls `rt`, which has a result.
+    fn call_rt_value(&mut self, rt: Rt, args: &[Value]) -> Result<Value> {
+        self.call_rt(rt, args)
+            .ok_or_else(|| backend(format!("`{}` has no result", rt.symbol())))
+    }
+
+    /// Calls `rt` on `ops`, which has a result.
+    fn rt_on(&mut self, rt: Rt, ops: &[Operand]) -> Result<Value> {
+        let args: Vec<Value> = ops.iter().map(|op| self.operand(*op)).collect();
+        self.call_rt_value(rt, &args)
+    }
+
+    /// Calls `rt` on `ops`, failing at `span` if it gives null.
+    fn rt_nonnull(&mut self, rt: Rt, ops: &[Operand], span: Span, message: &str) -> Result<Value> {
+        let s = self.rt_on(rt, ops)?;
+        let null = self.b.ins().icmp_imm_s(IntCC::Equal, s, 0);
+        self.fail_if(null, span, message)?;
+        Ok(s)
     }
 
     fn operand(&mut self, op: Operand) -> Value {
@@ -323,6 +421,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 self.fail_if(min, span, OVERFLOW)?;
                 Ok(self.b.ins().ineg(a))
             }
+            Rvalue::Cmp(op, a, b) if self.func.ty(*a) == Ty::Str => {
+                let order = self.rt_on(Rt::StrCmp, &[*a, *b])?;
+                Ok(self.b.ins().icmp_imm_s(int_cc(*op), order, 0))
+            }
             Rvalue::Cmp(op, a, b) => {
                 let (a, b) = (self.operand(*a), self.operand(*b));
                 Ok(self.b.ins().icmp(int_cc(*op), a, b))
@@ -332,7 +434,28 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 Ok(self.b.ins().sadd_overflow(a, b).1)
             }
             Rvalue::Call(callee, args) => self.call(*callee, args, dest, span),
+            Rvalue::StrLit(text) => self.str_lit(text),
+            Rvalue::Concat(a, b) => self.rt_on(Rt::StrConcat, &[*a, *b]),
+            Rvalue::Repeat(s, n) => self.rt_nonnull(Rt::StrRepeat, &[*s, *n], span, TOO_LARGE),
+            Rvalue::Index(s, i) => self.rt_nonnull(Rt::StrIndex, &[*s, *i], span, STR_INDEX),
+            Rvalue::Len(s) => self.rt_on(Rt::StrLen, &[*s]),
+            Rvalue::Contains { hay, needle } => self.rt_on(Rt::StrContains, &[*hay, *needle]),
+            Rvalue::ToStr(op) => match self.func.ty(*op) {
+                Ty::Int => self.rt_on(Rt::StrFromInt, &[*op]),
+                Ty::Bool => self.rt_on(Rt::StrFromBool, &[*op]),
+                Ty::None => self.rt_on(Rt::StrNone, &[]),
+                Ty::Str => Err(backend("`str` of a string".to_string())),
+            },
         }
+    }
+
+    /// A new string holding `text`, copied from read-only data.
+    fn str_lit(&mut self, text: &str) -> Result<Value> {
+        let (data, len) = self.cg.bytes(text.to_string())?;
+        let gv = self.cg.module.declare_data_in_func(data, self.b.func);
+        let addr = self.b.ins().symbol_value(self.cg.ptr, gv);
+        let len = self.b.ins().iconst(self.cg.ptr, len as i64);
+        self.call_rt_value(Rt::StrNew, &[addr, len])
     }
 
     /// Calls `callee`, failing at `span` if `MAX_DEPTH` calls are active.
@@ -368,7 +491,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         self.b.ins().store(flags, depth, addr, 0);
         match self.b.inst_results(call).first() {
             Some(v) => Ok(*v),
-            None => Ok(self.b.ins().iconst(clif_ty(self.func.locals[dest.0]), 0)),
+            None => Ok(self
+                .b
+                .ins()
+                .iconst(self.cg.clif_ty(self.func.locals[dest.0]), 0)),
         }
     }
 
@@ -437,8 +563,8 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     }
 
     fn fail(&mut self, diag: &Diagnostic) -> Result<()> {
-        let (data, len) = self.cg.message(diag)?;
-        let ptr = self.cg.module.target_config().pointer_type();
+        let (data, len) = self.cg.bytes((self.cg.render)(diag))?;
+        let ptr = self.cg.ptr;
         let gv = self.cg.module.declare_data_in_func(data, self.b.func);
         let addr = self.b.ins().symbol_value(ptr, gv);
         let len = self.b.ins().iconst(ptr, len as i64);
@@ -483,13 +609,8 @@ const RECURSION: &str = "RecursionError: maximum recursion depth exceeded";
 /// Active calls allowed, as in the interpreter.
 const MAX_DEPTH: i64 = crate::interp::MAX_DEPTH as i64;
 const ZERO_DIV: &str = "ZeroDivisionError: integer division or modulo by zero";
-
-fn clif_ty(ty: Ty) -> types::Type {
-    match ty {
-        Ty::Int => types::I64,
-        Ty::Bool | Ty::None => types::I8,
-    }
-}
+const TOO_LARGE: &str = "MemoryError: repeated sequence is too large";
+const STR_INDEX: &str = "IndexError: string index out of range";
 
 fn int_cc(op: CmpOp) -> IntCC {
     match op {
@@ -558,5 +679,14 @@ mod tests {
         // `+`, `//` and `-` can overflow; `//` can also divide by zero.
         assert_eq!(count(OVERFLOW), 3);
         assert_eq!(count(ZERO_DIV), 1);
+    }
+
+    #[test]
+    fn string_failures_are_rendered_and_literals_stored_once() {
+        let (object, rendered) = compile("s = 'needle'\nprint(s[5], s * 3, 'needle')\n");
+        let count = |m: &str| rendered.iter().filter(|r| r.as_str() == m).count();
+        assert_eq!((count(STR_INDEX), count(TOO_LARGE)), (1, 1));
+        let lit = b"needle";
+        assert_eq!(object.windows(lit.len()).filter(|w| w == lit).count(), 1);
     }
 }

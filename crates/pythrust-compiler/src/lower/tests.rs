@@ -1,5 +1,5 @@
 use crate::diag::{DiagKind, Diagnostic};
-use crate::ir::{Program, Term, Ty};
+use crate::ir::{Func, Inst, LocalId, Program, Term, Ty};
 use crate::{infer, lexer, parser};
 
 fn lower_src(src: &str) -> crate::diag::Result<Program> {
@@ -73,9 +73,6 @@ fn code_after_return_and_break_lowers() {
 
 #[test]
 fn unsupported_values_name_the_construct() {
-    let (d, text) = rejected("print('hi')\n");
-    assert!(d.message.contains("strings"), "{}", d.message);
-    assert_eq!(text, "'hi'");
     let (d, _) = rejected("x = 1.5\n");
     assert!(d.message.contains("floats"));
     let (d, _) = rejected("xs = [1]\n");
@@ -150,4 +147,90 @@ fn bool_int_mixing_is_rejected_not_miscompiled() {
     assert!(d.message.contains("non-int"), "{}", d.message);
     let (d, _) = rejected("print(True == 1)\n");
     assert!(d.message.contains("different types"), "{}", d.message);
+}
+
+/// The function named `name`.
+fn func<'p>(p: &'p Program, name: &str) -> &'p Func {
+    match p.funcs.iter().find(|f| f.name == name) {
+        Some(f) => f,
+        None => panic!("no function `{name}`"),
+    }
+}
+
+fn count(f: &Func, pred: impl Fn(&Inst) -> bool) -> usize {
+    f.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| pred(i))
+        .count()
+}
+
+#[test]
+fn returns_release_every_string_but_the_result() {
+    let p = lowered("def f(s):\n    t = s + 'x'\n    return t\nprint(f('a'))\n");
+    let f = func(&p, "f");
+    let exits: Vec<&crate::ir::Block> = f
+        .blocks
+        .iter()
+        .filter(|b| matches!(b.term, Term::Return(_)))
+        .collect();
+    assert_eq!(exits.len(), 1, "every return goes through one exit");
+    let strs = f.locals.iter().filter(|t| **t == Ty::Str).count();
+    let released = exits[0]
+        .insts
+        .iter()
+        .filter(|i| matches!(i, Inst::Release(_)))
+        .count();
+    assert_eq!(released, strs - 1, "all but the result slot");
+    // The parameter is the caller's to give: the call moves an owned copy.
+    let main = &p.funcs[p.main.0];
+    assert!(count(main, |i| matches!(i, Inst::Forget(_))) >= 1);
+}
+
+#[test]
+fn writes_own_the_new_string_before_releasing_the_old() {
+    let p = lowered("x = 'a'\nx = x\nprint(x)\n");
+    let main = &p.funcs[p.main.0];
+    let insts: Vec<&Inst> = main.blocks.iter().flat_map(|b| &b.insts).collect();
+    // `x` is local 1 (after the literal's temporary); the copy is local 3.
+    let (x, copy) = (LocalId(1), LocalId(3));
+    let moved = insts.windows(4).any(|w| match w {
+        [Inst::Retain(t), Inst::Release(r), Inst::Assign { dest, value, .. }, Inst::Forget(f)] => {
+            (*t, *r, *dest, *f) == (copy, x, x, copy)
+                && *value == crate::ir::Rvalue::Use(crate::ir::Operand::Local(copy))
+        }
+        _ => false,
+    });
+    assert!(moved, "retain the copy, release `x`, move: {insts:?}");
+}
+
+#[test]
+fn string_operations_outside_the_subset_are_rejected() {
+    let (d, _) = rejected("print('a' * True)\n");
+    assert!(d.message.contains("non-int"), "{}", d.message);
+    let (d, _) = rejected("for x in [1]:\n    print(x)\n");
+    assert!(d.message.contains("lists"), "{}", d.message);
+}
+
+#[test]
+fn leaving_a_loop_releases_the_statements_it_leaves() {
+    // `continue` from the inner `for`'s `else` leaves that `for`
+    // statement, whose snapshot is the literal's temporary: released on
+    // that edge, at the statement's end, and at exit.
+    let src = "for i in range(2):\n    for ch in 'ab':\n        pass\n    else:\n        continue\n    print(i)\n";
+    let p = lowered(src);
+    let main = &p.funcs[p.main.0];
+    let insts = || main.blocks.iter().flat_map(|b| &b.insts);
+    let lit = insts().find_map(|i| match i {
+        Inst::Assign {
+            dest,
+            value: crate::ir::Rvalue::StrLit(_),
+            ..
+        } => Some(*dest),
+        _ => None,
+    });
+    let Some(lit) = lit else {
+        panic!("no literal");
+    };
+    assert_eq!(insts().filter(|i| **i == Inst::Release(lit)).count(), 3);
 }

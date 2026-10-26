@@ -5,8 +5,15 @@
 //! can fail at run time are explicit: a failing `Rvalue` carries the span
 //! of its `Inst`, and a `Term::Fail` ends the program with a diagnostic.
 //!
-//! This first cut covers ints, bools and `None`; strings, lists, tuples
-//! and floats follow, with refcounting, as `docs/native.md` lays out.
+//! Covers ints, bools, `None` and strings; lists, tuples and floats
+//! follow, as `docs/native.md` lays out.
+//!
+//! Locals other than parameters start zeroed. A `Str` local is a
+//! reference-counted pointer and, at every instruction boundary, either
+//! null or the owner of one reference: lowering makes ownership explicit
+//! with `Retain`, `Release` and `Forget`, so the backend never decides
+//! it. Operands of `Str` type are borrowed; calls take their `Str`
+//! arguments owned and return an owned result.
 
 use crate::diag::Diagnostic;
 use crate::span::Span;
@@ -17,6 +24,8 @@ pub enum Ty {
     Int,
     Bool,
     None,
+    /// Immutable, reference-counted text.
+    Str,
 }
 
 /// Index into [`Program::funcs`].
@@ -68,6 +77,12 @@ pub enum Inst {
     },
     /// `print(args...)` with the default separator and line end.
     Print(Vec<Operand>),
+    /// Adds a reference to the `Str` in the local (null: nothing).
+    Retain(LocalId),
+    /// Drops the local's reference (null: nothing) and nulls the local.
+    Release(LocalId),
+    /// Nulls the local without dropping: its reference was moved.
+    Forget(LocalId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -85,11 +100,29 @@ pub enum Rvalue {
     Int(IntOp, Operand, Operand),
     /// Checked negation: `-i64::MIN` fails.
     Neg(Operand),
-    /// Both operands have the same type, `Int` or `Bool`. Gives a `Bool`.
+    /// Both operands have the same type: `Int`, `Bool` or `Str` (code
+    /// point order). Gives a `Bool`.
     Cmp(CmpOp, Operand, Operand),
     /// Whether int `a + b` overflows. Never fails; ends `range` loops.
     AddOverflows(Operand, Operand),
     Call(FuncId, Vec<Operand>),
+    /// A new `Str` holding the literal.
+    StrLit(String),
+    /// `a + b` on two `Str`s.
+    Concat(Operand, Operand),
+    /// `s * n`, a `Str` and an `Int`. Fails when too large to allocate.
+    Repeat(Operand, Operand),
+    /// `s[i]`, a one-char `Str`. Fails when `i` is out of range.
+    Index(Operand, Operand),
+    /// `len(s)` in chars: an `Int`.
+    Len(Operand),
+    /// `needle in hay` on two `Str`s: a `Bool`.
+    Contains {
+        hay: Operand,
+        needle: Operand,
+    },
+    /// `str(x)` for an `Int`, `Bool` or `None`.
+    ToStr(Operand),
 }
 
 /// Int arithmetic with Python semantics: `//` and `%` floor.

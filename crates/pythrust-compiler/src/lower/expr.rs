@@ -22,10 +22,10 @@ impl FnBuilder<'_, '_> {
             ExprKind::IfExp { test, body, orelse } => self.if_exp(test, body, orelse, e.span),
             ExprKind::Call { func, args } => self.call(func, args, e.span),
             ExprKind::Float(_) => Err(unsupported(e.span, "floats")),
-            ExprKind::Str(_) => Err(unsupported(e.span, "strings")),
+            ExprKind::Str(text) => Ok(self.temp(Ty::Str, Rvalue::StrLit(text.clone()), e.span)),
             ExprKind::Tuple(_) => Err(unsupported(e.span, "tuples")),
             ExprKind::List(_) => Err(unsupported(e.span, "lists")),
-            ExprKind::Subscript { .. } => Err(unsupported(e.span, "indexing")),
+            ExprKind::Subscript { value, index } => self.subscript(value, index, e.span),
             ExprKind::Attr { .. } => Err(unsupported(e.span, "methods")),
         }
     }
@@ -50,19 +50,26 @@ impl FnBuilder<'_, '_> {
     fn binary(&mut self, op: BinOp, left: &Expr, right: &Expr, span: Span) -> Result<Operand> {
         let l = self.expr(left)?;
         let r = self.expr(right)?;
-        self.int_op(op, l, r, span)
+        self.arith(op, l, r, span)
     }
 
-    /// `l op r` on two ints; shared with augmented assignment.
-    pub(super) fn int_op(
+    /// `l op r`; shared with augmented assignment.
+    pub(super) fn arith(
         &mut self,
         op: BinOp,
         l: Operand,
         r: Operand,
         span: Span,
     ) -> Result<Operand> {
-        if (self.ty(l), self.ty(r)) != (Ty::Int, Ty::Int) {
-            return Err(unsupported(span, "arithmetic on a non-int"));
+        let str_op = match (op, self.ty(l), self.ty(r)) {
+            (_, Ty::Int, Ty::Int) => None,
+            (BinOp::Add, Ty::Str, Ty::Str) => Some(Rvalue::Concat(l, r)),
+            (BinOp::Mul, Ty::Str, Ty::Int) => Some(Rvalue::Repeat(l, r)),
+            (BinOp::Mul, Ty::Int, Ty::Str) => Some(Rvalue::Repeat(r, l)),
+            _ => return Err(unsupported(span, "arithmetic on a non-int")),
+        };
+        if let Some(value) = str_op {
+            return Ok(self.temp(Ty::Str, value, span));
         }
         let op = match op {
             BinOp::Add => IntOp::Add,
@@ -87,19 +94,21 @@ impl FnBuilder<'_, '_> {
                 "`and` / `or` on operands of different types",
             ));
         }
-        let dest = self.new_local(ty);
-        self.assign(dest, Rvalue::Use(l), span);
+        let dest = self.pooled(ty);
         let test = self.truthy(l, span);
-        let (rhs, end) = (self.new_block(), self.new_block());
+        let (short, rhs, end) = (self.new_block(), self.new_block(), self.new_block());
         let (then, orelse) = match op {
-            LogicalOp::And => (rhs, end),
-            LogicalOp::Or => (end, rhs),
+            LogicalOp::And => (rhs, short),
+            LogicalOp::Or => (short, rhs),
         };
         self.terminate(Term::Branch {
             cond: test,
             then,
             orelse,
         });
+        self.switch_to(short);
+        self.move_into(dest, l, span);
+        self.terminate(Term::Goto(end));
         self.switch_to(rhs);
         let r = self.expr(right)?;
         if self.ty(r) != ty {
@@ -108,7 +117,7 @@ impl FnBuilder<'_, '_> {
                 "`and` / `or` on operands of different types",
             ));
         }
-        self.assign(dest, Rvalue::Use(r), span);
+        self.move_into(dest, r, span);
         self.terminate(Term::Goto(end));
         self.switch_to(end);
         Ok(Operand::Local(dest))
@@ -149,7 +158,7 @@ impl FnBuilder<'_, '_> {
         let op = match op {
             ast::CmpOp::Is => return Ok(Operand::Bool(same)),
             ast::CmpOp::IsNot => return Ok(Operand::Bool(!same)),
-            ast::CmpOp::In | ast::CmpOp::NotIn => return Err(unsupported(span, "`in`")),
+            ast::CmpOp::In | ast::CmpOp::NotIn => return self.contains(op, l, r, span),
             ast::CmpOp::Eq => CmpOp::Eq,
             ast::CmpOp::NotEq => CmpOp::Ne,
             ast::CmpOp::Lt => CmpOp::Lt,
@@ -167,9 +176,36 @@ impl FnBuilder<'_, '_> {
         }
     }
 
+    /// `l in r` and `l not in r`, on strings.
+    fn contains(&mut self, op: ast::CmpOp, l: Operand, r: Operand, span: Span) -> Result<Operand> {
+        if (self.ty(l), self.ty(r)) != (Ty::Str, Ty::Str) {
+            return Err(unsupported(span, "`in` on anything but strings"));
+        }
+        let found = Rvalue::Contains { hay: r, needle: l };
+        let found = self.temp(Ty::Bool, found, span);
+        if op == ast::CmpOp::In {
+            return Ok(found);
+        }
+        let not = Rvalue::Cmp(CmpOp::Eq, found, Operand::Bool(false));
+        Ok(self.temp(Ty::Bool, not, span))
+    }
+
+    /// `s[i]` on a string.
+    fn subscript(&mut self, value: &Expr, index: &Expr, span: Span) -> Result<Operand> {
+        let s = self.expr(value)?;
+        let i = self.expr(index)?;
+        if (self.ty(s), self.ty(i)) != (Ty::Str, Ty::Int) {
+            return Err(unsupported(
+                span,
+                "indexing anything but a string by an int",
+            ));
+        }
+        Ok(self.temp(Ty::Str, Rvalue::Index(s, i), span))
+    }
+
     fn if_exp(&mut self, test: &Expr, body: &Expr, orelse: &Expr, span: Span) -> Result<Operand> {
         let ty = self.ty_at(span)?;
-        let dest = self.new_local(ty);
+        let dest = self.pooled(ty);
         let (then, other, end) = (self.new_block(), self.new_block(), self.new_block());
         let t = self.expr(test)?;
         let cond = self.truthy(t, span);
@@ -187,7 +223,7 @@ impl FnBuilder<'_, '_> {
                     "a conditional expression whose branches differ in type",
                 ));
             }
-            self.assign(dest, Rvalue::Use(v), span);
+            self.move_into(dest, v, span);
             self.terminate(Term::Goto(end));
         }
         self.switch_to(end);
@@ -200,6 +236,10 @@ impl FnBuilder<'_, '_> {
             Ty::Bool => v,
             Ty::Int => self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, Operand::Int(0)), span),
             Ty::None => Operand::Bool(false),
+            Ty::Str => {
+                let n = self.temp(Ty::Int, Rvalue::Len(v), span);
+                self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, n, Operand::Int(0)), span)
+            }
         }
     }
 
@@ -243,7 +283,15 @@ impl FnBuilder<'_, '_> {
         let tys = ops.iter().map(|op| self.ty(*op)).collect();
         let ret = self.ty_at(span)?;
         let id = self.cx.instance(def, tys, ret, span)?;
-        Ok(self.temp(ret, Rvalue::Call(id, ops), span))
+        // The callee takes its arguments' references.
+        let owned: Vec<Operand> = ops.into_iter().map(|op| self.own(op, span)).collect();
+        let result = self.temp(ret, Rvalue::Call(id, owned.clone()), span);
+        for op in owned {
+            if let (Operand::Local(l), Ty::Str) = (op, self.ty(op)) {
+                self.emit(Inst::Forget(l));
+            }
+        }
+        Ok(result)
     }
 
     /// Whether a call from here to top-level `name` finds it defined. In
@@ -276,7 +324,25 @@ impl FnBuilder<'_, '_> {
                 self.emit(Inst::Print(args));
                 Ok(Operand::None)
             }
+            "len" | "str" => self.unary_builtin(name, &args, span),
             other => Err(unsupported(span, &format!("`{other}`"))),
+        }
+    }
+
+    /// `len(s)` and `str(x)`, the one-argument builtins on strings.
+    fn unary_builtin(&mut self, name: &str, args: &[Operand], span: Span) -> Result<Operand> {
+        let [arg] = args else {
+            return Err(unsupported(
+                span,
+                &format!("`{name}` with other than one argument"),
+            ));
+        };
+        let arg = *arg;
+        match (name, self.ty(arg)) {
+            ("len", Ty::Str) => Ok(self.temp(Ty::Int, Rvalue::Len(arg), span)),
+            ("str", Ty::Str) => Ok(arg),
+            ("str", _) => Ok(self.temp(Ty::Str, Rvalue::ToStr(arg), span)),
+            _ => Err(unsupported(span, &format!("`{name}` on a non-string"))),
         }
     }
 }

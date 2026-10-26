@@ -1,0 +1,29 @@
+# Strings owned by a loop are freed on every way out of it.
+def first_upper(words):
+    for ch in words:
+        if ch == "|":
+            continue
+        if "A" <= ch and ch <= "Z":
+            return ch
+    return "-"
+
+
+for i in range(3):
+    for ch in str(i) + "ab":
+        pass
+    else:
+        continue
+    print("never")
+
+n = 0
+while n < 5:
+    n += 1
+    for ch in "x" + str(n):
+        if ch == "3":
+            break
+    else:
+        continue
+    break
+print(n)
+
+print(first_upper("ab|cD"), first_upper("none"))

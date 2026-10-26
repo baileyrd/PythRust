@@ -1,0 +1,4 @@
+# expect-exit: 1
+print(len("ab" * 3))
+print(len("ab" * 9223372036854775807))
+print("unreachable")

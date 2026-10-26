@@ -36,7 +36,8 @@ impl FnBuilder<'_, '_> {
         Ok(Operand::Local(var.local))
     }
 
-    /// Assigns `value` to `name` and marks it bound from here on. The
+    /// Assigns `value` to `name` and marks it bound from here on; a
+    /// string's old value is released. The
     /// value must have the variable's type: the IR is typed, and a
     /// mismatch (inference and lowering disagreeing) is refused here
     /// rather than miscompiled.
@@ -53,7 +54,14 @@ impl FnBuilder<'_, '_> {
             self.always_bound.insert(var.local);
         }
         self.block_bound.insert(var.local);
-        self.assign(var.local, Rvalue::Use(value), span);
+        if self.ty(value) != Ty::Str {
+            self.assign(var.local, Rvalue::Use(value), span);
+            return Ok(());
+        }
+        // Owned first: `value` may be this variable.
+        let owned = self.own(value, span);
+        self.emit(Inst::Release(var.local));
+        self.move_into(var.local, owned, span);
         Ok(())
     }
 
@@ -77,6 +85,19 @@ impl FnBuilder<'_, '_> {
             return Err(unsupported(span, &what));
         }
         let ty = self.ty_at(span)?;
+        Ok(self.new_var(name, ty, span))
+    }
+
+    /// Creates variable `name` of type `ty` unless it exists: for a loop
+    /// target whose type lowering knows better than generic inference.
+    pub(super) fn declare(&mut self, name: &str, ty: Ty, span: Span) {
+        if !self.names.contains_key(name) {
+            self.new_var(name, ty, span);
+        }
+    }
+
+    /// A new variable, its flag cleared in the entry block.
+    fn new_var(&mut self, name: &str, ty: Ty, span: Span) -> Var {
         let local = self.new_local(ty);
         let flag = self.new_local(Ty::Bool);
         let clear = Inst::Assign {
@@ -90,7 +111,7 @@ impl FnBuilder<'_, '_> {
             flag: Some(flag),
         };
         self.names.insert(name.to_string(), var);
-        Ok(var)
+        var
     }
 
     /// Fails with `message` at `span` when the `Bool` `test` holds.
