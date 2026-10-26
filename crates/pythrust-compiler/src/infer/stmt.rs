@@ -122,6 +122,9 @@ impl Checker {
         scope: &[Stmt],
         f: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<()> {
+        // Solve first: a name's `T | None` may still sit in a pending
+        // constraint (a `for` target's element type).
+        self.settle()?;
         let assigned = scope::assigned(scope);
         let saved = self.frame.narrowed.clone();
         for name in names.iter().filter(|n| !assigned.contains(*n)) {
