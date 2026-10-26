@@ -222,27 +222,69 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 
 /// Programs the native backend must compile; it grows with the subset.
 const NATIVE: &[&str] = &[
+    "call_before_def",
     "collatz",
     "fibonacci",
     "int_control",
     "overflow_min_floordiv",
+    "recursion_limit",
+    "unbound_augassign",
+    "unbound_local",
+    "unbound_loop_target",
 ];
 
 /// What the native backend says about a program outside its subset.
 const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";
 
-/// Builds the runtime library `pythrust build` links against. `cargo
-/// test` builds the compiler but not this static library.
+/// Builds the runtime library `pythrust build` links against, with the
+/// profile and target of the `pythrust` under test so it lands beside it.
+/// `cargo test` builds the compiler but not this static library.
 fn build_runtime() -> Res<()> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let args = runtime_build_args(&pythrust_bin()?, &|dir| dir.join("CACHEDIR.TAG").is_file())?;
     let status = Command::new(cargo)
-        .args(["build", "--quiet", "-p", "pythrust-rt"])
+        .args(&args)
         .status()
         .map_err(|e| format!("cannot run cargo: {e}"))?;
     status
         .success()
         .then_some(())
         .ok_or_else(|| format!("building pythrust-rt failed: {status}"))
+}
+
+/// Cargo arguments that build `pythrust-rt` into the directory of `exe`,
+/// laid out as `<target-dir>[/<triple>]/<profile-dir>/pythrust`. Cargo
+/// marks a target directory with `CACHEDIR.TAG`; `is_target_dir` checks it.
+fn runtime_build_args(exe: &Path, is_target_dir: &dyn Fn(&Path) -> bool) -> Res<Vec<String>> {
+    let parent = |p: &Path| {
+        p.parent()
+            .map(Path::to_path_buf)
+            .ok_or(format!("{} has no parent", p.display()))
+    };
+    let name = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or(format!("{} has no name", p.display()))
+    };
+    let profile_dir = parent(exe)?;
+    let profile = match name(&profile_dir)?.as_str() {
+        "debug" => "dev".to_string(),
+        other => other.to_string(),
+    };
+    let mut root = parent(&profile_dir)?;
+    let mut args: Vec<String> = ["build", "--quiet", "-p", "pythrust-rt", "--profile"]
+        .map(String::from)
+        .into();
+    args.push(profile);
+    if !is_target_dir(&root) {
+        args.extend(["--target".to_string(), name(&root)?]);
+        root = parent(&root)?;
+    }
+    args.extend([
+        "--target-dir".to_string(),
+        root.to_string_lossy().into_owned(),
+    ]);
+    Ok(args)
 }
 
 /// Builds a copy of `source` in `dir`: the executable, or `None` when
@@ -454,6 +496,25 @@ fn corpus_is_complete() -> Res<()> {
             && !path.with_extension("pythrust").exists();
         assert!(!orphan, "golden without a program: {}", path.display());
     }
+    Ok(())
+}
+
+#[test]
+fn runtime_follows_the_profile_and_target_under_test() -> Res<()> {
+    let root = |dir: &Path| dir.ends_with("target");
+    let tail = |args: Vec<String>| args[4..].join(" ");
+    let dev = runtime_build_args(Path::new("/w/target/debug/pythrust"), &root)?;
+    assert_eq!(tail(dev), "--profile dev --target-dir /w/target");
+    let release = runtime_build_args(Path::new("/w/target/release/pythrust"), &root)?;
+    assert_eq!(tail(release), "--profile release --target-dir /w/target");
+    let cross = runtime_build_args(
+        Path::new("/w/target/x86_64-unknown-linux-gnu/bench/pythrust"),
+        &root,
+    )?;
+    assert_eq!(
+        tail(cross),
+        "--profile bench --target x86_64-unknown-linux-gnu --target-dir /w/target"
+    );
     Ok(())
 }
 

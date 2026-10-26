@@ -9,11 +9,12 @@
 
 mod expr;
 mod stmt;
+mod vars;
 
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ast::{FuncDef, Module, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
@@ -42,6 +43,7 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
     }
     let main = cx.reserve();
     let mut b = FnBuilder::new(&mut cx, Subst::new(), scope::assigned(&module.body));
+    b.defined = Some(HashSet::new());
     b.block(&module.body)?;
     let func = b.finish("<module>", Vec::new(), Ty::None);
     cx.funcs[main.0] = Some(func);
@@ -117,12 +119,38 @@ impl<'a> Cx<'a> {
         let mut params = Vec::new();
         for (p, ty) in f.params.iter().zip(&job.args) {
             let id = b.new_local(*ty);
-            b.names.insert(p.name.name.clone(), id);
+            b.names.insert(
+                p.name.name.clone(),
+                vars::Var {
+                    local: id,
+                    flag: None,
+                },
+            );
             params.push(id);
         }
         b.block(&f.body)?;
         Ok(b.finish(&f.name.name, params, job.ret))
     }
+}
+
+/// Every top-level function `name` may call, directly or not, and itself.
+fn reach<'a>(defs: &HashMap<&'a str, &'a FuncDef>, name: &'a str) -> BTreeSet<&'a str> {
+    let mut seen = BTreeSet::new();
+    let mut todo = vec![name];
+    while let Some(n) = todo.pop() {
+        let Some(def) = defs.get(n) else {
+            continue;
+        };
+        if !seen.insert(def.name.name.as_str()) {
+            continue;
+        }
+        for r in scope::references(def) {
+            if let Some((k, _)) = defs.get_key_value(r.as_str()) {
+                todo.push(k);
+            }
+        }
+    }
+    seen
 }
 
 /// Binds the variables of `t` so that it becomes `ty`. False on a clash.
@@ -153,7 +181,14 @@ struct FnBuilder<'c, 'a> {
     subst: Subst,
     /// Names local to this function, as Python decides them.
     scope: BTreeSet<String>,
-    names: HashMap<String, LocalId>,
+    names: HashMap<String, vars::Var>,
+    /// Locals known to be bound wherever control is now: assigned in the
+    /// entry block, which runs before every other block.
+    always_bound: HashSet<LocalId>,
+    /// Locals assigned earlier in the current block.
+    block_bound: HashSet<LocalId>,
+    /// In the module's code: the functions whose `def` has run so far.
+    defined: Option<HashSet<String>>,
     locals: Vec<Ty>,
     blocks: Vec<Pending>,
     cur: BlockId,
@@ -167,6 +202,9 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             subst,
             scope,
             names: HashMap::new(),
+            always_bound: HashSet::new(),
+            block_bound: HashSet::new(),
+            defined: None,
             locals: Vec::new(),
             blocks: Vec::new(),
             cur: BlockId(0),
@@ -212,6 +250,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
 
     fn switch_to(&mut self, block: BlockId) {
         self.cur = block;
+        self.block_bound.clear();
     }
 
     /// Ends the current block. A block already ended (code after a
@@ -225,7 +264,8 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
     /// for `return`, `break` and `continue` mid-block.
     fn jump_away(&mut self, term: Term) {
         self.terminate(term);
-        self.cur = self.new_block();
+        let next = self.new_block();
+        self.switch_to(next);
     }
 
     fn emit(&mut self, inst: Inst) {
@@ -269,22 +309,6 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
                 .ok_or_else(|| unsupported(span, "a value whose type depends on generic code")),
             other => Err(unsupported(span, &format!("values of type `{other}`"))),
         }
-    }
-
-    /// The local for variable `name`, created on first use with the type
-    /// of the node at `span`.
-    fn var(&mut self, name: &str, span: Span) -> Result<LocalId> {
-        if let Some(id) = self.names.get(name) {
-            return Ok(*id);
-        }
-        if !self.scope.contains(name) {
-            let what = format!("reading `{name}`, a global, from a function");
-            return Err(unsupported(span, &what));
-        }
-        let ty = self.ty_at(span)?;
-        let id = self.new_local(ty);
-        self.names.insert(name.to_string(), id);
-        Ok(id)
     }
 }
 

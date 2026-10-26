@@ -109,7 +109,7 @@ pub(super) fn groups<'a>(funcs: &[&'a FuncDef]) -> Vec<Vec<&'a FuncDef>> {
 /// Names `f` reads that are not its own locals: candidates for calls to
 /// other top-level functions. Defaults run in module scope, so all of
 /// their names count.
-fn references(f: &FuncDef) -> BTreeSet<String> {
+pub(crate) fn references(f: &FuncDef) -> BTreeSet<String> {
     let mut locals = assigned(&f.body);
     locals.extend(f.params.iter().map(|p| p.name.name.clone()));
     let mut names = BTreeSet::new();

@@ -1,7 +1,9 @@
 //! Statements and control flow.
 
-use crate::ast::{Arg, BinOp, Block, Branch, Expr, ExprKind, Stmt, StmtKind, Target, TargetKind};
-use crate::diag::{DiagKind, Diagnostic, Result};
+use crate::ast::{
+    Arg, BinOp, Block, Branch, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind,
+};
+use crate::diag::Result;
 use crate::ir::{BlockId, CmpOp, IntOp, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
@@ -18,7 +20,7 @@ impl FnBuilder<'_, '_> {
             StmtKind::Assign { target, value } => self.assign_stmt(target, value),
             StmtKind::AnnAssign { target, value, .. } => {
                 let v = self.expr(value)?;
-                let dest = self.var(&target.name, target.span)?;
+                let dest = self.write(&target.name, target.span)?;
                 self.assign(dest, Rvalue::Use(v), s.span);
                 Ok(())
             }
@@ -35,9 +37,8 @@ impl FnBuilder<'_, '_> {
             }
             StmtKind::Break => self.loop_jump(s.span, |l| l.exit),
             StmtKind::Continue => self.loop_jump(s.span, |l| l.next),
-            // Top-level `def`s are lowered as instances; inference
-            // rejects nested ones.
-            StmtKind::Pass | StmtKind::FuncDef(_) => Ok(()),
+            StmtKind::Pass => Ok(()),
+            StmtKind::FuncDef(f) => self.def_stmt(f),
             StmtKind::If {
                 branch,
                 elifs,
@@ -58,7 +59,7 @@ impl FnBuilder<'_, '_> {
     fn assign_stmt(&mut self, target: &Target, value: &Expr) -> Result<()> {
         if let TargetKind::Name(name) = &target.kind {
             let v = self.expr(value)?;
-            let dest = self.var(name, target.span)?;
+            let dest = self.write(name, target.span)?;
             self.assign(dest, Rvalue::Use(v), target.span);
             return Ok(());
         }
@@ -81,7 +82,7 @@ impl FnBuilder<'_, '_> {
             let TargetKind::Name(name) = &t.kind else {
                 return Err(unsupported(t.span, "nested or indexed unpacking"));
             };
-            let dest = self.var(name, t.span)?;
+            let dest = self.write(name, t.span)?;
             self.assign(dest, Rvalue::Use(op), t.span);
         }
         Ok(())
@@ -91,10 +92,24 @@ impl FnBuilder<'_, '_> {
         let TargetKind::Name(name) = &target.kind else {
             return Err(unsupported(target.span, "augmented assignment to an index"));
         };
-        let dest = self.var(name, target.span)?;
+        let l = self.read(name, target.span)?;
         let r = self.expr(value)?;
-        let v = self.int_op(op, Operand::Local(dest), r, span)?;
+        let v = self.int_op(op, l, r, span)?;
+        let dest = self.write(name, target.span)?;
         self.assign(dest, Rvalue::Use(v), span);
+        Ok(())
+    }
+
+    /// A top-level `def` (inference rejects nested ones). Its body is
+    /// lowered per instance; here it only becomes callable. Defaults
+    /// would run now, which is not supported yet.
+    fn def_stmt(&mut self, f: &FuncDef) -> Result<()> {
+        if let Some(default) = f.params.iter().find_map(|p| p.default.as_ref()) {
+            return Err(unsupported(default.span, "default arguments"));
+        }
+        if let Some(defined) = &mut self.defined {
+            defined.insert(f.name.name.clone());
+        }
         Ok(())
     }
 
@@ -206,7 +221,7 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        let dest = self.var(name, target.span)?;
+        let dest = self.write(name, target.span)?;
         self.assign(dest, Rvalue::Use(cur), target.span);
         self.loop_body(body, latch, end)?;
         self.switch_to(latch);
@@ -292,23 +307,5 @@ impl FnBuilder<'_, '_> {
         }
         self.switch_to(end);
         Operand::Local(dest)
-    }
-
-    /// Fails with `message` at `span` when the `Bool` `test` holds.
-    fn fail_if(&mut self, test: Rvalue, span: Span, message: &str) {
-        let cond = self.temp(Ty::Bool, test, span);
-        let (fail, ok) = (self.new_block(), self.new_block());
-        self.terminate(Term::Branch {
-            cond,
-            then: fail,
-            orelse: ok,
-        });
-        self.switch_to(fail);
-        self.terminate(Term::Fail(Diagnostic {
-            span,
-            message: message.to_string(),
-            kind: DiagKind::Runtime,
-        }));
-        self.switch_to(ok);
     }
 }

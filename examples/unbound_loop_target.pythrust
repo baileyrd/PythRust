@@ -1,0 +1,5 @@
+# expect-exit: 1
+print(1)
+for i in range(0):
+    pass
+print(i)

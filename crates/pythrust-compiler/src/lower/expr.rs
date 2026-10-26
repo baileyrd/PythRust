@@ -5,6 +5,7 @@ use crate::diag::Result;
 use crate::ir::{CmpOp, Inst, IntOp, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
+use super::vars::runtime;
 use super::{unsupported, FnBuilder};
 
 impl FnBuilder<'_, '_> {
@@ -13,7 +14,7 @@ impl FnBuilder<'_, '_> {
             ExprKind::Int(n) => Ok(Operand::Int(*n)),
             ExprKind::Bool(b) => Ok(Operand::Bool(*b)),
             ExprKind::None => Ok(Operand::None),
-            ExprKind::Name(name) => Ok(Operand::Local(self.var(name, e.span)?)),
+            ExprKind::Name(name) => self.read(name, e.span),
             ExprKind::Unary { op, operand } => self.unary(*op, operand, e.span),
             ExprKind::Binary { op, left, right } => self.binary(*op, left, right, e.span),
             ExprKind::Logical { op, left, right } => self.logical(*op, left, right, e.span),
@@ -209,11 +210,16 @@ impl FnBuilder<'_, '_> {
         if args.iter().any(|a| a.name.is_some()) {
             return Err(unsupported(span, "keyword arguments"));
         }
+        let def = self.cx.defs.get(name.as_str()).copied();
+        if def.is_some() && !self.callable(name, func.span)? {
+            // Python looks the callee up before evaluating arguments.
+            return Ok(Operand::Local(self.new_local(self.ty_at(span)?)));
+        }
         let mut ops = Vec::new();
         for a in args {
             ops.push(self.expr(&a.value)?);
         }
-        let Some(def) = self.cx.defs.get(name.as_str()).copied() else {
+        let Some(def) = def else {
             return self.builtin(name, ops, span);
         };
         if def.params.len() != ops.len() {
@@ -223,6 +229,30 @@ impl FnBuilder<'_, '_> {
         let ret = self.ty_at(span)?;
         let id = self.cx.instance(def, tys, ret, span)?;
         Ok(self.temp(ret, Rvalue::Call(id, ops), span))
+    }
+
+    /// Whether a call from here to top-level `name` finds it defined. In
+    /// module code a call before its `def` raises `NameError`, emitted
+    /// here (false). A call that can reach a function whose `def` has not
+    /// run yet would fail midway, which is not supported. Function bodies
+    /// only run once a module-level call reached them, which checked.
+    fn callable(&mut self, name: &str, span: Span) -> Result<bool> {
+        let Some(defined) = &self.defined else {
+            return Ok(true);
+        };
+        if !defined.contains(name) {
+            let diag = runtime(span, &format!("NameError: name '{name}' is not defined"));
+            self.jump_away(Term::Fail(diag));
+            return Ok(false);
+        }
+        let reach = super::reach(&self.cx.defs, name);
+        match reach.into_iter().find(|f| !defined.contains(*f)) {
+            Some(late) => Err(unsupported(
+                span,
+                &format!("calling `{name}` while `{late}`, which it may call, is not yet defined,"),
+            )),
+            None => Ok(true),
+        }
     }
 
     fn builtin(&mut self, name: &str, args: Vec<Operand>, span: Span) -> Result<Operand> {

@@ -105,8 +105,31 @@ fn unsupported_scoping_and_calls_name_the_construct() {
     let (d, text) = rejected("N = 3\ndef f():\n    return N\nprint(f())\n");
     assert!(d.message.contains("global"), "{}", d.message);
     assert_eq!(text, "N");
-    let (d, _) = rejected("def f(x=1):\n    return x\nprint(f())\n");
+    let (d, text) = rejected("def f(x=1 // 0):\n    pass\nprint(2)\n");
     assert!(d.message.contains("default arguments"));
+    assert_eq!(text, "1 // 0");
+}
+
+#[test]
+fn calls_before_a_def_fail_or_are_rejected() {
+    let p = lowered("print(f())\ndef f():\n    return 7\n");
+    assert_eq!(fails(&p), 1, "a direct early call raises NameError");
+    let src = "def g():\n    return f()\nprint(g())\ndef f():\n    return 7\n";
+    let (d, text) = rejected(src);
+    assert!(d.message.contains("`f`"), "{}", d.message);
+    assert_eq!(text, "g");
+    assert_eq!(fails(&lowered("def f():\n    return 7\nprint(f())\n")), 0);
+}
+
+#[test]
+fn reads_check_boundness_unless_known() {
+    // Assigned in the entry block: never checked.
+    assert_eq!(
+        fails(&lowered("x = 1\nwhile x < 3:\n    x += 1\nprint(x)\n")),
+        0
+    );
+    // Maybe unbound after the branch: checked once.
+    assert_eq!(fails(&lowered("if True:\n    y = 1\nprint(y)\n")), 1);
 }
 
 #[test]

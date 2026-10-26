@@ -7,11 +7,17 @@
 //! calls `pt_fail` with its diagnostic, rendered at compile time and
 //! stored as read-only data. `None` has no machine representation: a
 //! function returning it returns nothing.
+//!
+//! Calls are counted in a module-private depth counter so recursion past
+//! the interpreter's limit is a `RecursionError`, as in `run`, rather
+//! than a native stack overflow.
 
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{types, AbiParam, InstBuilder, Signature, TrapCode, Value};
+use cranelift_codegen::ir::{
+    types, AbiParam, InstBuilder, MemFlagsData, Signature, TrapCode, Value,
+};
 use cranelift_codegen::{isa, settings, settings::Configurable, Context};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{
@@ -85,6 +91,8 @@ struct Codegen<'r> {
     module: ObjectModule,
     render: &'r dyn Fn(&Diagnostic) -> String,
     rt: HashMap<&'static str, ClifFunc>,
+    /// The `i64` count of active Pythrust calls.
+    depth: DataId,
     /// Rendered failure messages, deduplicated.
     messages: HashMap<String, (DataId, usize)>,
 }
@@ -103,9 +111,17 @@ impl<'r> Codegen<'r> {
             .map_err(|e| backend(e.to_string()))?;
         let builder =
             ObjectBuilder::new(isa, "pythrust", default_libcall_names()).map_err(module_err)?;
+        let mut module = ObjectModule::new(builder);
+        let depth = module
+            .declare_data("pythrust_depth", Linkage::Local, true, false)
+            .map_err(module_err)?;
+        let mut zero = DataDescription::new();
+        zero.define_zeroinit(8);
+        module.define_data(depth, &zero).map_err(module_err)?;
         let mut cg = Codegen {
-            module: ObjectModule::new(builder),
+            module,
             render,
+            depth,
             rt: HashMap::new(),
             messages: HashMap::new(),
         };
@@ -315,18 +331,41 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let (a, b) = (self.operand(*a), self.operand(*b));
                 Ok(self.b.ins().sadd_overflow(a, b).1)
             }
-            Rvalue::Call(callee, args) => self.call(*callee, args, dest),
+            Rvalue::Call(callee, args) => self.call(*callee, args, dest, span),
         }
     }
 
-    fn call(&mut self, callee: ir::FuncId, args: &[Operand], dest: LocalId) -> Result<Value> {
+    /// Calls `callee`, failing at `span` if `MAX_DEPTH` calls are active.
+    fn call(
+        &mut self,
+        callee: ir::FuncId,
+        args: &[Operand],
+        dest: LocalId,
+        span: Span,
+    ) -> Result<Value> {
         let id = *self
             .ids
             .get(callee.0)
             .ok_or_else(|| backend("call to an unknown function".to_string()))?;
         let fref = self.cg.module.declare_func_in_func(id, self.b.func);
         let args: Vec<Value> = args.iter().map(|op| self.operand(*op)).collect();
+        let ptr = self.cg.module.target_config().pointer_type();
+        let gv = self
+            .cg
+            .module
+            .declare_data_in_func(self.cg.depth, self.b.func);
+        let addr = self.b.ins().symbol_value(ptr, gv);
+        let flags = MemFlagsData::trusted();
+        let depth = self.b.ins().load(types::I64, flags, addr, 0);
+        let full = self
+            .b
+            .ins()
+            .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, depth, MAX_DEPTH);
+        self.fail_if(full, span, RECURSION)?;
+        let deeper = self.b.ins().iadd_imm_s(depth, 1);
+        self.b.ins().store(flags, deeper, addr, 0);
         let call = self.b.ins().call(fref, &args);
+        self.b.ins().store(flags, depth, addr, 0);
         match self.b.inst_results(call).first() {
             Some(v) => Ok(*v),
             None => Ok(self.b.ins().iconst(clif_ty(self.func.locals[dest.0]), 0)),
@@ -440,6 +479,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
 }
 
 const OVERFLOW: &str = "OverflowError: integer overflow";
+const RECURSION: &str = "RecursionError: maximum recursion depth exceeded";
+/// Active calls allowed, as in the interpreter.
+const MAX_DEPTH: i64 = crate::interp::MAX_DEPTH as i64;
 const ZERO_DIV: &str = "ZeroDivisionError: integer division or modulo by zero";
 
 fn clif_ty(ty: Ty) -> types::Type {

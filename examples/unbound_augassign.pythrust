@@ -1,0 +1,11 @@
+# expect-exit: 1
+def total(n):
+    while n > 0:
+        t += n
+        n -= 1
+    t = 0
+    return t
+
+
+print(total(0))
+print(total(2))

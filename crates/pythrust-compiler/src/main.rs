@@ -160,28 +160,62 @@ fn link(path: &str, object: &[u8]) -> Result<(), String> {
         ));
     }
     let runtime = runtime_lib()?;
-    let obj = std::env::temp_dir().join(format!("pythrust-{}.o", std::process::id()));
-    std::fs::write(&obj, object)
+    let dir = private_dir()?;
+    let linked = link_in(&dir, object, &runtime, &out);
+    let removed = std::fs::remove_dir_all(&dir)
+        .map_err(|e| format!("pythrust: cannot remove {}: {e}\n", dir.display()));
+    linked.and(removed)
+}
+
+/// Writes `object` into `dir` and links it with `runtime` into `out`.
+fn link_in(dir: &Path, object: &[u8], runtime: &Path, out: &Path) -> Result<(), String> {
+    let obj = dir.join("program.o");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&obj)
+        .and_then(|mut f| f.write_all(object))
         .map_err(|e| format!("pythrust: cannot write {}: {e}\n", obj.display()))?;
-    let linked = std::process::Command::new("cc")
+    let status = std::process::Command::new("cc")
         .arg(&obj)
-        .arg(&runtime)
+        .arg(runtime)
         .args(NATIVE_LIBS)
         .arg("-o")
-        .arg(&out)
-        .status();
-    let removed = std::fs::remove_file(&obj);
-    match linked {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            return Err(format!(
-                "pythrust: linking {} failed: cc {status}\n",
-                out.display()
-            ))
-        }
-        Err(e) => return Err(format!("pythrust: cannot run cc: {e}\n")),
+        .arg(out)
+        .status()
+        .map_err(|e| format!("pythrust: cannot run cc: {e}\n"))?;
+    match status.success() {
+        true => Ok(()),
+        false => Err(format!(
+            "pythrust: linking {} failed: cc {status}\n",
+            out.display()
+        )),
     }
-    removed.map_err(|e| format!("pythrust: cannot remove {}: {e}\n", obj.display()))
+}
+
+/// A fresh directory under the system temp dir that only this user can
+/// read, so no other process can swap or read the object before `cc` does.
+/// Created exclusively: an existing path is never reused.
+fn private_dir() -> Result<PathBuf, String> {
+    let base = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    for attempt in 0..100 {
+        let dir = base.join(format!("pythrust-{}-{nanos}-{attempt}", std::process::id()));
+        match builder.create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("pythrust: cannot create {}: {e}\n", dir.display())),
+        }
+    }
+    Err(format!(
+        "pythrust: no free temporary directory in {}\n",
+        base.display()
+    ))
 }
 
 /// The runtime library: `$PYTHRUST_RT`, or next to this executable.
@@ -332,6 +366,20 @@ mod tests {
         let (result, out) = exec(Command::Check, "print(1)\n");
         assert_eq!(result, Ok(()));
         assert_eq!(out, "");
+    }
+
+    #[test]
+    fn private_dirs_are_fresh_and_owner_only() {
+        let (a, b) = (private_dir().unwrap(), private_dir().unwrap());
+        assert_ne!(a, b);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        std::fs::remove_dir(&a).unwrap();
+        std::fs::remove_dir(&b).unwrap();
     }
 
     #[test]

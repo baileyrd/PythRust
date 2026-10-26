@@ -24,14 +24,18 @@ The compiled binary prints what `pythrust run` prints. A runtime error's message
 
 Ints (checked `i64`), bools, `None`; top-level functions with positional arguments, recursion and generic instantiation; `if`/`elif`/`else`, `while` and `for x in range(...)` with `else`, `break`, `continue`; `+ - * // %`, unary `- + not`, chained comparisons, `and`/`or`, conditional expressions, `is None`; `print` with positional arguments.
 
+Semantics kept from `run`: a read of a variable no assignment has reached fails (`UnboundLocalError` in a function, `NameError` at module level), via a per-variable flag checked unless the read follows an assignment in the entry block or earlier in its own block. A module-level call before the function's `def` raises `NameError`; a call that could reach a function not yet defined is rejected. More than 1000 active calls is a `RecursionError` (the interpreter's `MAX_DEPTH`), counted in a module-private counter around each call. A `def` with defaults is rejected, since defaults run at definition time.
+
 Everything else is a compile error, `backend error: the native backend does not support X yet`, pointing at X. Nothing is guessed. `corpus_matches_native` in `tests/conformance.rs` builds every corpus program, runs what builds against its golden, and requires the programs in `NATIVE` to build.
 
 ## Choices made inside the settled design
 
+- **Recursion limit matches `run`** (1000 active calls), pending Nano's call on the PR; it is one constant.
 - **`None` has no machine value.** A function returning `None` returns nothing. (ir.md: zero-sized.)
 - **Monomorphization from signatures.** An instance's type variables are bound by matching the generic signature against the call's argument and result types. A generic body whose inner types are not determined by its signature is a backend error for now; the fix is for inference to expose per-instance types, which ir.md anticipated.
 - **`target-lexicon` as a direct dependency** for the host triple. It is already a dependency of the accepted `cranelift-*` crates, so no new crate enters the tree. `cranelift-native` (CPU feature detection) is left out so binaries run on any machine of the same architecture.
-- **Runtime lookup next to the compiler**, because Cargo cannot yet express "this binary needs that static library" (artifact dependencies are unstable). The conformance test builds `pythrust-rt` itself, since `cargo test` does not.
+- **Runtime lookup next to the compiler**, because Cargo cannot yet express "this binary needs that static library" (artifact dependencies are unstable). The conformance test builds `pythrust-rt` itself, with the profile and target of the `pythrust` under test, since `cargo test` does not.
+- **Objects are written to a fresh owner-only temporary directory**, created exclusively and removed after linking.
 
 ## Next, in order (one small PR each)
 
@@ -43,6 +47,6 @@ Everything else is a compile error, `backend error: the native backend does not 
 
 ## Known gaps
 
-- **Deep recursion** overflows the native stack and the process dies on a signal, where `run` raises `RecursionError` at depth 1000. Open question for Nano, see the PR.
 - **Binary size** is dominated by the runtime and Rust's standard library (about 5 MB in debug builds).
-- **Targets:** Linux and macOS on x86-64 and AArch64, the hosts Cranelift and `cc` both serve.
+- **Targets:** CI covers Linux x86-64 only. macOS and AArch64 are expected to work (Cranelift and `cc` serve them) but are untested.
+- **Diagnostics:** the conformance harness compares stdout and exit status, not stderr, so native error text and spans are not yet checked against `run`.
