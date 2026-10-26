@@ -54,7 +54,7 @@ impl FnBuilder<'_, '_> {
             self.always_bound.insert(var.local);
         }
         self.block_bound.insert(var.local);
-        if self.ty(value) != Ty::Str {
+        if !self.ty(value).is_rc() {
             self.assign(var.local, Rvalue::Use(value), span);
             return Ok(());
         }

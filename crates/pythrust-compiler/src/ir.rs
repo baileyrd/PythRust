@@ -5,15 +5,17 @@
 //! can fail at run time are explicit: a failing `Rvalue` carries the span
 //! of its `Inst`, and a `Term::Fail` ends the program with a diagnostic.
 //!
-//! Covers ints, floats, bools, `None` and strings; lists and tuples
-//! follow, as `docs/native.md` lays out.
+//! Covers ints, floats, bools, `None`, strings, lists and tuples. List
+//! and tuple types are interned in [`Program::types`], so [`Ty`] stays
+//! `Copy`.
 //!
-//! Locals other than parameters start zeroed. A `Str` local is a
-//! reference-counted pointer and, at every instruction boundary, either
-//! null or the owner of one reference: lowering makes ownership explicit
-//! with `Retain`, `Release` and `Forget`, so the backend never decides
-//! it. Operands of `Str` type are borrowed; calls take their `Str`
-//! arguments owned and return an owned result.
+//! Locals other than parameters start zeroed. A local of a
+//! reference-counted type ([`Ty::is_rc`]: strings, lists, tuples) is a
+//! pointer and, at every instruction boundary, either null or the owner
+//! of one reference: lowering makes ownership explicit with `Retain`,
+//! `Release` and `Forget`, so the backend never decides it. Such
+//! operands are borrowed; calls take them owned and return an owned
+//! result, and rvalues giving one give a new reference.
 
 use crate::diag::Diagnostic;
 use crate::span::Span;
@@ -28,6 +30,30 @@ pub enum Ty {
     None,
     /// Immutable, reference-counted text.
     Str,
+    /// A mutable, reference-counted list; `types[id]` is a
+    /// [`Compound::List`].
+    List(TypeId),
+    /// An immutable, reference-counted tuple; `types[id]` is a
+    /// [`Compound::Tuple`].
+    Tuple(TypeId),
+}
+
+impl Ty {
+    /// Whether values of this type are reference-counted pointers.
+    pub fn is_rc(self) -> bool {
+        matches!(self, Ty::Str | Ty::List(_) | Ty::Tuple(_))
+    }
+}
+
+/// Index into [`Program::types`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TypeId(pub usize);
+
+/// What a list or tuple type holds.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Compound {
+    List(Ty),
+    Tuple(Vec<Ty>),
 }
 
 /// Index into [`Program::funcs`].
@@ -48,6 +74,7 @@ pub struct BlockId(pub usize);
 pub struct Program {
     pub funcs: Vec<Func>,
     pub main: FuncId,
+    pub types: Vec<Compound>,
 }
 
 /// One monomorphic function. `blocks[0]` is the entry; `params` are the
@@ -85,6 +112,15 @@ pub enum Inst {
     Release(LocalId),
     /// Nulls the local without dropping: its reference was moved.
     Forget(LocalId),
+    /// `list.append(value)`: the list adds its own reference.
+    Append { list: Operand, value: Operand },
+    /// `list[index] = value`; fails at `span` when out of range.
+    SetItem {
+        list: Operand,
+        index: Operand,
+        value: Operand,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -104,8 +140,8 @@ pub enum Rvalue {
     /// Negation of an `Int` (checked: `-i64::MIN` fails) or a `Float`.
     Neg(Operand),
     /// Both operands have the same type: `Int`, `Float` (IEEE: false
-    /// with a NaN, but for `Ne`), `Bool` or `Str` (code point order).
-    /// Gives a `Bool`.
+    /// with a NaN, but for `Ne`), `Bool`, `Str` (code point order), or a
+    /// list or tuple (lexicographic). Gives a `Bool`.
     Cmp(CmpOp, Operand, Operand),
     /// Whether int `a + b` overflows. Never fails; ends `range` loops.
     AddOverflows(Operand, Operand),
@@ -116,17 +152,23 @@ pub enum Rvalue {
     Concat(Operand, Operand),
     /// `s * n`, a `Str` and an `Int`. Fails when too large to allocate.
     Repeat(Operand, Operand),
-    /// `s[i]`, a one-char `Str`. Fails when `i` is out of range.
+    /// `s[i]` on a `Str` (a one-char `Str`) or a list (an element).
+    /// Fails when `i` is out of range.
     Index(Operand, Operand),
-    /// `len(s)` in chars: an `Int`.
+    /// `len(s)` of a `Str` (in chars), list or tuple: an `Int`.
     Len(Operand),
-    /// `needle in hay` on two `Str`s: a `Bool`.
+    /// `needle in hay`: a substring of a `Str`, or an element of a list.
+    /// Gives a `Bool`.
     Contains {
         hay: Operand,
         needle: Operand,
     },
-    /// `str(x)` for an `Int`, `Float`, `Bool` or `None`.
+    /// `str(x)` for anything but a `Str`.
     ToStr(Operand),
+    /// A new list or tuple, of the destination's type, holding `items`.
+    NewSeq(Vec<Operand>),
+    /// Field `k` of a tuple.
+    Field(Operand, usize),
     /// Float arithmetic with Python semantics: `/`, `//` and `%` by zero
     /// and `**` out of range fail.
     Float(FloatOp, Operand, Operand),
@@ -205,5 +247,15 @@ pub fn operand_ty(locals: &[Ty], op: Operand) -> Ty {
         Operand::Float(_) => Ty::Float,
         Operand::Bool(_) => Ty::Bool,
         Operand::None => Ty::None,
+    }
+}
+
+impl Program {
+    /// What list or tuple type `ty` holds; `None` for other types.
+    pub fn compound(&self, ty: Ty) -> Option<&Compound> {
+        match ty {
+            Ty::List(id) | Ty::Tuple(id) => self.types.get(id.0),
+            _ => None,
+        }
     }
 }

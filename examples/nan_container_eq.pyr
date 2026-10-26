@@ -1,0 +1,5 @@
+# deviation: container equality and `in` use value equality only, with no identity shortcut, so a NaN never equals itself inside a list or tuple (docs/grammar.md#deviations-from-python)
+x = float("nan")
+print([x] == [x], (x,) == (x,), x in [x])
+print([x] != [x], (1, x) < (1, x), x not in [x])
+print([float("nan")] == [float("nan")])

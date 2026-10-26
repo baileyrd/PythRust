@@ -26,10 +26,11 @@ use cranelift_module::{
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 mod num;
+mod seq;
 
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::ir::{
-    self, BlockId, CmpOp, Func, Inst, IntOp, LocalId, Operand, Program, Rvalue, Term, Ty,
+    self, BlockId, CmpOp, Compound, Func, Inst, IntOp, LocalId, Operand, Program, Rvalue, Term, Ty,
 };
 use crate::span::Span;
 
@@ -42,7 +43,7 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
     let mut cg = Codegen::new(render)?;
     let ids = cg.declare(program)?;
     for (func, id) in program.funcs.iter().zip(&ids) {
-        cg.define(func, *id, &ids)?;
+        cg.define(func, *id, &ids, &program.types)?;
     }
     cg.module
         .finish()
@@ -82,10 +83,22 @@ enum Rt {
     PowHint,
     FloatParse,
     IntParse,
+    SeqNew,
+    SeqPush,
+    SeqLen,
+    SeqGet,
+    ListSet,
+    SeqInc,
+    SeqDec,
+    SeqEq,
+    SeqCmp,
+    ListContains,
+    WriteSeq,
+    StrFromSeq,
 }
 
 impl Rt {
-    const ALL: [Rt; 29] = [
+    const ALL: [Rt; 41] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -115,6 +128,18 @@ impl Rt {
         Rt::PowHint,
         Rt::FloatParse,
         Rt::IntParse,
+        Rt::SeqNew,
+        Rt::SeqPush,
+        Rt::SeqLen,
+        Rt::SeqGet,
+        Rt::ListSet,
+        Rt::SeqInc,
+        Rt::SeqDec,
+        Rt::SeqEq,
+        Rt::SeqCmp,
+        Rt::ListContains,
+        Rt::WriteSeq,
+        Rt::StrFromSeq,
     ];
 
     fn symbol(self) -> &'static str {
@@ -148,6 +173,18 @@ impl Rt {
             Rt::PowHint => "pt_pow_hint",
             Rt::FloatParse => "pt_float_parse",
             Rt::IntParse => "pt_int_parse",
+            Rt::SeqNew => "pt_seq_new",
+            Rt::SeqPush => "pt_seq_push",
+            Rt::SeqLen => "pt_seq_len",
+            Rt::SeqGet => "pt_seq_get",
+            Rt::ListSet => "pt_list_set",
+            Rt::SeqInc => "pt_seq_inc",
+            Rt::SeqDec => "pt_seq_dec",
+            Rt::SeqEq => "pt_seq_eq",
+            Rt::SeqCmp => "pt_seq_cmp",
+            Rt::ListContains => "pt_list_contains",
+            Rt::WriteSeq => "pt_write_seq",
+            Rt::StrFromSeq => "pt_str_from_seq",
         }
     }
 
@@ -178,6 +215,16 @@ impl Rt {
             Rt::PowHint => (vec![I64, I64], Some(ptr)),
             Rt::FloatParse => (vec![ptr, ptr], Some(F64)),
             Rt::IntParse => (vec![ptr, ptr], Some(I64)),
+            Rt::SeqNew => (vec![ptr, ptr, I64], Some(ptr)),
+            Rt::SeqPush => (vec![ptr, I64], None),
+            Rt::SeqLen => (vec![ptr], Some(I64)),
+            Rt::SeqGet => (vec![ptr, I64, ptr], Some(I64)),
+            Rt::ListSet => (vec![ptr, I64, I64], Some(I8)),
+            Rt::SeqInc | Rt::SeqDec | Rt::WriteSeq => (vec![ptr], None),
+            Rt::SeqEq => (vec![ptr, ptr], Some(I8)),
+            Rt::SeqCmp => (vec![ptr, ptr], Some(I64)),
+            Rt::ListContains => (vec![ptr, I64], Some(I8)),
+            Rt::StrFromSeq => (vec![ptr], Some(ptr)),
         }
     }
 }
@@ -270,7 +317,7 @@ impl<'r> Codegen<'r> {
             Ty::Int => types::I64,
             Ty::Float => types::F64,
             Ty::Bool | Ty::None => types::I8,
-            Ty::Str => self.ptr,
+            Ty::Str | Ty::List(_) | Ty::Tuple(_) => self.ptr,
         }
     }
 
@@ -291,13 +338,18 @@ impl<'r> Codegen<'r> {
         Ok(entry)
     }
 
-    fn define(&mut self, func: &Func, id: ClifFunc, ids: &[ClifFunc]) -> Result<()> {
+    fn define(
+        &mut self,
+        func: &Func,
+        id: ClifFunc,
+        ids: &[ClifFunc],
+        types: &[Compound],
+    ) -> Result<()> {
         let mut ctx = Context::new();
         ctx.func.signature = self.signature(func);
         FnGen::build(
             self,
-            func,
-            ids,
+            Ctx { func, ids, types },
             &mut ctx,
             &mut FunctionBuilderContext::new(),
         )?;
@@ -307,12 +359,20 @@ impl<'r> Codegen<'r> {
     }
 }
 
+/// What translating one function reads.
+struct Ctx<'c> {
+    func: &'c Func,
+    ids: &'c [ClifFunc],
+    types: &'c [Compound],
+}
+
 /// Translates one function.
 struct FnGen<'b, 'c, 'r> {
     cg: &'c mut Codegen<'r>,
     b: FunctionBuilder<'b>,
     func: &'c Func,
     ids: &'c [ClifFunc],
+    types: &'c [Compound],
     vars: Vec<Variable>,
     blocks: Vec<cranelift_codegen::ir::Block>,
 }
@@ -320,8 +380,7 @@ struct FnGen<'b, 'c, 'r> {
 impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     fn build(
         cg: &'c mut Codegen<'r>,
-        func: &'c Func,
-        ids: &'c [ClifFunc],
+        Ctx { func, ids, types }: Ctx<'c>,
         ctx: &'b mut Context,
         fctx: &'b mut FunctionBuilderContext,
     ) -> Result<()> {
@@ -351,6 +410,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             b,
             func,
             ids,
+            types,
             vars,
             blocks,
         };
@@ -385,15 +445,27 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 self.write_byte(b'\n');
             }
             Inst::Retain(l) => {
+                let (inc, _) = rc_fns(self.func.locals[l.0]);
                 let s = self.b.use_var(self.vars[l.0]);
-                self.call_rt(Rt::StrInc, &[s]);
+                self.call_rt(inc, &[s]);
             }
             Inst::Release(l) => {
+                let (_, dec) = rc_fns(self.func.locals[l.0]);
                 let s = self.b.use_var(self.vars[l.0]);
-                self.call_rt(Rt::StrDec, &[s]);
+                self.call_rt(dec, &[s]);
                 self.forget(*l);
             }
             Inst::Forget(l) => self.forget(*l),
+            Inst::Append { list, value } => {
+                let (s, v) = (self.operand(*list), self.slot(*value));
+                self.call_rt(Rt::SeqPush, &[s, v]);
+            }
+            Inst::SetItem {
+                list,
+                index,
+                value,
+                span,
+            } => self.set_item(*list, *index, *value, *span)?,
         }
         Ok(())
     }
@@ -410,6 +482,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::None => (Rt::WriteNone, vec![]),
             Ty::Str => (Rt::WriteStr, vec![self.operand(op)]),
             Ty::Float => (Rt::WriteFloat, vec![self.operand(op)]),
+            Ty::List(_) | Ty::Tuple(_) => (Rt::WriteSeq, vec![self.operand(op)]),
         };
         self.call_rt(rt, &args);
     }
@@ -478,6 +551,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let order = self.rt_on(Rt::StrCmp, &[*a, *b])?;
                 Ok(self.b.ins().icmp_imm_s(int_cc(*op), order, 0))
             }
+            Rvalue::Cmp(op, a, b) if is_seq(self.func.ty(*a)) => self.seq_cmp(*op, *a, *b),
             Rvalue::Cmp(op, a, b) if self.func.ty(*a) == Ty::Float => {
                 let (a, b) = (self.operand(*a), self.operand(*b));
                 Ok(self.b.ins().fcmp(num::float_cc(*op), a, b))
@@ -494,16 +568,25 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::StrLit(text) => self.str_lit(text),
             Rvalue::Concat(a, b) => self.rt_on(Rt::StrConcat, &[*a, *b]),
             Rvalue::Repeat(s, n) => self.rt_nonnull(Rt::StrRepeat, &[*s, *n], span, TOO_LARGE),
+            Rvalue::Index(s, i) if is_seq(self.func.ty(*s)) => self.item(*s, *i, dest, span),
             Rvalue::Index(s, i) => self.rt_nonnull(Rt::StrIndex, &[*s, *i], span, STR_INDEX),
+            Rvalue::Len(s) if is_seq(self.func.ty(*s)) => self.rt_on(Rt::SeqLen, &[*s]),
             Rvalue::Len(s) => self.rt_on(Rt::StrLen, &[*s]),
+            Rvalue::Contains { hay, needle } if is_seq(self.func.ty(*hay)) => {
+                let (s, v) = (self.operand(*hay), self.slot(*needle));
+                self.call_rt_value(Rt::ListContains, &[s, v])
+            }
             Rvalue::Contains { hay, needle } => self.rt_on(Rt::StrContains, &[*hay, *needle]),
             Rvalue::ToStr(op) => match self.func.ty(*op) {
                 Ty::Int => self.rt_on(Rt::StrFromInt, &[*op]),
                 Ty::Bool => self.rt_on(Rt::StrFromBool, &[*op]),
                 Ty::None => self.rt_on(Rt::StrNone, &[]),
                 Ty::Float => self.rt_on(Rt::StrFromFloat, &[*op]),
+                Ty::List(_) | Ty::Tuple(_) => self.rt_on(Rt::StrFromSeq, &[*op]),
                 Ty::Str => Err(backend("`str` of a string".to_string())),
             },
+            Rvalue::NewSeq(items) => self.new_seq(self.func.locals[dest.0], items),
+            Rvalue::Field(t, k) => self.field(*t, *k, dest),
             Rvalue::Float(op, a, b) => self.float_op(*op, *a, *b, span),
             Rvalue::IntPow(a, b) => self.int_pow(*a, *b, span),
             Rvalue::ToFloat(a) => Ok(self.int_as_float(*a)),
@@ -677,6 +760,19 @@ const MAX_DEPTH: i64 = crate::interp::MAX_DEPTH as i64;
 const ZERO_DIV: &str = "ZeroDivisionError: integer division or modulo by zero";
 const TOO_LARGE: &str = "MemoryError: repeated sequence is too large";
 const STR_INDEX: &str = "IndexError: string index out of range";
+
+/// Whether `ty` is a list or tuple.
+fn is_seq(ty: Ty) -> bool {
+    matches!(ty, Ty::List(_) | Ty::Tuple(_))
+}
+
+/// The runtime functions adding and dropping a reference to a `ty`.
+fn rc_fns(ty: Ty) -> (Rt, Rt) {
+    match is_seq(ty) {
+        true => (Rt::SeqInc, Rt::SeqDec),
+        false => (Rt::StrInc, Rt::StrDec),
+    }
+}
 
 fn int_cc(op: CmpOp) -> IntCC {
     match op {

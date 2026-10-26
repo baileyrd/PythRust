@@ -1,9 +1,10 @@
 //! Pythrust runtime: what compiled programs call that is not worth
 //! generating inline. Output buffering, `print` formatting, runtime
-//! error exits, strings ([`str`]) and numbers ([`num`]).
+//! error exits, strings ([`str`]), lists and tuples ([`seq`]) and
+//! numbers ([`num`]).
 //!
 //! The C ABI surface is the only `unsafe` in the project. Each exported
-//! item (or module, for [`str`] and [`num`]) carries `allow(unsafe_code)` and a
+//! item (or module, for [`str`], [`seq`] and [`num`]) carries `allow(unsafe_code)` and a
 //! `# Safety` note on what the caller guarantees, so the audit is
 //! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
 //! tested.
@@ -11,10 +12,17 @@
 #![deny(unsafe_code)]
 
 pub mod num;
+pub mod seq;
 pub mod str;
 
 use std::io::{self, Write};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Mutex, PoisonError};
+
+/// Strings and sequences allocated and not yet freed. A debug runtime
+/// checks it is 0 when the program ends normally, so a leak fails the
+/// corpus tests.
+pub(crate) static LIVE: AtomicUsize = AtomicUsize::new(0);
 
 /// Flush threshold for buffered stdout.
 const FLUSH_AT: usize = 1 << 16;
@@ -146,7 +154,7 @@ mod entry {
     }
 
     /// Runs the module, then flushes stdout. A debug runtime then
-    /// fails if any string leaked.
+    /// fails if any string or sequence leaked.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn main() -> i32 {
@@ -154,17 +162,20 @@ mod entry {
         // emits it with exactly that signature.
         unsafe { pythrust_main() };
         super::flush();
-        super::leak_status(cfg!(debug_assertions), super::str::live())
+        super::leak_status(
+            cfg!(debug_assertions),
+            super::LIVE.load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 }
 
 /// The exit status after a normal end: 1, with a message, when `check`
-/// is on and `live` strings were never freed.
+/// is on and `live` objects were never freed.
 fn leak_status(check: bool, live: usize) -> i32 {
     if !check || live == 0 {
         return 0;
     }
-    let _ = writeln!(io::stderr(), "pythrust-rt: {live} strings leaked");
+    let _ = writeln!(io::stderr(), "pythrust-rt: {live} objects leaked");
     1
 }
 

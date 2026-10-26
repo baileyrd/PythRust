@@ -1,0 +1,5 @@
+# deviation: ints are i64, so int() of a float past their range is an OverflowError; CPython has bigints.
+# expect-exit: 1
+print(int(-9.2e18))
+print(int(9.3e18))
+print("unreachable")

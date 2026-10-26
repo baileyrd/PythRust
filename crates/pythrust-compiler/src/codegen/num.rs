@@ -123,7 +123,7 @@ impl FnGen<'_, '_, '_> {
 
     /// Calls `rt` with `args` and a pointer to a fresh status byte, giving
     /// the result and the status.
-    fn with_status(&mut self, rt: Rt, args: &[Value]) -> Result<(Value, Value)> {
+    pub(super) fn with_status(&mut self, rt: Rt, args: &[Value]) -> Result<(Value, Value)> {
         let data = StackSlotData::new(StackSlotKind::ExplicitSlot, 1, 0);
         let slot = self.b.create_sized_stack_slot(data);
         let addr = self.b.ins().stack_addr(self.cg.ptr, slot, 0);
@@ -133,7 +133,13 @@ impl FnGen<'_, '_, '_> {
         Ok((r, status))
     }
 
-    fn fail_on(&mut self, status: Value, code: i64, span: Span, message: &str) -> Result<()> {
+    pub(super) fn fail_on(
+        &mut self,
+        status: Value,
+        code: i64,
+        span: Span,
+        message: &str,
+    ) -> Result<()> {
         let hit = self.b.ins().icmp_imm_s(IntCC::Equal, status, code);
         self.fail_if(hit, span, message)
     }

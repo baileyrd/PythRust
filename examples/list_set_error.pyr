@@ -1,0 +1,7 @@
+# expect-exit: 1
+# Assigning past the end of a list is a runtime IndexError.
+xs = ["a", "b"]
+xs[-2] = "c"
+print(xs)
+xs[2] = "d"
+print("unreachable")

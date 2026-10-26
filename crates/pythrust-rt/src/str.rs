@@ -13,16 +13,9 @@
 
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::Ordering::Relaxed;
 
-/// Strings allocated and not yet freed. A debug runtime checks it is 0
-/// when the program ends normally, so a leak fails the corpus tests.
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-
-/// How many strings are live.
-pub fn live() -> usize {
-    LIVE.load(Relaxed)
-}
+use crate::LIVE;
 
 /// A string object. Never shared across threads: compiled programs are
 /// single-threaded.
@@ -103,7 +96,7 @@ fn compare(a: &PtStr, b: &PtStr) -> i64 {
 
 /// Python's `repr` of a string: single quotes unless the text holds a
 /// single quote and no double quote.
-fn repr(s: &str) -> String {
+pub(crate) fn repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') {
         '"'
     } else {

@@ -1,0 +1,27 @@
+# Loop targets that unpack nested tuples or assign into lists, over many
+# iterations and through `break` and `continue`: the native backend's
+# debug runtime exits 1 if any iteration leaks what binding created.
+pairs = [(("a", ["b"]), 1), (("c", ["d"]), 2), (("e", ["f"]), 3)]
+for (s, xs), n in pairs:
+    print(s, xs, n)
+for (s, xs), n in pairs:
+    if n == 1:
+        continue
+    print(s, xs)
+    if n == 2:
+        break
+rows = [["x", "y"], ["z"]]
+for rows[0][0] in ["p", "q", "r"]:
+    print(rows)
+for rows[1][0] in ["s", "t", "u"]:
+    if rows[1][0] == "t":
+        break
+print(rows)
+grid = [[0, 0], [0]]
+for grid[0][1] in range(3):
+    if grid[0][1] == 1:
+        continue
+    print(grid)
+for (a, b), (c, d) in [((1, "one"), (2, "two")), ((3, "three"), (4, "four"))]:
+    for (e, f), g in [((a, b), c)]:
+        print(e, f, g, d)
