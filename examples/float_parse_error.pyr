@@ -1,0 +1,4 @@
+# expect-exit: 1
+print(float(" 2.5 "), int("-7"))
+print(float("2.5.1"))
+print("unreachable")

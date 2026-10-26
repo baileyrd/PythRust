@@ -12,8 +12,8 @@ source -> lex -> parse -> infer -> lower -> ir::Program -> codegen -> object -> 
 |---|---|---|
 | IR | `pythrust-compiler/src/ir.rs` | Contract type. Basic blocks over typed, monomorphic locals; not SSA. |
 | Lowering | `src/lower/` | Typed AST to IR. Monomorphizes generic functions per call-site types; desugars `for` (over `range` and strings), chained compares, `and`/`or`, tuple-display assignment; makes string ownership explicit. |
-| Codegen | `src/codegen.rs` | IR to an object file with Cranelift (`opt_level=speed`, PIC). Checked arithmetic and Python floor `//` and `%` are emitted inline. |
-| Runtime | `crates/pythrust-rt` | Static library: `main`, buffered stdout, `print` formatting, `pt_fail`, refcounted strings (`str.rs`). The project's only `unsafe`, each item marked `allow(unsafe_code)` with its reason. |
+| Codegen | `src/codegen/` | IR to an object file with Cranelift (`opt_level=speed`, PIC). Checked int arithmetic, Python floor `//` and `%` on ints, and float `+ - * /` and comparisons are emitted inline; `num.rs` holds the numeric rvalues. |
+| Runtime | `crates/pythrust-rt` | Static library: `main`, buffered stdout, `print` formatting, `pt_fail`, refcounted strings (`str.rs`), float `repr`, `**` and parsing (`num.rs`). The project's only `unsafe`, each item marked `allow(unsafe_code)` with its reason. |
 | Driver | `src/main.rs` | `pythrust build f.pyr` writes `f`, linking with the system `cc`. |
 
 The compiled binary prints what `pythrust run` prints. A runtime error's message is rendered at compile time (`path:line:col`, source line, carets) and stored in the binary, then printed by `pt_fail`, which flushes stdout and exits 1.
@@ -22,9 +22,9 @@ The compiled binary prints what `pythrust run` prints. A runtime error's message
 
 ## Covered now
 
-Ints (checked `i64`), bools, `None`, strings; top-level functions with positional arguments, recursion and generic instantiation; `if`/`elif`/`else`, `while` and `for x in range(...)` with `else`, `break`, `continue`; `+ - * // %`, unary `- + not`, chained comparisons, `and`/`or`, conditional expressions, `is None`; `print` with positional arguments. On strings: literals, `+`, `*` by an int, `s[i]` (negative too), `len`, `str()` of ints, bools and `None`, comparisons in code point order, `in` and `not in`, truthiness, `for ch in s`.
+Ints (checked `i64`), floats (`f64`), bools, `None`, strings; top-level functions with positional arguments, recursion and generic instantiation; `if`/`elif`/`else`, `while` and `for x in range(...)` with `else`, `break`, `continue`; `+ - * / // % **`, unary `- + not`, chained comparisons, `and`/`or`, conditional expressions, `is None`; `print` with positional arguments. Numbers follow Python's tower: `/`, or an int meeting a float, computes in floats, and mixed comparisons compare as floats (as `run` does). `int()` of a float or a string, `float()` of an int, bool or string, and `str()` and `print` of a float (Python's shortest `repr`). On strings: literals, `+`, `*` by an int, `s[i]` (negative too), `len`, `str()` of ints, bools and `None`, comparisons in code point order, `in` and `not in`, truthiness, `for ch in s`.
 
-Semantics kept from `run`: a read of a variable no assignment has reached fails (`UnboundLocalError` in a function, `NameError` at module level), via a per-variable flag checked unless the read follows an assignment in the entry block or earlier in its own block. A module-level call before the function's `def` raises `NameError`; a call that could reach a function not yet defined is rejected. More than 1000 active calls is a `RecursionError` (the interpreter's `MAX_DEPTH`), counted in a module-private counter around each call. A `def` with defaults is rejected, since defaults run at definition time. An out-of-range string index is an `IndexError` and a repeat too large to allocate a `MemoryError`, as in `run`.
+Semantics kept from `run`: a read of a variable no assignment has reached fails (`UnboundLocalError` in a function, `NameError` at module level), via a per-variable flag checked unless the read follows an assignment in the entry block or earlier in its own block. A module-level call before the function's `def` raises `NameError`; a call that could reach a function not yet defined is rejected. More than 1000 active calls is a `RecursionError` (the interpreter's `MAX_DEPTH`), counted in a module-private counter around each call. A `def` with defaults is rejected, since defaults run at definition time. An out-of-range string index is an `IndexError` and a repeat too large to allocate a `MemoryError`, as in `run`; so are float division by zero, `**` out of range, a negative `int ** int` exponent, and failed conversions, each with `run`'s message. A message with a run-time part (`could not convert string to float: 'x'`, the `2.0 ** -1` fix-it) is rendered at compile time around a marker, and the runtime fills the marker in (`pt_fail_mid`).
 
 ### Strings
 
@@ -46,6 +46,8 @@ Everything else is a compile error, `backend error: the native backend does not 
 
 - **Recursion limit matches `run`** (1000 active calls), as Nano chose; it is one constant.
 - **`Retain`/`Release`/`Forget` instead of ir.md's `Copy`/`Move` operands with `RcInc`/`Drop`.** The same information: a move is a `Use` then a `Forget`, a copy a `Use` then a `Retain`. Keeping operands plain kept every existing int rvalue unchanged, and M5's ownership pass can still delete the pairs it proves unnecessary.
+- **Numeric semantics are copied into the runtime, not shared with the interpreter.** Float `repr`, floor division, `**` and number parsing exist in `interp` and in `pythrust-rt/src/num.rs`. Sharing them needs a crate both depend on (the runtime cannot be a library of the compiler: it defines `main`). The copies are small and the native corpus test holds them to the same output; a shared crate is a follow-up if they grow.
+- **Fallible runtime calls report a status byte** through a stack slot rather than returning a pair, which keeps the C ABI to scalars and pointers.
 - **`None` has no machine value.** A function returning `None` returns nothing. (ir.md: zero-sized.)
 - **Monomorphization from signatures.** An instance's type variables are bound by matching the generic signature against the call's argument and result types. A generic body whose inner types are not determined by its signature is a backend error for now; the fix is for inference to expose per-instance types, which ir.md anticipated.
 - **`target-lexicon` as a direct dependency** for the host triple. It is already a dependency of the accepted `cranelift-*` crates, so no new crate enters the tree. `cranelift-native` (CPU feature detection) is left out so binaries run on any machine of the same architecture.
@@ -54,10 +56,9 @@ Everything else is a compile error, `backend error: the native backend does not 
 
 ## Next, in order (one small PR each)
 
-1. **Floats.** `f64`, `/`, `**` (int and float), Python's shortest `repr` in the runtime, int/float mixing.
-2. **Lists and tuples.** Refcounted shared lists (loose aliasing), unboxed tuples, indexing with bounds checks, `for` over lists, `append`, `len`, unpacking from any tuple.
-3. **The rest of the subset.** Globals read from functions, default and keyword arguments, `T | None`, `print(sep=, end=)`.
-4. **Benchmarks** against CPython: a numeric loop, string building, list sorting; numbers reported honestly, including where the gain is small.
+1. **Lists and tuples.** Refcounted shared lists (loose aliasing), unboxed tuples, indexing with bounds checks, `for` over lists, `append`, `len`, unpacking from any tuple.
+2. **The rest of the subset.** Globals read from functions, default and keyword arguments, `T | None`, `print(sep=, end=)`.
+3. **Benchmarks** against CPython: a numeric loop, string building, list sorting; numbers reported honestly, including where the gain is small.
 
 ## Known gaps
 

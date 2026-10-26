@@ -1,15 +1,16 @@
 //! Pythrust runtime: what compiled programs call that is not worth
 //! generating inline. Output buffering, `print` formatting, runtime
-//! error exits, and strings ([`str`]).
+//! error exits, strings ([`str`]) and numbers ([`num`]).
 //!
 //! The C ABI surface is the only `unsafe` in the project. Each exported
-//! item (or module, for [`str`]) carries `allow(unsafe_code)` and a
+//! item (or module, for [`str`] and [`num`]) carries `allow(unsafe_code)` and a
 //! `# Safety` note on what the caller guarantees, so the audit is
 //! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
 //! tested.
 
 #![deny(unsafe_code)]
 
+pub mod num;
 pub mod str;
 
 use std::io::{self, Write};
@@ -98,6 +99,40 @@ pub unsafe extern "C" fn pt_fail(msg: *const u8, len: usize) -> ! {
     let msg = unsafe { std::slice::from_raw_parts(msg, len) };
     flush();
     let _ = io::stderr().write_all(msg);
+    std::process::exit(1)
+}
+
+/// Ends the program on a runtime error whose message has a part known
+/// only now: prints `head`, the text of `mid`, then `tail`, like
+/// [`pt_fail`].
+///
+/// # Safety
+///
+/// `head` and `tail` point to `head_len` and `tail_len` readable bytes;
+/// `mid` is a live string.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_fail_mid(
+    head: *const u8,
+    head_len: usize,
+    mid: *const str::PtStr,
+    tail: *const u8,
+    tail_len: usize,
+) -> ! {
+    // SAFETY: guaranteed by the caller, see above.
+    let (head, mid, tail) = unsafe {
+        (
+            std::slice::from_raw_parts(head, head_len),
+            str::borrow(mid),
+            std::slice::from_raw_parts(tail, tail_len),
+        )
+    };
+    flush();
+    let mut err = io::stderr().lock();
+    let _ = err
+        .write_all(head)
+        .and_then(|()| err.write_all(mid.text().as_bytes()))
+        .and_then(|()| err.write_all(tail));
     std::process::exit(1)
 }
 

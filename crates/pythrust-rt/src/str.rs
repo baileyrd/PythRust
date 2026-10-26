@@ -34,7 +34,7 @@ pub struct PtStr {
 }
 
 impl PtStr {
-    fn new(text: Box<str>) -> PtStr {
+    pub(crate) fn new(text: Box<str>) -> PtStr {
         let chars = text.chars().count();
         PtStr {
             rc: Cell::new(1),
@@ -101,7 +101,44 @@ fn compare(a: &PtStr, b: &PtStr) -> i64 {
     }
 }
 
-fn into_ptr(s: PtStr) -> *mut PtStr {
+/// Python's `repr` of a string: single quotes unless the text holds a
+/// single quote and no double quote.
+fn repr(s: &str) -> String {
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() => out.push_str(&control_escape(c)),
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn control_escape(c: char) -> String {
+    let n = u32::from(c);
+    if n <= 0xff {
+        format!("\\x{n:02x}")
+    } else {
+        format!("\\u{n:04x}")
+    }
+}
+
+pub(crate) fn into_ptr(s: PtStr) -> *mut PtStr {
     LIVE.fetch_add(1, Relaxed);
     Box::into_raw(Box::new(s))
 }
@@ -111,7 +148,7 @@ fn into_ptr(s: PtStr) -> *mut PtStr {
 /// # Safety
 ///
 /// `p` came from `into_ptr` and its count is at least 1 for the borrow.
-unsafe fn borrow<'a>(p: *const PtStr) -> &'a PtStr {
+pub(crate) unsafe fn borrow<'a>(p: *const PtStr) -> &'a PtStr {
     // SAFETY: guaranteed by the caller.
     unsafe { &*p }
 }
@@ -259,6 +296,18 @@ pub extern "C" fn pt_str_none() -> *mut PtStr {
     into_ptr(PtStr::new("None".into()))
 }
 
+/// `repr(s)`, a new string.
+///
+/// # Safety
+///
+/// `s` is a live string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_repr(s: *const PtStr) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { borrow(s) };
+    into_ptr(PtStr::new(repr(s.text()).into()))
+}
+
 /// Writes `s` to stdout.
 ///
 /// # Safety
@@ -315,6 +364,14 @@ mod tests {
         assert_eq!(compare(&s("é"), &s("z")), 1);
         assert_eq!(compare(&s("a"), &s("a")), 0);
         assert_eq!(compare(&s("ab"), &s("a")), 1);
+    }
+
+    #[test]
+    fn repr_quotes_and_escapes_as_python_does() {
+        assert_eq!(repr("x"), "'x'");
+        assert_eq!(repr("it's"), "\"it's\"");
+        assert_eq!(repr("a\n\\'\""), "'a\\n\\\\\\'\"'");
+        assert_eq!(repr("\u{7}"), "'\\x07'");
     }
 
     #[test]

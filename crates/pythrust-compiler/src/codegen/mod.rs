@@ -25,6 +25,8 @@ use cranelift_module::{
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+mod num;
+
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::ir::{
     self, BlockId, CmpOp, Func, Inst, IntOp, LocalId, Operand, Program, Rvalue, Term, Ty,
@@ -69,10 +71,21 @@ enum Rt {
     StrFromInt,
     StrFromBool,
     StrNone,
+    StrRepr,
+    FailMid,
+    WriteFloat,
+    StrFromFloat,
+    FloatFloorDiv,
+    FloatMod,
+    FloatPow,
+    IntPow,
+    PowHint,
+    FloatParse,
+    IntParse,
 }
 
 impl Rt {
-    const ALL: [Rt; 18] = [
+    const ALL: [Rt; 29] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -91,6 +104,17 @@ impl Rt {
         Rt::StrFromInt,
         Rt::StrFromBool,
         Rt::StrNone,
+        Rt::StrRepr,
+        Rt::FailMid,
+        Rt::WriteFloat,
+        Rt::StrFromFloat,
+        Rt::FloatFloorDiv,
+        Rt::FloatMod,
+        Rt::FloatPow,
+        Rt::IntPow,
+        Rt::PowHint,
+        Rt::FloatParse,
+        Rt::IntParse,
     ];
 
     fn symbol(self) -> &'static str {
@@ -113,12 +137,23 @@ impl Rt {
             Rt::StrFromInt => "pt_str_from_int",
             Rt::StrFromBool => "pt_str_from_bool",
             Rt::StrNone => "pt_str_none",
+            Rt::StrRepr => "pt_str_repr",
+            Rt::FailMid => "pt_fail_mid",
+            Rt::WriteFloat => "pt_write_float",
+            Rt::StrFromFloat => "pt_str_from_float",
+            Rt::FloatFloorDiv => "pt_float_floordiv",
+            Rt::FloatMod => "pt_float_mod",
+            Rt::FloatPow => "pt_float_pow",
+            Rt::IntPow => "pt_int_pow",
+            Rt::PowHint => "pt_pow_hint",
+            Rt::FloatParse => "pt_float_parse",
+            Rt::IntParse => "pt_int_parse",
         }
     }
 
     /// Parameter and result types; `ptr` is a pointer, such as a string.
     fn sig(self, ptr: types::Type) -> (Vec<types::Type>, Option<types::Type>) {
-        use types::{I64, I8};
+        use types::{F64, I64, I8};
         match self {
             Rt::WriteInt => (vec![I64], None),
             Rt::WriteBool | Rt::WriteByte => (vec![I8], None),
@@ -133,6 +168,16 @@ impl Rt {
             Rt::StrFromInt => (vec![I64], Some(ptr)),
             Rt::StrFromBool => (vec![I8], Some(ptr)),
             Rt::StrNone => (vec![], Some(ptr)),
+            Rt::StrRepr => (vec![ptr], Some(ptr)),
+            Rt::FailMid => (vec![ptr; 5], None),
+            Rt::WriteFloat => (vec![F64], None),
+            Rt::StrFromFloat => (vec![F64], Some(ptr)),
+            Rt::FloatFloorDiv | Rt::FloatMod => (vec![F64, F64], Some(F64)),
+            Rt::FloatPow => (vec![F64, F64, ptr], Some(F64)),
+            Rt::IntPow => (vec![I64, I64, ptr], Some(I64)),
+            Rt::PowHint => (vec![I64, I64], Some(ptr)),
+            Rt::FloatParse => (vec![ptr, ptr], Some(F64)),
+            Rt::IntParse => (vec![ptr, ptr], Some(I64)),
         }
     }
 }
@@ -223,6 +268,7 @@ impl<'r> Codegen<'r> {
     fn clif_ty(&self, ty: Ty) -> types::Type {
         match ty {
             Ty::Int => types::I64,
+            Ty::Float => types::F64,
             Ty::Bool | Ty::None => types::I8,
             Ty::Str => self.ptr,
         }
@@ -295,6 +341,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         for (i, var) in vars.iter().enumerate() {
             let v = match func.params.iter().position(|p| p.0 == i) {
                 Some(k) => params[k],
+                None if func.locals[i] == Ty::Float => b.ins().f64const(0.0),
                 None => b.ins().iconst(cg.clif_ty(func.locals[i]), 0),
             };
             b.def_var(*var, v);
@@ -362,6 +409,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::Bool => (Rt::WriteBool, vec![self.operand(op)]),
             Ty::None => (Rt::WriteNone, vec![]),
             Ty::Str => (Rt::WriteStr, vec![self.operand(op)]),
+            Ty::Float => (Rt::WriteFloat, vec![self.operand(op)]),
         };
         self.call_rt(rt, &args);
     }
@@ -405,6 +453,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Operand::Int(n) => self.b.ins().iconst(types::I64, n),
             Operand::Bool(v) => self.b.ins().iconst(types::I8, i64::from(v)),
             Operand::None => self.b.ins().iconst(types::I8, 0),
+            Operand::Float(f) => self.b.ins().f64const(f),
         }
     }
 
@@ -415,6 +464,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let (a, b) = (self.operand(*a), self.operand(*b));
                 self.int_op(*op, a, b, span)
             }
+            Rvalue::Neg(a) if self.func.ty(*a) == Ty::Float => {
+                let a = self.operand(*a);
+                Ok(self.b.ins().fneg(a))
+            }
             Rvalue::Neg(a) => {
                 let a = self.operand(*a);
                 let min = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
@@ -424,6 +477,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Cmp(op, a, b) if self.func.ty(*a) == Ty::Str => {
                 let order = self.rt_on(Rt::StrCmp, &[*a, *b])?;
                 Ok(self.b.ins().icmp_imm_s(int_cc(*op), order, 0))
+            }
+            Rvalue::Cmp(op, a, b) if self.func.ty(*a) == Ty::Float => {
+                let (a, b) = (self.operand(*a), self.operand(*b));
+                Ok(self.b.ins().fcmp(num::float_cc(*op), a, b))
             }
             Rvalue::Cmp(op, a, b) => {
                 let (a, b) = (self.operand(*a), self.operand(*b));
@@ -444,18 +501,31 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 Ty::Int => self.rt_on(Rt::StrFromInt, &[*op]),
                 Ty::Bool => self.rt_on(Rt::StrFromBool, &[*op]),
                 Ty::None => self.rt_on(Rt::StrNone, &[]),
+                Ty::Float => self.rt_on(Rt::StrFromFloat, &[*op]),
                 Ty::Str => Err(backend("`str` of a string".to_string())),
             },
+            Rvalue::Float(op, a, b) => self.float_op(*op, *a, *b, span),
+            Rvalue::IntPow(a, b) => self.int_pow(*a, *b, span),
+            Rvalue::ToFloat(a) => Ok(self.to_float(*a)),
+            Rvalue::FloatToInt(a) => self.float_to_int(*a, span),
+            Rvalue::ParseFloat(s) => self.parse_float(*s, span),
+            Rvalue::ParseInt(s) => self.parse_int(*s, span),
         }
     }
 
     /// A new string holding `text`, copied from read-only data.
     fn str_lit(&mut self, text: &str) -> Result<Value> {
-        let (data, len) = self.cg.bytes(text.to_string())?;
+        let (addr, len) = self.data(text.to_string())?;
+        self.call_rt_value(Rt::StrNew, &[addr, len])
+    }
+
+    /// The address and length of `text` in read-only data.
+    fn data(&mut self, text: String) -> Result<(Value, Value)> {
+        let (data, len) = self.cg.bytes(text)?;
         let gv = self.cg.module.declare_data_in_func(data, self.b.func);
         let addr = self.b.ins().symbol_value(self.cg.ptr, gv);
         let len = self.b.ins().iconst(self.cg.ptr, len as i64);
-        self.call_rt_value(Rt::StrNew, &[addr, len])
+        Ok((addr, len))
     }
 
     /// Calls `callee`, failing at `span` if `MAX_DEPTH` calls are active.
@@ -563,11 +633,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     }
 
     fn fail(&mut self, diag: &Diagnostic) -> Result<()> {
-        let (data, len) = self.cg.bytes((self.cg.render)(diag))?;
-        let ptr = self.cg.ptr;
-        let gv = self.cg.module.declare_data_in_func(data, self.b.func);
-        let addr = self.b.ins().symbol_value(ptr, gv);
-        let len = self.b.ins().iconst(ptr, len as i64);
+        let (addr, len) = self.data((self.cg.render)(diag))?;
         self.call_rt(Rt::Fail, &[addr, len]);
         self.b.ins().trap(TrapCode::unwrap_user(1));
         Ok(())
@@ -679,6 +745,16 @@ mod tests {
         // `+`, `//` and `-` can overflow; `//` can also divide by zero.
         assert_eq!(count(OVERFLOW), 3);
         assert_eq!(count(ZERO_DIV), 1);
+    }
+
+    #[test]
+    fn run_time_message_parts_are_rendered_around_a_marker() {
+        let (_, rendered) = compile("n = -2\nprint(2 ** n, float('x'), 1.5 / n)\n");
+        let marked = rendered.iter().filter(|r| r.contains('\0')).count();
+        assert_eq!(marked, 2, "{rendered:?}");
+        assert!(rendered
+            .iter()
+            .any(|r| r == "ZeroDivisionError: division by zero"));
     }
 
     #[test]

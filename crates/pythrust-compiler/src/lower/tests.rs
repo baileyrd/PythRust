@@ -73,8 +73,6 @@ fn code_after_return_and_break_lowers() {
 
 #[test]
 fn unsupported_values_name_the_construct() {
-    let (d, _) = rejected("x = 1.5\n");
-    assert!(d.message.contains("floats"));
     let (d, _) = rejected("xs = [1]\n");
     assert!(d.message.contains("lists"), "{}", d.message);
     let (d, _) = rejected("def f(xs):\n    return 1\nprint(f([]))\n");
@@ -83,10 +81,8 @@ fn unsupported_values_name_the_construct() {
 
 #[test]
 fn unsupported_operations_name_the_construct() {
-    let (_, text) = rejected("print(1 / 2)\n");
-    assert_eq!(text, "1 / 2");
-    let (_, text) = rejected("print(2 ** 3)\n");
-    assert_eq!(text, "2 ** 3");
+    let (_, text) = rejected("print(int(True))\n");
+    assert_eq!(text, "int(True)");
     let (d, _) = rejected("print(1, end='')\n");
     assert!(d.message.contains("keyword arguments"));
     let (d, _) = rejected("print(len([1]))\n");
@@ -144,7 +140,9 @@ fn reads_check_boundness_unless_known() {
 #[test]
 fn bool_int_mixing_is_rejected_not_miscompiled() {
     let (d, _) = rejected("print(True + 1)\n");
-    assert!(d.message.contains("non-int"), "{}", d.message);
+    assert!(d.message.contains("non-number"), "{}", d.message);
+    let (d, _) = rejected("print(True + 1.5)\n");
+    assert!(d.message.contains("non-number"), "{}", d.message);
     let (d, _) = rejected("print(True == 1)\n");
     assert!(d.message.contains("different types"), "{}", d.message);
 }
@@ -207,7 +205,7 @@ fn writes_own_the_new_string_before_releasing_the_old() {
 #[test]
 fn string_operations_outside_the_subset_are_rejected() {
     let (d, _) = rejected("print('a' * True)\n");
-    assert!(d.message.contains("non-int"), "{}", d.message);
+    assert!(d.message.contains("non-number"), "{}", d.message);
     let (d, _) = rejected("for x in [1]:\n    print(x)\n");
     assert!(d.message.contains("lists"), "{}", d.message);
 }
@@ -233,4 +231,47 @@ fn leaving_a_loop_releases_the_statements_it_leaves() {
         panic!("no literal");
     };
     assert_eq!(insts().filter(|i| **i == Inst::Release(lit)).count(), 3);
+}
+
+/// The rvalues assigned anywhere in `f`.
+fn rvalues(f: &Func) -> Vec<&crate::ir::Rvalue> {
+    let insts = f.blocks.iter().flat_map(|b| &b.insts);
+    insts
+        .filter_map(|i| match i {
+            Inst::Assign { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn ints_meeting_floats_compute_in_floats() {
+    use crate::ir::{FloatOp, Operand, Rvalue};
+    let p = lowered("n = 3\nprint(n / 2, n * 1.5, 2 < 2.5, n ** 2)\n");
+    let main = &p.funcs[p.main.0];
+    let values = rvalues(main);
+    // An int constant converts at compile time, a variable at run time.
+    let div = values.iter().find_map(|v| match v {
+        Rvalue::Float(FloatOp::Div, _, b) => Some(*b),
+        _ => None,
+    });
+    assert_eq!(div, Some(Operand::Float(2.0)));
+    assert!(values.iter().any(|v| matches!(v, Rvalue::ToFloat(_))));
+    assert!(values.iter().any(|v| matches!(v, Rvalue::IntPow(_, _))));
+    let cmp = values.iter().any(|v| {
+        matches!(v, Rvalue::Cmp(_, Operand::Float(a), Operand::Float(b)) if (*a, *b) == (2.0, 2.5))
+    });
+    assert!(cmp, "{values:?}");
+}
+
+#[test]
+fn conversions_pick_their_rvalue_by_type() {
+    use crate::ir::Rvalue;
+    let p = lowered("s = '2'\nf = 2.5\nprint(int(f), int(s), float(s), str(f), float(f))\n");
+    let values = rvalues(&p.funcs[p.main.0]);
+    let has = |pred: fn(&Rvalue) -> bool| values.iter().any(|v| pred(v));
+    assert!(has(|v| matches!(v, Rvalue::FloatToInt(_))));
+    assert!(has(|v| matches!(v, Rvalue::ParseInt(_))));
+    assert!(has(|v| matches!(v, Rvalue::ParseFloat(_))));
+    assert!(has(|v| matches!(v, Rvalue::ToStr(_))));
 }
