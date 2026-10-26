@@ -1,0 +1,25 @@
+# Lists and tuples on the native backend: displays, comparison,
+# membership, mutation through aliases, and iteration that sees appends.
+xs = [3, 1, 2]
+ys = xs
+ys.append(4)
+xs[0] = 30
+print(xs, ys, len(xs), xs == ys)
+grid = [[1, 2], [3]]
+grid[1].append(4)
+grid[0][1] += 10
+print(grid, grid[-1][-1], [] == [], [[]] < [[0]])
+print([1.5, 2.0] < [1.5, 3.0], [2, 1] > [1, 9], [1, 2] <= [1, 2], ["b"] >= ["a", "z"])
+print(2 in [1, 2], 5 not in [1, 2], "b" in ["a", "b"], [1] in [[0], [1]])
+print(bool([]), bool([0]), not [], str([None, None]), [True], [(1, "a")])
+n = [1, 2]
+for v in n:
+    if v < 5:
+        n.append(v + 10)
+print(n)
+t = (1, "two", 3.5, [4])
+t[3].append(5)
+print(t, t[0], t[-1], len(t), t == (1, "two", 3.5, [4, 5]), ())
+words = ["b", "a"]
+words[0] = words[1] + "!"
+print(words, words[0] * 2)

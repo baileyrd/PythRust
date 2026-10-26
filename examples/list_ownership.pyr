@@ -1,0 +1,35 @@
+# Reference counting for lists and tuples: the native backend's debug
+# runtime exits 1 on a leak, so this program must end with nothing live.
+def pairs(names: list[str]) -> list[tuple[int, str]]:
+    out = []
+    i = 0
+    for name in names:
+        out.append((i, name + "?"))
+        i += 1
+    return out
+
+def first(rows: list[list[str]]) -> list[str]:
+    return rows[0]
+
+names = ["ann", "bo"]
+for k, v in pairs(names):
+    print(k, v)
+rows = [["x"], ["y", "z"]]
+head = first(rows)
+rows[0] = ["w"]
+print(head, rows)
+for row in rows:
+    for cell in row:
+        if cell == "z":
+            break
+    else:
+        continue
+    print("found in", row)
+for row in rows:
+    for cell in row:
+        pass
+    else:
+        continue
+a, b = ("left", ["right"])
+a, b = a + "!", b
+print(a, b)
