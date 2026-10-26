@@ -1,5 +1,6 @@
 # deviation: `is` compares only with None, so this is a compile error; CPython runs it.
 # expect-exit: 1
+# expect-error: `is` compares only with None
 print("before")
 a = [1]
 b = a

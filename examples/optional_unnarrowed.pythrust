@@ -1,0 +1,6 @@
+# deviation: arithmetic on an un-narrowed int | None is a compile error; CPython runs it.
+# expect-exit: 1
+# expect-error: unsupported operand types for +: int | None and int
+print("before")
+x: int | None = 1
+print(x + 1)
