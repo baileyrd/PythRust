@@ -1,0 +1,6 @@
+# deviation: a truth test does not narrow an int | None; CPython runs it.
+# expect-exit: 1
+# expect-error: a truth test does not narrow `x`: write `x is not None`
+x: int | None = 5
+if x:
+    print(x + 1)

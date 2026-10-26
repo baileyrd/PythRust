@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{BinOp, Block, Branch, Expr, Stmt, StmtKind, Target, TargetKind};
-use crate::diag::Result;
+use crate::diag::{Diagnostic, Result};
 use crate::span::Span;
 
 use super::expr::int_literal;
@@ -110,7 +110,32 @@ impl Checker {
         self.narrowed(not_none, &[], |c| c.expr(&b.test).map(drop))?;
         let mut inside = not_none.clone();
         inside.extend(scope::not_none(&b.test, true));
+        let tested = scope::truth_tested(&b.test);
         self.narrowed(&inside, &b.body, |c| c.block(&b.body))
+            .map_err(|e| self.truth_hint(e, &tested, &scope::block_reads(&b.body)))
+    }
+
+    /// Adds a fix-it to `err` when it is about a name of `tested` (tested
+    /// only for truth) that `reads` uses and that is still `T | None`.
+    fn truth_hint(
+        &self,
+        mut err: Diagnostic,
+        tested: &BTreeSet<String>,
+        reads: &BTreeSet<String>,
+    ) -> Diagnostic {
+        if err.message.contains("a truth test does not narrow") {
+            return err;
+        }
+        let still_optional = |name: &&String| match self.lookup(name).map(|t| self.subst.zonk(&t)) {
+            Some(t @ Type::Optional(_)) => err.message.contains(&t.to_string()),
+            _ => false,
+        };
+        let Some(name) = tested.intersection(reads).find(still_optional).cloned() else {
+            return err;
+        };
+        let hint = format!("; a truth test does not narrow `{name}`: write `{name} is not None`");
+        err.message.push_str(&hint);
+        err
     }
 
     /// Runs `f` with each of `names` narrowed from `T | None` to `T`,

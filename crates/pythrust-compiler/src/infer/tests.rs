@@ -1319,6 +1319,32 @@ fn not_flips_what_a_test_proves() {
 }
 
 #[test]
+fn truth_tests_do_not_narrow_but_suggest_is_not_none() {
+    let b = B::default();
+    let hinted = format!("{UNNARROWED}; a truth test does not narrow `x`: write `x is not None`");
+    let body = vec![b.if_(b.n("x"), vec![b.ex(plus_one(&b, "x"))], vec![])];
+    assert_eq!(err(with_optionals(&b, body)), hinted);
+    let nested = b.if_(b.n("x"), vec![b.ex(plus_one(&b, "x"))], vec![]);
+    let body = vec![b.if_(b.n("x"), vec![nested], vec![])];
+    assert_eq!(err(with_optionals(&b, body)), hinted);
+    let test = b.logic(LogicalOp::And, b.n("y"), b.n("x"));
+    let body = vec![b.if_(test, vec![b.ex(plus_one(&b, "x"))], vec![])];
+    assert_eq!(err(with_optionals(&b, body)), hinted);
+    // No hint for a name the error is not about, or one already narrowed.
+    let body = vec![b.if_(b.n("y"), vec![b.ex(plus_one(&b, "x"))], vec![])];
+    assert_eq!(err(with_optionals(&b, body)), UNNARROWED);
+    let inner = b.if_(
+        is_none(&b, "x", CmpOp::IsNot),
+        vec![b.ex(plus_one(&b, "x"))],
+        vec![],
+    );
+    ok(with_optionals(
+        &b,
+        vec![b.if_(b.n("x"), vec![inner], vec![])],
+    ));
+}
+
+#[test]
 fn is_with_a_non_none_operand_is_an_error() {
     let b = B::default();
     let msg = err(vec![b.ex(b.cmp(b.i(1), vec![(CmpOp::Is, b.i(1))]))]);

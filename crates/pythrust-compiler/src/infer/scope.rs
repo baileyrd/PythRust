@@ -301,6 +301,30 @@ pub(super) fn not_none(test: &Expr, holds: bool) -> BTreeSet<String> {
     }
 }
 
+/// Names `test` checks only for truth (`x`, `x and y`). That does not
+/// narrow them, since `0` and `""` are false too.
+pub(super) fn truth_tested(test: &Expr) -> BTreeSet<String> {
+    match &test.kind {
+        ExprKind::Name(name) => BTreeSet::from([name.clone()]),
+        ExprKind::Logical {
+            op: LogicalOp::And,
+            left,
+            right,
+        } => truth_tested(left)
+            .union(&truth_tested(right))
+            .cloned()
+            .collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+/// Names `block` reads.
+pub(super) fn block_reads(block: &[Stmt]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    block.iter().for_each(|s| stmt_names(s, &mut out));
+    out
+}
+
 /// `x is None` gives `(x, false)`; `x is not None` gives `(x, true)`
 /// (`true`: `x` is not `None` when the test holds). Either order.
 fn none_test(test: &Expr) -> Option<(String, bool)> {
