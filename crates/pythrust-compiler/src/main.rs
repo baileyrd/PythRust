@@ -1,15 +1,37 @@
-//! `pythrust` command line: `run` and `check` a source file.
+//! `pythrust` command line: `run`, `check` or `build` a source file.
 //!
 //! The only place that does I/O. Stages are pure; this file reads the
-//! file, calls them, and renders diagnostics as `path:line:col`.
+//! file, calls them, renders diagnostics as `path:line:col`, and for
+//! `build` writes the object file and links it with the system `cc`.
 
 #![forbid(unsafe_code)]
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use pythrust_compiler::{infer, lexer, parser, DiagKind, Diagnostic, Span};
+use pythrust_compiler::{codegen, infer, lexer, lower, parser, DiagKind, Diagnostic, Span};
 
-const USAGE: &str = "usage: pythrust <run|check> <file>";
+const USAGE: &str = "usage: pythrust <run|check|build> <file>";
+
+/// The runtime library every native program links against. Found next
+/// to this executable, where `cargo build` puts it, unless overridden.
+const RUNTIME_LIB: &str = "libpythrust_rt.a";
+const RUNTIME_ENV: &str = "PYTHRUST_RT";
+
+/// System libraries a Rust static library needs (`rustc --print
+/// native-static-libs`).
+#[cfg(target_os = "macos")]
+const NATIVE_LIBS: &[&str] = &["-lSystem", "-lc", "-lm"];
+#[cfg(not(target_os = "macos"))]
+const NATIVE_LIBS: &[&str] = &[
+    "-lgcc_s",
+    "-lutil",
+    "-lrt",
+    "-lpthread",
+    "-lm",
+    "-ldl",
+    "-lc",
+];
 
 /// A subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +40,9 @@ enum Command {
     Run,
     /// Lex, parse, and infer. Never executes the program.
     Check,
+    /// Compile to a native executable beside the source, without its
+    /// extension: `fib.pythrust` builds `fib`.
+    Build,
 }
 
 /// A 1-based source position. `col` counts chars, not bytes.
@@ -43,10 +68,16 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match execute(command, &src) {
+    let result = match command {
+        Command::Build => compile(path, &src)
+            .map_err(|diag| render(path, &src, &diag))
+            .and_then(|object| link(path, &object)),
+        _ => execute(command, &src).map_err(|diag| render(path, &src, &diag)),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(diag) => {
-            eprint!("{}", render(path, &src, &diag));
+        Err(message) => {
+            eprint!("{message}");
             ExitCode::FAILURE
         }
     }
@@ -60,6 +91,7 @@ fn parse_args(args: &[String]) -> Result<(Command, &str), String> {
     let command = match command.as_str() {
         "run" => Command::Run,
         "check" => Command::Check,
+        "build" => Command::Build,
         other => return Err(format!("unknown command `{other}`")),
     };
     Ok((command, path.as_str()))
@@ -70,7 +102,7 @@ fn execute(command: Command, src: &str) -> pythrust_compiler::Result<()> {
     let tokens = lexer::lex(src)?;
     let module = parser::parse(&tokens)?;
     match command {
-        Command::Check => infer::infer(&module).map(drop),
+        Command::Check | Command::Build => infer::infer(&module).map(drop),
         // Thread D replaces this with the interpreter.
         Command::Run => Err(Diagnostic {
             span: module.span,
@@ -78,6 +110,66 @@ fn execute(command: Command, src: &str) -> pythrust_compiler::Result<()> {
             kind: DiagKind::Runtime,
         }),
     }
+}
+
+/// Compiles `src` to an object file. Runtime errors in it are rendered
+/// now, against `path`, so the binary prints what `run` would.
+fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
+    let tokens = lexer::lex(src)?;
+    let module = parser::parse(&tokens)?;
+    let types = infer::infer(&module)?;
+    let program = lower::lower(&module, &types)?;
+    codegen::emit(&program, &|diag| render(path, src, diag))
+}
+
+/// Links `object` with the runtime into the executable for `path`.
+fn link(path: &str, object: &[u8]) -> Result<(), String> {
+    let out = Path::new(path).with_extension("");
+    if out == Path::new(path) {
+        return Err(format!(
+            "pythrust: {path} has no extension to strip for the output name\n"
+        ));
+    }
+    let runtime = runtime_lib()?;
+    let obj = std::env::temp_dir().join(format!("pythrust-{}.o", std::process::id()));
+    std::fs::write(&obj, object)
+        .map_err(|e| format!("pythrust: cannot write {}: {e}\n", obj.display()))?;
+    let linked = std::process::Command::new("cc")
+        .arg(&obj)
+        .arg(&runtime)
+        .args(NATIVE_LIBS)
+        .arg("-o")
+        .arg(&out)
+        .status();
+    let removed = std::fs::remove_file(&obj);
+    match linked {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            return Err(format!(
+                "pythrust: linking {} failed: cc {status}\n",
+                out.display()
+            ))
+        }
+        Err(e) => return Err(format!("pythrust: cannot run cc: {e}\n")),
+    }
+    removed.map_err(|e| format!("pythrust: cannot remove {}: {e}\n", obj.display()))
+}
+
+/// The runtime library: `$PYTHRUST_RT`, or next to this executable.
+fn runtime_lib() -> Result<PathBuf, String> {
+    let path = match std::env::var_os(RUNTIME_ENV) {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_exe()
+            .map_err(|e| format!("pythrust: cannot locate myself: {e}\n"))?
+            .with_file_name(RUNTIME_LIB),
+    };
+    if !path.is_file() {
+        return Err(format!(
+            "pythrust: runtime library not found at {}; run `cargo build -p pythrust-rt` or set {RUNTIME_ENV}\n",
+            path.display()
+        ));
+    }
+    Ok(path)
 }
 
 /// Renders `diag` as a header, the offending line, and a caret underline.
@@ -156,16 +248,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_accepts_run_and_check() {
+    fn parse_args_accepts_each_command() {
         let run = args(&["run", "a.pythrust"]);
         let check = args(&["check", "b.pythrust"]);
         assert_eq!(parse_args(&run), Ok((Command::Run, "a.pythrust")));
         assert_eq!(parse_args(&check), Ok((Command::Check, "b.pythrust")));
+        let build = args(&["build", "c.pythrust"]);
+        assert_eq!(parse_args(&build), Ok((Command::Build, "c.pythrust")));
     }
 
     #[test]
     fn parse_args_rejects_unknown_command_and_wrong_arity() {
-        assert!(parse_args(&args(&["build", "a"])).is_err());
+        assert!(parse_args(&args(&["bulid", "a"])).is_err());
         assert!(parse_args(&args(&[])).is_err());
         assert!(parse_args(&args(&["run"])).is_err());
         assert!(parse_args(&args(&["run", "a", "b"])).is_err());

@@ -9,7 +9,7 @@ use crate::ast::{
 };
 
 /// Names bound anywhere in `block`, as Python decides locals.
-pub(super) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
+pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     walk(block, &mut |s| match &s.kind {
         StmtKind::Assign { target, .. }
