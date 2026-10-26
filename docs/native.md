@@ -60,9 +60,9 @@ Everything else is a compile error, `backend error: the native backend does not 
 - **Runtime lookup next to the compiler**, because Cargo cannot yet express "this binary needs that static library" (artifact dependencies are unstable). The conformance test builds `pythrust-rt` itself, with the profile and target of the `pythrust` under test, since `cargo test` does not.
 - **Objects are written to a fresh owner-only temporary directory**, created exclusively and removed after linking.
 
-## Next, in order (one small PR each)
+## Benchmarks
 
-1. **Benchmarks** against CPython: a numeric loop, string building, list sorting, and a tuple-heavy one (multiple return plus unpacking) to measure boxed tuples' allocation cost; numbers reported honestly, including where the gain is small.
+M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.md](benchmarks.md). Scalar code runs about 19x faster than CPython, list sorting 7x, string building about the same, and tuple-heavy code 1.6x, where boxed tuples cost about 12x against a tuple-free control.
 
 ## Known gaps
 

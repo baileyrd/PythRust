@@ -1,0 +1,9 @@
+# String building: a small string per iteration, and one growing line.
+total = 0
+line = ""
+for i in range(1000000):
+    key = "k" + str(i) + ":" + str(i % 97)
+    total += len(key)
+    if i % 50 == 0:
+        line += key[0]
+print(total, len(line))

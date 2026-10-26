@@ -1,0 +1,24 @@
+# Control for tuples.pyr: the same digit counts and sums without a tuple,
+# so the gap between the two is the cost of boxed tuples.
+def digits_count(n: int) -> int:
+    count = 0
+    while n > 0:
+        n = n // 10
+        count += 1
+    return count
+
+
+def digits_total(n: int) -> int:
+    total = 0
+    while n > 0:
+        total += n % 10
+        n = n // 10
+    return total
+
+
+all_count = 0
+all_total = 0
+for i in range(1000000):
+    all_count += digits_count(i)
+    all_total += digits_total(i)
+print(all_count, all_total)
