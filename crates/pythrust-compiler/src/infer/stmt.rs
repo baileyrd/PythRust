@@ -11,10 +11,17 @@ use super::ty::Type;
 use super::{error, Checker};
 
 impl Checker {
-    pub(super) fn block(&mut self, block: &Block) -> Result<()> {
-        for s in block {
+    /// Infers `block` in order. After a guard (`if x is None: return`),
+    /// the rest of the block sees `x` narrowed.
+    pub(super) fn block(&mut self, block: &[Stmt]) -> Result<()> {
+        for (i, s) in block.iter().enumerate() {
             self.stmt(s)?;
             self.settle()?;
+            let Some(name) = scope::guard(s) else {
+                continue;
+            };
+            let rest = &block[i + 1..];
+            return self.narrowed(&[name], rest, |c| c.block(rest));
         }
         Ok(())
     }
@@ -99,7 +106,7 @@ impl Checker {
     /// `not_none` names are narrowed in both, as is the name the test
     /// itself proves is not `None`.
     fn branch(&mut self, b: &Branch, not_none: &[String]) -> Result<()> {
-        self.narrowed(not_none, &Block::new(), |c| c.expr(&b.test).map(drop))?;
+        self.narrowed(not_none, &[], |c| c.expr(&b.test).map(drop))?;
         let mut inside = not_none.to_vec();
         if let Some((name, true)) = scope::none_test(&b.test) {
             inside.push(name);
@@ -112,7 +119,7 @@ impl Checker {
     fn narrowed(
         &mut self,
         names: &[String],
-        scope: &Block,
+        scope: &[Stmt],
         f: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<()> {
         let assigned = scope::assigned(scope);

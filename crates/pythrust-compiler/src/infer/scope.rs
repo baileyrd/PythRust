@@ -9,7 +9,7 @@ use crate::ast::{
 };
 
 /// Names bound anywhere in `block`, as Python decides locals.
-pub(super) fn assigned(block: &Block) -> BTreeSet<String> {
+pub(super) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     walk(block, &mut |s| match &s.kind {
         StmtKind::Assign { target, .. }
@@ -38,7 +38,7 @@ pub(super) fn annotated(block: &Block) -> Vec<(&str, &TypeExpr)> {
 }
 
 /// Visits every statement of `block` and of the blocks nested in it.
-fn walk<'a>(block: &'a Block, f: &mut impl FnMut(&'a Stmt)) {
+fn walk<'a>(block: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
     for s in block {
         f(s);
         match &s.kind {
@@ -295,6 +295,48 @@ pub(super) fn none_test(test: &Expr) -> Option<(String, bool)> {
 }
 
 /// Whether control can reach the end of `block` without a `return`.
+/// The name an `if` proves is not `None` for the statements after it:
+/// `if x is None:` with a body that leaves, or `if x is not None:` with an
+/// `else` that leaves, while the other side keeps `x`.
+pub(super) fn guard(stmt: &Stmt) -> Option<String> {
+    let StmtKind::If {
+        branch,
+        elifs,
+        orelse,
+    } = &stmt.kind
+    else {
+        return None;
+    };
+    if !elifs.is_empty() {
+        return None;
+    }
+    let (name, not_none) = none_test(&branch.test)?;
+    let (none_side, other) = if not_none {
+        (orelse, &branch.body)
+    } else {
+        (&branch.body, orelse)
+    };
+    let proven = leaves(none_side) && !assigned(other).contains(&name);
+    proven.then_some(name)
+}
+
+/// Whether control never reaches the statement after `block`: every path
+/// ends in `return`, `break` or `continue`, or loops forever.
+fn leaves(block: &[Stmt]) -> bool {
+    block.iter().any(|s| match &s.kind {
+        StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::If {
+            branch,
+            elifs,
+            orelse,
+        } => {
+            let mut bodies = std::iter::once(branch).chain(elifs);
+            bodies.all(|b| leaves(&b.body)) && leaves(orelse)
+        }
+        _ => diverges(s),
+    })
+}
+
 pub(super) fn falls_through(block: &Block) -> bool {
     !block.iter().any(diverges)
 }
