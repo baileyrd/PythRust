@@ -66,7 +66,9 @@ type        = type_atom ['|' 'None'] ;                  # `None | None` is rejec
 type_atom   = (NAME | 'None') ['[' type (',' type)* ']'] ;
 ```
 
-Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`, `None`, `int | None`, `list[str | None]`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. General `A | B` unions are a later addition.
+Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`, `None`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. `T | None` (Optional) is in phase 2, including nested positions such as `list[int | None]`; general `A | B` unions remain later. Optional is one fixed union type, not permission to change a variable's type. PR #10 implements the token/AST contracts and Optional inference at module level; PR #13 implements this type syntax and `is` / `is not` parsing, including nested annotations. PR #14 implements supported post-terminator narrowing. PR #16 adds Optional fixtures and in-process lex/parse/infer diagnostic checks. PR #17 wires CLI `check`/`run` and validates the current 35-program executable corpus; this is not exhaustive edge-case coverage. `raise` stays deferred. See [open implementation work](roadmap.md#phase-2-open-implementation-work).
+
+For example, `x: int | None = None` followed by `x = 5` keeps the same `int | None` type. Nano confirmed that a None-first variable intended to hold a value requires an explicit annotation. Without it, `x = None` fixes the type as `None`, so a later `x = 5` is a type error with a fix-it suggesting `x: int | None = None`. Do not relax loose-mode Optional inference yet; revisit only after the corpus shows how often the annotation is needed.
 
 ## Expressions
 
@@ -109,7 +111,9 @@ atom        = NAME | INT | FLOAT | STRING
 - Unpacking arity must match. A mismatch is a compile error when both lengths are statically known, otherwise a runtime error.
 - Call arguments and list elements are comma lists but never tuples: `f(1, 2)` is two arguments, `f((1, 2))` is one tuple.
 - `a, b = b, a` evaluates the right side fully before assigning.
-- Lists are homogeneous: every element has one type.
+- Lists are homogeneous: every element has one type. `[1, "a"]` is a type error unless the element type is `dyn`. A variable of type `dyn`, the Python-bridge escape hatch, may hold anything; this does not implicitly turn heterogeneous lists or ordinary variables into `dyn`. The bridge remains phase 5; this decision does not claim `dyn` is implemented in phase 2.
+- A variable has one fixed type, inferred once (or constrained by its annotation); assignment and augmented assignment cannot change it. See [Decided](#decided) for the no-widening diagnostic and Optional boundary.
+- `int ** int` returns `int`. A negative integer exponent is a runtime error, except that a literal negative exponent with an integer base is a compile-time error. Both diagnostics say "use a float base"; `2.0 ** -1` is legal.
 - A tuple subscript must be an integer literal, optionally negated (`t[-1]`), so the element type is known statically.
 - Subscripts apply to lists, strings, and tuples. A negative index counts from the end: `xs[-1]` is the last element. An index out of range in either direction is a runtime error, except on a tuple: there the index and the length are both static, so it is a compile error, like an unpacking arity mismatch. Slicing is not in phase 2.
 - Indexing a string and iterating over it (`for ch in s`) yield a length-1 `str`, counted in code points, as in CPython. Under UTF-8, indexing a non-ASCII string is O(n); the phase-3 backend deals with that.
@@ -133,20 +137,23 @@ A compile error (lexical, syntax, or type) is reported before anything runs: `py
 
 ## Deviations from Python
 
+This is the canonical documented deviations-from-CPython list. Thread E treats these as expected differences, not bugs, and links deviation fixtures here. The [Decided](#decided) section supplies rationale; other docs should reference this list rather than maintain another one.
+
 - Spaces only: a tab outside a string or comment is an error, not just in indentation.
 - An unknown string escape (`'\q'`) is an error; CPython keeps the backslash and warns.
 - `\N{name}` escapes are not supported.
 - Strings hold Unicode scalar values: a surrogate escape (`'\uD800'`) is an error.
 - String prefixes and triple quotes are rejected with a dedicated error.
 - `NAME` is ASCII only.
-- Ints are `i64`: overflow is a runtime error, including `i64::MIN // -1` and `-i64::MIN`. An out-of-range literal is a compile error.
+- **Checked overflow:** ints are `i64`; overflow is a runtime error, including `i64::MIN // -1`, `-i64::MIN` and `2 ** 64`. An out-of-range literal is a compile error (with the unary-minus boundary exception specified above).
+- **Fixed variable types:** a variable cannot be rebound to a different type. Flow-sensitive type-changing rebinding is outside the current subset; `dyn` is the explicit Python-bridge escape hatch.
+- **No int-to-float variable widening:** `total = 0` followed by `total += 1.5` is a compile error, with a fix-it to initialize with `0.0`. Mixed arithmetic within an expression still promotes as in Python; the variable's type does not widen.
+- **Negative integer exponents:** `int ** int` returns `int`; a negative exponent is a runtime error. With an integer base, a literal negative exponent (`x ** -1`) is a compile-time error. Both messages say "use a float base". `2.0 ** -1` stays legal.
 - Lists are homogeneous; tuple subscripts are integer literals, optionally negated.
 - An out-of-range tuple index (`(1, 2)[2]`) is a compile error, so nothing runs. Python raises an `IndexError` at that point.
 - Type errors are reported before the program runs, so a program with one prints nothing. Python raises the same mistakes as a `TypeError` at runtime, if it raises them at all.
 - `1 in "abc"`: a non-`str` left operand of `in` on a string is a compile error. Python raises a `TypeError`.
 - List equality needs the same element type: `[1] == [1.0]` is a type error, where Python compares element-wise and returns `True`.
-- A variable has one type in its scope. `int` never widens to `float` on assignment: `total = 0` then `total += 0.5` is a type error (write `0.0`). Mixed arithmetic in an expression still promotes, as in Python.
-- `int ** int` is `int`. A negative exponent is a compile error when it is a literal (`2 ** -1`) and a runtime error otherwise; the fix is a float base (`2.0 ** -1`). Python returns a `float`.
 - `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
 - Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.
 - A function that returns a value on some path must not fall off its end (that returns `None`) unless its return annotation is `T | None`.
@@ -157,13 +164,18 @@ A compile error (lexical, syntax, or type) is reported before anything runs: `py
 
 ## Deliberate omissions (phase 2)
 
-Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators, chained assignment (`a = b = 1`), bare declarations (`x: int` with no value), `tuple[int, ...]`, `A | B` unions beyond `T | None`. Each is additive: existing phase-2 programs keep their meaning.
+Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators, chained assignment (`a = b = 1`), bare declarations (`x: int` with no value), `tuple[int, ...]`, general `A | B` unions (except phase-2 `T | None`). Each is additive: existing phase-2 programs keep their meaning.
 
 ## Decided
 
 - **Integers:** `i64` with checked overflow (runtime error, no silent wrap).
+- **Fixed variable types (Nano):** one type per variable, inferred once; no rebinding to a different type. `total = 0` followed by `total += 1.5` is a compile error with a fix-it: "total is int here; write 0.0". Do not widen the variable from int to float: if the loop never runs, that changes the output from `0` to `0.0`, violating "tempering never changes meaning". Flow-sensitive type-changing rebinding such as `x = int(x)` is out of scope now; ship a clear error, then use the conformance corpus to decide whether to revisit it. A same-type assignment is unaffected.
+- **Optional (Nano):** pull `T | None` into phase 2 so None-initialized values can be represented without arbitrary type-changing rebinding. Optional remains one fixed union type. **None-first annotation confirmed by Nano:** write `x: int | None = None` when a None-first variable must later hold an int; unannotated `x = None` then `x = 5` is an error with that fix-it. Do not relax loose-mode Optional inference yet; revisit after corpus evidence shows how often the annotation is needed.
+- **Optional follow-ups (Nano, in order):** parser support for `'|' 'None'` and `is` / `is not`; then a separate PR for narrowing after a terminating `if x is None` branch (`return`, `break`, `continue`), with each implemented terminator tested and a fall-through negative case; then Optional conformance cases once parsing lands. These narrow an existing fixed union, not the variable's declared type. **Raise deferral confirmed by Nano:** implement and test `return`/`break`/`continue` narrowing now; defer the `raise` test until `raise` exists. `raise` remains reserved; do not expand exception syntax here.
+- **Lists and dyn (Nano):** homogeneous element types; `[1, "a"]` is an error unless the element type is `dyn`. A `dyn` variable may hold anything. `dyn` is the explicit Python-bridge escape hatch, not an implicit fallback.
+- **Integer powers (Nano):** `int ** int` returns `int`; negative exponents fail at runtime. A literal negative exponent with an integer base fails at compile time. Both diagnostics say "use a float base". `2.0 ** -1` remains legal. Checked overflow already makes `2 ** 64` a runtime error.
 - **Tempering marker:** `temper def f(...)`, a keyword prefix.
-- **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`.
+- **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`. **Tuple bounds confirmed by Nano (#12):** an out-of-range tuple index is a compile error because index and length are static, so nothing runs; list/string out-of-range indexes remain runtime errors.
 - **Source file extension:** `.pyr`.
 
 - **Pause marker** (lands with concurrency): `pause <expr>`, a loosely binding prefix covering the whole expression to its right, like Swift's `await`. Required in tempered code at every pause point; it must cover at least one. See [research/concurrency-syntax.md](research/concurrency-syntax.md).
