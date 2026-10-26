@@ -1,0 +1,49 @@
+def describe(x: int | None) -> str:
+    if x is None:
+        return "nothing"
+    elif x < 0:
+        return "negative " + str(-x)
+    else:
+        return "value " + str(x + 1)
+
+
+def double(x: int | None) -> int:
+    if x is not None:
+        return x * 2
+    return 0
+
+
+def guarded(x: int | None) -> int:
+    if x is None:
+        return -1
+    return x + 100
+
+
+def drain(step: int | None) -> int:
+    total = 0
+    while step is not None:
+        total += step
+        if total > 10:
+            break
+    return total
+
+
+def sum_present(xs: list[int | None]) -> int:
+    total = 0
+    for x in xs:
+        if x is None:
+            continue
+        total += x
+    return total
+
+
+vals: list[int | None] = [None, -3, 4]
+for v in vals:
+    print(describe(v), double(v), guarded(v))
+print(drain(4), drain(None))
+
+xs: list[int | None] = [None, 1, 2]
+xs.append(None)
+xs.append(5)
+print(xs)
+print(len(xs), sum_present(xs))

@@ -1,4 +1,5 @@
 # deviation: list == needs one element type; this is a compile error, where CPython prints False.
 # expect-exit: 1
+# expect-error: cannot compare list[int] with list[str]
 print("before")
 print([1] == ["a"])
