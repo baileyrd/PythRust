@@ -295,7 +295,14 @@ impl FnBuilder<'_, '_> {
         let Some(def) = def else {
             return self.builtin(name, args, ops, span);
         };
-        let ops = bind_params(def, args, ops, span)?;
+        let mut bound = Vec::new();
+        for (k, op) in bind_params(def, args, ops)?.into_iter().enumerate() {
+            bound.push(match op {
+                Some(op) => op,
+                None => self.default_arg(def, k, span)?,
+            });
+        }
+        let ops = bound;
         let tys = ops.iter().map(|op| self.ty(*op)).collect();
         let ret = self.ty_at(span)?;
         let id = self.cx.instance(def, tys, ret, span)?;
@@ -438,8 +445,9 @@ fn type_name(ty: Ty) -> &'static str {
 }
 
 /// `ops`, the values of `args`, in `def`'s parameter order: positional
-/// first, then keywords by name. Inference rejected every other shape.
-fn bind_params(def: &FuncDef, args: &[Arg], ops: Vec<Operand>, span: Span) -> Result<Vec<Operand>> {
+/// first, then keywords by name; `None` where the default applies.
+/// Inference rejected every other shape.
+fn bind_params(def: &FuncDef, args: &[Arg], ops: Vec<Operand>) -> Result<Vec<Option<Operand>>> {
     let mut slots: Vec<Option<Operand>> = vec![None; def.params.len()];
     for (next, (a, op)) in args.iter().zip(ops).enumerate() {
         let k = match &a.name {
@@ -455,10 +463,7 @@ fn bind_params(def: &FuncDef, args: &[Arg], ops: Vec<Operand>, span: Span) -> Re
         };
         *slot = Some(op);
     }
-    slots
-        .into_iter()
-        .collect::<Option<Vec<Operand>>>()
-        .ok_or_else(|| unsupported(span, "default arguments"))
+    Ok(slots)
 }
 
 /// The int operation for `op`; `/` and `**` are not one.

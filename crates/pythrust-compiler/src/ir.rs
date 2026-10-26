@@ -60,6 +60,10 @@ pub enum Compound {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FuncId(pub usize);
 
+/// Index into [`Program::globals`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlobalId(pub usize);
+
 /// Index into [`Func::locals`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocalId(pub usize);
@@ -75,6 +79,9 @@ pub struct Program {
     pub funcs: Vec<Func>,
     pub main: FuncId,
     pub types: Vec<Compound>,
+    /// Module-level storage functions can read: zeroed at start, like
+    /// locals.
+    pub globals: Vec<Ty>,
 }
 
 /// One monomorphic function. `blocks[0]` is the entry; `params` are the
@@ -119,6 +126,12 @@ pub enum Inst {
     Forget(LocalId),
     /// `list.append(value)`: the list adds its own reference.
     Append { list: Operand, value: Operand },
+    /// Stores a new reference to `value` in the global, dropping the
+    /// one it held (null: nothing).
+    SetGlobal { global: GlobalId, value: Operand },
+    /// Drops the global's reference (null: nothing) and nulls it: the
+    /// end of the module's code.
+    DropGlobal(GlobalId),
     /// `list[index] = value`; fails at `span` when out of range.
     SetItem {
         list: Operand,
@@ -174,6 +187,8 @@ pub enum Rvalue {
     NewSeq(Vec<Operand>),
     /// Field `k` of a tuple.
     Field(Operand, usize),
+    /// The global's value; a new reference if reference-counted.
+    Global(GlobalId),
     /// Float arithmetic with Python semantics: `/`, `//` and `%` by zero
     /// and `**` out of range fail.
     Float(FloatOp, Operand, Operand),

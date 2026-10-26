@@ -87,13 +87,58 @@ fn unsupported_operations_name_the_construct() {
 }
 
 #[test]
-fn unsupported_scoping_and_calls_name_the_construct() {
-    let (d, text) = rejected("N = 3\ndef f():\n    return N\nprint(f())\n");
-    assert!(d.message.contains("global"), "{}", d.message);
-    assert_eq!(text, "N");
-    let (d, text) = rejected("def f(x=1 // 0):\n    pass\nprint(2)\n");
-    assert!(d.message.contains("default arguments"));
-    assert_eq!(text, "1 // 0");
+fn only_module_variables_functions_read_are_mirrored() {
+    let p = lowered("n = 1\nm = 2\ndef f() -> int:\n    return n\nn = 3\nprint(f(), m)\n");
+    let main = &p.funcs[p.main.0];
+    let sets = main.blocks.iter().flat_map(|b| &b.insts);
+    let sets = sets.filter(|i| matches!(i, Inst::SetGlobal { .. })).count();
+    // Two writes of `n`, each storing the value and the bound flag.
+    assert_eq!(sets, 4);
+    assert_eq!(p.globals, vec![Ty::Int, Ty::Bool]);
+}
+
+#[test]
+fn a_function_reading_a_module_variable_checks_it_is_bound() {
+    let p = lowered("def f() -> str:\n    return s\ns = 'x'\nprint(f())\n");
+    assert_eq!(fails(&p), 1, "NameError before the module assigns it");
+    let main = &p.funcs[p.main.0];
+    let drops = main.blocks[1].insts.iter();
+    let drops = drops.filter(|i| matches!(i, Inst::DropGlobal(_))).count();
+    assert_eq!(drops, 1, "the module's end drops the string global");
+}
+
+#[test]
+fn defaults_are_stored_when_the_def_runs() {
+    let src = "def f(a: int, b: str = 'd') -> str:\n    return b\nprint(f(1), f(2, 'e'))\n";
+    let p = lowered(src);
+    let main = &p.funcs[p.main.0];
+    let insts = || main.blocks.iter().flat_map(|b| &b.insts);
+    let stored = insts()
+        .filter(|i| matches!(i, Inst::SetGlobal { .. }))
+        .count();
+    let loaded = insts().filter(|i| {
+        matches!(
+            i,
+            Inst::Assign {
+                value: crate::ir::Rvalue::Global(_),
+                ..
+            }
+        )
+    });
+    assert_eq!(
+        (stored, loaded.count()),
+        (1, 1),
+        "one default, one call omitting it"
+    );
+}
+
+#[test]
+fn unsupported_calls_name_the_construct() {
+    let src =
+        "def twice(n):\n    return sq(sq(n))\ndef sq(n):\n    return n * n\nprint(twice(3))\n";
+    let (d, text) = rejected(src);
+    assert!(d.message.contains("generic code"), "{}", d.message);
+    assert_eq!(text, "sq(n)");
 }
 
 #[test]

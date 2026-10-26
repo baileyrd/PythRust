@@ -8,6 +8,7 @@
 //! `DiagKind::Backend` error naming the construct, never a guess.
 
 mod expr;
+mod globals;
 mod seq;
 mod stmt;
 mod types;
@@ -31,19 +32,21 @@ type Subst = HashMap<TypeVar, Ty>;
 
 /// Lowers `module`, typed by `types`, to IR.
 pub fn lower(module: &Module, types: &Types) -> Result<Program> {
+    let mut defs = HashMap::new();
+    for s in &module.body {
+        if let StmtKind::FuncDef(f) = &s.kind {
+            defs.insert(f.name.name.as_str(), f);
+        }
+    }
     let mut cx = Cx {
         types,
-        defs: HashMap::new(),
+        globals: globals::Globals::new(module, &defs),
+        defs,
         instances: HashMap::new(),
         funcs: Vec::new(),
         queue: Vec::new(),
         seqs: types::SeqTypes::default(),
     };
-    for s in &module.body {
-        if let StmtKind::FuncDef(f) = &s.kind {
-            cx.defs.insert(f.name.name.as_str(), f);
-        }
-    }
     let main = cx.reserve();
     let mut b = FnBuilder::new(
         &mut cx,
@@ -61,11 +64,15 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
     }
     let funcs = std::mem::take(&mut cx.funcs);
     let funcs = funcs.into_iter().collect::<Option<Vec<Func>>>();
-    let funcs = funcs.ok_or_else(|| internal(module.span, "an instance was never lowered"))?;
+    let mut funcs = funcs.ok_or_else(|| internal(module.span, "an instance was never lowered"))?;
+    // The module's exit, which ends the program, drops what globals own.
+    let exit = &mut funcs[main.0].blocks[1].insts;
+    exit.extend(cx.globals.owning().into_iter().map(Inst::DropGlobal));
     Ok(Program {
         funcs,
         main,
         types: cx.seqs.into_vec(),
+        globals: cx.globals.into_vec(),
     })
 }
 
@@ -79,6 +86,7 @@ struct Cx<'a> {
     funcs: Vec<Option<Func>>,
     queue: Vec<Job<'a>>,
     seqs: types::SeqTypes,
+    globals: globals::Globals,
 }
 
 /// An instance waiting to be lowered.

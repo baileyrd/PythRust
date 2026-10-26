@@ -41,6 +41,7 @@ pub const ENTRY: &str = "pythrust_main";
 /// the exact text the program prints to stderr when it happens.
 pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result<Vec<u8>> {
     let mut cg = Codegen::new(render)?;
+    cg.declare_globals(&program.globals)?;
     let ids = cg.declare(program)?;
     for (func, id) in program.funcs.iter().zip(&ids) {
         cg.define(func, *id, &ids, &program.types)?;
@@ -238,6 +239,8 @@ struct Codegen<'r> {
     /// Read-only byte strings (failure messages, literals), deduplicated.
     bytes: HashMap<String, (DataId, usize)>,
     ptr: types::Type,
+    /// `ir::Program::globals`: each a zeroed, module-private word.
+    globals: Vec<(DataId, Ty)>,
 }
 
 impl<'r> Codegen<'r> {
@@ -269,6 +272,7 @@ impl<'r> Codegen<'r> {
             rt: HashMap::new(),
             bytes: HashMap::new(),
             ptr,
+            globals: Vec::new(),
         };
         for rt in Rt::ALL {
             let mut sig = cg.module.make_signature();
@@ -282,6 +286,20 @@ impl<'r> Codegen<'r> {
             cg.rt.insert(rt.symbol(), id);
         }
         Ok(cg)
+    }
+
+    fn declare_globals(&mut self, tys: &[Ty]) -> Result<()> {
+        for ty in tys {
+            let id = self
+                .module
+                .declare_anonymous_data(true, false)
+                .map_err(module_err)?;
+            let mut zero = DataDescription::new();
+            zero.define_zeroinit(8);
+            self.module.define_data(id, &zero).map_err(module_err)?;
+            self.globals.push((id, *ty));
+        }
+        Ok(())
     }
 
     fn declare(&mut self, program: &Program) -> Result<Vec<ClifFunc>> {
@@ -466,7 +484,43 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 value,
                 span,
             } => self.set_item(*list, *index, *value, *span)?,
+            Inst::SetGlobal { global, value } => {
+                let v = self.operand(*value);
+                self.set_global(*global, v)?;
+            }
+            Inst::DropGlobal(global) => {
+                let null = self.b.ins().iconst(self.cg.ptr, 0);
+                self.set_global(*global, null)?;
+            }
         }
+        Ok(())
+    }
+
+    /// The address and type of global `g`.
+    fn global(&mut self, g: ir::GlobalId) -> Result<(Value, Ty)> {
+        let (data, ty) = *self
+            .cg
+            .globals
+            .get(g.0)
+            .ok_or_else(|| backend("an unknown global".to_string()))?;
+        let gv = self.cg.module.declare_data_in_func(data, self.b.func);
+        Ok((self.b.ins().symbol_value(self.cg.ptr, gv), ty))
+    }
+
+    /// Stores `v` in global `g`: a reference-counted global takes a new
+    /// reference to `v` (null: none) and drops its old one.
+    fn set_global(&mut self, g: ir::GlobalId, v: Value) -> Result<()> {
+        let (addr, ty) = self.global(g)?;
+        let flags = MemFlagsData::trusted();
+        if !ty.is_rc() {
+            self.b.ins().store(flags, v, addr, 0);
+            return Ok(());
+        }
+        let (inc, dec) = rc_fns(ty);
+        self.call_rt(inc, &[v]);
+        let old = self.b.ins().load(self.cg.ptr, flags, addr, 0);
+        self.b.ins().store(flags, v, addr, 0);
+        self.call_rt(dec, &[old]);
         Ok(())
     }
 
@@ -595,6 +649,17 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             },
             Rvalue::NewSeq(items) => self.new_seq(self.func.locals[dest.0], items),
             Rvalue::Field(t, k) => self.field(*t, *k, dest),
+            Rvalue::Global(g) => {
+                let (addr, ty) = self.global(*g)?;
+                let v = self
+                    .b
+                    .ins()
+                    .load(self.cg.clif_ty(ty), MemFlagsData::trusted(), addr, 0);
+                if ty.is_rc() {
+                    self.call_rt(rc_fns(ty).0, &[v]);
+                }
+                Ok(v)
+            }
             Rvalue::Float(op, a, b) => self.float_op(*op, *a, *b, span),
             Rvalue::IntPow(a, b) => self.int_pow(*a, *b, span),
             Rvalue::ToFloat(a) => Ok(self.int_as_float(*a)),

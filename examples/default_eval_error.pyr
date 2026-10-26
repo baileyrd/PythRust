@@ -1,0 +1,11 @@
+# expect-exit: 1
+# Defaults are evaluated when the `def` runs, so a failing default stops
+# the program there, before any call.
+print("before")
+
+
+def f(x: int = 1 // 0) -> int:
+    return x
+
+
+print("unreachable")

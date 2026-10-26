@@ -22,6 +22,9 @@ pub(super) struct Var {
 impl FnBuilder<'_, '_> {
     /// Reads variable `name`, failing at `span` if it is unbound.
     pub(super) fn read(&mut self, name: &str, span: Span) -> Result<Operand> {
+        if self.defined.is_none() && !self.scope.contains(name) && self.cx.is_shared(name) {
+            return self.read_global(name, span);
+        }
         let var = self.var(name, span)?;
         let Some(flag) = var.flag else {
             return Ok(Operand::Local(var.local));
@@ -56,13 +59,13 @@ impl FnBuilder<'_, '_> {
         self.block_bound.insert(var.local);
         if !self.ty(value).is_rc() {
             self.assign(var.local, Rvalue::Use(value), span);
-            return Ok(());
+        } else {
+            // Owned first: `value` may be this variable.
+            let owned = self.own(value, span);
+            self.emit(Inst::Release(var.local));
+            self.move_into(var.local, owned, span);
         }
-        // Owned first: `value` may be this variable.
-        let owned = self.own(value, span);
-        self.emit(Inst::Release(var.local));
-        self.move_into(var.local, owned, span);
-        Ok(())
+        self.mirror_write(name, Operand::Local(var.local), span)
     }
 
     fn unbound_message(&self, name: &str) -> String {
