@@ -21,6 +21,9 @@ struct Looped<'s> {
 pub(super) const OPEN_RESULT: &str =
     "a generic function whose open result type no `return` decides";
 
+/// A range's `(start, stop, step)`.
+pub(super) type Bounds = (Operand, Operand, Operand);
+
 impl FnBuilder<'_, '_> {
     /// Lowers `block`'s statements. In an instance whose result type is
     /// still undecided, a statement stuck on a recursive call is skipped
@@ -283,9 +286,18 @@ impl FnBuilder<'_, '_> {
             orelse,
         };
         if let Some(args) = self.range_args(iter) {
-            return self.for_range(&looped, args, iter.span);
+            let mut ops = Vec::new();
+            for a in args {
+                ops.push(self.expr(&a.value)?);
+            }
+            let bounds = self.range_bounds(args, &ops, iter.span)?;
+            return self.for_range(&looped, bounds, iter.span);
         }
         let s = self.expr(iter)?;
+        if self.ty(s) == Ty::Range {
+            let bounds = [0, 1, 2].map(|k| self.temp(Ty::Int, Rvalue::Field(s, k), iter.span));
+            return self.for_range(&looped, bounds.into(), iter.span);
+        }
         if self
             .cx
             .seqs
@@ -373,11 +385,11 @@ impl FnBuilder<'_, '_> {
         Ok(())
     }
 
-    /// `for x in range(...)`. The bounds are evaluated once. The counter
-    /// steps until it passes `stop`; a step that would overflow `i64` has
-    /// passed it too, since `stop` fits in one.
-    fn for_range(&mut self, l: &Looped, args: &[Arg], iter_span: Span) -> Result<()> {
-        let (start, stop, step) = self.range_bounds(args, iter_span)?;
+    /// `for x` over the range `(start, stop, step)`, its bounds evaluated
+    /// once. The counter steps until it passes `stop`; a step that would
+    /// overflow `i64` has passed it too, since `stop` fits in one.
+    fn for_range(&mut self, l: &Looped, bounds: Bounds, iter_span: Span) -> Result<()> {
+        let (start, stop, step) = bounds;
         let counter = self.new_local(Ty::Int);
         self.assign(counter, Rvalue::Use(start), iter_span);
         let cur = Operand::Local(counter);
@@ -421,20 +433,26 @@ impl FnBuilder<'_, '_> {
         is_range.then_some(args.as_slice())
     }
 
-    /// `(start, stop, step)` snapshotted into temporaries. A zero step
-    /// fails here, as Python's `range` does.
-    fn range_bounds(&mut self, args: &[Arg], span: Span) -> Result<(Operand, Operand, Operand)> {
-        let mut ops = Vec::new();
-        for a in args {
+    /// `(start, stop, step)` of `range(args)`, the arguments evaluated
+    /// into `ops`, snapshotted into temporaries. A zero step fails here,
+    /// as Python's `range` does.
+    pub(super) fn range_bounds(
+        &mut self,
+        args: &[Arg],
+        ops: &[Operand],
+        span: Span,
+    ) -> Result<Bounds> {
+        let mut snap = Vec::new();
+        for (a, op) in args.iter().zip(ops) {
             if a.name.is_some() {
                 return Err(unsupported(a.span, "keyword arguments"));
             }
-            let op = self.expr(&a.value)?;
-            if self.ty(op) != Ty::Int {
+            if self.ty(*op) != Ty::Int {
                 return Err(unsupported(a.span, "`range` over a non-int"));
             }
-            ops.push(self.temp(Ty::Int, Rvalue::Use(op), a.span));
+            snap.push(self.temp(Ty::Int, Rvalue::Use(*op), a.span));
         }
+        let ops = snap;
         let (start, stop, step) = match ops[..] {
             [stop] => (Operand::Int(0), stop, Operand::Int(1)),
             [start, stop] => (start, stop, Operand::Int(1)),

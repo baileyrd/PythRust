@@ -10,7 +10,7 @@
 //! Descriptors are a prefix code the compiler emits as read-only data:
 //! `i` int, `f` float, `b` bool, `n` `None`, `s` str, `l` and the element
 //! type for a list, `t`, a field count byte and the field types for a
-//! tuple. Ownership follows strings: functions borrow their arguments,
+//! tuple, `r` for a range (see [`crate::range`]). Ownership follows strings: functions borrow their arguments,
 //! and slots read out are new references.
 
 #![allow(unsafe_code)] // Slots are pointers; the C ABI below.
@@ -19,6 +19,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 
+use crate::range::Range;
 use crate::str::{self as pstr, PtStr};
 use crate::LIVE;
 
@@ -41,6 +42,7 @@ enum Kind {
     Str,
     List,
     Tuple,
+    Range,
     Opt,
 }
 
@@ -52,6 +54,7 @@ fn kind(desc: &[u8]) -> Kind {
         Some(b's') => Kind::Str,
         Some(b'l') => Kind::List,
         Some(b't') => Kind::Tuple,
+        Some(b'r') => Kind::Range,
         Some(b'o') => Kind::Opt,
         _ => Kind::Int,
     }
@@ -72,8 +75,10 @@ fn span(desc: &[u8]) -> usize {
 
 /// The descriptor of slot `k` of a sequence described by `desc`.
 fn slot(desc: &'static [u8], k: usize) -> &'static [u8] {
-    if kind(desc) == Kind::List {
-        return desc.get(1..).unwrap_or_default();
+    match kind(desc) {
+        Kind::List => return desc.get(1..).unwrap_or_default(),
+        Kind::Range => return b"i",
+        _ => {}
     }
     let first = desc.get(2..).unwrap_or_default();
     (0..k).fold(first, |rest, _| rest.get(span(rest)..).unwrap_or_default())
@@ -137,7 +142,7 @@ fn inc(desc: &[u8], v: u64) {
         // SAFETY: a string slot holds a live string.
         Kind::Str => unsafe { pstr::pt_str_inc(v as *const PtStr) },
         // SAFETY: a sequence slot holds a live sequence.
-        Kind::List | Kind::Tuple => unsafe { pt_seq_inc(v as *const PtSeq) },
+        Kind::List | Kind::Tuple | Kind::Range => unsafe { pt_seq_inc(v as *const PtSeq) },
         _ => {}
     }
 }
@@ -150,7 +155,7 @@ fn dec(desc: &[u8], v: u64) {
         // SAFETY: a string slot owns a reference to a live string.
         Kind::Str => unsafe { pstr::pt_str_dec(v as *mut PtStr) },
         // SAFETY: a sequence slot owns a reference to a live sequence.
-        Kind::List | Kind::Tuple => unsafe { pt_seq_dec(v as *mut PtSeq) },
+        Kind::List | Kind::Tuple | Kind::Range => unsafe { pt_seq_dec(v as *mut PtSeq) },
         _ => {}
     }
 }
@@ -163,6 +168,10 @@ fn eq(desc: &[u8], a: u64, b: u64) -> bool {
         Kind::Str => unsafe { text(a) == text(b) },
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple => a == b || unsafe { seq_eq(seq(a), seq(b)) },
+        // SAFETY: range slots hold live ranges.
+        Kind::Range => unsafe {
+            range_fields(a as *const PtSeq).same(&range_fields(b as *const PtSeq))
+        },
         Kind::Opt if a == 0 || b == 0 => a == b,
         Kind::Opt => eq(opt(desc).0, present(desc, a), present(desc, b)),
         _ => a == b,
@@ -189,8 +198,8 @@ fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple => unsafe { seq_cmp(seq(a), seq(b)) },
         Kind::Bool | Kind::None => Some(a.cmp(&b)),
-        // Python cannot order `None`; the compiler never asks.
-        Kind::Opt => None,
+        // Python cannot order `None` or ranges; the compiler never asks.
+        Kind::Opt | Kind::Range => None,
     }
 }
 
@@ -217,6 +226,8 @@ fn repr(desc: &[u8], v: u64, out: &mut String) {
         Kind::Str => out.push_str(&pstr::repr(unsafe { text(v) })),
         // SAFETY: a sequence slot holds a live sequence.
         Kind::List | Kind::Tuple => seq_repr(unsafe { seq(v) }, out),
+        // SAFETY: a range slot holds a live range.
+        Kind::Range => out.push_str(&unsafe { range_fields(v as *const PtSeq) }.repr()),
         Kind::Opt if v == 0 => out.push_str("None"),
         Kind::Opt => repr(opt(desc).0, present(desc, v), out),
     }
@@ -400,12 +411,12 @@ pub unsafe extern "C" fn pt_seq_dec(s: *mut PtSeq) {
 ///
 /// # Safety
 ///
-/// `a` and `b` are live sequences of one type.
+/// `a` and `b` are live sequences (or ranges) of one type.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_seq_eq(a: *const PtSeq, b: *const PtSeq) -> u8 {
     // SAFETY: guaranteed by the caller.
-    let same = a == b || unsafe { seq_eq(seq(a as u64), seq(b as u64)) };
-    u8::from(same)
+    let desc = unsafe { seq(a as u64) }.desc;
+    u8::from(eq(desc, a as u64, b as u64))
 }
 
 /// Orders `a` and `b`: -1, 0 or 1, or 2 when unordered (a NaN decides).
@@ -437,6 +448,34 @@ pub unsafe extern "C" fn pt_list_contains(s: *const PtSeq, v: u64) -> u8 {
     u8::from(s.items.borrow().iter().any(|x| eq(desc, *x, v)))
 }
 
+/// Python's `repr` of sequence (or range) `s`.
+///
+/// # Safety
+///
+/// `s` is a live sequence.
+unsafe fn shown(s: *const PtSeq) -> String {
+    let mut out = String::new();
+    // SAFETY: guaranteed by the caller.
+    repr(unsafe { seq(s as u64) }.desc, s as u64, &mut out);
+    out
+}
+
+/// The bounds of range `r`.
+///
+/// # Safety
+///
+/// `r` is a live range.
+pub(crate) unsafe fn range_fields(r: *const PtSeq) -> Range {
+    // SAFETY: guaranteed by the caller.
+    let items = unsafe { seq(r as u64) }.items.borrow();
+    let at = |k: usize| items.get(k).map_or(0, |v| *v as i64);
+    Range {
+        start: at(0),
+        stop: at(1),
+        step: at(2),
+    }
+}
+
 /// Writes Python's `repr` of `s`, as `print` does.
 ///
 /// # Safety
@@ -444,10 +483,8 @@ pub unsafe extern "C" fn pt_list_contains(s: *const PtSeq, v: u64) -> u8 {
 /// `s` is a live sequence.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_write_seq(s: *const PtSeq) {
-    let mut out = String::new();
     // SAFETY: guaranteed by the caller.
-    seq_repr(unsafe { seq(s as u64) }, &mut out);
-    crate::write(out.as_bytes());
+    crate::write(unsafe { shown(s) }.as_bytes());
 }
 
 /// `str(s)`, a new string.
@@ -457,10 +494,8 @@ pub unsafe extern "C" fn pt_write_seq(s: *const PtSeq) {
 /// `s` is a live sequence.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_str_from_seq(s: *const PtSeq) -> *mut PtStr {
-    let mut out = String::new();
     // SAFETY: guaranteed by the caller.
-    seq_repr(unsafe { seq(s as u64) }, &mut out);
-    pstr::into_ptr(PtStr::new(out.into()))
+    pstr::into_ptr(PtStr::new(unsafe { shown(s) }.into()))
 }
 
 #[cfg(test)]
@@ -554,6 +589,25 @@ mod tests {
             assert_eq!((pt_seq_get(s, 0, &mut status), status), (11, 0));
             assert_eq!(pt_list_set(s, -4, 0), 1);
             pt_seq_dec(s);
+        }
+    }
+
+    #[test]
+    fn ranges_show_and_compare_as_python_inside_lists() {
+        let empty = make(b"r", &[0, 0, 1]);
+        let also_empty = make(b"r", &[5, 2, 3]);
+        let odd = make(b"r", &[1, 9, 2]);
+        let xs = make(b"lr", &[empty as u64, odd as u64]);
+        let ys = make(b"lr", &[also_empty as u64, odd as u64]);
+        // SAFETY: every sequence here is live until dropped below.
+        unsafe {
+            assert_eq!(shown(xs), "[range(0, 0), range(1, 9, 2)]");
+            assert_eq!(pt_seq_eq(empty, also_empty), 1);
+            assert_eq!(pt_seq_eq(xs, ys), 1);
+            assert_eq!(pt_seq_eq(empty, odd), 0);
+            [xs, ys, empty, also_empty, odd]
+                .into_iter()
+                .for_each(|s| pt_seq_dec(s));
         }
     }
 
