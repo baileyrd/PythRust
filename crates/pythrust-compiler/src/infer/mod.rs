@@ -15,7 +15,7 @@
 
 mod builtins;
 mod expr;
-mod scope;
+pub(crate) mod scope;
 mod solve;
 mod stmt;
 mod subst;

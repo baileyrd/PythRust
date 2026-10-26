@@ -1,16 +1,38 @@
-//! `pythrust` command line: `run` and `check` a source file.
+//! `pythrust` command line: `run`, `check` or `build` a source file.
 //!
 //! The only place that does I/O. Stages are pure; this file reads the
-//! file, calls them, and renders diagnostics as `path:line:col`.
+//! file, calls them, renders diagnostics as `path:line:col`, and for
+//! `build` writes the object file and links it with the system `cc`.
 
 #![forbid(unsafe_code)]
 
 use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use pythrust_compiler::{infer, interp, lexer, parser, DiagKind, Diagnostic, Span};
+use pythrust_compiler::{codegen, infer, interp, lexer, lower, parser, DiagKind, Diagnostic, Span};
 
-const USAGE: &str = "usage: pythrust <run|check> <file>";
+const USAGE: &str = "usage: pythrust <run|check|build> <file>";
+
+/// The runtime library every native program links against. Found next
+/// to this executable, where `cargo build` puts it, unless overridden.
+const RUNTIME_LIB: &str = "libpythrust_rt.a";
+const RUNTIME_ENV: &str = "PYTHRUST_RT";
+
+/// System libraries a Rust static library needs (`rustc --print
+/// native-static-libs`).
+#[cfg(target_os = "macos")]
+const NATIVE_LIBS: &[&str] = &["-lSystem", "-lc", "-lm"];
+#[cfg(not(target_os = "macos"))]
+const NATIVE_LIBS: &[&str] = &[
+    "-lgcc_s",
+    "-lutil",
+    "-lrt",
+    "-lpthread",
+    "-lm",
+    "-ldl",
+    "-lc",
+];
 
 /// A subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +41,9 @@ enum Command {
     Run,
     /// Lex, parse, and infer. Never executes the program.
     Check,
+    /// Compile to a native executable beside the source, without its
+    /// extension: `fib.pythrust` builds `fib`.
+    Build,
 }
 
 /// A 1-based source position. `col` counts chars, not bytes.
@@ -44,6 +69,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if command == Command::Build {
+        return build(path, &src);
+    }
     // Buffered for speed; flushed before any diagnostic so output already
     // printed precedes the error, as in CPython.
     let mut out = BufWriter::new(std::io::stdout());
@@ -60,7 +88,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// Parses `<run|check> <file>`.
+/// Parses `<run|check|build> <file>`.
 fn parse_args(args: &[String]) -> Result<(Command, &str), String> {
     let [command, path] = args else {
         return Err(format!("expected 2 arguments, got {}", args.len()));
@@ -68,6 +96,7 @@ fn parse_args(args: &[String]) -> Result<(Command, &str), String> {
     let command = match command.as_str() {
         "run" => Command::Run,
         "check" => Command::Check,
+        "build" => Command::Build,
         other => return Err(format!("unknown command `{other}`")),
     };
     Ok((command, path.as_str()))
@@ -84,7 +113,7 @@ fn execute(
     let module = parser::parse(&tokens)?;
     infer::infer(&module)?;
     match command {
-        Command::Check => Ok(()),
+        Command::Check | Command::Build => Ok(()),
         Command::Run => interp::run(&module, out),
     }
 }
@@ -96,6 +125,114 @@ fn flush(out: &mut impl Write) -> pythrust_compiler::Result<()> {
         message: format!("cannot write output: {e}"),
         kind: DiagKind::Runtime,
     })
+}
+
+/// `pythrust build`: compiles and links, reporting any failure.
+fn build(path: &str, src: &str) -> ExitCode {
+    let built = compile(path, src)
+        .map_err(|diag| render(path, src, &diag))
+        .and_then(|object| link(path, &object));
+    match built {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprint!("{message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Compiles `src` to an object file. Runtime errors in it are rendered
+/// now, against `path`, so the binary prints what `run` would.
+fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
+    let tokens = lexer::lex(src)?;
+    let module = parser::parse(&tokens)?;
+    let types = infer::infer(&module)?;
+    let program = lower::lower(&module, &types)?;
+    codegen::emit(&program, &|diag| render(path, src, diag))
+}
+
+/// Links `object` with the runtime into the executable for `path`.
+fn link(path: &str, object: &[u8]) -> Result<(), String> {
+    let out = Path::new(path).with_extension("");
+    if out == Path::new(path) {
+        return Err(format!(
+            "pythrust: {path} has no extension to strip for the output name\n"
+        ));
+    }
+    let runtime = runtime_lib()?;
+    let dir = private_dir()?;
+    let linked = link_in(&dir, object, &runtime, &out);
+    let removed = std::fs::remove_dir_all(&dir)
+        .map_err(|e| format!("pythrust: cannot remove {}: {e}\n", dir.display()));
+    linked.and(removed)
+}
+
+/// Writes `object` into `dir` and links it with `runtime` into `out`.
+fn link_in(dir: &Path, object: &[u8], runtime: &Path, out: &Path) -> Result<(), String> {
+    let obj = dir.join("program.o");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&obj)
+        .and_then(|mut f| f.write_all(object))
+        .map_err(|e| format!("pythrust: cannot write {}: {e}\n", obj.display()))?;
+    let status = std::process::Command::new("cc")
+        .arg(&obj)
+        .arg(runtime)
+        .args(NATIVE_LIBS)
+        .arg("-o")
+        .arg(out)
+        .status()
+        .map_err(|e| format!("pythrust: cannot run cc: {e}\n"))?;
+    match status.success() {
+        true => Ok(()),
+        false => Err(format!(
+            "pythrust: linking {} failed: cc {status}\n",
+            out.display()
+        )),
+    }
+}
+
+/// A fresh directory under the system temp dir that only this user can
+/// read, so no other process can swap or read the object before `cc` does.
+/// Created exclusively: an existing path is never reused.
+fn private_dir() -> Result<PathBuf, String> {
+    let base = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    for attempt in 0..100 {
+        let dir = base.join(format!("pythrust-{}-{nanos}-{attempt}", std::process::id()));
+        match builder.create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("pythrust: cannot create {}: {e}\n", dir.display())),
+        }
+    }
+    Err(format!(
+        "pythrust: no free temporary directory in {}\n",
+        base.display()
+    ))
+}
+
+/// The runtime library: `$PYTHRUST_RT`, or next to this executable.
+fn runtime_lib() -> Result<PathBuf, String> {
+    let path = match std::env::var_os(RUNTIME_ENV) {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_exe()
+            .map_err(|e| format!("pythrust: cannot locate myself: {e}\n"))?
+            .with_file_name(RUNTIME_LIB),
+    };
+    if !path.is_file() {
+        return Err(format!(
+            "pythrust: runtime library not found at {}; run `cargo build -p pythrust-rt` or set {RUNTIME_ENV}\n",
+            path.display()
+        ));
+    }
+    Ok(path)
 }
 
 /// Renders `diag` as a header, the offending line, and a caret underline.
@@ -174,16 +311,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_accepts_run_and_check() {
+    fn parse_args_accepts_each_command() {
         let run = args(&["run", "a.pythrust"]);
         let check = args(&["check", "b.pythrust"]);
         assert_eq!(parse_args(&run), Ok((Command::Run, "a.pythrust")));
         assert_eq!(parse_args(&check), Ok((Command::Check, "b.pythrust")));
+        let build = args(&["build", "c.pythrust"]);
+        assert_eq!(parse_args(&build), Ok((Command::Build, "c.pythrust")));
     }
 
     #[test]
     fn parse_args_rejects_unknown_command_and_wrong_arity() {
-        assert!(parse_args(&args(&["build", "a"])).is_err());
+        assert!(parse_args(&args(&["bulid", "a"])).is_err());
         assert!(parse_args(&args(&[])).is_err());
         assert!(parse_args(&args(&["run"])).is_err());
         assert!(parse_args(&args(&["run", "a", "b"])).is_err());
@@ -227,6 +366,28 @@ mod tests {
         let (result, out) = exec(Command::Check, "print(1)\n");
         assert_eq!(result, Ok(()));
         assert_eq!(out, "");
+    }
+
+    #[test]
+    fn compile_reports_unsupported_code_as_a_backend_error() {
+        let src = "x = print(7)\ndef print(n):\n    return 1\n";
+        let err = compile("f.pythrust", src).map(drop);
+        assert_eq!(err.map_err(|d| d.kind), Err(DiagKind::Backend));
+        assert!(compile("f.pythrust", "print(1 + 2)\n").is_ok());
+    }
+
+    #[test]
+    fn private_dirs_are_fresh_and_owner_only() {
+        let (a, b) = (private_dir().unwrap(), private_dir().unwrap());
+        assert_ne!(a, b);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        std::fs::remove_dir(&a).unwrap();
+        std::fs::remove_dir(&b).unwrap();
     }
 
     #[test]

@@ -14,7 +14,7 @@ Gut estimate: phases 1-3 (a prototype) about a quarter; a language trusted for r
 
 ## Phase-2 open implementation work
 
-Status against main `9a1e7a3a659a75f2ef42cb94419dfa5b56c33f1e` (including merged #17): checked items state their validated scope. CLI `check`/`run` and the current 35-program executable corpus are now wired and green; this is not exhaustive regression coverage. Unchecked items remain work from Nano's [recorded decisions](grammar.md#decided). Use the [canonical CPython-deviations list](grammar.md#deviations-from-python) for expected differences.
+Status against main `1202fc46e2a14527f1002fd757f4291443fabec3` (including merged #18): checked items state their validated scope. CLI `check`/`run` and the current 35-program executable corpus are now wired and green; this is not exhaustive regression coverage. Unchecked items remain work from Nano's [recorded decisions](grammar.md#decided). Use the [canonical CPython-deviations list](grammar.md#deviations-from-python) for expected differences.
 
 - [x] **A/C/D: Optional module support.** PR #10 implements the `|`/`is` token and type/compare contracts, Optional inference, contextual literals, per-block None narrowing and interpreter None comparisons. Parser and CLI/conformance completion are tracked separately below.
 - [x] **None-first annotation decision and module diagnostic.** Nano confirmed PR #10: a None-first variable that later holds a value requires an explicit annotation (`x: int | None = None`). The module test `none_first_without_annotation_asks_for_one` asserts the fix-it. Do not relax loose-mode inference yet; revisit after corpus evidence.
@@ -40,3 +40,9 @@ Status against main `9a1e7a3a659a75f2ef42cb94419dfa5b56c33f1e` (including merged
 3. [x] **E: Optional conformance fixtures and type-checks after parsing.** PR #16 covers Optional basics and narrowing, for-target narrowing, None-first annotation error/fix-it, non-None identity rejection and arithmetic on un-narrowed Optional. Its non-ignored `corpus_checks` test checks lex/parse/infer diagnostics and successful programs; CPython checks validate goldens/deviations. PR #17 also enables `corpus_matches_pythrust` and validates these fixtures through the executable pipeline. Do not relax loose-mode Optional inference until corpus evidence motivates revisiting the annotation requirement.
 
 - [ ] **F: final-flush and cross-stream ordering regressions.** #17 implements final-flush error handling and stdout flushing before diagnostics, but the inspected tests do not directly inject a final-flush failure or assert process-level stdout/stderr ordering. Keep these coverage limits explicit; corpus stdout/status success does not prove them.
+
+## Phase-3 native status (partial M4)
+
+PR #18 starts `pythrust build`: Cranelift lowering/codegen and `pythrust-rt` cover checked ints, bools, `None`, supported functions and control flow. See [native backend](native.md) for the exact supported operations, rejection rules, dependencies and next steps. This is not parity with the completed interpreter/CLI corpus: native strings, floats, lists/tuples, Optional and other documented forms remain incomplete, as do the planned three benchmarks. Do not claim full M4 completion.
+
+Native validation evidence is Linux x86-64 only, including the required native corpus subset and diagnostics compared with `run`; macOS and AArch64 are untested. Preserve the wider interpreter language decisions when extending the backend; a backend limitation is not a new language restriction.

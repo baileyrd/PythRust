@@ -10,6 +10,8 @@ pub enum DiagKind {
     Lex,
     Parse,
     Type,
+    /// The program is valid, but the native backend cannot compile it.
+    Backend,
     Runtime,
 }
 
@@ -30,6 +32,7 @@ impl fmt::Display for DiagKind {
             DiagKind::Lex => "lex",
             DiagKind::Parse => "parse",
             DiagKind::Type => "type",
+            DiagKind::Backend => "backend",
             DiagKind::Runtime => "runtime",
         };
         f.write_str(name)
