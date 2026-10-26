@@ -1,0 +1,61 @@
+# Optionals across calls: generic, tuple-typed, keyword None, narrowed module variables.
+def ident(x):
+    return x
+
+
+def lookup(xs: list[tuple[str, int]], key: str) -> tuple[str, int] | None:
+    for kv in xs:
+        if kv[0] == key:
+            return kv
+    return None
+
+
+def count(n: int, limit: int | None = None) -> int:
+    if limit is None:
+        return n
+    return n if n < limit else limit
+
+
+def split(s: str) -> tuple[str | None, int]:
+    if s == "":
+        return (None, 0)
+    return (s, len(s))
+
+
+limit: int | None = 3
+
+
+def capped(n: int) -> int:
+    if limit is None:
+        return n
+    return min_(n, limit)
+
+
+def min_(a: int, b: int) -> int:
+    return a if a < b else b
+
+
+o: int | None = 4
+print(ident(o), ident(None))
+table = [("a", 1), ("b", 2)]
+print(lookup(table, "b"), lookup(table, "z"))
+hit = lookup(table, "a")
+if hit is not None:
+    k, v = hit
+    print(k, v)
+print(count(5), count(5, 2), count(5, limit=None))
+w, n = split("")
+print(w, n, split("hey"))
+print(capped(10), capped(1))
+limit = None
+print(capped(10))
+def add(f: float | None, x: float) -> float | None:
+    if f is None:
+        return x
+    return f + x
+
+
+f: float | None = None
+for x in [1.5, 2.5]:
+    f = add(f, x)
+print(f, f == 4.0, f != 4)

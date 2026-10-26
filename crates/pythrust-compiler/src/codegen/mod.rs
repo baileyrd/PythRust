@@ -26,6 +26,7 @@ use cranelift_module::{
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 mod num;
+mod opt;
 mod seq;
 
 use crate::diag::{DiagKind, Diagnostic, Result};
@@ -335,7 +336,7 @@ impl<'r> Codegen<'r> {
             Ty::Int => types::I64,
             Ty::Float => types::F64,
             Ty::Bool | Ty::None => types::I8,
-            Ty::Str | Ty::List(_) | Ty::Tuple(_) => self.ptr,
+            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) => self.ptr,
         }
     }
 
@@ -458,17 +459,17 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                     if i > 0 {
                         self.write_text(*sep, b' ');
                     }
-                    self.write(*op);
+                    self.write(*op)?;
                 }
                 self.write_text(*end, b'\n');
             }
             Inst::Retain(l) => {
-                let (inc, _) = rc_fns(self.func.locals[l.0]);
+                let (inc, _) = rc_fns(self.types, self.func.locals[l.0]);
                 let s = self.b.use_var(self.vars[l.0]);
                 self.call_rt(inc, &[s]);
             }
             Inst::Release(l) => {
-                let (_, dec) = rc_fns(self.func.locals[l.0]);
+                let (_, dec) = rc_fns(self.types, self.func.locals[l.0]);
                 let s = self.b.use_var(self.vars[l.0]);
                 self.call_rt(dec, &[s]);
                 self.forget(*l);
@@ -516,7 +517,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             self.b.ins().store(flags, v, addr, 0);
             return Ok(());
         }
-        let (inc, dec) = rc_fns(ty);
+        let (inc, dec) = rc_fns(self.types, ty);
         self.call_rt(inc, &[v]);
         let old = self.b.ins().load(self.cg.ptr, flags, addr, 0);
         self.b.ins().store(flags, v, addr, 0);
@@ -529,22 +530,41 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         self.b.def_var(self.vars[l.0], null);
     }
 
-    fn write(&mut self, op: Operand) {
-        let (rt, args) = match self.func.ty(op) {
-            Ty::Int => (Rt::WriteInt, vec![self.operand(op)]),
-            Ty::Bool => (Rt::WriteBool, vec![self.operand(op)]),
-            Ty::None => (Rt::WriteNone, vec![]),
-            Ty::Str => (Rt::WriteStr, vec![self.operand(op)]),
-            Ty::Float => (Rt::WriteFloat, vec![self.operand(op)]),
-            Ty::List(_) | Ty::Tuple(_) => (Rt::WriteSeq, vec![self.operand(op)]),
+    /// Writes `op` as `print` does.
+    fn write(&mut self, op: Operand) -> Result<()> {
+        let ty = self.func.ty(op);
+        if let Ty::Opt(_) = ty {
+            return self.write_opt(op);
+        }
+        let v = self.operand(op);
+        self.write_value(ty, v);
+        Ok(())
+    }
+
+    /// Writes `v`, a value of `ty` but not an optional.
+    fn write_value(&mut self, ty: Ty, v: Value) {
+        let rt = match ty {
+            Ty::Int => Rt::WriteInt,
+            Ty::Bool => Rt::WriteBool,
+            Ty::None => return self.write_none(),
+            Ty::Str => Rt::WriteStr,
+            Ty::Float => Rt::WriteFloat,
+            Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) => Rt::WriteSeq,
         };
-        self.call_rt(rt, &args);
+        self.call_rt(rt, &[v]);
+    }
+
+    fn write_none(&mut self) {
+        self.call_rt(Rt::WriteNone, &[]);
     }
 
     /// Writes the string `text`, or `default` if there is none.
     fn write_text(&mut self, text: Option<Operand>, default: u8) {
         match text {
-            Some(s) => self.write(s),
+            Some(s) => {
+                let v = self.operand(s);
+                self.write_value(Ty::Str, v);
+            }
             None => self.write_byte(default),
         }
     }
@@ -640,13 +660,19 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             }
             Rvalue::Contains { hay, needle } => self.rt_on(Rt::StrContains, &[*hay, *needle]),
             Rvalue::ToStr(op) => match self.func.ty(*op) {
-                Ty::Int => self.rt_on(Rt::StrFromInt, &[*op]),
-                Ty::Bool => self.rt_on(Rt::StrFromBool, &[*op]),
-                Ty::None => self.rt_on(Rt::StrNone, &[]),
-                Ty::Float => self.rt_on(Rt::StrFromFloat, &[*op]),
-                Ty::List(_) | Ty::Tuple(_) => self.rt_on(Rt::StrFromSeq, &[*op]),
+                Ty::Opt(_) => self.opt_to_str(*op, dest),
                 Ty::Str => Err(backend("`str` of a string".to_string())),
+                ty => {
+                    let v = self.operand(*op);
+                    self.str_of_value(ty, v)
+                }
             },
+            Rvalue::Wrap(op) => self.wrap(*op, self.func.locals[dest.0]),
+            Rvalue::Unwrap(op) => self.unwrap(*op, dest),
+            Rvalue::IsNone(op) => {
+                let v = self.operand(*op);
+                Ok(self.b.ins().icmp_imm_s(IntCC::Equal, v, 0))
+            }
             Rvalue::NewSeq(items) => self.new_seq(self.func.locals[dest.0], items),
             Rvalue::Field(t, k) => self.field(*t, *k, dest),
             Rvalue::Global(g) => {
@@ -656,7 +682,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                     .ins()
                     .load(self.cg.clif_ty(ty), MemFlagsData::trusted(), addr, 0);
                 if ty.is_rc() {
-                    self.call_rt(rc_fns(ty).0, &[v]);
+                    self.call_rt(rc_fns(self.types, ty).0, &[v]);
                 }
                 Ok(v)
             }
@@ -667,6 +693,23 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::ParseFloat(s) => self.parse_float(*s, span),
             Rvalue::ParseInt(s) => self.parse_int(*s, span),
         }
+    }
+
+    /// `str(v)`, a new string, for `v` of `ty`; a string gains a
+    /// reference.
+    fn str_of_value(&mut self, ty: Ty, v: Value) -> Result<Value> {
+        let rt = match ty {
+            Ty::Int => Rt::StrFromInt,
+            Ty::Bool => Rt::StrFromBool,
+            Ty::None => return self.call_rt_value(Rt::StrNone, &[]),
+            Ty::Float => Rt::StrFromFloat,
+            Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) => Rt::StrFromSeq,
+            Ty::Str => {
+                self.call_rt(Rt::StrInc, &[v]);
+                return Ok(v);
+            }
+        };
+        self.call_rt_value(rt, &[v])
     }
 
     /// A new string holding `text`, copied from read-only data.
@@ -839,11 +882,19 @@ fn is_seq(ty: Ty) -> bool {
     matches!(ty, Ty::List(_) | Ty::Tuple(_))
 }
 
-/// The runtime functions adding and dropping a reference to a `ty`.
-fn rc_fns(ty: Ty) -> (Rt, Rt) {
-    match is_seq(ty) {
-        true => (Rt::SeqInc, Rt::SeqDec),
-        false => (Rt::StrInc, Rt::StrDec),
+/// The runtime functions adding and dropping a reference to a `ty`. An
+/// optional's are its present type's, or a sequence's for a boxed one.
+fn rc_fns(types: &[Compound], ty: Ty) -> (Rt, Rt) {
+    let ty = match ty {
+        Ty::Opt(id) => match types.get(id.0) {
+            Some(Compound::Opt(present)) => *present,
+            _ => ty,
+        },
+        _ => ty,
+    };
+    match ty {
+        Ty::Str => (Rt::StrInc, Rt::StrDec),
+        _ => (Rt::SeqInc, Rt::SeqDec),
     }
 }
 

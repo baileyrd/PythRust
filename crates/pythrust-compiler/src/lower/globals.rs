@@ -113,13 +113,18 @@ impl FnBuilder<'_, '_> {
     /// A function's read of module variable `name`: `NameError` until
     /// the module has assigned it.
     pub(super) fn read_global(&mut self, name: &str, span: Span) -> Result<Operand> {
-        let ty = self.ty_at(span)?;
+        // The module's own type: inference may have narrowed this read.
+        let ty = match self.cx.globals.mirrors.get(name) {
+            Some(m) => self.cx.globals.tys[m.value.0],
+            None => self.ty_at(span)?,
+        };
         let m = self.cx.globals.mirror(name, ty, span)?;
         let bound = self.temp(Ty::Bool, Rvalue::Global(m.bound), span);
         let unbound = Rvalue::Cmp(CmpOp::Eq, bound, Operand::Bool(false));
         let message = format!("NameError: name '{name}' is not defined");
         self.fail_if(unbound, span, &message);
-        Ok(self.temp(ty, Rvalue::Global(m.value), span))
+        let v = self.temp(ty, Rvalue::Global(m.value), span);
+        self.narrow(v, span)
     }
 
     /// Evaluates `f`'s defaults, as its `def` statement does.

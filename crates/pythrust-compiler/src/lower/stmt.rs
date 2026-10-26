@@ -120,17 +120,14 @@ impl FnBuilder<'_, '_> {
             Some(e) => self.expr(e)?,
             None => Operand::None,
         };
+        let v = self.fit(v, self.ret, span);
         if self.ty(v) != self.ret {
             return Err(unsupported(
                 span,
                 "returning a value of another type than inferred",
             ));
         }
-        let ret = self.ret;
-        let slot = *self.ret_slot.get_or_insert_with(|| {
-            self.locals.push(ret);
-            LocalId(self.locals.len() - 1)
-        });
+        let slot = self.return_slot();
         self.move_into(slot, v, span);
         self.jump_away(Term::Goto(self.exit));
         Ok(())

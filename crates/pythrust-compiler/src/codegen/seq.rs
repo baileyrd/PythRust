@@ -39,7 +39,7 @@ impl FnGen<'_, '_, '_> {
     }
 
     /// A slot as a value of `ty`.
-    fn unslot(&mut self, v: Value, ty: Ty) -> Value {
+    pub(super) fn unslot(&mut self, v: Value, ty: Ty) -> Value {
         let want = self.cg.clif_ty(ty);
         match want {
             types::I64 => v,
@@ -107,14 +107,14 @@ impl FnGen<'_, '_, '_> {
 }
 
 /// Appends the runtime descriptor of `ty`: see `pythrust-rt/src/seq.rs`.
-fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result<()> {
+pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result<()> {
     let code = match ty {
         Ty::Int => 'i',
         Ty::Float => 'f',
         Ty::Bool => 'b',
         Ty::None => 'n',
         Ty::Str => 's',
-        Ty::List(id) | Ty::Tuple(id) => {
+        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => {
             let compound = types
                 .get(id.0)
                 .ok_or_else(|| backend("an unknown sequence type".to_string()))?;
@@ -141,6 +141,10 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
             out.push(char::from(n));
             fields.iter().try_for_each(|f| descriptor(types, *f, out))
         }
+        Compound::Opt(present) => {
+            out.push('o');
+            descriptor(types, *present, out)
+        }
     }
 }
 
@@ -159,6 +163,14 @@ mod tests {
         let mut out = String::new();
         descriptor(&types, Ty::List(TypeId(2)), &mut out).expect("descriptor");
         assert_eq!(out, "lt\u{3}slfb");
+    }
+
+    #[test]
+    fn optional_descriptors_name_their_present_type() {
+        let types = vec![Compound::Opt(Ty::Int), Compound::List(Ty::Opt(TypeId(0)))];
+        let mut out = String::new();
+        descriptor(&types, Ty::List(TypeId(1)), &mut out).expect("descriptor");
+        assert_eq!(out, "loi");
     }
 
     #[test]

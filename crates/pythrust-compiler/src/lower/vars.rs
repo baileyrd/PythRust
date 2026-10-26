@@ -26,8 +26,9 @@ impl FnBuilder<'_, '_> {
             return self.read_global(name, span);
         }
         let var = self.var(name, span)?;
+        let v = Operand::Local(var.local);
         let Some(flag) = var.flag else {
-            return Ok(Operand::Local(var.local));
+            return self.narrow(v, span);
         };
         let known = self.always_bound.contains(&var.local) || self.block_bound.contains(&var.local);
         if !known {
@@ -36,7 +37,7 @@ impl FnBuilder<'_, '_> {
             self.fail_if(unbound, span, &message);
             self.block_bound.insert(var.local);
         }
-        Ok(Operand::Local(var.local))
+        self.narrow(v, span)
     }
 
     /// Assigns `value` to `name` and marks it bound from here on; a
@@ -46,6 +47,7 @@ impl FnBuilder<'_, '_> {
     /// rather than miscompiled.
     pub(super) fn write(&mut self, name: &str, value: Operand, span: Span) -> Result<()> {
         let var = self.var(name, span)?;
+        let value = self.fit(value, self.locals[var.local.0], span);
         if self.ty(value) != self.locals[var.local.0] {
             let what = format!("assigning `{name}` a value of another type than inferred");
             return Err(unsupported(span, &what));
