@@ -5,7 +5,7 @@ Usage: python3 bench/run.py [--runs N]
 Builds every bench/*.pyr with target/release/pythrust (run
 `cargo build --release && cargo build --release -p pythrust-rt` first),
 checks the native output equals CPython's, and prints the median wall
-time of each over N runs.
+time of each over N runs, with the fastest and slowest run.
 """
 
 import argparse
@@ -21,8 +21,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PYTHRUST = ROOT / "target" / "release" / "pythrust"
 
 
-def timed(cmd: list[str], runs: int) -> tuple[float, bytes]:
-    """Median seconds over `runs`, and the output, which must not vary."""
+def timed(cmd: list[str], runs: int) -> tuple[list[float], bytes]:
+    """Seconds of each of `runs` runs, and the output, which must not vary."""
     times, outputs = [], set()
     for _ in range(runs):
         start = time.perf_counter()
@@ -31,14 +31,20 @@ def timed(cmd: list[str], runs: int) -> tuple[float, bytes]:
         outputs.add(done.stdout)
     if len(outputs) != 1:
         raise SystemExit(f"{cmd}: output varies between runs")
-    return statistics.median(times), outputs.pop()
+    return times, outputs.pop()
+
+
+def spread(times: list[float]) -> str:
+    """Median, with the range in parentheses."""
+    return f"{statistics.median(times):.3f} ({min(times):.3f}-{max(times):.3f})"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=5)
     runs = parser.parse_args().runs
-    print(f"{'benchmark':<16} {'native s':>9} {'cpython s':>10} {'speedup':>8}")
+    head = f"{'benchmark':<16} {'native s (min-max)':>24} {'cpython s (min-max)':>25}"
+    print(f"{head} {'speedup':>8}")
     with tempfile.TemporaryDirectory() as tmp:
         for src in sorted((ROOT / "bench").glob("*.pyr")):
             copy = pathlib.Path(tmp) / src.name
@@ -48,7 +54,8 @@ def main() -> None:
             cpython, expected = timed([sys.executable, str(src)], runs)
             if out != expected:
                 raise SystemExit(f"{src.name}: native output differs from CPython")
-            print(f"{src.stem:<16} {native:>9.3f} {cpython:>10.3f} {cpython / native:>7.1f}x")
+            speedup = statistics.median(cpython) / statistics.median(native)
+            print(f"{src.stem:<16} {spread(native):>24} {spread(cpython):>25} {speedup:>7.1f}x")
 
 
 if __name__ == "__main__":

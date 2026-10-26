@@ -62,7 +62,7 @@ Everything else is a compile error, `backend error: the native backend does not 
 
 ## Benchmarks
 
-M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.md](benchmarks.md). Scalar code runs about 19x faster than CPython, list sorting 7x, string building about the same, and tuple-heavy code 1.6x, where boxed tuples cost about 12x against a tuple-free control.
+M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.md](benchmarks.md). Scalar code runs about 20x faster than CPython, list sorting about 8x, string building about the same, and tuple-heavy code about 1.8x; a tuple-free control of the same work runs about 6.8x faster than the tuple version, most of it plausibly boxed tuples (see the confounders there).
 
 ## Known gaps
 
