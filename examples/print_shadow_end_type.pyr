@@ -1,0 +1,6 @@
+# expect-exit: 1
+# The builtin `print` takes a string `end`; the later `def print` that
+# inference checked these calls against takes an int.
+print(7, end=1)
+def print(a: int, end: int) -> None:
+    pass

@@ -356,13 +356,37 @@ impl FnBuilder<'_, '_> {
     }
 
     /// `print`, its `sep` and `end` keywords split from the values.
+    /// Inference may have typed the call against a later `def print`, so
+    /// the builtin's own keywords are checked here, failing as `run` does.
     fn print(&mut self, args: &[Arg], ops: Vec<Operand>) -> Operand {
         let (mut values, mut sep, mut end) = (Vec::new(), None, None);
         for (a, op) in args.iter().zip(ops) {
-            match a.name.as_ref().map(|n| n.name.as_str()) {
-                Some("sep") => sep = Some(op),
-                Some(_) => end = Some(op),
-                None => values.push(op),
+            let Some(kw) = &a.name else {
+                values.push(op);
+                continue;
+            };
+            let slot = match kw.name.as_str() {
+                "sep" => &mut sep,
+                "end" => &mut end,
+                other => {
+                    let msg =
+                        format!("TypeError: '{other}' is an invalid keyword argument for print()");
+                    self.jump_away(Term::Fail(runtime(kw.span, &msg)));
+                    return Operand::None;
+                }
+            };
+            match self.ty(op) {
+                Ty::Str => *slot = Some(op),
+                Ty::None => {}
+                ty => {
+                    let msg = format!(
+                        "TypeError: {} must be None or a string, not {}",
+                        kw.name,
+                        type_name(ty)
+                    );
+                    self.jump_away(Term::Fail(runtime(kw.span, &msg)));
+                    return Operand::None;
+                }
             }
         }
         self.emit(Inst::Print {
@@ -397,6 +421,19 @@ impl FnBuilder<'_, '_> {
             }
         };
         Ok(self.temp(ty, value, span))
+    }
+}
+
+/// Python's name for the type of a `ty` value.
+fn type_name(ty: Ty) -> &'static str {
+    match ty {
+        Ty::Int => "int",
+        Ty::Float => "float",
+        Ty::Bool => "bool",
+        Ty::None => "NoneType",
+        Ty::Str => "str",
+        Ty::List(_) => "list",
+        Ty::Tuple(_) => "tuple",
     }
 }
 
