@@ -1,0 +1,4 @@
+# expect-exit: 1
+print(int(2.5), int(-1e18))
+print(int(float("nan")))
+print("unreachable")

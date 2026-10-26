@@ -1,0 +1,5 @@
+# deviation: ints are i64, so an int literal past its range is an OverflowError; CPython has bigints.
+# expect-exit: 1
+print(int("9223372036854775807"))
+print(int("9223372036854775808"))
+print("unreachable")
