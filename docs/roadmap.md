@@ -25,7 +25,7 @@ Status against main `6e78ff23c8724c6cbd382e41e469f8f20f8f6911` (including merged
 - [ ] **E/F: executable conformance.** Wire the CLI stages and enable `corpus_matches_pythrust`; verify runtime stdout/exit status independently of the in-process type-check harness. Preserve required runtime messages/fix-its in targeted stage tests.
 
 - [x] **B: baseline parser.** PR #6 supplies recursive-descent parsing and parser-error checks for the original subset. Optional parsing landed separately in PR #13 (see the ordered follow-ups below).
-- [ ] **F: CLI integration.** CLI `check` does not call inference and `run` does not call the interpreter. Wire the stages and enable source-level regressions before claiming these decisions work end to end.
+- [ ] **F: CLI integration.** CLI `check` calls inference; `run` does not yet call the interpreter. Wire `run` and enable executable corpus regressions before claiming runtime end-to-end completion.
 - [ ] **C/D/E: remaining regression coverage.** Verify the zero-iteration/nonempty-loop diagnostic and output invariant, source-level `2 ** 64`, and nonliteral negative exponent behavior through the integrated pipeline. Keep `2.0 ** -1` legal. Module-level green CI is not evidence that these source cases run.
 - [x] **C: Optional return interaction (module level).** An explicit `T | None` return annotation permits fall-through to `None`; PR #10's `optional_return_may_fall_through` covers this. No arbitrary union inference is implied.
 
