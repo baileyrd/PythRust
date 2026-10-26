@@ -34,6 +34,18 @@ type Subst = HashMap<TypeVar, Ty>;
 /// An instance lowered with an open result type, and that type.
 type OpenInstance = (FuncId, Ty);
 
+/// Where an instance whose result type its body decides stands.
+#[derive(Clone, Copy)]
+enum Open {
+    /// Being lowered: a call back into it cannot know its result yet.
+    Lowering,
+    /// Lowered with this result type.
+    Done(OpenInstance),
+    /// Every `return` needed a call into an instance still being
+    /// lowered; lowered again, under the same id, when called again.
+    Undecided(FuncId),
+}
+
 /// Lowers `module`, typed by `types`, to IR.
 pub fn lower(module: &Module, types: &Types) -> Result<Program> {
     let mut defs = HashMap::new();
@@ -64,7 +76,9 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
     let func = b.finish("<module>", Vec::new());
     cx.funcs[main.0] = Some(func);
     while let Some(job) = cx.queue.pop() {
-        let (func, _) = cx.instance_body(&job)?;
+        let lowered = cx.instance_body(&job)?;
+        let (func, _) =
+            lowered.ok_or_else(|| internal(module.span, "a queued instance undecided"))?;
         cx.funcs[job.id.0] = Some(func);
     }
     let funcs = std::mem::take(&mut cx.funcs);
@@ -94,7 +108,7 @@ struct Cx<'a> {
     globals: globals::Globals,
     /// Instances lowered by [`Cx::open_instance`], by function name and
     /// argument types; `None` while being lowered.
-    open: HashMap<(String, Vec<Ty>), Option<OpenInstance>>,
+    open: HashMap<(String, Vec<Ty>), Open>,
 }
 
 /// An instance waiting to be lowered.
@@ -133,7 +147,7 @@ impl<'a> Cx<'a> {
         {
             return Err(internal(span, &format!("call does not match `{name}`")));
         }
-        let id = self.reserve();
+        let id = self.take_undecided(name, &args);
         self.instances.insert(key, id);
         self.queue.push(Job {
             id,
@@ -152,9 +166,11 @@ impl<'a> Cx<'a> {
     /// `return` decides the result type; inference made every `return`
     /// agree.
     ///
-    /// `None` for a call back into an instance still being lowered.
-    /// When such a call came before the first `return`, the body is
-    /// lowered again once that `return` has decided the result type.
+    /// `None` while the result type is unknown: for a call back into an
+    /// instance still being lowered, or into one whose every `return`
+    /// needed such a call. The caller then skips the statement if it can
+    /// ([`FnBuilder::block`]); a body that skipped one is lowered again
+    /// once a `return` has decided the result type.
     fn open_instance(
         &mut self,
         def: &'a FuncDef,
@@ -163,9 +179,12 @@ impl<'a> Cx<'a> {
     ) -> Result<Option<OpenInstance>> {
         let name = &def.name.name;
         let key = (name.clone(), args.clone());
-        if let Some(found) = self.open.get(&key) {
-            return Ok(*found);
-        }
+        let id = match self.open.get(&key) {
+            Some(Open::Done(found)) => return Ok(Some(*found)),
+            Some(Open::Lowering) => return Ok(None),
+            Some(Open::Undecided(id)) => *id,
+            None => self.reserve(),
+        };
         let sig = self
             .types
             .func(name)
@@ -178,8 +197,7 @@ impl<'a> Cx<'a> {
         {
             return Err(internal(span, &format!("call does not match `{name}`")));
         }
-        self.open.insert(key.clone(), None);
-        let id = self.reserve();
+        self.open.insert(key.clone(), Open::Lowering);
         let mut job = Job {
             id,
             def,
@@ -187,22 +205,43 @@ impl<'a> Cx<'a> {
             args: args.clone(),
             ret: None,
         };
-        let (mut func, skipped) = self.instance_body(&job)?;
+        let Some((mut func, skipped)) = self.instance_body(&job)? else {
+            self.open.insert(key, Open::Undecided(id));
+            return Ok(None);
+        };
         let ret = func.ret;
         self.instances.insert((name.clone(), args, ret), id);
-        self.open.insert(key, Some((id, ret)));
+        self.open.insert(key, Open::Done((id, ret)));
         if skipped {
             bind(&sig.ret, ret, &self.seqs, &mut job.subst);
             job.ret = Some(ret);
-            func = self.instance_body(&job)?.0;
+            func = self
+                .instance_body(&job)?
+                .ok_or_else(|| internal(span, "an instance undecided with its result known"))?
+                .0;
         }
         self.funcs[id.0] = Some(func);
         Ok(Some((id, ret)))
     }
 
+    /// The id an instance of `name` for `args` lowered undecided holds,
+    /// so it is not left empty, or a new one.
+    fn take_undecided(&mut self, name: &str, args: &[Ty]) -> FuncId {
+        let key = (name.to_string(), args.to_vec());
+        match self.open.get(&key) {
+            Some(Open::Undecided(id)) => {
+                let id = *id;
+                self.open.remove(&key);
+                id
+            }
+            _ => self.reserve(),
+        }
+    }
+
     /// The function `job` asks for, and whether a statement was skipped
-    /// for a recursive call met before the first `return`.
-    fn instance_body(&mut self, job: &Job<'a>) -> Result<(Func, bool)> {
+    /// for a call whose result was unknown; `None` if no `return`
+    /// decided an open result type.
+    fn instance_body(&mut self, job: &Job<'a>) -> Result<Option<(Func, bool)>> {
         let f = job.def;
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
@@ -225,11 +264,10 @@ impl<'a> Cx<'a> {
         }
         b.block(&f.body)?;
         if b.skipped && b.open_ret.is_some() {
-            let what = "a recursive generic function whose result type its signature leaves open";
-            return Err(unsupported(f.name.span, what));
+            return Ok(None);
         }
         let skipped = b.skipped;
-        Ok((b.finish(&f.name.name, params), skipped))
+        Ok(Some((b.finish(&f.name.name, params), skipped)))
     }
 }
 

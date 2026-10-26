@@ -66,7 +66,7 @@ impl FnBuilder<'_, '_> {
     /// The concrete type a value of type `have` takes as declared type
     /// `t`: `have`, with optionals added where `t` declares them. The
     /// callee's type variables take what `have` holds there.
-    fn shape(&mut self, t: &Type, have: Ty, span: Span) -> Result<Ty> {
+    pub(super) fn shape(&mut self, t: &Type, have: Ty, span: Span) -> Result<Ty> {
         match t {
             Type::Optional(_) if have == Ty::None => self
                 .concrete(t, span)

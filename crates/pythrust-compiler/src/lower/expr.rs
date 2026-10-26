@@ -372,8 +372,7 @@ impl<'a> FnBuilder<'_, 'a> {
     ) -> Result<(FuncId, Ty)> {
         let Some((id, ret)) = self.cx.open_instance(def, tys, span)? else {
             self.stuck = self.open_ret.is_some();
-            let what = "a recursive generic function whose result type its signature leaves open";
-            return Err(unsupported(span, what));
+            return Err(unsupported(span, super::stmt::OPEN_RESULT));
         };
         super::bind(node, ret, &self.cx.seqs, &mut self.subst);
         Ok((id, ret))

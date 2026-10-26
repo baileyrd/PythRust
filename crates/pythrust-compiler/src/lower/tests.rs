@@ -492,8 +492,8 @@ fn recursion_before_the_deciding_return_lowers_in_a_second_pass() {
     let (d, text) = rejected(
         "def f(n):\n    return f(n - 1)\n\n\ndef g(x):\n    return f(x)\n\n\nprint(g(1))\n",
     );
-    assert!(d.message.contains("recursive generic"), "{}", d.message);
-    assert_eq!(text, "f");
+    assert!(d.message.contains("no `return` decides"), "{}", d.message);
+    assert_eq!(text, "g(1)");
 }
 
 #[test]

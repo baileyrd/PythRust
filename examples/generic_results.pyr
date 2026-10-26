@@ -119,3 +119,38 @@ def pong(n, x):
 
 
 print(outer(3), outer(0.5), ping(3, 2), ping(1, 1.5))
+
+
+def outer_ping(x):
+    return ping(2, x) + 1
+
+
+print(outer_ping(3), outer_ping(0.5))
+
+
+# An open result inside a declared optional: present and fall-through.
+def maybe(x) -> list | None:
+    if x:
+        return [x * x]
+
+
+def later(x) -> list | None:
+    if not x:
+        return None
+    return [x, x]
+
+
+def absent(x):
+    return maybe(x) is None
+
+
+def got(x):
+    return maybe(x)
+
+
+def got_later(x):
+    return later(x)
+
+
+print(absent(0), absent(2), got(3), got(0), got(1.5))
+print(got_later(0), got_later(2), got_later("a"))
