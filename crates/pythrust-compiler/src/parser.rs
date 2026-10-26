@@ -440,7 +440,28 @@ impl<'a> Parser<'a> {
 
     // Types.
 
+    /// `type_atom ['|' 'None']`. `None | None` is rejected: it is `None`.
     fn type_expr(&mut self) -> Result<TypeExpr> {
+        let atom = self.type_atom()?;
+        if !self.eat(&TokenKind::Pipe) {
+            return Ok(atom);
+        }
+        if !self.at(&TokenKind::None) {
+            return Err(self.unexpected("`None` (only `T | None` unions exist)"));
+        }
+        self.bump();
+        let span = self.span_from(atom.span);
+        if atom.name.name == "None" {
+            return Err(error(span, "`None | None` is just `None`"));
+        }
+        Ok(TypeExpr {
+            optional: true,
+            span,
+            ..atom
+        })
+    }
+
+    fn type_atom(&mut self) -> Result<TypeExpr> {
         let tok = self.tok(0);
         let name = match &tok.kind {
             TokenKind::Name(name) => name.clone(),
@@ -543,12 +564,16 @@ impl<'a> Parser<'a> {
         Ok(Expr { kind, span })
     }
 
-    /// Consumes a `comp_op`, including the two-token `not in`.
+    /// Consumes a `comp_op`, including the two-token `not in` and `is not`.
     fn comp_op(&mut self) -> Option<CmpOp> {
         if self.at(&TokenKind::Not) && self.tok(1).kind == TokenKind::In {
             self.bump();
             self.bump();
             return Some(CmpOp::NotIn);
+        }
+        if self.eat(&TokenKind::Is) {
+            let negated = self.eat(&TokenKind::Not);
+            return Some(if negated { CmpOp::IsNot } else { CmpOp::Is });
         }
         let op = cmp_op(self.peek())?;
         self.bump();
@@ -886,7 +911,8 @@ fn term_op(kind: &TokenKind) -> Option<BinOp> {
     }
 }
 
-/// Single-token comparison operators; `not in` is handled by the caller.
+/// Single-token comparison operators; `not in` and `is` are handled by the
+/// caller.
 fn cmp_op(kind: &TokenKind) -> Option<CmpOp> {
     match kind {
         TokenKind::EqEq => Some(CmpOp::Eq),

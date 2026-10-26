@@ -7,7 +7,9 @@
 
 use super::parse;
 use crate::ast::*;
-use crate::diag::{DiagKind, Diagnostic};
+use crate::diag::{self, DiagKind, Diagnostic};
+use crate::infer::{infer, Type, Types};
+use crate::lexer::lex;
 use crate::span::Span;
 use crate::token::{Token, TokenKind};
 
@@ -26,6 +28,8 @@ fn kind_of(word: &str) -> TokenKind {
         "while" => T::While,
         "for" => T::For,
         "in" => T::In,
+        "is" => T::Is,
+        "|" => T::Pipe,
         "break" => T::Break,
         "continue" => T::Continue,
         "pass" => T::Pass,
@@ -234,11 +238,12 @@ fn sx_param(p: &Param) -> String {
 }
 
 fn sx_type(t: &TypeExpr) -> String {
+    let suffix = if t.optional { " | None" } else { "" };
     if t.args.is_empty() {
-        return t.name.name.clone();
+        return format!("{}{suffix}", t.name.name);
     }
     let args = t.args.iter().map(sx_type).collect::<Vec<_>>().join(", ");
-    format!("{}[{args}]", t.name.name)
+    format!("{}[{args}]{suffix}", t.name.name)
 }
 
 fn sx_target(t: &Target) -> String {
@@ -814,4 +819,176 @@ fn deep_nesting_is_an_error_not_a_crash() {
     assert_eq!(err(&unary), "too deeply nested");
     let shallow = format!("x = {}1{} NL", "( ".repeat(50), " )".repeat(50));
     assert_eq!(ok(&shallow), "(= x 1)");
+}
+
+// Optional types and `is`.
+
+#[test]
+fn optional_types() {
+    assert_eq!(ok("x : int | None = None NL"), "(: x int | None None)");
+    assert_eq!(
+        ok("x : list [ str | None ] | None = None NL"),
+        "(: x list[str | None] | None None)"
+    );
+    assert_eq!(
+        ok("def f ( a : int | None = None ) -> tuple [ int , str | None ] : NL INDENT return a NL DEDENT"),
+        "(def f ([a: int | None = None]) -> tuple[int, str | None] ((return a)))"
+    );
+}
+
+#[test]
+fn optional_type_errors() {
+    assert_eq!(
+        err("x : None | None = None NL"),
+        "`None | None` is just `None`"
+    );
+    assert_eq!(
+        err("x : int | str = 1 NL"),
+        "expected `None` (only `T | None` unions exist), found name `str`"
+    );
+    assert_eq!(
+        err("x : int | None | None = 1 NL"),
+        "expected `=`, found `|`"
+    );
+    assert_eq!(err("x : | None = 1 NL"), "expected a type, found `|`");
+}
+
+#[test]
+fn optional_type_span_covers_the_suffix() {
+    let src = "x : list [ int | None ] | None = y NL";
+    let StmtKind::AnnAssign { annotation, .. } = &parse_src(src).body[0].kind else {
+        panic!("not an annotated assignment");
+    };
+    assert!(annotation.optional);
+    assert_eq!(text(src, annotation.span), "list [ int | None ] | None");
+    assert_eq!(text(src, annotation.name.span), "list");
+    assert_eq!(text(src, annotation.args[0].span), "int | None");
+}
+
+#[test]
+fn is_and_is_not_compare() {
+    assert_eq!(ok("x is None NL"), "(cmp x is None)");
+    assert_eq!(ok("x is not None NL"), "(cmp x is-not None)");
+    assert_eq!(ok("not x is None NL"), "(not (cmp x is None))");
+    assert_eq!(ok("a < b is not None NL"), "(cmp a < b is-not None)");
+    assert_eq!(ok("x + 1 is None NL"), "(cmp (+ x 1) is None)");
+    assert_eq!(
+        ok("a is None and b is not None NL"),
+        "(and (cmp a is None) (cmp b is-not None))"
+    );
+    assert_eq!(err("x is NL"), "expected an expression, found newline");
+    assert_eq!(err("x not is None NL"), "expected newline, found `not`");
+}
+
+// Source level: lexer, parser and inference together. Mirrors the
+// Optional and narrowing sections of `infer/tests.rs`.
+
+fn check(src: &str) -> diag::Result<Types> {
+    infer(&parse(&lex(src)?)?)
+}
+
+fn types(src: &str) -> Types {
+    check(src).unwrap_or_else(|d| panic!("{src:?}: {d}"))
+}
+
+fn type_err(src: &str) -> String {
+    match check(src) {
+        Ok(_) => panic!("{src:?} type-checked"),
+        Err(d) => d.message,
+    }
+}
+
+/// Span of the last occurrence of `needle` in `src`.
+fn last(src: &str, needle: &str) -> Span {
+    let start = src.rfind(needle).unwrap();
+    Span {
+        start,
+        end: start + needle.len(),
+    }
+}
+
+fn int_or_none() -> Type {
+    Type::Optional(Box::new(Type::Int))
+}
+
+#[test]
+fn source_optional_variable_holds_none_or_its_type() {
+    let src = "x: int | None = None\nx = 5\nx = None\n";
+    let t = types(src);
+    assert_eq!(t.at(Span { start: 21, end: 22 }), Some(&int_or_none()));
+}
+
+#[test]
+fn source_optional_is_not_its_inner_type() {
+    assert_eq!(
+        type_err("x: int | None = 1\nx + 1\n"),
+        "unsupported operand types for +: int | None and int"
+    );
+    let msg = type_err("x: int | None = 1\ny: int = x\n");
+    assert!(msg.ends_with("expected int, found int | None"), "{msg}");
+    assert_eq!(
+        type_err("x: int | None = 1\nx < 2\n"),
+        "cannot order int | None against int"
+    );
+}
+
+#[test]
+fn source_list_of_optional_takes_mixed_literal_and_appends() {
+    let src = "xs: list[int | None] = [None, 1]\nxs.append(None)\nxs.append(2)\nys = xs\n";
+    let t = types(src);
+    let list = Type::List(Box::new(int_or_none()));
+    assert_eq!(t.at(last(src, "ys")), Some(&list));
+}
+
+#[test]
+fn source_optional_return_and_parameter() {
+    let src = "def f(x) -> int | None:\n    if x:\n        return 1\n";
+    let ret = types(src).func("f").map(|f| f.ret.clone());
+    assert_eq!(ret, Some(int_or_none()));
+    let src = "def g(x: int | None = None):\n    return x\ng()\ng(3)\n";
+    types(src);
+}
+
+#[test]
+fn source_none_or_none_is_a_parse_error() {
+    let d = check("x: None | None = None\n").unwrap_err();
+    assert_eq!(d.kind, DiagKind::Parse);
+    assert_eq!(d.message, "`None | None` is just `None`");
+}
+
+#[test]
+fn source_is_not_none_narrows_the_branch() {
+    let src = "x: int | None = None\nif x is not None:\n    y = x + 1\n";
+    assert_eq!(types(src).at(last(src, "y")), Some(&Type::Int));
+}
+
+#[test]
+fn source_is_none_narrows_the_else_branch() {
+    types("x: int | None = None\nif x is None:\n    pass\nelse:\n    x + 1\n");
+}
+
+#[test]
+fn source_narrowing_does_not_leak_or_survive_assignment() {
+    let leak = "x: int | None = None\nif x is not None:\n    pass\nx + 1\n";
+    let msg = "unsupported operand types for +: int | None and int";
+    assert_eq!(type_err(leak), msg);
+    let reassigned = "x: int | None = 1\nif x is not None:\n    x = None\n    x + 1\n";
+    assert_eq!(type_err(reassigned), msg);
+}
+
+#[test]
+fn source_narrowed_parameter_and_while() {
+    let src =
+        "def f(x: int | None = None):\n    if x is not None:\n        return x * 2\n    return 0\n";
+    let ret = types(src).func("f").map(|f| f.ret.clone());
+    assert_eq!(ret, Some(Type::Int));
+    types("x: int | None = 1\nwhile x is not None:\n    x + 1\n    break\n");
+}
+
+#[test]
+fn source_is_with_a_non_none_operand_is_a_type_error() {
+    assert_eq!(
+        type_err("1 is 1\n"),
+        "`is` compares only with None in phase 2; use `==` for values"
+    );
 }

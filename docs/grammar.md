@@ -62,11 +62,11 @@ for_stmt    = 'for' target_list 'in' expr ':' block ['else' ':' block] ;
 ## Types (annotation syntax)
 
 ```ebnf
-type        = type_atom ['|' 'None'] ;
+type        = type_atom ['|' 'None'] ;                  # `None | None` is rejected (checked after parsing)
 type_atom   = (NAME | 'None') ['[' type (',' type)* ']'] ;
 ```
 
-Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`, `None`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. `T | None` (Optional) is in phase 2, including nested positions such as `list[int | None]`; general `A | B` unions remain later. Optional is one fixed union type, not permission to change a variable's type. PR #10 implements the token/AST contracts and Optional inference at module level; parsing this syntax and end-to-end CLI/conformance work remain pending. See [open implementation work](roadmap.md#phase-2-open-implementation-work).
+Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`, `None`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. `T | None` (Optional) is in phase 2, including nested positions such as `list[int | None]`; general `A | B` unions remain later. Optional is one fixed union type, not permission to change a variable's type. PR #10 implements the token/AST contracts and Optional inference at module level; PR #13 implements this type syntax and `is` / `is not` parsing, including nested annotations. End-to-end CLI/conformance work and post-terminator narrowing remain pending. See [open implementation work](roadmap.md#phase-2-open-implementation-work).
 
 For example, `x: int | None = None` followed by `x = 5` keeps the same `int | None` type. Nano confirmed that a None-first variable intended to hold a value requires an explicit annotation. Without it, `x = None` fixes the type as `None`, so a later `x = 5` is a type error with a fix-it suggesting `x: int | None = None`. Do not relax loose-mode Optional inference yet; revisit only after the corpus shows how often the annotation is needed.
 
