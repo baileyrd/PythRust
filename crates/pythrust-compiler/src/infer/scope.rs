@@ -323,43 +323,39 @@ pub(super) fn guard(stmt: &Stmt) -> Option<String> {
 /// Whether control never reaches the statement after `block`: every path
 /// ends in `return`, `break` or `continue`, or loops forever.
 fn leaves(block: &[Stmt]) -> bool {
+    exits(block, true)
+}
+
+/// Whether a function body can reach its end (and return `None`).
+pub(super) fn falls_through(block: &[Stmt]) -> bool {
+    !exits(block, false)
+}
+
+/// Whether every path through `block` ends in `return`, or loops
+/// forever; with `jumps`, a `break` or `continue` also ends a path.
+///
+/// A loop with no `break` of its own either never ends or runs its
+/// `else`, so it exits when it loops forever or its `else` exits. A jump
+/// in its body only leaves that loop, so the body counts only for breaks.
+fn exits(block: &[Stmt], jumps: bool) -> bool {
     block.iter().any(|s| match &s.kind {
-        StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::Return(_) => true,
+        StmtKind::Break | StmtKind::Continue => jumps,
         StmtKind::If {
             branch,
             elifs,
             orelse,
         } => {
             let mut bodies = std::iter::once(branch).chain(elifs);
-            bodies.all(|b| leaves(&b.body)) && leaves(orelse)
+            bodies.all(|b| exits(&b.body, jumps)) && exits(orelse, jumps)
         }
-        _ => diverges(s),
-    })
-}
-
-pub(super) fn falls_through(block: &Block) -> bool {
-    !block.iter().any(diverges)
-}
-
-fn diverges(stmt: &Stmt) -> bool {
-    match &stmt.kind {
-        StmtKind::Return(_) => true,
-        StmtKind::If {
-            branch,
-            elifs,
-            orelse,
-        } => {
-            let all_branches = std::iter::once(branch)
-                .chain(elifs)
-                .all(|b| !falls_through(&b.body));
-            all_branches && !orelse.is_empty() && !falls_through(orelse)
-        }
-        StmtKind::While { branch, .. } => {
+        StmtKind::While { branch, orelse } => {
             let forever = matches!(branch.test.kind, ExprKind::Bool(true));
-            forever && !branch.body.iter().any(breaks)
+            !branch.body.iter().any(breaks) && (forever || exits(orelse, jumps))
         }
+        StmtKind::For { body, orelse, .. } => !body.iter().any(breaks) && exits(orelse, jumps),
         _ => false,
-    }
+    })
 }
 
 /// Whether `stmt` contains a `break` for the enclosing loop. A nested
