@@ -1,13 +1,16 @@
 //! Pythrust runtime: what compiled programs call that is not worth
-//! generating inline. Output buffering, `print` formatting, and runtime
-//! error exits.
+//! generating inline. Output buffering, `print` formatting, runtime
+//! error exits, and strings ([`str`]).
 //!
 //! The C ABI surface is the only `unsafe` in the project. Each exported
-//! item carries `allow(unsafe_code)` and a note on why it is sound, so
-//! the audit is `grep allow(unsafe_code)`. Formatting and buffering are
-//! safe Rust, tested below.
+//! item (or module, for [`str`]) carries `allow(unsafe_code)` and a
+//! `# Safety` note on what the caller guarantees, so the audit is
+//! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
+//! tested.
 
 #![deny(unsafe_code)]
+
+pub mod str;
 
 use std::io::{self, Write};
 use std::sync::{Mutex, PoisonError};

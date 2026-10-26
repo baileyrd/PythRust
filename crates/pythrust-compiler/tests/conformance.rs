@@ -226,13 +226,19 @@ const NATIVE: &[&str] = &[
     "call_before_def",
     "collatz",
     "fibonacci",
+    "fizzbuzz",
+    "hello",
     "int_control",
+    "overflow_add",
+    "overflow_factorial",
     "overflow_min_floordiv",
     "recursion_limit",
     "shadow_builtin_late",
+    "strings",
     "unbound_augassign",
     "unbound_local",
     "unbound_loop_target",
+    "zero_division",
 ];
 
 /// What the native backend says about a program outside its subset.
