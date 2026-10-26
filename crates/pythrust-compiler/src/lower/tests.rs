@@ -122,6 +122,14 @@ fn calls_before_a_def_fail_or_are_rejected() {
 }
 
 #[test]
+fn builtins_stay_callable_until_a_shadowing_def_runs() {
+    let p = lowered("print(7)\ndef print(x):\n    pass\nprint(8)\n");
+    assert_eq!(fails(&p), 0);
+    // The builtin call before the def, then the user's `print` after it.
+    assert_eq!(p.funcs.len(), 2);
+}
+
+#[test]
 fn reads_check_boundness_unless_known() {
     // Assigned in the entry block: never checked.
     assert_eq!(

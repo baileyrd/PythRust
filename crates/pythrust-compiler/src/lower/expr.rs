@@ -210,7 +210,15 @@ impl FnBuilder<'_, '_> {
         if args.iter().any(|a| a.name.is_some()) {
             return Err(unsupported(span, "keyword arguments"));
         }
-        let def = self.cx.defs.get(name.as_str()).copied();
+        let mut def = self.cx.defs.get(name.as_str()).copied();
+        // Before a shadowing `def` runs, the name still finds the builtin.
+        let pending = self
+            .defined
+            .as_ref()
+            .is_some_and(|d| !d.contains(name.as_str()));
+        if pending && crate::interp::is_builtin(name) {
+            def = None;
+        }
         if def.is_some() && !self.callable(name, func.span)? {
             // Python looks the callee up before evaluating arguments.
             return Ok(Operand::Local(self.new_local(self.ty_at(span)?)));

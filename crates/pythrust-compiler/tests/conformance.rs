@@ -229,6 +229,7 @@ const NATIVE: &[&str] = &[
     "int_control",
     "overflow_min_floordiv",
     "recursion_limit",
+    "shadow_builtin_late",
     "unbound_augassign",
     "unbound_local",
     "unbound_loop_target",

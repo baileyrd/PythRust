@@ -1,0 +1,9 @@
+# A def that shadows a builtin only takes effect once it runs.
+print(7)
+
+
+def print(x):
+    pass
+
+
+print(8)
