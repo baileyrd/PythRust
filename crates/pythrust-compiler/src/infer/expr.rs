@@ -4,6 +4,7 @@ use crate::ast::{Arg, CmpOp, Expr, ExprKind, Ident, LogicalOp, TypeExpr, UnaryOp
 use crate::diag::Result;
 use crate::span::Span;
 
+use super::scope;
 use super::solve::{Access, Binary, Need};
 use super::ty::{FuncType, Type};
 use super::{builtins, error, Checker, Func};
@@ -48,7 +49,8 @@ impl Checker {
             ExprKind::Compare { left, rest } => self.compare(left, rest),
             ExprKind::IfExp { test, body, orelse } => {
                 self.expr(test)?;
-                let (b, o) = (self.expr(body)?, self.expr(orelse)?);
+                let b = self.narrowed(&scope::not_none(test, true), &[], |c| c.expr(body))?;
+                let o = self.narrowed(&scope::not_none(test, false), &[], |c| c.expr(orelse))?;
                 let what = "both branches of a conditional must share one type";
                 self.expect(orelse.span, &b, &o, what)?;
                 Ok(b)
@@ -130,13 +132,16 @@ impl Checker {
         Ok(out)
     }
 
-    /// `and`/`or` return an operand, so both sides share one type.
+    /// `and`/`or` return an operand, so both sides share one type. The
+    /// right side runs only when the left holds (`and`) or fails (`or`),
+    /// so it sees what that proves (`x is None or k > x`).
     fn logical(&mut self, op: LogicalOp, left: &Expr, right: &Expr) -> Result<Type> {
-        let (l, r) = (self.expr(left)?, self.expr(right)?);
-        let word = match op {
-            LogicalOp::And => "and",
-            LogicalOp::Or => "or",
+        let l = self.expr(left)?;
+        let (word, holds) = match op {
+            LogicalOp::And => ("and", true),
+            LogicalOp::Or => ("or", false),
         };
+        let r = self.narrowed(&scope::not_none(left, holds), &[], |c| c.expr(right))?;
         let what = format!("both sides of `{word}` must share one type");
         self.expect(right.span, &l, &r, &what)?;
         Ok(l)

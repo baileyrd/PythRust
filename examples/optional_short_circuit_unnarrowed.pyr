@@ -1,0 +1,4 @@
+# expect-exit: 1
+# expect-error: unsupported operand types for +: int | None and int
+x: int | None = None
+print(x is not None or x + 1 > 0)

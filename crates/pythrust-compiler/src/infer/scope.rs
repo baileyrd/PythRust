@@ -5,7 +5,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ast::{
-    Arg, Block, CmpOp, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind, TypeExpr,
+    Arg, Block, CmpOp, Expr, ExprKind, FuncDef, LogicalOp, Stmt, StmtKind, Target, TargetKind,
+    TypeExpr, UnaryOp,
 };
 
 /// Names bound anywhere in `block`, as Python decides locals.
@@ -273,9 +274,36 @@ impl<'e> Tarjan<'e> {
     }
 }
 
+/// Names `test` proves are not `None` when its truth value is `holds`.
+/// `x is not None` proves `x` when it holds, `x is None` when it fails.
+/// `a and b` holds only when both hold, so it proves both sides' names;
+/// it fails when either fails, so it proves only names both failures
+/// prove. `or` is the mirror image, and `not` flips `holds`.
+pub(super) fn not_none(test: &Expr, holds: bool) -> BTreeSet<String> {
+    match &test.kind {
+        ExprKind::Logical { op, left, right } => {
+            let (l, r) = (not_none(left, holds), not_none(right, holds));
+            let both = matches!((op, holds), (LogicalOp::And, true) | (LogicalOp::Or, false));
+            match both {
+                true => l.union(&r).cloned().collect(),
+                false => l.intersection(&r).cloned().collect(),
+            }
+        }
+        ExprKind::Unary {
+            op: UnaryOp::Not,
+            operand,
+        } => not_none(operand, !holds),
+        _ => none_test(test)
+            .filter(|(_, proven)| *proven == holds)
+            .map(|(name, _)| name)
+            .into_iter()
+            .collect(),
+    }
+}
+
 /// `x is None` gives `(x, false)`; `x is not None` gives `(x, true)`
 /// (`true`: `x` is not `None` when the test holds). Either order.
-pub(super) fn none_test(test: &Expr) -> Option<(String, bool)> {
+fn none_test(test: &Expr) -> Option<(String, bool)> {
     let ExprKind::Compare { left, rest } = &test.kind else {
         return None;
     };
@@ -294,30 +322,32 @@ pub(super) fn none_test(test: &Expr) -> Option<(String, bool)> {
     Some((name, not_none))
 }
 
-/// Whether control can reach the end of `block` without a `return`.
-/// The name an `if` proves is not `None` for the statements after it:
-/// `if x is None:` with a body that leaves, or `if x is not None:` with an
-/// `else` that leaves, while the other side keeps `x`.
-pub(super) fn guard(stmt: &Stmt) -> Option<String> {
+/// The names an `if` proves are not `None` for the statements after it:
+/// those its test proves by failing when its body leaves (`if x is None:
+/// return`), and by holding when its `else` leaves, minus any the other
+/// side assigns.
+pub(super) fn guard(stmt: &Stmt) -> BTreeSet<String> {
     let StmtKind::If {
         branch,
         elifs,
         orelse,
     } = &stmt.kind
     else {
-        return None;
+        return BTreeSet::new();
     };
     if !elifs.is_empty() {
-        return None;
+        return BTreeSet::new();
     }
-    let (name, not_none) = none_test(&branch.test)?;
-    let (none_side, other) = if not_none {
-        (orelse, &branch.body)
-    } else {
-        (&branch.body, orelse)
-    };
-    let proven = leaves(none_side) && !assigned(other).contains(&name);
-    proven.then_some(name)
+    let mut out = BTreeSet::new();
+    for (holds, leaving, other) in [(false, &branch.body, orelse), (true, orelse, &branch.body)] {
+        if !leaves(leaving) {
+            continue;
+        }
+        let assigned = assigned(other);
+        let proven = not_none(&branch.test, holds);
+        out.extend(proven.into_iter().filter(|n| !assigned.contains(n)));
+    }
+    out
 }
 
 /// Whether control never reaches the statement after `block`: every path
