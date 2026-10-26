@@ -28,7 +28,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>> {
 
 /// Words reserved for later phases. The lexer rejects them.
 const RESERVED: &[&str] = &[
-    "try", "except", "finally", "raise", "assert", "class", "import", "from", "as", "with", "is",
+    "try", "except", "finally", "raise", "assert", "class", "import", "from", "as", "with",
     "lambda", "yield", "async", "await", "global", "nonlocal", "del", "pause", "shared",
 ];
 
@@ -582,6 +582,7 @@ fn keyword(text: &str) -> Option<TokenKind> {
         "False" => False,
         "None" => None,
         "temper" => Temper,
+        "is" => Is,
         _ => return Option::None,
     };
     Some(kind)
@@ -620,6 +621,7 @@ fn operator(rest: &[u8]) -> Option<(TokenKind, usize)> {
         [b',', ..] => (Comma, 1),
         [b':', ..] => (Colon, 1),
         [b'.', ..] => (Dot, 1),
+        [b'|', ..] => (Pipe, 1),
         _ => return Option::None,
     };
     Some(op)
@@ -1130,6 +1132,14 @@ mod tests {
     }
 
     // ---- Operators ----
+
+    #[test]
+    fn pipe_for_optional_annotations() {
+        assert_eq!(
+            line("x: int | None"),
+            vec![name("x"), Colon, name("int"), Pipe, TokenKind::None]
+        );
+    }
 
     #[test]
     fn operators_longest_match() {

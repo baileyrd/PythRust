@@ -271,6 +271,8 @@ pub(super) fn compare<'m>(op: CmpOp, a: &Value<'m>, b: &Value<'m>, span: Span) -
         CmpOp::NotEq => return eq(a, b, span).map(|same| !same),
         CmpOp::In => return contains(b, a, span),
         CmpOp::NotIn => return contains(b, a, span).map(|found| !found),
+        CmpOp::Is => return is_none_check(a, b, span),
+        CmpOp::IsNot => return is_none_check(a, b, span).map(|same| !same),
         CmpOp::Lt | CmpOp::LtEq | CmpOp::Gt | CmpOp::GtEq => order(op, a, b, 0, span)?,
     };
     Ok(match op {
@@ -279,6 +281,17 @@ pub(super) fn compare<'m>(op: CmpOp, a: &Value<'m>, b: &Value<'m>, span: Span) -
         CmpOp::Gt => ord == Some(Ordering::Greater),
         _ => matches!(ord, Some(Ordering::Greater | Ordering::Equal)),
     })
+}
+
+/// `a is b`, where phase 2 requires one side to be `None`.
+fn is_none_check<'m>(a: &Value<'m>, b: &Value<'m>, span: Span) -> Result<bool> {
+    match (a, b) {
+        (Value::None, other) | (other, Value::None) => Ok(matches!(other, Value::None)),
+        _ => Err(rt_err(
+            span,
+            "TypeError: `is` compares only with None in phase 2".to_string(),
+        )),
+    }
 }
 
 /// Orders two values for `op`. `Ok(None)` means unordered (a NaN).
@@ -410,6 +423,8 @@ fn cmp_symbol(op: CmpOp) -> &'static str {
         CmpOp::GtEq => ">=",
         CmpOp::In => "in",
         CmpOp::NotIn => "not in",
+        CmpOp::Is => "is",
+        CmpOp::IsNot => "is not",
     }
 }
 
