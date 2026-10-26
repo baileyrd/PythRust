@@ -506,7 +506,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             },
             Rvalue::Float(op, a, b) => self.float_op(*op, *a, *b, span),
             Rvalue::IntPow(a, b) => self.int_pow(*a, *b, span),
-            Rvalue::ToFloat(a) => Ok(self.to_float(*a)),
+            Rvalue::ToFloat(a) => Ok(self.int_as_float(*a)),
             Rvalue::FloatToInt(a) => self.float_to_int(*a, span),
             Rvalue::ParseFloat(s) => self.parse_float(*s, span),
             Rvalue::ParseInt(s) => self.parse_int(*s, span),

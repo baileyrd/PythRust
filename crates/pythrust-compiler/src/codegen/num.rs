@@ -70,7 +70,7 @@ impl FnGen<'_, '_, '_> {
     }
 
     /// An `Int` or `Bool` as a float.
-    pub(super) fn to_float(&mut self, a: Operand) -> Value {
+    pub(super) fn int_as_float(&mut self, a: Operand) -> Value {
         let v = self.operand(a);
         let v = match self.func.ty(a) {
             Ty::Bool => self.b.ins().uextend(types::I64, v),
