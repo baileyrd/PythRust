@@ -12,6 +12,9 @@
 //! - `# deviation: why` a documented deviation from Python (see
 //!   `docs/grammar.md`). The golden holds Pythrust's output, and CPython is
 //!   required to differ, so a stale deviation fails.
+//! - `# expect-error: text` the program must fail `check` (lex, parse,
+//!   infer) with a diagnostic containing `text`; it implies exit 1. Every
+//!   other program must pass `check`. `corpus_checks` asserts both.
 //!
 //! Environment:
 //! - `PYTHON` interpreter to use as the oracle (default `python3`).
@@ -26,6 +29,8 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use pythrust_compiler::{infer, lexer, parser};
+
 type Res<T> = std::result::Result<T, String>;
 
 /// What a program is expected to do, from its directives.
@@ -33,6 +38,8 @@ type Res<T> = std::result::Result<T, String>;
 struct Expect {
     status: i32,
     deviation: Option<String>,
+    /// Substring of the compile error `check` must report, if any.
+    check_error: Option<String>,
 }
 
 /// One corpus program and its golden stdout.
@@ -52,11 +59,13 @@ struct Run {
 
 const EXIT: &str = "# expect-exit:";
 const DEVIATION: &str = "# deviation:";
+const ERROR: &str = "# expect-error:";
 
 /// Reads directives from the leading `#` comment block of `src`.
 fn parse_expect(src: &str) -> Res<Expect> {
     let mut status: Option<i32> = None;
     let mut deviation: Option<String> = None;
+    let mut check_error: Option<String> = None;
     for line in src.lines().take_while(|l| l.starts_with('#')) {
         if let Some(v) = line.strip_prefix(EXIT) {
             let n = v
@@ -65,17 +74,29 @@ fn parse_expect(src: &str) -> Res<Expect> {
                 .map_err(|e| format!("bad {EXIT} {v:?}: {e}"))?;
             set_once(&mut status, n, EXIT)?;
         } else if let Some(v) = line.strip_prefix(DEVIATION) {
-            let why = v.trim();
-            if why.is_empty() {
-                return Err(format!("{DEVIATION} needs a reason"));
-            }
-            set_once(&mut deviation, why.to_string(), DEVIATION)?;
+            set_once(&mut deviation, text(v, DEVIATION)?, DEVIATION)?;
+        } else if let Some(v) = line.strip_prefix(ERROR) {
+            set_once(&mut check_error, text(v, ERROR)?, ERROR)?;
         }
     }
+    let status = status.unwrap_or(0);
+    if check_error.is_some() && status != 1 {
+        return Err(format!("{ERROR} needs {EXIT} 1"));
+    }
     Ok(Expect {
-        status: status.unwrap_or(0),
+        status,
         deviation,
+        check_error,
     })
+}
+
+/// A directive's non-empty value.
+fn text(value: &str, name: &str) -> Res<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{name} needs a value"));
+    }
+    Ok(value.to_string())
 }
 
 fn set_once<T>(slot: &mut Option<T>, value: T, name: &str) -> Res<()> {
@@ -270,6 +291,50 @@ fn cpython_failures(dir: &Path, blessing: bool) -> Res<Vec<String>> {
     Ok(failures)
 }
 
+/// Runs `check` (lex, parse, infer) in process; `Err` holds the message.
+fn check_source(src: &str) -> std::result::Result<(), String> {
+    let tokens = lexer::lex(src).map_err(|d| d.message)?;
+    let module = parser::parse(&tokens).map_err(|d| d.message)?;
+    infer::infer(&module).map(|_| ()).map_err(|d| d.message)
+}
+
+/// Compares `check` against the case's `expect-error`; `None` means it agrees.
+fn check_mismatch(source: &Path, want: Option<&str>, got: Result<(), String>) -> Option<String> {
+    let name = source.display();
+    match (want, got) {
+        (None, Ok(())) => None,
+        (None, Err(msg)) => Some(format!("{name}: check failed: {msg}")),
+        (Some(want), Ok(())) => Some(format!("{name}: check passed, want error {want:?}")),
+        (Some(want), Err(msg)) if msg.contains(want) => None,
+        (Some(want), Err(msg)) => Some(format!("{name}: want error {want:?}, got {msg:?}")),
+    }
+}
+
+#[test]
+fn corpus_checks() -> Res<()> {
+    let mut failures = Vec::new();
+    for case in load_corpus(&corpus_dir()?)? {
+        let got = check_source(&read(&case.source)?);
+        let want = case.expect.check_error.as_deref();
+        failures.extend(check_mismatch(&case.source, want, got));
+    }
+    report(failures);
+    Ok(())
+}
+
+#[test]
+fn check_mismatch_cases() {
+    let p = Path::new("p.pythrust");
+    assert_eq!(check_mismatch(p, None, Ok(())), None);
+    assert_eq!(
+        check_mismatch(p, Some("bad"), Err("a bad type".into())),
+        None
+    );
+    assert!(check_mismatch(p, None, Err("x".into())).is_some());
+    assert!(check_mismatch(p, Some("bad"), Ok(())).is_some());
+    assert!(check_mismatch(p, Some("bad"), Err("other".into())).is_some());
+}
+
 #[test]
 fn corpus_matches_cpython() -> Res<()> {
     let blessing = std::env::var("PYTHRUST_BLESS").is_ok_and(|v| v == "1");
@@ -310,26 +375,22 @@ fn corpus_is_complete() -> Res<()> {
 
 #[test]
 fn expect_defaults() {
-    let want = Expect {
+    let want = || Expect {
         status: 0,
         deviation: None,
+        check_error: None,
     };
-    assert_eq!(parse_expect("print(1)\n"), Ok(want));
-    assert_eq!(
-        parse_expect(""),
-        Ok(Expect {
-            status: 0,
-            deviation: None
-        })
-    );
+    assert_eq!(parse_expect("print(1)\n"), Ok(want()));
+    assert_eq!(parse_expect(""), Ok(want()));
 }
 
 #[test]
 fn expect_reads_directives() {
-    let src = "# a plain comment\n# expect-exit: 1\n# deviation: checked overflow\nx = 1\n";
+    let src = "# a plain comment\n# expect-exit: 1\n# deviation: checked overflow\n# expect-error: overflow\nx = 1\n";
     let want = Expect {
         status: 1,
         deviation: Some("checked overflow".to_string()),
+        check_error: Some("overflow".to_string()),
     };
     assert_eq!(parse_expect(src), Ok(want));
 }
@@ -346,6 +407,9 @@ fn expect_rejects_bad_directives() {
     assert!(parse_expect("# expect-exit: 1\n# expect-exit: 2\n").is_err());
     assert!(parse_expect("# deviation:\n").is_err());
     assert!(parse_expect("# deviation: a\n# deviation: b\n").is_err());
+    assert!(parse_expect("# expect-error:\n# expect-exit: 1\n").is_err());
+    assert!(parse_expect("# expect-error: x\n").is_err());
+    assert!(parse_expect("# expect-error: x\n# expect-exit: 1\n# expect-error: y\n").is_err());
 }
 
 #[test]
@@ -356,6 +420,7 @@ fn mismatch_reports_status_and_stdout() {
         expect: Expect {
             status: 0,
             deviation: None,
+            check_error: None,
         },
     };
     let ok = Run {

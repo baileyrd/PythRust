@@ -1,0 +1,25 @@
+def find(xs: list[int], target: int) -> int | None:
+    for i in range(len(xs)):
+        if xs[i] == target:
+            return i
+
+
+def greet(name: str | None = None) -> str:
+    if name is None:
+        return "hello, stranger"
+    return "hello, " + name
+
+
+best: int | None = None
+print(best, best is None)
+best = 7
+print(best, best is None, best is not None)
+best = None
+print(best)
+
+print(find([4, 8, 15], 8))
+print(find([4, 8, 15], 16))
+print(greet())
+print(greet("Ada"))
+print(greet(name=None))
+print(greet(None) == greet())
