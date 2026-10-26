@@ -5,9 +5,9 @@
 //! can fail at run time are explicit: a failing `Rvalue` carries the span
 //! of its `Inst`, and a `Term::Fail` ends the program with a diagnostic.
 //!
-//! Covers ints, floats, bools, `None`, strings, lists and tuples. List
-//! and tuple types are interned in [`Program::types`], so [`Ty`] stays
-//! `Copy`.
+//! Covers ints, floats, bools, `None`, strings, lists, tuples and
+//! optionals (`T | None`). List, tuple and optional types are interned
+//! in [`Program::types`], so [`Ty`] stays `Copy`.
 //!
 //! Locals other than parameters start zeroed. A local of a
 //! reference-counted type ([`Ty::is_rc`]: strings, lists, tuples) is a
@@ -36,12 +36,16 @@ pub enum Ty {
     /// An immutable, reference-counted tuple; `types[id]` is a
     /// [`Compound::Tuple`].
     Tuple(TypeId),
+    /// `T | None`; `types[id]` is a [`Compound::Opt`]. Null is `None`;
+    /// otherwise a reference to the value, or for an `Int`, `Float` or
+    /// `Bool` to a one-field tuple boxing it.
+    Opt(TypeId),
 }
 
 impl Ty {
     /// Whether values of this type are reference-counted pointers.
     pub fn is_rc(self) -> bool {
-        matches!(self, Ty::Str | Ty::List(_) | Ty::Tuple(_))
+        matches!(self, Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_))
     }
 }
 
@@ -49,11 +53,13 @@ impl Ty {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(pub usize);
 
-/// What a list or tuple type holds.
+/// What a list, tuple or optional type holds.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Compound {
     List(Ty),
     Tuple(Vec<Ty>),
+    /// The present type: never `None` or itself optional.
+    Opt(Ty),
 }
 
 /// Index into [`Program::funcs`].
@@ -189,6 +195,13 @@ pub enum Rvalue {
     Field(Operand, usize),
     /// The global's value; a new reference if reference-counted.
     Global(GlobalId),
+    /// A value of an optional's present type, or `None`, as that
+    /// optional (the destination's type).
+    Wrap(Operand),
+    /// An optional's present value; lowering proved it is not `None`.
+    Unwrap(Operand),
+    /// Whether an optional is `None`: a `Bool`.
+    IsNone(Operand),
     /// Float arithmetic with Python semantics: `/`, `//` and `%` by zero
     /// and `**` out of range fail.
     Float(FloatOp, Operand, Operand),
@@ -271,10 +284,11 @@ pub fn operand_ty(locals: &[Ty], op: Operand) -> Ty {
 }
 
 impl Program {
-    /// What list or tuple type `ty` holds; `None` for other types.
+    /// What list, tuple or optional type `ty` holds; `None` for other
+    /// types.
     pub fn compound(&self, ty: Ty) -> Option<&Compound> {
         match ty {
-            Ty::List(id) | Ty::Tuple(id) => self.types.get(id.0),
+            Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => self.types.get(id.0),
             _ => None,
         }
     }

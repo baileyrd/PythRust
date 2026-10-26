@@ -2,6 +2,7 @@
 
 use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
 use crate::diag::Result;
+use crate::infer::Type;
 use crate::ir::{CmpOp, FloatOp, Inst, IntOp, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
@@ -98,17 +99,11 @@ impl FnBuilder<'_, '_> {
         }
     }
 
-    /// `and` / `or`: the result is one of the operands, so all three
-    /// types must agree.
+    /// `and` / `or`: the result is one of the operands, adapted to the
+    /// result's type (`x or 7` on an `int | None` wraps the 7).
     fn logical(&mut self, op: LogicalOp, left: &Expr, right: &Expr, span: Span) -> Result<Operand> {
         let ty = self.ty_at(span)?;
         let l = self.expr(left)?;
-        if self.ty(l) != ty {
-            return Err(unsupported(
-                span,
-                "`and` / `or` on operands of different types",
-            ));
-        }
         let dest = self.pooled(ty);
         let test = self.truthy(l, span);
         let (short, rhs, end) = (self.new_block(), self.new_block(), self.new_block());
@@ -122,10 +117,18 @@ impl FnBuilder<'_, '_> {
             orelse,
         });
         self.switch_to(short);
+        let l = self.fit(l, ty, span);
+        if self.ty(l) != ty {
+            return Err(unsupported(
+                span,
+                "`and` / `or` on operands of different types",
+            ));
+        }
         self.move_into(dest, l, span);
         self.terminate(Term::Goto(end));
         self.switch_to(rhs);
         let r = self.expr(right)?;
+        let r = self.fit(r, ty, span);
         if self.ty(r) != ty {
             return Err(unsupported(
                 span,
@@ -165,14 +168,11 @@ impl FnBuilder<'_, '_> {
         Ok(Operand::Local(dest))
     }
 
-    /// One comparison. `is` only meets `None` (inference ensures it), and
-    /// no value in this subset is optional, so it folds to a constant.
+    /// One comparison. `is` only meets `None` (inference ensures it).
     fn cmp(&mut self, op: ast::CmpOp, l: Operand, r: Operand, span: Span) -> Result<Operand> {
-        let (lt, rt) = (self.ty(l), self.ty(r));
-        let same = lt == rt;
         let op = match op {
-            ast::CmpOp::Is => return Ok(Operand::Bool(same)),
-            ast::CmpOp::IsNot => return Ok(Operand::Bool(!same)),
+            ast::CmpOp::Is => return Ok(self.is(l, r, false, span)),
+            ast::CmpOp::IsNot => return Ok(self.is(l, r, true, span)),
             ast::CmpOp::In | ast::CmpOp::NotIn => return self.contains(op, l, r, span),
             ast::CmpOp::Eq => CmpOp::Eq,
             ast::CmpOp::NotEq => CmpOp::Ne,
@@ -181,6 +181,21 @@ impl FnBuilder<'_, '_> {
             ast::CmpOp::Gt => CmpOp::Gt,
             ast::CmpOp::GtEq => CmpOp::Ge,
         };
+        if matches!(self.ty(l), Ty::Opt(_)) || matches!(self.ty(r), Ty::Opt(_)) {
+            return self.opt_eq(op, l, r, span);
+        }
+        self.cmp_values(op, l, r, span)
+    }
+
+    /// `l op r` on values that are not optional.
+    pub(super) fn cmp_values(
+        &mut self,
+        op: CmpOp,
+        l: Operand,
+        r: Operand,
+        span: Span,
+    ) -> Result<Operand> {
+        let (lt, rt) = (self.ty(l), self.ty(r));
         match (lt, rt) {
             (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {
                 let (a, b) = (self.as_float(l, span), self.as_float(r, span));
@@ -190,7 +205,7 @@ impl FnBuilder<'_, '_> {
                 op,
                 CmpOp::Eq | CmpOp::Le | CmpOp::Ge
             ))),
-            _ if !same => Err(unsupported(span, "comparing values of different types")),
+            _ if lt != rt => Err(unsupported(span, "comparing values of different types")),
             _ => Ok(self.temp(Ty::Bool, Rvalue::Cmp(op, l, r), span)),
         }
     }
@@ -204,7 +219,14 @@ impl FnBuilder<'_, '_> {
             (Ty::Int, ty @ Ty::List(_)) if self.slot_ty(ty, 0, span)? == Ty::Float => {
                 self.as_float(l, span)
             }
-            (needle, ty @ Ty::List(_)) if self.slot_ty(ty, 0, span)? == needle => l,
+            (_, ty @ Ty::List(_)) => {
+                let elem = self.slot_ty(ty, 0, span)?;
+                let needle = self.fit(l, elem, span);
+                if self.ty(needle) != elem {
+                    return Err(unsupported(span, "`in` on a list of another type"));
+                }
+                needle
+            }
             _ => return Err(unsupported(span, "`in` on anything but strings and lists")),
         };
         let found = Rvalue::Contains { hay: r, needle };
@@ -230,6 +252,7 @@ impl FnBuilder<'_, '_> {
         for (block, e) in [(then, body), (other, orelse)] {
             self.switch_to(block);
             let v = self.expr(e)?;
+            let v = self.fit(v, ty, span);
             if self.ty(v) != ty {
                 return Err(unsupported(
                     span,
@@ -257,6 +280,7 @@ impl FnBuilder<'_, '_> {
                 let n = self.temp(Ty::Int, Rvalue::Len(v), span);
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, n, Operand::Int(0)), span)
             }
+            Ty::Opt(_) => self.opt_truthy(v, span),
         }
     }
 
@@ -302,7 +326,16 @@ impl FnBuilder<'_, '_> {
                 None => self.default_arg(def, k, span)?,
             });
         }
-        let ops = bound;
+        let sig = self
+            .cx
+            .types
+            .func(name)
+            .ok_or_else(|| super::internal(span, &format!("`{name}` has no signature")))?;
+        let params: Vec<Type> = sig.params.iter().map(|p| p.ty.clone()).collect();
+        let mut ops = Vec::new();
+        for (op, param) in bound.into_iter().zip(&params) {
+            ops.push(self.fit_param(op, param, span)?);
+        }
         let tys = ops.iter().map(|op| self.ty(*op)).collect();
         let ret = self.ty_at(span)?;
         let id = self.cx.instance(def, tys, ret, span)?;
@@ -351,7 +384,7 @@ impl FnBuilder<'_, '_> {
         span: Span,
     ) -> Result<Operand> {
         if name == "print" {
-            return Ok(self.print(args, ops));
+            return self.print(args, ops);
         }
         if args.iter().any(|a| a.name.is_some()) {
             return Err(unsupported(span, "keyword arguments"));
@@ -365,7 +398,7 @@ impl FnBuilder<'_, '_> {
     /// `print`, its `sep` and `end` keywords split from the values.
     /// Inference may have typed the call against a later `def print`, so
     /// the builtin's own keywords are checked here, failing as `run` does.
-    fn print(&mut self, args: &[Arg], ops: Vec<Operand>) -> Operand {
+    fn print(&mut self, args: &[Arg], ops: Vec<Operand>) -> Result<Operand> {
         let (mut values, mut sep, mut end) = (Vec::new(), None, None);
         for (a, op) in args.iter().zip(ops) {
             let Some(kw) = &a.name else {
@@ -379,12 +412,13 @@ impl FnBuilder<'_, '_> {
                     let msg =
                         format!("TypeError: '{other}' is an invalid keyword argument for print()");
                     self.jump_away(Term::Fail(runtime(kw.span, &msg)));
-                    return Operand::None;
+                    return Ok(Operand::None);
                 }
             };
             match self.ty(op) {
                 Ty::Str => *slot = Some(op),
                 Ty::None => {}
+                Ty::Opt(_) => return Err(unsupported(kw.span, "an optional `sep` or `end`")),
                 ty => {
                     let msg = format!(
                         "TypeError: {} must be None or a string, not {}",
@@ -392,7 +426,7 @@ impl FnBuilder<'_, '_> {
                         type_name(ty)
                     );
                     self.jump_away(Term::Fail(runtime(kw.span, &msg)));
-                    return Operand::None;
+                    return Ok(Operand::None);
                 }
             }
         }
@@ -401,7 +435,7 @@ impl FnBuilder<'_, '_> {
             sep,
             end,
         });
-        Operand::None
+        Ok(Operand::None)
     }
 
     /// `len`, `str`, `int`, `float` and `bool` of one argument.
@@ -441,6 +475,7 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Str => "str",
         Ty::List(_) => "list",
         Ty::Tuple(_) => "tuple",
+        Ty::Opt(_) => "optional",
     }
 }
 

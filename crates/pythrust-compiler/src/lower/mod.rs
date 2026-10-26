@@ -9,6 +9,7 @@
 
 mod expr;
 mod globals;
+mod opt;
 mod seq;
 mod stmt;
 mod types;
@@ -183,6 +184,9 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
     match (t, ty) {
         (Type::Var(v), _) => *subst.entry(*v).or_insert(ty) == ty,
         (Type::List(t), Ty::List(_)) => seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst)),
+        (Type::Optional(t), Ty::Opt(_)) => {
+            seqs.present(ty).is_some_and(|p| bind(t, p, seqs, subst))
+        }
         (Type::Tuple(ts), Ty::Tuple(_)) => {
             let fields = seqs.fields(ty).map(<[Ty]>::to_vec).unwrap_or_default();
             ts.len() == fields.len() && ts.iter().zip(fields).all(|(t, f)| bind(t, f, seqs, subst))
@@ -270,6 +274,12 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
     fn finish(mut self, name: &str, params: Vec<LocalId>) -> Func {
         let end = match self.ret {
             Ty::None => Term::Goto(self.exit),
+            // Falling off returns `None`: the slot, never assigned on
+            // that path, is null.
+            Ty::Opt(_) => {
+                self.return_slot();
+                Term::Goto(self.exit)
+            }
             _ => Term::Unreachable,
         };
         self.terminate(end);
@@ -294,6 +304,15 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             locals: self.locals,
             blocks: blocks.collect(),
         }
+    }
+
+    /// Where `return` leaves its value, created on first use.
+    fn return_slot(&mut self) -> LocalId {
+        let ret = self.ret;
+        *self.ret_slot.get_or_insert_with(|| {
+            self.locals.push(ret);
+            LocalId(self.locals.len() - 1)
+        })
     }
 
     fn new_block(&mut self) -> BlockId {
@@ -432,6 +451,10 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
                     .map(|t| self.concrete(t, span))
                     .collect::<Result<Vec<Ty>>>()?;
                 Ok(self.cx.seqs.tuple(fields))
+            }
+            Type::Optional(present) => {
+                let present = self.concrete(present, span)?;
+                Ok(self.cx.seqs.optional(present))
             }
             Type::Int => Ok(Ty::Int),
             Type::Float => Ok(Ty::Float),

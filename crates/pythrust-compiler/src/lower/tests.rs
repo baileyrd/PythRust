@@ -1,5 +1,5 @@
 use crate::diag::{DiagKind, Diagnostic};
-use crate::ir::{Func, Inst, LocalId, Program, Term, Ty};
+use crate::ir::{Compound, Func, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
 use crate::{infer, lexer, parser};
 
 fn lower_src(src: &str) -> crate::diag::Result<Program> {
@@ -73,8 +73,88 @@ fn code_after_return_and_break_lowers() {
 
 #[test]
 fn unsupported_values_name_the_construct() {
-    let (d, _) = rejected("x: int | None = None\nprint(x)\n");
-    assert!(d.message.contains("int | None"), "{}", d.message);
+    let (d, _) = rejected("r = range(3)\nprint(len(r))\n");
+    assert!(d.message.contains("range"), "{}", d.message);
+}
+
+/// Every rvalue of every function of `p`.
+fn all_rvalues(p: &Program) -> Vec<&Rvalue> {
+    p.funcs.iter().flat_map(rvalues).collect()
+}
+
+#[test]
+fn optionals_wrap_on_assignment_and_unwrap_where_narrowed() {
+    let p = lowered("x: int | None = None\nx = 2\nif x is not None:\n    print(x + 1)\n");
+    let rv = all_rvalues(&p);
+    let count = |f: fn(&Rvalue) -> bool| rv.iter().filter(|r| f(r)).count();
+    assert_eq!(count(|r| matches!(r, Rvalue::Wrap(_))), 2);
+    assert_eq!(count(|r| matches!(r, Rvalue::IsNone(_))), 1);
+    assert_eq!(count(|r| matches!(r, Rvalue::Unwrap(_))), 1);
+    assert_eq!(p.types, vec![Compound::Opt(Ty::Int)]);
+}
+
+#[test]
+fn comparing_an_optional_with_none_needs_no_unwrap() {
+    let p = lowered("x: str | None = None\nprint(x == None, x != \"a\")\n");
+    let rv = all_rvalues(&p);
+    let unwraps = rv.iter().filter(|r| matches!(r, Rvalue::Unwrap(_))).count();
+    // Only `x != "a"` reads the present value.
+    assert_eq!(unwraps, 1);
+}
+
+#[test]
+fn falling_off_an_optional_function_returns_its_null_slot() {
+    let p = lowered("def f(n: int) -> int | None:\n    if n > 0:\n        return n\nprint(f(1))\n");
+    let f = p.funcs.iter().find(|f| f.name == "f").expect("f");
+    assert!(matches!(f.ret, Ty::Opt(_)));
+    assert!(matches!(f.blocks[1].term, Term::Return(Operand::Local(_))));
+}
+
+#[test]
+fn and_or_wrap_the_operand_they_select() {
+    let p = lowered("x: int | None = None\nprint(x or 7)\n");
+    let wraps = all_rvalues(&p);
+    let wraps = wraps
+        .iter()
+        .filter(|r| matches!(r, Rvalue::Wrap(_)))
+        .count();
+    // The `None` stored in `x`, and the 7.
+    assert_eq!(wraps, 2);
+}
+
+#[test]
+fn arguments_take_their_parameters_optional_fields() {
+    let p = lowered(
+        "def f(x: tuple[int | None, str]) -> str:\n    return str(x)\nprint(f((None, \"a\")))\n",
+    );
+    let f = p.funcs.iter().find(|f| f.name == "f").expect("f");
+    let param = f.locals[f.params[0].0];
+    let Some(Compound::Tuple(fields)) = p.compound(param) else {
+        panic!("a tuple parameter");
+    };
+    assert!(matches!(fields[0], Ty::Opt(_)));
+}
+
+#[test]
+fn a_tuple_is_rebuilt_before_wrapping_into_an_optional() {
+    let p = lowered("t: tuple[int | None, str] | None = (None, \"a\")\nprint(t)\n");
+    let rv = all_rvalues(&p);
+    // The `None` field, then the rebuilt tuple.
+    assert_eq!(
+        rv.iter().filter(|r| matches!(r, Rvalue::Wrap(_))).count(),
+        2
+    );
+}
+
+#[test]
+fn optional_tuples_are_rebuilt_to_the_declared_type() {
+    let p = lowered("t: tuple[int | None, str] = (None, \"a\")\nprint(t)\n");
+    let rv = all_rvalues(&p);
+    assert!(rv.iter().any(|r| matches!(r, Rvalue::Field(_, 1))));
+    assert_eq!(
+        rv.iter().filter(|r| matches!(r, Rvalue::NewSeq(_))).count(),
+        2
+    );
 }
 
 #[test]

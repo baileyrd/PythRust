@@ -1,0 +1,71 @@
+# Optionals of every present type: wrapping, narrowing, equality,
+# truthiness, str(), containers and module variables read by functions.
+def pick(names: list[str], i: int) -> str | None:
+    if i < len(names):
+        return names[i]
+    return None
+
+
+def first_word(s: str | None) -> str:
+    if s is None:
+        return "-"
+    if s:
+        return s + "!"
+    return "-"
+
+
+def scale(x: float | None, k: float = 2.0) -> float | None:
+    if x is None:
+        return None
+    return x * k
+
+
+def flag(b: bool | None) -> str:
+    if b is None:
+        return "unset"
+    return "on" if b else "off"
+
+
+label: str | None = None
+
+
+def show() -> str:
+    if label is None:
+        return "no label"
+    return "label " + label
+
+
+names = ["ada", "bo"]
+for i in range(3):
+    n = pick(names, i)
+    print(n, first_word(n), n is None, n == "bo", n != None, str(n))
+print(show())
+label = "x" * 3
+print(show())
+label = None
+print(show())
+
+print(scale(1.5), scale(None), scale(2.0, 0.5) == 1.0)
+print(flag(True), flag(False), flag(None))
+
+rows: list[list[int] | None] = [[1, 2], None]
+rows.append([3])
+rows[1] = [0]
+print(rows, len(rows))
+pair: tuple[str | None, int | None] = (None, 4)
+print(pair, pair[0] is None, pair[1])
+words: list[str | None] = ["a", None]
+print("a" in words, None in words, "b" in words, words == words)
+
+best: int | None = None
+for k in [3, 0, 5]:
+    if best is None:
+        best = k
+    elif k > best:
+        best = k
+print(best, bool(best), best == 5)
+zero: int | None = 0
+empty: str | None = ""
+print(bool(zero), bool(empty), zero == 0, empty == "")
+fallback = pick(names, 9) if len(names) > 5 else None
+print(fallback)

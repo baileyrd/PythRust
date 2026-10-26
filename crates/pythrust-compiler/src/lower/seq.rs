@@ -32,8 +32,10 @@ impl FnBuilder<'_, '_> {
     }
 
     /// `v`, which must have type `want`: inference gives every slot its
-    /// value's exact type, with no widening.
-    fn expect(&self, v: Operand, want: Ty, span: Span) -> Result<Operand> {
+    /// value's exact type, with no widening, but for wrapping into an
+    /// optional.
+    fn expect(&mut self, v: Operand, want: Ty, span: Span) -> Result<Operand> {
+        let v = self.fit(v, want, span);
         if self.ty(v) != want {
             return Err(unsupported(
                 span,

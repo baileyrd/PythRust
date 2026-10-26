@@ -41,6 +41,7 @@ enum Kind {
     Str,
     List,
     Tuple,
+    Opt,
 }
 
 fn kind(desc: &[u8]) -> Kind {
@@ -51,6 +52,7 @@ fn kind(desc: &[u8]) -> Kind {
         Some(b's') => Kind::Str,
         Some(b'l') => Kind::List,
         Some(b't') => Kind::Tuple,
+        Some(b'o') => Kind::Opt,
         _ => Kind::Int,
     }
 }
@@ -58,7 +60,7 @@ fn kind(desc: &[u8]) -> Kind {
 /// The length of the one type `desc` starts with.
 fn span(desc: &[u8]) -> usize {
     match kind(desc) {
-        Kind::List => 1 + span(desc.get(1..).unwrap_or_default()),
+        Kind::List | Kind::Opt => 1 + span(desc.get(1..).unwrap_or_default()),
         Kind::Tuple => {
             let n = desc.get(1).copied().unwrap_or(0);
             let fields = (0..n).fold(2, |at, _| at + span(desc.get(at..).unwrap_or_default()));
@@ -97,9 +99,41 @@ unsafe fn text<'a>(p: u64) -> &'a str {
     unsafe { pstr::borrow(p as *const PtStr) }.text()
 }
 
+/// For an optional slot type `desc` (`o` and the inner type): the inner
+/// type and whether a present value is boxed, which an `int`, `float`
+/// or `bool` is, in a one-field tuple. A string, list or tuple is held
+/// directly; `None` is null.
+fn opt(desc: &[u8]) -> (&[u8], bool) {
+    let inner = desc.get(1..).unwrap_or_default();
+    let boxed = matches!(kind(inner), Kind::Int | Kind::Float | Kind::Bool);
+    (inner, boxed)
+}
+
+/// The inner value of a present optional slot `v` of type `desc`.
+fn present(desc: &[u8], v: u64) -> u64 {
+    let (_, boxed) = opt(desc);
+    if !boxed {
+        return v;
+    }
+    // SAFETY: a present boxed optional holds a live one-field tuple.
+    let cell = unsafe { seq(v) };
+    cell.items.borrow().first().copied().unwrap_or(0)
+}
+
+/// The type whose count an optional slot `v` of type `desc` holds a
+/// reference by: its box (a tuple) or its inner type.
+fn opt_owner(desc: &[u8]) -> &[u8] {
+    match opt(desc) {
+        (_, true) => b"t",
+        (inner, false) => inner,
+    }
+}
+
 /// Adds a reference to what slot `v` of type `desc` holds, if anything.
 fn inc(desc: &[u8], v: u64) {
     match kind(desc) {
+        Kind::Opt if v == 0 => {}
+        Kind::Opt => inc(opt_owner(desc), v),
         // SAFETY: a string slot holds a live string.
         Kind::Str => unsafe { pstr::pt_str_inc(v as *const PtStr) },
         // SAFETY: a sequence slot holds a live sequence.
@@ -111,6 +145,8 @@ fn inc(desc: &[u8], v: u64) {
 /// Drops the reference slot `v` of type `desc` owns, if any.
 fn dec(desc: &[u8], v: u64) {
     match kind(desc) {
+        Kind::Opt if v == 0 => {}
+        Kind::Opt => dec(opt_owner(desc), v),
         // SAFETY: a string slot owns a reference to a live string.
         Kind::Str => unsafe { pstr::pt_str_dec(v as *mut PtStr) },
         // SAFETY: a sequence slot owns a reference to a live sequence.
@@ -127,6 +163,8 @@ fn eq(desc: &[u8], a: u64, b: u64) -> bool {
         Kind::Str => unsafe { text(a) == text(b) },
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple => a == b || unsafe { seq_eq(seq(a), seq(b)) },
+        Kind::Opt if a == 0 || b == 0 => a == b,
+        Kind::Opt => eq(opt(desc).0, present(desc, a), present(desc, b)),
         _ => a == b,
     }
 }
@@ -151,6 +189,8 @@ fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple => unsafe { seq_cmp(seq(a), seq(b)) },
         Kind::Bool | Kind::None => Some(a.cmp(&b)),
+        // Python cannot order `None`; the compiler never asks.
+        Kind::Opt => None,
     }
 }
 
@@ -177,6 +217,8 @@ fn repr(desc: &[u8], v: u64, out: &mut String) {
         Kind::Str => out.push_str(&pstr::repr(unsafe { text(v) })),
         // SAFETY: a sequence slot holds a live sequence.
         Kind::List | Kind::Tuple => seq_repr(unsafe { seq(v) }, out),
+        Kind::Opt if v == 0 => out.push_str("None"),
+        Kind::Opt => repr(opt(desc).0, present(desc, v), out),
     }
 }
 
@@ -525,6 +567,35 @@ mod tests {
             pt_seq_dec(outer);
             assert_eq!(seq(inner as u64).rc.get(), 1);
             pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn optional_slots_box_scalars_and_hold_references_directly() {
+        let five = make(b"t\x01i", &[5]);
+        let six = make(b"t\x01i", &[6]);
+        let xs = make(b"loi", &[0, five as u64]);
+        let ys = make(b"loi", &[0, six as u64]);
+        // SAFETY: every sequence here is live until dropped below.
+        unsafe {
+            assert_eq!(shown(xs), "[None, 5]");
+            assert_eq!(pt_seq_eq(xs, ys), 0);
+            assert_eq!(pt_seq_eq(xs, xs), 1);
+            assert_eq!(pt_list_contains(xs, 0), 1);
+            // The list's references keep the boxes alive.
+            pt_seq_dec(five);
+            pt_seq_dec(six);
+            assert_eq!(shown(ys), "[None, 6]");
+            pt_seq_dec(xs);
+            pt_seq_dec(ys);
+        }
+        let inner = make(b"li", &[1]);
+        let nested = make(b"loli", &[inner as u64, 0]);
+        assert_eq!(shown(nested), "[[1], None]");
+        // SAFETY: as above.
+        unsafe {
+            pt_seq_dec(inner);
+            pt_seq_dec(nested);
         }
     }
 }
