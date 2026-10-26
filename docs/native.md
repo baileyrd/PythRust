@@ -67,6 +67,8 @@ M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.m
 
 ## Known gaps
 
+M4 closed with these open; [roadmap.md](roadmap.md#phase-3-native-status-m4-done) tracks them as follow-ups.
+
 - **Reference ownership** is checked for leaks in CI (the debug runtime's count) but for use-after-free only by running the examples under valgrind by hand.
 - **Bools as ints** in `range` bounds and indexes (`range(True)`, `xs[True]`), which inference and `run` accept, are backend errors.
 - **Binary size** is dominated by the runtime and Rust's standard library (about 5 MB in debug builds).
