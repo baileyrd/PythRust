@@ -2,7 +2,7 @@
 
 use crate::ast::{self, Arg, BinOp, Expr, ExprKind, LogicalOp, UnaryOp};
 use crate::diag::Result;
-use crate::ir::{CmpOp, Inst, IntOp, Operand, Rvalue, Term, Ty};
+use crate::ir::{CmpOp, FloatOp, Inst, IntOp, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 use super::vars::runtime;
@@ -21,7 +21,7 @@ impl FnBuilder<'_, '_> {
             ExprKind::Compare { left, rest } => self.compare(left, rest, e.span),
             ExprKind::IfExp { test, body, orelse } => self.if_exp(test, body, orelse, e.span),
             ExprKind::Call { func, args } => self.call(func, args, e.span),
-            ExprKind::Float(_) => Err(unsupported(e.span, "floats")),
+            ExprKind::Float(f) => Ok(Operand::Float(*f)),
             ExprKind::Str(text) => Ok(self.temp(Ty::Str, Rvalue::StrLit(text.clone()), e.span)),
             ExprKind::Tuple(_) => Err(unsupported(e.span, "tuples")),
             ExprKind::List(_) => Err(unsupported(e.span, "lists")),
@@ -41,9 +41,9 @@ impl FnBuilder<'_, '_> {
                     span,
                 ))
             }
-            (UnaryOp::Neg, Ty::Int) => Ok(self.temp(Ty::Int, Rvalue::Neg(v), span)),
-            (UnaryOp::Pos, Ty::Int) => Ok(v),
-            _ => Err(unsupported(span, "unary `-` or `+` on a non-int")),
+            (UnaryOp::Neg, ty @ (Ty::Int | Ty::Float)) => Ok(self.temp(ty, Rvalue::Neg(v), span)),
+            (UnaryOp::Pos, Ty::Int | Ty::Float) => Ok(v),
+            _ => Err(unsupported(span, "unary `-` or `+` on a non-number")),
         }
     }
 
@@ -53,7 +53,8 @@ impl FnBuilder<'_, '_> {
         self.arith(op, l, r, span)
     }
 
-    /// `l op r`; shared with augmented assignment.
+    /// `l op r`; shared with augmented assignment. Python's numeric
+    /// tower: `/`, or an int meeting a float, computes in floats.
     pub(super) fn arith(
         &mut self,
         op: BinOp,
@@ -61,26 +62,41 @@ impl FnBuilder<'_, '_> {
         r: Operand,
         span: Span,
     ) -> Result<Operand> {
-        let str_op = match (op, self.ty(l), self.ty(r)) {
-            (_, Ty::Int, Ty::Int) => None,
-            (BinOp::Add, Ty::Str, Ty::Str) => Some(Rvalue::Concat(l, r)),
-            (BinOp::Mul, Ty::Str, Ty::Int) => Some(Rvalue::Repeat(l, r)),
-            (BinOp::Mul, Ty::Int, Ty::Str) => Some(Rvalue::Repeat(r, l)),
-            _ => return Err(unsupported(span, "arithmetic on a non-int")),
+        let (ty, value) = match (op, self.ty(l), self.ty(r)) {
+            (BinOp::Add, Ty::Str, Ty::Str) => (Ty::Str, Rvalue::Concat(l, r)),
+            (BinOp::Mul, Ty::Str, Ty::Int) => (Ty::Str, Rvalue::Repeat(l, r)),
+            (BinOp::Mul, Ty::Int, Ty::Str) => (Ty::Str, Rvalue::Repeat(r, l)),
+            (BinOp::Pow, Ty::Int, Ty::Int) => (Ty::Int, Rvalue::IntPow(l, r)),
+            (BinOp::Div, Ty::Int, Ty::Int) => self.float_arith(op, l, r, span),
+            (_, Ty::Int, Ty::Int) => (Ty::Int, Rvalue::Int(int_op(op, span)?, l, r)),
+            (_, Ty::Int | Ty::Float, Ty::Int | Ty::Float) => self.float_arith(op, l, r, span),
+            _ => return Err(unsupported(span, "arithmetic on a non-number")),
         };
-        if let Some(value) = str_op {
-            return Ok(self.temp(Ty::Str, value, span));
-        }
+        Ok(self.temp(ty, value, span))
+    }
+
+    /// `l op r` in floats, each side an int or a float.
+    fn float_arith(&mut self, op: BinOp, l: Operand, r: Operand, span: Span) -> (Ty, Rvalue) {
         let op = match op {
-            BinOp::Add => IntOp::Add,
-            BinOp::Sub => IntOp::Sub,
-            BinOp::Mul => IntOp::Mul,
-            BinOp::FloorDiv => IntOp::FloorDiv,
-            BinOp::Mod => IntOp::Mod,
-            BinOp::Div => return Err(unsupported(span, "`/`, which gives a float,")),
-            BinOp::Pow => return Err(unsupported(span, "`**`")),
+            BinOp::Add => FloatOp::Add,
+            BinOp::Sub => FloatOp::Sub,
+            BinOp::Mul => FloatOp::Mul,
+            BinOp::Div => FloatOp::Div,
+            BinOp::FloorDiv => FloatOp::FloorDiv,
+            BinOp::Mod => FloatOp::Mod,
+            BinOp::Pow => FloatOp::Pow,
         };
-        Ok(self.temp(Ty::Int, Rvalue::Int(op, l, r), span))
+        let (a, b) = (self.as_float(l, span), self.as_float(r, span));
+        (Ty::Float, Rvalue::Float(op, a, b))
+    }
+
+    /// `v`, an int, bool or float, as a float.
+    fn as_float(&mut self, v: Operand, span: Span) -> Operand {
+        match (v, self.ty(v)) {
+            (_, Ty::Float) => v,
+            (Operand::Int(n), _) => Operand::Float(n as f64),
+            _ => self.temp(Ty::Float, Rvalue::ToFloat(v), span),
+        }
     }
 
     /// `and` / `or`: the result is one of the operands, so all three
@@ -167,6 +183,10 @@ impl FnBuilder<'_, '_> {
             ast::CmpOp::GtEq => CmpOp::Ge,
         };
         match (lt, rt) {
+            (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {
+                let (a, b) = (self.as_float(l, span), self.as_float(r, span));
+                Ok(self.temp(Ty::Bool, Rvalue::Cmp(op, a, b), span))
+            }
             (Ty::None, Ty::None) => Ok(Operand::Bool(matches!(
                 op,
                 CmpOp::Eq | CmpOp::Le | CmpOp::Ge
@@ -235,6 +255,10 @@ impl FnBuilder<'_, '_> {
         match self.ty(v) {
             Ty::Bool => v,
             Ty::Int => self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, Operand::Int(0)), span),
+            Ty::Float => {
+                let zero = Operand::Float(0.0);
+                self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
+            }
             Ty::None => Operand::Bool(false),
             Ty::Str => {
                 let n = self.temp(Ty::Int, Rvalue::Len(v), span);
@@ -324,12 +348,12 @@ impl FnBuilder<'_, '_> {
                 self.emit(Inst::Print(args));
                 Ok(Operand::None)
             }
-            "len" | "str" => self.unary_builtin(name, &args, span),
+            "len" | "str" | "int" | "float" => self.unary_builtin(name, &args, span),
             other => Err(unsupported(span, &format!("`{other}`"))),
         }
     }
 
-    /// `len(s)` and `str(x)`, the one-argument builtins on strings.
+    /// `len`, `str`, `int` and `float` of one argument.
     fn unary_builtin(&mut self, name: &str, args: &[Operand], span: Span) -> Result<Operand> {
         let [arg] = args else {
             return Err(unsupported(
@@ -338,11 +362,31 @@ impl FnBuilder<'_, '_> {
             ));
         };
         let arg = *arg;
-        match (name, self.ty(arg)) {
-            ("len", Ty::Str) => Ok(self.temp(Ty::Int, Rvalue::Len(arg), span)),
-            ("str", Ty::Str) => Ok(arg),
-            ("str", _) => Ok(self.temp(Ty::Str, Rvalue::ToStr(arg), span)),
-            _ => Err(unsupported(span, &format!("`{name}` on a non-string"))),
-        }
+        let (ty, value) = match (name, self.ty(arg)) {
+            ("str", Ty::Str) | ("int", Ty::Int) | ("float", Ty::Float) => return Ok(arg),
+            ("float", Ty::Int | Ty::Bool) => return Ok(self.as_float(arg, span)),
+            ("len", Ty::Str) => (Ty::Int, Rvalue::Len(arg)),
+            ("str", _) => (Ty::Str, Rvalue::ToStr(arg)),
+            ("int", Ty::Float) => (Ty::Int, Rvalue::FloatToInt(arg)),
+            ("int", Ty::Str) => (Ty::Int, Rvalue::ParseInt(arg)),
+            ("float", Ty::Str) => (Ty::Float, Rvalue::ParseFloat(arg)),
+            (_, ty) => {
+                let what = format!("`{name}` of a {ty:?}");
+                return Err(unsupported(span, &what));
+            }
+        };
+        Ok(self.temp(ty, value, span))
+    }
+}
+
+/// The int operation for `op`; `/` and `**` are not one.
+fn int_op(op: BinOp, span: Span) -> Result<IntOp> {
+    match op {
+        BinOp::Add => Ok(IntOp::Add),
+        BinOp::Sub => Ok(IntOp::Sub),
+        BinOp::Mul => Ok(IntOp::Mul),
+        BinOp::FloorDiv => Ok(IntOp::FloorDiv),
+        BinOp::Mod => Ok(IntOp::Mod),
+        BinOp::Div | BinOp::Pow => Err(super::internal(span, "`/` or `**` as an int operation")),
     }
 }

@@ -163,6 +163,7 @@ fn bind(t: &Type, ty: Ty, subst: &mut Subst) -> bool {
     match (t, ty) {
         (Type::Var(v), _) => *subst.entry(*v).or_insert(ty) == ty,
         (Type::Int, Ty::Int)
+        | (Type::Float, Ty::Float)
         | (Type::Bool, Ty::Bool)
         | (Type::None, Ty::None)
         | (Type::Str, Ty::Str) => true,
@@ -391,6 +392,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
     fn concrete(&self, t: &Type, span: Span) -> Result<Ty> {
         match t {
             Type::Int => Ok(Ty::Int),
+            Type::Float => Ok(Ty::Float),
             Type::Bool => Ok(Ty::Bool),
             Type::None => Ok(Ty::None),
             Type::Str => Ok(Ty::Str),

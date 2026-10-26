@@ -5,7 +5,7 @@
 //! can fail at run time are explicit: a failing `Rvalue` carries the span
 //! of its `Inst`, and a `Term::Fail` ends the program with a diagnostic.
 //!
-//! Covers ints, bools, `None` and strings; lists, tuples and floats
+//! Covers ints, floats, bools, `None` and strings; lists and tuples
 //! follow, as `docs/native.md` lays out.
 //!
 //! Locals other than parameters start zeroed. A `Str` local is a
@@ -22,6 +22,8 @@ use crate::span::Span;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Ty {
     Int,
+    /// An IEEE 754 double.
+    Float,
     Bool,
     None,
     /// Immutable, reference-counted text.
@@ -89,6 +91,7 @@ pub enum Inst {
 pub enum Operand {
     Local(LocalId),
     Int(i64),
+    Float(f64),
     Bool(bool),
     None,
 }
@@ -98,10 +101,11 @@ pub enum Rvalue {
     Use(Operand),
     /// Checked int arithmetic: overflow and division by zero fail.
     Int(IntOp, Operand, Operand),
-    /// Checked negation: `-i64::MIN` fails.
+    /// Negation of an `Int` (checked: `-i64::MIN` fails) or a `Float`.
     Neg(Operand),
-    /// Both operands have the same type: `Int`, `Bool` or `Str` (code
-    /// point order). Gives a `Bool`.
+    /// Both operands have the same type: `Int`, `Float` (IEEE: false
+    /// with a NaN, but for `Ne`), `Bool` or `Str` (code point order).
+    /// Gives a `Bool`.
     Cmp(CmpOp, Operand, Operand),
     /// Whether int `a + b` overflows. Never fails; ends `range` loops.
     AddOverflows(Operand, Operand),
@@ -121,8 +125,32 @@ pub enum Rvalue {
         hay: Operand,
         needle: Operand,
     },
-    /// `str(x)` for an `Int`, `Bool` or `None`.
+    /// `str(x)` for an `Int`, `Float`, `Bool` or `None`.
     ToStr(Operand),
+    /// Float arithmetic with Python semantics: `/`, `//` and `%` by zero
+    /// and `**` out of range fail.
+    Float(FloatOp, Operand, Operand),
+    /// Checked int `**`: overflow and a negative exponent fail.
+    IntPow(Operand, Operand),
+    /// An `Int` or `Bool` as a `Float`.
+    ToFloat(Operand),
+    /// `int(f)`, truncating. Fails on NaN and out of range.
+    FloatToInt(Operand),
+    /// `float(s)`. Fails unless `s` is a float literal.
+    ParseFloat(Operand),
+    /// `int(s)` in base 10. Fails unless `s` is an int literal in range.
+    ParseInt(Operand),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FloatOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    FloorDiv,
+    Mod,
+    Pow,
 }
 
 /// Int arithmetic with Python semantics: `//` and `%` floor.
@@ -174,6 +202,7 @@ pub fn operand_ty(locals: &[Ty], op: Operand) -> Ty {
     match op {
         Operand::Local(LocalId(i)) => locals[i],
         Operand::Int(_) => Ty::Int,
+        Operand::Float(_) => Ty::Float,
         Operand::Bool(_) => Ty::Bool,
         Operand::None => Ty::None,
     }

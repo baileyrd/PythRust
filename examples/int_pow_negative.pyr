@@ -1,0 +1,6 @@
+# deviation: int ** int is an int, so a negative exponent is a runtime error; CPython returns a float.
+# expect-exit: 1
+n = -2
+print(2.0 ** n)
+print(2 ** n)
+print("unreachable")

@@ -223,12 +223,16 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 
 /// Programs the native backend must compile; it grows with the subset.
 const NATIVE: &[&str] = &[
+    "arithmetic",
     "call_before_def",
     "collatz",
     "fibonacci",
     "fizzbuzz",
+    "float_parse_error",
+    "floats",
     "hello",
     "int_control",
+    "int_pow_negative",
     "overflow_add",
     "overflow_factorial",
     "overflow_min_floordiv",
