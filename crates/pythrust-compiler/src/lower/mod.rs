@@ -181,6 +181,9 @@ struct Pending {
 struct Loop {
     next: BlockId,
     exit: BlockId,
+    /// How many statement pools were open outside the body: a jump out
+    /// of the body releases the ones above.
+    pools: usize,
 }
 
 /// Builds one function's IR.

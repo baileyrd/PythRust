@@ -110,7 +110,8 @@ mod entry {
         fn pythrust_main();
     }
 
-    /// Runs the module, then flushes stdout.
+    /// Runs the module, then flushes stdout. A debug runtime then
+    /// fails if any string leaked.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn main() -> i32 {
@@ -118,13 +119,30 @@ mod entry {
         // emits it with exactly that signature.
         unsafe { pythrust_main() };
         super::flush();
-        0
+        super::leak_status(cfg!(debug_assertions), super::str::live())
     }
+}
+
+/// The exit status after a normal end: 1, with a message, when `check`
+/// is on and `live` strings were never freed.
+fn leak_status(check: bool, live: usize) -> i32 {
+    if !check || live == 0 {
+        return 0;
+    }
+    let _ = writeln!(io::stderr(), "pythrust-rt: {live} strings leaked");
+    1
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaks_fail_only_when_checked() {
+        assert_eq!(leak_status(true, 0), 0);
+        assert_eq!(leak_status(false, 3), 0);
+        assert_eq!(leak_status(true, 3), 1);
+    }
 
     #[test]
     fn bools_print_as_python_does() {

@@ -211,3 +211,26 @@ fn string_operations_outside_the_subset_are_rejected() {
     let (d, _) = rejected("for x in [1]:\n    print(x)\n");
     assert!(d.message.contains("lists"), "{}", d.message);
 }
+
+#[test]
+fn leaving_a_loop_releases_the_statements_it_leaves() {
+    // `continue` from the inner `for`'s `else` leaves that `for`
+    // statement, whose snapshot is the literal's temporary: released on
+    // that edge, at the statement's end, and at exit.
+    let src = "for i in range(2):\n    for ch in 'ab':\n        pass\n    else:\n        continue\n    print(i)\n";
+    let p = lowered(src);
+    let main = &p.funcs[p.main.0];
+    let insts = || main.blocks.iter().flat_map(|b| &b.insts);
+    let lit = insts().find_map(|i| match i {
+        Inst::Assign {
+            dest,
+            value: crate::ir::Rvalue::StrLit(_),
+            ..
+        } => Some(*dest),
+        _ => None,
+    });
+    let Some(lit) = lit else {
+        panic!("no literal");
+    };
+    assert_eq!(insts().filter(|i| **i == Inst::Release(lit)).count(), 3);
+}

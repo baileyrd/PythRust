@@ -36,8 +36,9 @@ A string is a pointer to an immutable runtime object holding a count, its length
 - Assigning a variable takes an owned value (moved from a temporary, or a retained copy), then releases the old one.
 - Calls take their string arguments owned and return an owned result. Every `return` goes through one exit block that releases the function's strings except the result.
 - `for ch in s` iterates an owned snapshot of `s`.
+- `break` and `continue` release the temporaries of every statement they leave, such as a nested `for`'s snapshot when they sit in its `else`.
 
-A runtime error exits without releasing; nothing else does.
+A runtime error exits without releasing; nothing else does. The runtime counts live strings, and a debug build of it fails a program that ends normally with any still live (`pythrust-rt: N strings leaked`, exit 1), so the native corpus run checks for leaks.
 
 Everything else is a compile error, `backend error: the native backend does not support X yet`, pointing at X. Nothing is guessed. `corpus_matches_native` in `tests/conformance.rs` builds every corpus program, runs what builds against its golden, and requires the programs in `NATIVE` to build.
 
@@ -60,7 +61,7 @@ Everything else is a compile error, `backend error: the native backend does not 
 
 ## Known gaps
 
-- **String ownership** is checked by running the string examples under valgrind by hand, not in CI.
+- **String ownership** is checked for leaks in CI (the debug runtime's count) but for use-after-free only by running the examples under valgrind by hand.
 - **Binary size** is dominated by the runtime and Rust's standard library (about 5 MB in debug builds).
 - **Targets:** CI covers Linux x86-64 only. macOS and AArch64 are expected to work (Cranelift and `cc` serve them) but are untested.
 - **Diagnostics:** for a native program that fails, `corpus_matches_native` requires its stderr to equal `run`'s byte for byte (message, location, carets). This is only checked on Linux x86-64 in CI.

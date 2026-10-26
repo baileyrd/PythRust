@@ -4,7 +4,7 @@ use crate::ast::{
     Arg, BinOp, Block, Branch, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::Result;
-use crate::ir::{BlockId, CmpOp, IntOp, LocalId, Operand, Rvalue, Term, Ty};
+use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 use super::{unsupported, FnBuilder, Loop};
@@ -152,6 +152,10 @@ impl FnBuilder<'_, '_> {
                 "`break` or `continue` outside a loop",
             ));
         };
+        // The statements being left end here: release their temporaries.
+        // From a nested loop's `else`, that includes its snapshot.
+        let left: Vec<LocalId> = self.pools[l.pools..].concat();
+        left.into_iter().for_each(|t| self.emit(Inst::Release(t)));
         self.jump_away(Term::Goto(to(l)));
         Ok(())
     }
@@ -204,7 +208,8 @@ impl FnBuilder<'_, '_> {
     /// Lowers `body` with `break` to `exit` and `continue` to `next`, then
     /// jumps to `next`.
     fn loop_body(&mut self, body: &Block, next: BlockId, exit: BlockId) -> Result<()> {
-        self.loops.push(Loop { next, exit });
+        let pools = self.pools.len();
+        self.loops.push(Loop { next, exit, pools });
         let lowered = self.block(body);
         self.loops.pop();
         lowered?;

@@ -13,6 +13,16 @@
 
 use std::cell::Cell;
 use std::cmp::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+/// Strings allocated and not yet freed. A debug runtime checks it is 0
+/// when the program ends normally, so a leak fails the corpus tests.
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// How many strings are live.
+pub fn live() -> usize {
+    LIVE.load(Relaxed)
+}
 
 /// A string object. Never shared across threads: compiled programs are
 /// single-threaded.
@@ -92,6 +102,7 @@ fn compare(a: &PtStr, b: &PtStr) -> i64 {
 }
 
 fn into_ptr(s: PtStr) -> *mut PtStr {
+    LIVE.fetch_add(1, Relaxed);
     Box::into_raw(Box::new(s))
 }
 
@@ -154,6 +165,7 @@ pub unsafe extern "C" fn pt_str_dec(s: *mut PtStr) {
     // SAFETY: the last reference: `s` came from `Box::into_raw` and no
     // other reference remains.
     drop(unsafe { Box::from_raw(s) });
+    LIVE.fetch_sub(1, Relaxed);
 }
 
 /// `a + b`.
