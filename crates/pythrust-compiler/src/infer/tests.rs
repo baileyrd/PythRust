@@ -1448,3 +1448,84 @@ fn numeric_slots_never_widen() {
         "element does not match the annotation: expected float, found int"
     );
 }
+
+// Guards: an `if` that leaves when `x` is None narrows what follows.
+
+#[test]
+fn guard_narrows_the_rest_of_the_function() {
+    let b = B::default();
+    let p = || b.param("x", Some(b.opt("int", vec![])), Some(b.e(ExprKind::None)));
+    let plus_one = || b.ret(b.bin(BinOp::Add, b.n("x"), b.i(1)));
+    let returns = vec![
+        b.if_(is_none(&b, "x", CmpOp::Is), vec![b.ret(b.i(0))], vec![]),
+        plus_one(),
+    ];
+    let types = ok(vec![b.def_full("f", vec![p()], None, returns)]);
+    assert_eq!(types.func("f").map(|f| f.ret.clone()), Some(Type::Int));
+    let otherwise = vec![
+        b.if_(
+            is_none(&b, "x", CmpOp::IsNot),
+            vec![b.st(StmtKind::Pass)],
+            vec![b.ret(b.i(0))],
+        ),
+        plus_one(),
+    ];
+    let types = ok(vec![b.def_full("g", vec![p()], None, otherwise)]);
+    assert_eq!(types.func("g").map(|f| f.ret.clone()), Some(Type::Int));
+}
+
+#[test]
+fn guard_with_continue_narrows_the_loop_body() {
+    let b = B::default();
+    let body = vec![
+        b.if_(
+            is_none(&b, "y", CmpOp::Is),
+            vec![b.st(StmtKind::Continue)],
+            vec![],
+        ),
+        b.aug("total", BinOp::Add, b.n("y")),
+    ];
+    ok(vec![
+        b.ann(
+            "ys",
+            b.ty("list", vec![b.opt("int", vec![])]),
+            b.list(vec![b.e(ExprKind::None), b.i(1)]),
+        ),
+        b.assign("total", b.i(0)),
+        b.for_(b.t("y"), b.n("ys"), body),
+    ]);
+}
+
+#[test]
+fn guard_narrows_only_when_it_proves_not_none() {
+    let b = B::default();
+    let opt = || b.ann("x", b.opt("int", vec![]), b.e(ExprKind::None));
+    let use_x = || b.ex(b.bin(BinOp::Add, b.n("x"), b.i(1)));
+    let unsupported = "unsupported operand types for +: int | None and int";
+    let stays = |c: &str| b.if_(is_none(&b, "x", CmpOp::Is), vec![b.ex(b.s(c))], vec![]);
+    assert_eq!(
+        err(vec![opt(), stays("body falls through"), use_x()]),
+        unsupported
+    );
+    let reassigned = vec![
+        b.if_(
+            is_none(&b, "x", CmpOp::IsNot),
+            vec![b.assign("x", b.e(ExprKind::None))],
+            vec![b.st(StmtKind::Break)],
+        ),
+        use_x(),
+    ];
+    let body = vec![opt(), b.while_(b.bl(true), reassigned)];
+    assert_eq!(err(body), unsupported);
+    let after = vec![
+        b.if_(
+            is_none(&b, "x", CmpOp::Is),
+            vec![b.st(StmtKind::Break)],
+            vec![],
+        ),
+        b.assign("x", b.e(ExprKind::None)),
+        use_x(),
+    ];
+    let body = vec![opt(), b.while_(b.bl(true), after)];
+    assert_eq!(err(body), unsupported);
+}

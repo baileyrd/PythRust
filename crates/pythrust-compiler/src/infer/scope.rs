@@ -9,7 +9,7 @@ use crate::ast::{
 };
 
 /// Names bound anywhere in `block`, as Python decides locals.
-pub(super) fn assigned(block: &Block) -> BTreeSet<String> {
+pub(super) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     walk(block, &mut |s| match &s.kind {
         StmtKind::Assign { target, .. }
@@ -38,7 +38,7 @@ pub(super) fn annotated(block: &Block) -> Vec<(&str, &TypeExpr)> {
 }
 
 /// Visits every statement of `block` and of the blocks nested in it.
-fn walk<'a>(block: &'a Block, f: &mut impl FnMut(&'a Stmt)) {
+fn walk<'a>(block: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
     for s in block {
         f(s);
         match &s.kind {
@@ -295,29 +295,67 @@ pub(super) fn none_test(test: &Expr) -> Option<(String, bool)> {
 }
 
 /// Whether control can reach the end of `block` without a `return`.
-pub(super) fn falls_through(block: &Block) -> bool {
-    !block.iter().any(diverges)
+/// The name an `if` proves is not `None` for the statements after it:
+/// `if x is None:` with a body that leaves, or `if x is not None:` with an
+/// `else` that leaves, while the other side keeps `x`.
+pub(super) fn guard(stmt: &Stmt) -> Option<String> {
+    let StmtKind::If {
+        branch,
+        elifs,
+        orelse,
+    } = &stmt.kind
+    else {
+        return None;
+    };
+    if !elifs.is_empty() {
+        return None;
+    }
+    let (name, not_none) = none_test(&branch.test)?;
+    let (none_side, other) = if not_none {
+        (orelse, &branch.body)
+    } else {
+        (&branch.body, orelse)
+    };
+    let proven = leaves(none_side) && !assigned(other).contains(&name);
+    proven.then_some(name)
 }
 
-fn diverges(stmt: &Stmt) -> bool {
-    match &stmt.kind {
+/// Whether control never reaches the statement after `block`: every path
+/// ends in `return`, `break` or `continue`, or loops forever.
+fn leaves(block: &[Stmt]) -> bool {
+    exits(block, true)
+}
+
+/// Whether a function body can reach its end (and return `None`).
+pub(super) fn falls_through(block: &[Stmt]) -> bool {
+    !exits(block, false)
+}
+
+/// Whether every path through `block` ends in `return`, or loops
+/// forever; with `jumps`, a `break` or `continue` also ends a path.
+///
+/// A loop with no `break` of its own either never ends or runs its
+/// `else`, so it exits when it loops forever or its `else` exits. A jump
+/// in its body only leaves that loop, so the body counts only for breaks.
+fn exits(block: &[Stmt], jumps: bool) -> bool {
+    block.iter().any(|s| match &s.kind {
         StmtKind::Return(_) => true,
+        StmtKind::Break | StmtKind::Continue => jumps,
         StmtKind::If {
             branch,
             elifs,
             orelse,
         } => {
-            let all_branches = std::iter::once(branch)
-                .chain(elifs)
-                .all(|b| !falls_through(&b.body));
-            all_branches && !orelse.is_empty() && !falls_through(orelse)
+            let mut bodies = std::iter::once(branch).chain(elifs);
+            bodies.all(|b| exits(&b.body, jumps)) && exits(orelse, jumps)
         }
-        StmtKind::While { branch, .. } => {
+        StmtKind::While { branch, orelse } => {
             let forever = matches!(branch.test.kind, ExprKind::Bool(true));
-            forever && !branch.body.iter().any(breaks)
+            !branch.body.iter().any(breaks) && (forever || exits(orelse, jumps))
         }
+        StmtKind::For { body, orelse, .. } => !body.iter().any(breaks) && exits(orelse, jumps),
         _ => false,
-    }
+    })
 }
 
 /// Whether `stmt` contains a `break` for the enclosing loop. A nested
