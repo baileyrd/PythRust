@@ -273,24 +273,27 @@ fn conversions_pick_their_rvalue_by_type() {
 }
 
 #[test]
-fn unpacking_a_loop_item_releases_it_each_iteration() {
-    // Binding a name moves the item; unpacking only reads its fields, so
-    // the item is released in the loop, at the statement's end and at exit.
-    let p = lowered("for a, b in [(1, 'x')]:\n    print(a, b)\n");
+fn loop_bindings_release_what_they_create_each_iteration() {
+    // The item and the inner tuple's field are temporaries of the
+    // per-iteration binding: each is released there and once more at
+    // exit, never left for the next iteration to overwrite.
+    let p = lowered("for (a, b), c in [((1, 'x'), 3)]:\n    print(a, b, c)\n");
     let main = &p.funcs[p.main.0];
     let insts = || main.blocks.iter().flat_map(|b| &b.insts);
-    let item = insts().find_map(|i| match i {
-        Inst::Assign {
-            dest,
-            value: crate::ir::Rvalue::Index(..),
-            ..
-        } => Some(*dest),
-        _ => None,
-    });
-    let Some(item) = item else {
-        panic!("no item");
-    };
-    assert_eq!(insts().filter(|i| **i == Inst::Release(item)).count(), 3);
+    let made: Vec<LocalId> = insts()
+        .filter_map(|i| match i {
+            Inst::Assign {
+                dest,
+                value: crate::ir::Rvalue::Index(..) | crate::ir::Rvalue::Field(_, 0),
+                ..
+            } if main.locals[dest.0].is_rc() => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(made.len(), 2, "the item and the inner tuple");
+    for t in made {
+        assert_eq!(insts().filter(|i| **i == Inst::Release(t)).count(), 2);
+    }
 }
 
 #[test]

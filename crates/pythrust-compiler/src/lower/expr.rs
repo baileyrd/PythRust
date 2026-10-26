@@ -200,10 +200,11 @@ impl FnBuilder<'_, '_> {
     fn contains(&mut self, op: ast::CmpOp, l: Operand, r: Operand, span: Span) -> Result<Operand> {
         let needle = match (self.ty(l), self.ty(r)) {
             (Ty::Str, Ty::Str) => l,
-            (_, ty @ Ty::List(_)) => {
-                let elem = self.slot_ty(ty, 0, span)?;
-                self.coerce(l, elem, span)?
+            // An int meets a float element as a float, as `==` does.
+            (Ty::Int, ty @ Ty::List(_)) if self.slot_ty(ty, 0, span)? == Ty::Float => {
+                self.as_float(l, span)
             }
+            (needle, ty @ Ty::List(_)) if self.slot_ty(ty, 0, span)? == needle => l,
             _ => return Err(unsupported(span, "`in` on anything but strings and lists")),
         };
         let found = Rvalue::Contains { hay: r, needle };

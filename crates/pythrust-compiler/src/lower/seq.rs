@@ -16,7 +16,7 @@ impl FnBuilder<'_, '_> {
         for (k, item) in items.iter().enumerate() {
             let op = self.expr(item)?;
             let want = self.slot_ty(ty, k, span)?;
-            ops.push(self.coerce(op, want, item.span)?);
+            ops.push(self.expect(op, want, item.span)?);
         }
         Ok(self.temp(ty, Rvalue::NewSeq(ops), span))
     }
@@ -31,17 +31,16 @@ impl FnBuilder<'_, '_> {
         slot.ok_or_else(|| internal(span, "a sequence slot of no type"))
     }
 
-    /// `v` as a value of type `want`: an int widens to a float, as in a
-    /// `list[float]` display; any other difference is refused.
-    pub(super) fn coerce(&mut self, v: Operand, want: Ty, span: Span) -> Result<Operand> {
-        match (self.ty(v), want) {
-            (have, want) if have == want => Ok(v),
-            (Ty::Int, Ty::Float) => Ok(self.as_float(v, span)),
-            _ => Err(unsupported(
+    /// `v`, which must have type `want`: inference gives every slot its
+    /// value's exact type, with no widening.
+    fn expect(&self, v: Operand, want: Ty, span: Span) -> Result<Operand> {
+        if self.ty(v) != want {
+            return Err(unsupported(
                 span,
                 "a value of another type than its list or tuple holds",
-            )),
+            ));
         }
+        Ok(v)
     }
 
     /// `value[index]` on a string, list or tuple.
@@ -113,7 +112,7 @@ impl FnBuilder<'_, '_> {
         }
         let v = self.expr(&arg.value)?;
         let elem = self.slot_ty(ty, 0, span)?;
-        let value = self.coerce(v, elem, arg.span)?;
+        let value = self.expect(v, elem, arg.span)?;
         self.emit(Inst::Append { list, value });
         Ok(Operand::None)
     }
@@ -147,7 +146,7 @@ impl FnBuilder<'_, '_> {
             ));
         }
         let elem = self.slot_ty(ty, 0, span)?;
-        let value = self.coerce(v, elem, span)?;
+        let value = self.expect(v, elem, span)?;
         self.emit(Inst::SetItem {
             list,
             index,

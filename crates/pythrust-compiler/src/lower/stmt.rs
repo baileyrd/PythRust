@@ -279,18 +279,28 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        let x = self.temp(item, Rvalue::Index(s, cur), span);
-        self.bind(l.target, x)?;
-        // Binding a name moved `x`; unpacking only read it.
-        if let (Operand::Local(x), true) = (x, item.is_rc()) {
-            self.emit(Inst::Release(x));
-        }
+        self.bind_iteration(l.target, |b| Ok(b.temp(item, Rvalue::Index(s, cur), span)))?;
         self.loop_body(l.body, latch, end)?;
         self.switch_to(latch);
         let next = Rvalue::Int(IntOp::Add, cur, Operand::Int(1));
         self.assign(counter, next, span);
         self.terminate(Term::Goto(head));
         self.finish_loop(l.orelse, other, end)
+    }
+
+    /// Binds a loop target to the value `next` gives, as a statement of
+    /// its own: the item and whatever binding it creates (the fields an
+    /// unpacking reads, the list an indexed target evaluates) are
+    /// released each iteration.
+    fn bind_iteration(
+        &mut self,
+        target: &Target,
+        next: impl FnOnce(&mut Self) -> Result<Operand>,
+    ) -> Result<()> {
+        self.pooled_stmt(|b| {
+            let x = next(b)?;
+            b.bind(target, x)
+        })
     }
 
     /// Lowers the `else` of a loop in `other`, then continues at `end`.
@@ -326,7 +336,7 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        self.bind(l.target, cur)?;
+        self.bind_iteration(l.target, |_| Ok(cur))?;
         self.loop_body(l.body, latch, end)?;
         self.switch_to(latch);
         let over = self.temp(Ty::Bool, Rvalue::AddOverflows(cur, step), iter_span);

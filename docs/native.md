@@ -35,7 +35,7 @@ A string is a pointer to an immutable runtime object holding a count, its length
 - Temporaries belong to their statement (a condition counts as one) and are released where it ends. A temporary can be moved out of, which nulls it.
 - Assigning a variable takes an owned value (moved from a temporary, or a retained copy), then releases the old one.
 - Calls take their reference arguments owned and return an owned result. Every `return` goes through one exit block that releases the function's strings except the result.
-- `for x in s` holds its own reference to `s`. Over a list it re-reads the length each time, so appending in the body extends the loop, as in Python.
+- `for x in s` holds its own reference to `s`. Over a list it re-reads the length each time, so appending in the body extends the loop, as in Python. Binding the target is a statement of its own each iteration, so the item, the fields an unpacking reads and the list an indexed target evaluates are released before the body runs.
 - `break` and `continue` release the temporaries of every statement they leave, such as a nested `for`'s snapshot when they sit in its `else`.
 
 A list or tuple is a pointer to one runtime object: a count, a descriptor, and a vector of 64-bit slots. A slot holds an int, a float's bits, a bool or `None` as 0 or 1, or a pointer the sequence owns a reference to. The descriptor is a prefix code the compiler emits as read-only data (`i f b n s`, `l` and the element, `t`, a field-count byte and the fields), which tells the runtime how to compare, print and drop slots. Runtime functions borrow their arguments and give new references, like the string ones. Static types rule out a sequence containing itself, so counts never form a cycle.
