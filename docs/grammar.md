@@ -176,6 +176,7 @@ Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts 
 - **Integer powers (Nano):** `int ** int` returns `int`; negative exponents fail at runtime. A literal negative exponent with an integer base fails at compile time. Both diagnostics say "use a float base". `2.0 ** -1` remains legal. Checked overflow already makes `2 ** 64` a runtime error.
 - **Tempering marker:** `temper def f(...)`, a keyword prefix.
 - **Tuples:** Python syntax. Fixed-length, immutable, positionally typed. Unpacking in assignment and `for`. **Tuple bounds confirmed by Nano (#12):** an out-of-range tuple index is a compile error because index and length are static, so nothing runs; list/string out-of-range indexes remain runtime errors.
+- **Source file extension:** `.pyr`.
 
 - **Pause marker** (lands with concurrency): `pause <expr>`, a loosely binding prefix covering the whole expression to its right, like Swift's `await`. Required in tempered code at every pause point; it must cover at least one. See [research/concurrency-syntax.md](research/concurrency-syntax.md).
 - **Shared lock** (lands with concurrency): a builtin type `shared[T]`, built with `shared(v)` and accessed through `with x as n:`, where `n` writes through. Not a keyword.
@@ -184,4 +185,4 @@ Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts 
 
 ## Open syntax questions (M3 blockers)
 
-1. **Source file extension.** Placeholder: `.pythrust`.
+None.

@@ -35,7 +35,7 @@ The single CPython-deviations list is `docs/grammar.md#deviations-from-python`; 
 
 ## Open decisions (do not decide silently; propose and ask)
 
-Source file extension (placeholder `.pythrust`). Do not silently infer new widening rules. Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate.
+None. Source file extension: `.pyr`. Do not silently infer new widening rules. Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate.
 
 ## Checks
 

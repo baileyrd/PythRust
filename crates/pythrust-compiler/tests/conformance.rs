@@ -1,6 +1,6 @@
 //! Differential conformance harness. Thread E.
 //!
-//! Every `examples/<name>.pythrust` program has a golden `<name>.out`: the
+//! Every `examples/<name>.pyr` program has a golden `<name>.out`: the
 //! stdout it must print. The phase-2 subset is Python-compatible, so CPython
 //! is the oracle: `corpus_matches_cpython` checks each golden against
 //! `python3`, and `corpus_matches_pythrust` checks it against `pythrust run`.
@@ -130,13 +130,13 @@ fn read(path: &Path) -> Res<String> {
     fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// All `.pythrust` programs in `dir`, sorted.
+/// All `.pyr` programs in `dir`, sorted.
 fn list_sources(dir: &Path) -> Res<Vec<PathBuf>> {
     let entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut sources: Vec<PathBuf> = entries
         .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
         .collect::<Res<_>>()?;
-    sources.retain(|p| p.extension().is_some_and(|x| x == "pythrust"));
+    sources.retain(|p| p.extension().is_some_and(|x| x == "pyr"));
     sources.sort();
     Ok(sources)
 }
@@ -422,7 +422,7 @@ fn corpus_checks() -> Res<()> {
 
 #[test]
 fn check_mismatch_cases() {
-    let p = Path::new("p.pythrust");
+    let p = Path::new("p.pyr");
     assert_eq!(check_mismatch(p, None, Ok(())), None);
     assert_eq!(
         check_mismatch(p, Some("bad"), Err("a bad type".into())),
@@ -461,7 +461,7 @@ fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
             .map_err(|e| format!("cannot run {cmd:?}: {e}"))?;
         Ok(String::from_utf8_lossy(&out.stderr).into_owned())
     };
-    let source = exe.with_extension("pythrust");
+    let source = exe.with_extension("pyr");
     let native = stderr(&mut Command::new(exe))?;
     let interp = stderr(Command::new(pythrust_bin()?).arg("run").arg(&source))?;
     Ok((native != interp).then(|| {
@@ -521,8 +521,8 @@ fn corpus_is_complete() -> Res<()> {
     assert!(cases.iter().any(|c| c.expect.deviation.is_some()));
     for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
-        let orphan = path.extension().is_some_and(|x| x == "out")
-            && !path.with_extension("pythrust").exists();
+        let orphan =
+            path.extension().is_some_and(|x| x == "out") && !path.with_extension("pyr").exists();
         assert!(!orphan, "golden without a program: {}", path.display());
     }
     Ok(())
@@ -589,7 +589,7 @@ fn expect_rejects_bad_directives() {
 #[test]
 fn mismatch_reports_status_and_stdout() {
     let case = Case {
-        source: PathBuf::from("x.pythrust"),
+        source: PathBuf::from("x.pyr"),
         stdout: "1\n".to_string(),
         expect: Expect {
             status: 0,
@@ -641,7 +641,7 @@ fn write(path: &Path, text: &str) -> Res<()> {
 #[test]
 fn missing_golden_fails_check() -> Res<()> {
     let dir = scratch("missing")?;
-    write(&dir.join("p.pythrust"), "print(1)\n")?;
+    write(&dir.join("p.pyr"), "print(1)\n")?;
     assert!(cpython_failures(&dir, false).is_err());
     cleanup(&dir)
 }
@@ -649,7 +649,7 @@ fn missing_golden_fails_check() -> Res<()> {
 #[test]
 fn bless_creates_missing_golden() -> Res<()> {
     let dir = scratch("create")?;
-    write(&dir.join("p.pythrust"), "print(1)\n")?;
+    write(&dir.join("p.pyr"), "print(1)\n")?;
     assert_eq!(cpython_failures(&dir, true)?, Vec::<String>::new());
     assert_eq!(read(&dir.join("p.out"))?, "1\n");
     assert_eq!(cpython_failures(&dir, false)?, Vec::<String>::new());
@@ -659,7 +659,7 @@ fn bless_creates_missing_golden() -> Res<()> {
 #[test]
 fn bless_keeps_golden_on_unexpected_exit() -> Res<()> {
     let dir = scratch("keep")?;
-    write(&dir.join("p.pythrust"), "print(1)\nprint(1 // 0)\n")?;
+    write(&dir.join("p.pyr"), "print(1)\nprint(1 // 0)\n")?;
     write(&dir.join("p.out"), "old\n")?;
     assert_eq!(cpython_failures(&dir, true)?.len(), 1);
     assert_eq!(read(&dir.join("p.out"))?, "old\n");
@@ -669,7 +669,7 @@ fn bless_keeps_golden_on_unexpected_exit() -> Res<()> {
 #[test]
 fn bless_skips_deviations() -> Res<()> {
     let dir = scratch("deviation")?;
-    write(&dir.join("p.pythrust"), "# deviation: test\nprint(2)\n")?;
+    write(&dir.join("p.pyr"), "# deviation: test\nprint(2)\n")?;
     write(&dir.join("p.out"), "hand\n")?;
     assert_eq!(cpython_failures(&dir, true)?, Vec::<String>::new());
     assert_eq!(read(&dir.join("p.out"))?, "hand\n");

@@ -9,7 +9,7 @@ Read first, in order: `README.md`, `docs/design.md`, `docs/grammar.md`, `docs/ro
 - Done: design sketch, roadmap, loose-syntax grammar (functions, ints, floats, strings, lists, tuples, control flow, optional annotations).
 - Exists in code: an empty `crates/pythrust-compiler` lib crate (`forbid(unsafe_code)`). Nothing else.
 - Decided: ints are `i64` with checked overflow; tempering is `temper def f(...)`; tuples are fixed-length, immutable, positionally typed.
-- Open: pause marker (`pause f(x)`?), shared-lock keyword (`shared`?), source file extension (placeholder: `.pythrust`), LLVM vs Cranelift. Do not decide these silently; propose and ask.
+- Open: pause marker (`pause f(x)`?), shared-lock keyword (`shared`?), LLVM vs Cranelift. Do not decide these silently; propose and ask.
 
 ## Engineering rules
 
@@ -72,7 +72,7 @@ Each milestone ends in something runnable.
 
 **M0. Contract.** Step 0 merged. Exit: all threads unblocked.
 
-**M1. Subset runs (phase 2).** A, B, D integrated: `pythrust run hello.pythrust` works for the subset. Exit: fizzbuzz and fibonacci run and match CPython output.
+**M1. Subset runs (phase 2).** A, B, D integrated: `pythrust run hello.pyr` works for the subset. Exit: fizzbuzz and fibonacci run and match CPython output.
 
 **M2. Subset checked (phase 2).** C integrated, E corpus at 20+ programs, F and CI green. Exit: `pythrust check` catches type errors with good spans; differential tests pass in CI.
 
