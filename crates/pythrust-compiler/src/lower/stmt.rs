@@ -17,10 +17,23 @@ struct Looped<'s> {
 }
 
 impl FnBuilder<'_, '_> {
+    /// Lowers `block`'s statements. In an instance whose result type is
+    /// still undecided, a statement stuck on a recursive call is skipped
+    /// (the instance is lowered again once a `return` decides it).
     pub(super) fn block(&mut self, block: &Block) -> Result<()> {
-        block
-            .iter()
-            .try_for_each(|s| self.pooled_stmt(|b| b.stmt(s)))
+        for s in block {
+            let (pools, loops) = (self.pools.len(), self.loops.len());
+            match self.pooled_stmt(|b| b.stmt(s)) {
+                Err(_) if self.stuck => {
+                    (self.stuck, self.skipped) = (false, true);
+                    self.pools.truncate(pools);
+                    self.loops.truncate(loops);
+                    self.jump_away(Term::Unreachable);
+                }
+                r => r?,
+            }
+        }
+        Ok(())
     }
 
     fn stmt(&mut self, s: &Stmt) -> Result<()> {

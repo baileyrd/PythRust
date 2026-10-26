@@ -59,3 +59,63 @@ def is_odd(n):
 
 
 print(fact(5), is_even(10), is_odd(7))
+
+
+# Containers whose items the signature leaves open, through generic
+# callers: the instance's displays decide them.
+def squares(n):
+    return [n * n]
+
+
+def count(n):
+    return len(squares(n))
+
+
+def grow(n):
+    xs = squares(n)
+    xs.append(n * n + 1)
+    return xs
+
+
+def boxed(n):
+    return (n * n, [n])
+
+
+def unbox(n):
+    a, b = boxed(n)
+    return a + b[0]
+
+
+def walk(n):
+    s = 0 * n
+    for p in [(n, n * n)]:
+        a, b = p
+        s += a + b
+    return s
+
+
+print(count(3), grow(2), grow(1.5), unbox(3), unbox(0.5), walk(2), walk(0.5))
+
+
+# A recursive call before the first `return` that decides the result.
+def rec(n, x):
+    if n > 0:
+        return rec(n - 1, x) + x
+    return x * x
+
+
+def outer(x):
+    return rec(2, x) + 1
+
+
+def ping(n, x):
+    if n > 0:
+        return pong(n - 1, x) + x
+    return x * x
+
+
+def pong(n, x):
+    return ping(n, x)
+
+
+print(outer(3), outer(0.5), ping(3, 2), ping(1, 1.5))

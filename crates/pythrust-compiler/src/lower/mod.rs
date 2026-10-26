@@ -64,7 +64,7 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
     let func = b.finish("<module>", Vec::new());
     cx.funcs[main.0] = Some(func);
     while let Some(job) = cx.queue.pop() {
-        let func = cx.instance_body(&job)?;
+        let (func, _) = cx.instance_body(&job)?;
         cx.funcs[job.id.0] = Some(func);
     }
     let funcs = std::mem::take(&mut cx.funcs);
@@ -151,22 +151,20 @@ impl<'a> Cx<'a> {
     /// type of its own). The instance is lowered now, and its first
     /// `return` decides the result type; inference made every `return`
     /// agree.
+    ///
+    /// `None` for a call back into an instance still being lowered.
+    /// When such a call came before the first `return`, the body is
+    /// lowered again once that `return` has decided the result type.
     fn open_instance(
         &mut self,
         def: &'a FuncDef,
         args: Vec<Ty>,
         span: Span,
-    ) -> Result<(FuncId, Ty)> {
+    ) -> Result<Option<OpenInstance>> {
         let name = &def.name.name;
         let key = (name.clone(), args.clone());
-        match self.open.get(&key) {
-            Some(Some(found)) => return Ok(*found),
-            Some(None) => {
-                let what =
-                    "a recursive generic function whose result type its signature leaves open";
-                return Err(unsupported(span, what));
-            }
-            None => {}
+        if let Some(found) = self.open.get(&key) {
+            return Ok(*found);
         }
         let sig = self
             .types
@@ -182,22 +180,29 @@ impl<'a> Cx<'a> {
         }
         self.open.insert(key.clone(), None);
         let id = self.reserve();
-        let job = Job {
+        let mut job = Job {
             id,
             def,
             subst,
             args: args.clone(),
             ret: None,
         };
-        let func = self.instance_body(&job)?;
+        let (mut func, skipped) = self.instance_body(&job)?;
         let ret = func.ret;
-        self.funcs[id.0] = Some(func);
         self.instances.insert((name.clone(), args, ret), id);
         self.open.insert(key, Some((id, ret)));
-        Ok((id, ret))
+        if skipped {
+            bind(&sig.ret, ret, &self.seqs, &mut job.subst);
+            job.ret = Some(ret);
+            func = self.instance_body(&job)?.0;
+        }
+        self.funcs[id.0] = Some(func);
+        Ok(Some((id, ret)))
     }
 
-    fn instance_body(&mut self, job: &Job<'a>) -> Result<Func> {
+    /// The function `job` asks for, and whether a statement was skipped
+    /// for a recursive call met before the first `return`.
+    fn instance_body(&mut self, job: &Job<'a>) -> Result<(Func, bool)> {
         let f = job.def;
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
@@ -219,7 +224,22 @@ impl<'a> Cx<'a> {
             params.push(id);
         }
         b.block(&f.body)?;
-        Ok(b.finish(&f.name.name, params))
+        if b.skipped && b.open_ret.is_some() {
+            let what = "a recursive generic function whose result type its signature leaves open";
+            return Err(unsupported(f.name.span, what));
+        }
+        let skipped = b.skipped;
+        Ok((b.finish(&f.name.name, params), skipped))
+    }
+}
+
+/// Whether `t` has no variables `subst` leaves unbound.
+fn is_closed(t: &Type, subst: &Subst) -> bool {
+    match t {
+        Type::Var(v) => subst.contains_key(v),
+        Type::List(t) | Type::Optional(t) => is_closed(t, subst),
+        Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
+        Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
     }
 }
 
@@ -302,6 +322,10 @@ struct FnBuilder<'c, 'a> {
     /// When the first `return` decides `ret`: the signature's result
     /// type, whose variables it binds, so later recursive calls resolve.
     open_ret: Option<Type>,
+    /// Set by a recursive call met while `open_ret` is undecided; the
+    /// statement holding it is then skipped and `skipped` set.
+    stuck: bool,
+    skipped: bool,
     /// Where `return` leaves its value, created by the first `return`.
     ret_slot: Option<LocalId>,
     /// Where every `return` goes: it releases the function's strings.
@@ -327,6 +351,8 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             loops: Vec::new(),
             ret,
             open_ret: None,
+            stuck: false,
+            skipped: false,
             ret_slot: None,
             exit: BlockId(1),
             pools: vec![Vec::new()],
@@ -494,12 +520,16 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
 
     /// The concrete type of the node at `span`.
     fn ty_at(&mut self, span: Span) -> Result<Ty> {
-        let t = self
-            .cx
+        let t = self.node_type(span)?;
+        self.concrete(t, span)
+    }
+
+    /// The inferred type of the node at `span`.
+    fn node_type(&self, span: Span) -> Result<&'a Type> {
+        self.cx
             .types
             .at(span)
-            .ok_or_else(|| internal(span, "node has no type"))?;
-        self.concrete(t, span)
+            .ok_or_else(|| internal(span, "node has no type"))
     }
 
     fn concrete(&mut self, t: &Type, span: Span) -> Result<Ty> {

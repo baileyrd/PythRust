@@ -3,6 +3,7 @@
 
 use crate::ast::{Arg, Expr, ExprKind, Target, TargetKind, UnaryOp};
 use crate::diag::Result;
+use crate::infer::Type;
 use crate::ir::{CmpOp, Inst, Operand, Rvalue, Ty};
 use crate::span::Span;
 
@@ -11,14 +12,36 @@ use super::{internal, unsupported, FnBuilder};
 impl FnBuilder<'_, '_> {
     /// A list or tuple display: a new sequence holding the items.
     pub(super) fn display(&mut self, items: &[Expr], span: Span) -> Result<Operand> {
-        let ty = self.ty_at(span)?;
         let mut ops = Vec::new();
-        for (k, item) in items.iter().enumerate() {
-            let op = self.expr(item)?;
-            let want = self.slot_ty(ty, k, span)?;
-            ops.push(self.expect(op, want, item.span)?);
+        for item in items {
+            ops.push(self.expr(item)?);
         }
-        Ok(self.temp(ty, Rvalue::NewSeq(ops), span))
+        self.bind_display(&ops, span)?;
+        let ty = self.ty_at(span)?;
+        let mut slots = Vec::new();
+        for (k, (op, item)) in ops.into_iter().zip(items).enumerate() {
+            let want = self.slot_ty(ty, k, span)?;
+            slots.push(self.expect(op, want, item.span)?);
+        }
+        Ok(self.temp(ty, Rvalue::NewSeq(slots), span))
+    }
+
+    /// In generic code, binds the variables a display's type leaves open
+    /// from its items' types, as `[n * n]` in `def squares(n)` needs.
+    fn bind_display(&mut self, ops: &[Operand], span: Span) -> Result<()> {
+        let node = self.node_type(span)?;
+        if super::is_closed(node, &self.subst) {
+            return Ok(());
+        }
+        let slots: Vec<&Type> = match node {
+            Type::List(elem) => vec![elem.as_ref(); ops.len()],
+            Type::Tuple(fields) => fields.iter().collect(),
+            _ => Vec::new(),
+        };
+        for (t, op) in slots.into_iter().zip(ops) {
+            super::bind(t, self.ty(*op), &self.cx.seqs, &mut self.subst);
+        }
+        Ok(())
     }
 
     /// The type of slot `k` of sequence type `ty`.
