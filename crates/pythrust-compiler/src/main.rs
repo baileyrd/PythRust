@@ -6,10 +6,11 @@
 
 #![forbid(unsafe_code)]
 
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use pythrust_compiler::{codegen, infer, lexer, lower, parser, DiagKind, Diagnostic, Span};
+use pythrust_compiler::{codegen, infer, interp, lexer, lower, parser, DiagKind, Diagnostic, Span};
 
 const USAGE: &str = "usage: pythrust <run|check|build> <file>";
 
@@ -36,7 +37,7 @@ const NATIVE_LIBS: &[&str] = &[
 /// A subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command {
-    /// Lex, parse, and interpret.
+    /// Lex, parse, infer, and interpret. A compile error runs nothing.
     Run,
     /// Lex, parse, and infer. Never executes the program.
     Check,
@@ -68,22 +69,26 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let result = match command {
-        Command::Build => compile(path, &src)
-            .map_err(|diag| render(path, &src, &diag))
-            .and_then(|object| link(path, &object)),
-        _ => execute(command, &src).map_err(|diag| render(path, &src, &diag)),
-    };
+    if command == Command::Build {
+        return build(path, &src);
+    }
+    // Buffered for speed; flushed before any diagnostic so output already
+    // printed precedes the error, as in CPython.
+    let mut out = BufWriter::new(std::io::stdout());
+    let result = execute(command, &src, &mut out).and_then(|()| flush(&mut out));
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprint!("{message}");
+        Err(diag) => {
+            // The diagnostic is the error worth reporting; a flush failure
+            // here would only repeat a broken stdout.
+            let _ = out.flush();
+            eprint!("{}", render(path, &src, &diag));
             ExitCode::FAILURE
         }
     }
 }
 
-/// Parses `<run|check> <file>`.
+/// Parses `<run|check|build> <file>`.
 fn parse_args(args: &[String]) -> Result<(Command, &str), String> {
     let [command, path] = args else {
         return Err(format!("expected 2 arguments, got {}", args.len()));
@@ -97,18 +102,42 @@ fn parse_args(args: &[String]) -> Result<(Command, &str), String> {
     Ok((command, path.as_str()))
 }
 
-/// Runs the pipeline for `command` over `src`.
-fn execute(command: Command, src: &str) -> pythrust_compiler::Result<()> {
+/// Runs the pipeline for `command` over `src`, printing program output to
+/// `out`. Every compile stage finishes before anything runs.
+fn execute(
+    command: Command,
+    src: &str,
+    out: &mut (dyn Write + Send),
+) -> pythrust_compiler::Result<()> {
     let tokens = lexer::lex(src)?;
     let module = parser::parse(&tokens)?;
+    infer::infer(&module)?;
     match command {
-        Command::Check | Command::Build => infer::infer(&module).map(drop),
-        // Thread D replaces this with the interpreter.
-        Command::Run => Err(Diagnostic {
-            span: module.span,
-            message: "interpreter not implemented".to_string(),
-            kind: DiagKind::Runtime,
-        }),
+        Command::Check | Command::Build => Ok(()),
+        Command::Run => interp::run(&module, out),
+    }
+}
+
+/// Flushes program output; a failure (say, a closed pipe) is a runtime error.
+fn flush(out: &mut impl Write) -> pythrust_compiler::Result<()> {
+    out.flush().map_err(|e| Diagnostic {
+        span: Span { start: 0, end: 0 },
+        message: format!("cannot write output: {e}"),
+        kind: DiagKind::Runtime,
+    })
+}
+
+/// `pythrust build`: compiles and links, reporting any failure.
+fn build(path: &str, src: &str) -> ExitCode {
+    let built = compile(path, src)
+        .map_err(|diag| render(path, src, &diag))
+        .and_then(|object| link(path, &object));
+    match built {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprint!("{message}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -265,10 +294,44 @@ mod tests {
         assert!(parse_args(&args(&["run", "a", "b"])).is_err());
     }
 
+    fn exec(command: Command, src: &str) -> (pythrust_compiler::Result<()>, String) {
+        let mut out = Vec::new();
+        let result = execute(command, src, &mut out);
+        (result, String::from_utf8_lossy(&out).into_owned())
+    }
+
     #[test]
     fn execute_surfaces_the_first_stage_error() {
-        let err = execute(Command::Check, "x = 1\ny = (2\n");
+        let (err, _) = exec(Command::Check, "x = 1\ny = (2\n");
         assert_eq!(err.map_err(|d| d.kind), Err(DiagKind::Lex));
+    }
+
+    #[test]
+    fn run_prints_program_output() {
+        let (result, out) = exec(Command::Run, "print(1 + 2)\n");
+        assert_eq!(result, Ok(()));
+        assert_eq!(out, "3\n");
+    }
+
+    #[test]
+    fn run_on_type_error_runs_nothing() {
+        let (result, out) = exec(Command::Run, "print(1)\nx = 1 + \"a\"\n");
+        assert_eq!(result.map_err(|d| d.kind), Err(DiagKind::Type));
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn run_keeps_output_before_a_runtime_error() {
+        let (result, out) = exec(Command::Run, "print(1)\nx = 0\nprint(1 // x)\n");
+        assert_eq!(result.map_err(|d| d.kind), Err(DiagKind::Runtime));
+        assert_eq!(out, "1\n");
+    }
+
+    #[test]
+    fn check_never_runs_the_program() {
+        let (result, out) = exec(Command::Check, "print(1)\n");
+        assert_eq!(result, Ok(()));
+        assert_eq!(out, "");
     }
 
     #[test]
