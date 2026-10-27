@@ -41,9 +41,20 @@ impl<'a> FnBuilder<'_, 'a> {
                     span,
                 ))
             }
-            (UnaryOp::Neg, ty @ (Ty::Int | Ty::Float)) => Ok(self.temp(ty, Rvalue::Neg(v), span)),
-            (UnaryOp::Pos, Ty::Int | Ty::Float) => Ok(v),
+            (UnaryOp::Neg | UnaryOp::Pos, Ty::Bool) => {
+                let v = self.as_int(v, span);
+                self.unary_number(op, v, span)
+            }
+            (_, Ty::Int | Ty::Float) => self.unary_number(op, v, span),
             _ => Err(unsupported(span, "unary `-` or `+` on a non-number")),
+        }
+    }
+
+    /// `-v` or `+v` of an int or float `v`.
+    fn unary_number(&mut self, op: UnaryOp, v: Operand, span: Span) -> Result<Operand> {
+        match op {
+            UnaryOp::Neg => Ok(self.temp(self.ty(v), Rvalue::Neg(v), span)),
+            _ => Ok(v),
         }
     }
 
@@ -54,7 +65,8 @@ impl<'a> FnBuilder<'_, 'a> {
     }
 
     /// `l op r`; shared with augmented assignment. Python's numeric
-    /// tower: `/`, or an int meeting a float, computes in floats.
+    /// tower: a bool computes as an int, and `/`, or an int meeting a
+    /// float, computes in floats.
     pub(super) fn arith(
         &mut self,
         op: BinOp,
@@ -62,6 +74,7 @@ impl<'a> FnBuilder<'_, 'a> {
         r: Operand,
         span: Span,
     ) -> Result<Operand> {
+        let (l, r) = (self.as_int(l, span), self.as_int(r, span));
         let (ty, value) = match (op, self.ty(l), self.ty(r)) {
             (BinOp::Add, Ty::Str, Ty::Str) => (Ty::Str, Rvalue::Concat(l, r)),
             (BinOp::Mul, Ty::Str, Ty::Int) => (Ty::Str, Rvalue::Repeat(l, r)),
@@ -88,6 +101,15 @@ impl<'a> FnBuilder<'_, 'a> {
         };
         let (a, b) = (self.as_float(l, span), self.as_float(r, span));
         (Ty::Float, Rvalue::Float(op, a, b))
+    }
+
+    /// `v` as an int if it is a bool (0 or 1), else as it is.
+    pub(super) fn as_int(&mut self, v: Operand, span: Span) -> Operand {
+        match (v, self.ty(v)) {
+            (Operand::Bool(b), _) => Operand::Int(i64::from(b)),
+            (_, Ty::Bool) => self.temp(Ty::Int, Rvalue::BoolToInt(v), span),
+            _ => v,
+        }
     }
 
     /// `v`, an int, bool or float, as a float.
@@ -196,6 +218,11 @@ impl<'a> FnBuilder<'_, 'a> {
         span: Span,
     ) -> Result<Operand> {
         let (lt, rt) = (self.ty(l), self.ty(r));
+        if (lt == Ty::Bool) != (rt == Ty::Bool) {
+            // A bool meets a number as the int it is.
+            let (l, r) = (self.as_int(l, span), self.as_int(r, span));
+            return self.cmp_values(op, l, r, span);
+        }
         match (lt, rt) {
             (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {
                 let (a, b) = (self.as_float(l, span), self.as_float(r, span));
@@ -215,6 +242,13 @@ impl<'a> FnBuilder<'_, 'a> {
     fn contains(&mut self, op: ast::CmpOp, l: Operand, r: Operand, span: Span) -> Result<Operand> {
         let needle = match (self.ty(l), self.ty(r)) {
             (Ty::Str, Ty::Str) => l,
+            // A bool meets a number element as the int it is.
+            (Ty::Bool, ty @ Ty::List(_))
+                if matches!(self.slot_ty(ty, 0, span)?, Ty::Int | Ty::Float) =>
+            {
+                let l = self.as_int(l, span);
+                return self.contains(op, l, r, span);
+            }
             // An int meets a float element as a float, as `==` does.
             (Ty::Int, ty @ Ty::List(_)) if self.slot_ty(ty, 0, span)? == Ty::Float => {
                 self.as_float(l, span)
@@ -223,7 +257,8 @@ impl<'a> FnBuilder<'_, 'a> {
                 let elem = self.slot_ty(ty, 0, span)?;
                 let needle = self.fit(l, elem, span);
                 if self.ty(needle) != elem {
-                    return Err(unsupported(span, "`in` on a list of another type"));
+                    let found = self.scan(l, r, span)?;
+                    return Ok(self.negate_if(op, found, span));
                 }
                 needle
             }
@@ -237,11 +272,67 @@ impl<'a> FnBuilder<'_, 'a> {
         };
         let found = Rvalue::Contains { hay: r, needle };
         let found = self.temp(Ty::Bool, found, span);
+        Ok(self.negate_if(op, found, span))
+    }
+
+    /// `found` for `in`, its negation for `not in`.
+    fn negate_if(&mut self, op: ast::CmpOp, found: Operand, span: Span) -> Operand {
         if op == ast::CmpOp::In {
-            return Ok(found);
+            return found;
         }
         let not = Rvalue::Cmp(CmpOp::Eq, found, Operand::Bool(false));
-        Ok(self.temp(Ty::Bool, not, span))
+        self.temp(Ty::Bool, not, span)
+    }
+
+    /// `needle in list` for a needle of another type than the elements
+    /// (`1 in [True]`, `True in [1.0, None]`): a loop comparing each
+    /// element with `==`, so the needle meets each as `==` would.
+    fn scan(&mut self, needle: Operand, list: Operand, span: Span) -> Result<Operand> {
+        let item = self.slot_ty(self.ty(list), 0, span)?;
+        let (found, counter) = (self.pooled(Ty::Bool), self.new_local(Ty::Int));
+        self.assign(found, Rvalue::Use(Operand::Bool(false)), span);
+        self.assign(counter, Rvalue::Use(Operand::Int(0)), span);
+        let cur = Operand::Local(counter);
+        let (head, body, next, end) = (
+            self.new_block(),
+            self.new_block(),
+            self.new_block(),
+            self.new_block(),
+        );
+        self.terminate(Term::Goto(head));
+        self.switch_to(head);
+        let n = self.temp(Ty::Int, Rvalue::Len(list), span);
+        let going = self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Lt, cur, n), span);
+        self.terminate(Term::Branch {
+            cond: going,
+            then: body,
+            orelse: end,
+        });
+        self.switch_to(body);
+        self.pooled_stmt(|b| {
+            let x = b.temp(item, Rvalue::Index(list, cur), span);
+            let eq = b.equal(needle, x, span)?;
+            b.assign(found, Rvalue::Use(eq), span);
+            Ok(())
+        })?;
+        self.terminate(Term::Branch {
+            cond: Operand::Local(found),
+            then: end,
+            orelse: next,
+        });
+        self.switch_to(next);
+        self.assign(counter, Rvalue::Int(IntOp::Add, cur, Operand::Int(1)), span);
+        self.terminate(Term::Goto(head));
+        self.switch_to(end);
+        Ok(Operand::Local(found))
+    }
+
+    /// `l == r`, either side optional or not.
+    fn equal(&mut self, l: Operand, r: Operand, span: Span) -> Result<Operand> {
+        if matches!(self.ty(l), Ty::Opt(_)) || matches!(self.ty(r), Ty::Opt(_)) {
+            return self.opt_eq(CmpOp::Eq, l, r, span);
+        }
+        self.cmp_values(CmpOp::Eq, l, r, span)
     }
 
     fn if_exp(&mut self, test: &Expr, body: &Expr, orelse: &Expr, span: Span) -> Result<Operand> {
@@ -489,6 +580,7 @@ impl<'a> FnBuilder<'_, 'a> {
         let (ty, value) = match (name, self.ty(arg)) {
             ("str", Ty::Str) | ("int", Ty::Int) | ("float", Ty::Float) => return Ok(arg),
             ("float", Ty::Int | Ty::Bool) => return Ok(self.as_float(arg, span)),
+            ("int", Ty::Bool) => return Ok(self.as_int(arg, span)),
             ("bool", _) => return Ok(self.truthy(arg, span)),
             ("len", Ty::Range) => return Ok(self.range_len(arg, span)),
             ("len", Ty::Str | Ty::List(_) | Ty::Tuple(_)) => (Ty::Int, Rvalue::Len(arg)),

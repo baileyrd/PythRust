@@ -217,6 +217,8 @@ pub enum Rvalue {
     IntPow(Operand, Operand),
     /// An `Int` or `Bool` as a `Float`.
     ToFloat(Operand),
+    /// A `Bool` as an `Int`: 0 or 1.
+    BoolToInt(Operand),
     /// `int(f)`, truncating. Fails on NaN and out of range.
     FloatToInt(Operand),
     /// `float(s)`. Fails unless `s` is a float literal.

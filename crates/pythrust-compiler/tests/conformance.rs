@@ -225,6 +225,7 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 const NATIVE: &[&str] = &[
     "annotations",
     "arithmetic",
+    "bools_as_ints",
     "builtins",
     "call_before_def",
     "chained_compare",
