@@ -58,7 +58,7 @@ handler     = 'except' NAME ['as' NAME] ':' block ;      # NAME is a builtin exc
 - Single-line bodies (`if x: y`) are not in phase 2. One way to write a block.
 - Attribute assignment (`a.b = c`) waits for classes.
 - `def` appears only at module top level. Nested functions bring closure capture, which waits for ownership (phase 4).
-- Phase 2 parses and records `temper`; nothing about it is enforced until M5.
+- Since M5 (A1), a `temper def` must annotate every parameter and its return completely (no bare `list`), and may call only tempered functions and builtins (D1, D5 below). Loose code may call it freely. The other tempered rules land with the rest of M5.
 - Rejected by the parser, as CPython rejects them before running: `return` outside a function, `break`/`continue` outside a loop (a loop's `else` is outside it), duplicate parameter names, a parameter without a default after one with a default, a positional argument after a keyword argument, and a repeated keyword argument.
 - Parameters: defaults are evaluated once, when `def` runs, as in Python. A call binds positional arguments first, then keyword arguments by name. An unknown name, a parameter bound twice, or a parameter left unbound is an error.
 - Exceptions (phase 4, D6/D7): `raise e` raises an exception value; `raise ValueError` means `raise ValueError()`. A `try` runs its first handler whose name matches the raised exception; an exception no handler names propagates, through calls, as in Python. `except Name as e` binds `e` for the handler and unbinds it afterwards, as Python does, so reading `e` after the handler is an unbound-name error. `raise` ends a path like `return` (no fall-through, post-terminator narrowing), and a `try` ends one when its body and every handler do. Only `raise` and `int(s)` / `float(s)` of a malformed string produce a catchable exception; see [Runtime errors](#runtime-errors).
@@ -192,6 +192,19 @@ Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts 
 - **Shared lock** (lands with concurrency): a builtin type `shared[T]`, built with `shared(v)` and accessed through `with x as n:`, where `n` writes through. Not a keyword.
 
 `pause`, `shared` and `with` stay reserved until those features land, so adopting them breaks no programs. `temper` is already live in `func_def`.
+
+### Phase 4 (M5): tempering, ownership, exceptions (Nano, 2026-10-27)
+
+Decided, not yet implemented; [roadmap.md](roadmap.md#phase-4-m5-plan) orders the work. Ownership direction and vocabulary are in [research/ownership.md](research/ownership.md).
+
+- **D1, what tempering requires:** a `temper def` annotates every parameter and its return, uses no `dyn` in its signature or body, and writes the `mut`/`owned` modes its body needs (D2). Implemented (A1) for annotations: each must be complete, so `xs: list` is an error, and a missing one suggests the inferred type when it can be spelled, such as `n: int`. The `dyn` rule holds trivially until `dyn` lands, since no code may use it yet; modes come with A4.
+- **D2, ownership modes:** a contextual prefix on a parameter, `def grow(mut xs: list[int])`, `def keep(owned xs: list[int])`. `read` is the default and is never written. `mut` and `owned` are not reserved, so `mut = 1` stays legal. Loose functions may write modes; the compiler checks them against the body. Only a tempered callee's `mut` makes passing one list twice an error (ownership.md, decided 2); loose-to-loose calls keep Python aliasing.
+- **D3, returned aliases:** tempered code may not return an alias of a parameter (`return xs`); the fix-it is `return list(xs)`. Loose code may, tracked by the inferred summary. A new builtin `list(xs)` makes a shallow copy.
+- **D4, aliased mutation:** in tempered code, two live names for one list with a mutation through either (`b = a`, then `b.append(1)` while `a` is used) is an error; the fix-it is `b = list(a)`. There is no share marker in phase 4. Loose code keeps Python's aliasing.
+- **D5, tempered calling loose:** a tempered function calls only tempered functions and builtins; otherwise the error says "temper `f` first". Implemented (A1), defaults included. The crossing annotation in [design.md](design.md#core-idea-tempering) waits for module tempering or the Python bridge.
+- **D6, exception surface:** builtin exception names only: `ValueError`, `IndexError`, `ZeroDivisionError`, `OverflowError`, `RecursionError`. `raise ValueError("msg")`; `try:` with one or more `except Name [as e]:` clauses (`as` is allowed only there until `with` lands); `str(e)` and `print(e)` give the message. Bare `except:`, `else`, `finally`, chaining and user-defined exceptions are later; their words stay reserved.
+- **D7, what can be caught:** faults that mean a bug stay fatal as today: overflow, index out of range, division by zero, unpacking arity, recursion depth. Only `raise` and the parse builtins `int(s)` / `float(s)` (which raise `ValueError`) can be caught. A deviation from Python: `except IndexError` around `xs[10]` never catches.
+- **D8, declared errors:** a tempered function lists the errors that escape it with a contextual `raises` clause after the return type, `temper def parse(s: str) -> int raises ValueError:`. Loose functions infer theirs. Explicit `Result[T, E]` types and a `?` operator are later.
 
 ## Open syntax questions (M3 blockers)
 

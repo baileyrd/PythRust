@@ -8,6 +8,7 @@ use crate::ast::{
     Arg, Block, CmpOp, Expr, ExprKind, FuncDef, LogicalOp, Stmt, StmtKind, Target, TargetKind,
     TypeExpr, UnaryOp,
 };
+use crate::span::Span;
 
 /// Names bound anywhere in `block`, as Python decides locals.
 pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
@@ -119,19 +120,28 @@ pub(super) fn groups<'a>(funcs: &[&'a FuncDef]) -> Vec<Vec<&'a FuncDef>> {
 /// other top-level functions. Defaults run in module scope, so all of
 /// their names count.
 pub(crate) fn references(f: &FuncDef) -> BTreeSet<String> {
-    let mut locals = assigned(&f.body);
-    locals.extend(f.params.iter().map(|p| p.name.name.clone()));
-    let mut names = BTreeSet::new();
-    f.body.iter().for_each(|s| stmt_names(s, &mut names));
-    names.retain(|n| !locals.contains(n));
-    for default in f.params.iter().filter_map(|p| p.default.as_ref()) {
-        expr_names(default, &mut names);
-    }
-    names
+    name_uses(f)
+        .into_iter()
+        .map(|(n, _)| n.to_string())
+        .collect()
 }
 
-fn stmt_names(stmt: &Stmt, out: &mut BTreeSet<String>) {
-    let mut e = |x: &Expr| expr_names(x, out);
+/// Each read counted by [`references`], with its span, in source order
+/// (body first, then defaults).
+pub(super) fn name_uses(f: &FuncDef) -> Vec<(&str, Span)> {
+    let mut locals = assigned(&f.body);
+    locals.extend(f.params.iter().map(|p| p.name.name.clone()));
+    let mut uses = Vec::new();
+    f.body.iter().for_each(|s| stmt_names(s, &mut uses));
+    uses.retain(|(n, _)| !locals.contains(*n));
+    for default in f.params.iter().filter_map(|p| p.default.as_ref()) {
+        expr_names(default, &mut uses);
+    }
+    uses
+}
+
+fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
+    let mut e = |x: &'a Expr| expr_names(x, out);
     match &stmt.kind {
         StmtKind::Assign { target, value } | StmtKind::AugAssign { target, value, .. } => {
             e(value);
@@ -186,11 +196,9 @@ fn target_exprs(target: &Target) -> Vec<&Expr> {
     }
 }
 
-fn expr_names(expr: &Expr, out: &mut BTreeSet<String>) {
+fn expr_names<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span)>) {
     match &expr.kind {
-        ExprKind::Name(name) => {
-            out.insert(name.clone());
-        }
+        ExprKind::Name(name) => out.push((name, expr.span)),
         ExprKind::Tuple(items) | ExprKind::List(items) => {
             items.iter().for_each(|x| expr_names(x, out))
         }
@@ -208,7 +216,7 @@ fn expr_names(expr: &Expr, out: &mut BTreeSet<String>) {
         }
         ExprKind::Call { func, args } => {
             expr_names(func, out);
-            args.iter().for_each(|a: &Arg| expr_names(&a.value, out));
+            args.iter().for_each(|a: &'a Arg| expr_names(&a.value, out));
         }
         ExprKind::Subscript { value, index } => {
             expr_names(value, out);

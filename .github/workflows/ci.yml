@@ -17,10 +17,28 @@ env:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Native builds emit host code and link with the host `cc`, so each
+    # target needs its own runner: x86-64 and AArch64 Linux, AArch64 macOS.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+
+  memcheck:
+    # Use-after-free and lost blocks in native programs; valgrind covers
+    # Linux x86-64, the leak count in the debug runtime covers the rest.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: cargo test --locked --test conformance corpus_matches_native
+        env:
+          PYTHRUST_VALGRIND: "1"
