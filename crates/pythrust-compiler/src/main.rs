@@ -37,9 +37,11 @@ const NATIVE_LIBS: &[&str] = &[
 /// Linker flags that keep only what the program reaches and drop debug
 /// info, as Cargo's release profile does (`strip = "debuginfo"`). Without
 /// them a binary carries the standard library's debug info and its unused
-/// code: 5.5 to 6.3 MB instead of 0.44 to 0.52 MB. Symbols stay for backtraces.
+/// code: 5.5 to 6.3 MB instead of 0.44 to 0.52 MB on x86-64 Linux.
+/// Symbols stay for backtraces. On macOS, ld64's `-S` is the analogue of
+/// `--strip-debug`: it leaves out the debug map.
 #[cfg(target_os = "macos")]
-const LINK_FLAGS: &[&str] = &["-Wl,-dead_strip"];
+const LINK_FLAGS: &[&str] = &["-Wl,-dead_strip", "-Wl,-S"];
 #[cfg(not(target_os = "macos"))]
 const LINK_FLAGS: &[&str] = &["-Wl,--gc-sections", "-Wl,--strip-debug"];
 
