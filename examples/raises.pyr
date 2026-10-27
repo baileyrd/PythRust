@@ -1,0 +1,40 @@
+# Declared errors (D8): a tempered function lists what escapes it after
+# its return type; a loose one infers it. CPython runs this with `temper`
+# and the `raises` clauses removed, and the output is the same.
+temper def parse(s: str) -> int raises ValueError:
+    return int(s)
+
+
+temper def checked(s: str) -> int raises ValueError, IndexError:
+    if s == "":
+        raise IndexError("empty")
+    return parse(s)
+
+
+temper def safe(s: str) -> int:
+    try:
+        return checked(s)
+    except ValueError:
+        return -1
+    except IndexError:
+        return 0
+
+
+temper def relay(e: Exception) -> None raises Exception:
+    raise e
+
+
+def loose(s):
+    return checked(s) * 2
+
+
+print(safe("12"), safe("x"), safe(""))
+print(loose("21"))
+try:
+    loose("")
+except IndexError as e:
+    print("caught", e)
+try:
+    relay(ValueError("relayed"))
+except ValueError as e:
+    print("caught", e)

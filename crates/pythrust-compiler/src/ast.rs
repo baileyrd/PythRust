@@ -103,13 +103,16 @@ pub struct Branch {
     pub span: Span,
 }
 
-/// `['temper'] 'def' NAME '(' [params] ')' ['->' type] ':' block`
+/// `['temper'] 'def' NAME '(' [params] ')' ['->' type] [raises] ':' block`
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncDef {
     pub mode: Mode,
     pub name: Ident,
     pub params: Vec<Param>,
     pub returns: Option<TypeExpr>,
+    /// The `raises` clause's exception names (D8); empty when there is
+    /// none. Names are checked by inference.
+    pub raises: Vec<Ident>,
     pub body: Block,
     pub span: Span,
 }

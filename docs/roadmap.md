@@ -76,8 +76,8 @@ Track A, tempering and ownership:
 
 Track B, exceptions:
 
-- [ ] **B1. Front end and interpreter (D6, D7).** Unreserve `try`/`except`/`raise`, and allow `as` in `except Name as e` only (it stays reserved elsewhere until `with`), with a regression test that `e` binds the exception; parse, infer and run them; `int(s)`/`float(s)` raise `ValueError`. CPython-differential corpus programs; deviations recorded in grammar.md.
-- [ ] **B2. Error inference and `raises` (D8).** Inferred escaping errors for loose functions; tempered ones must declare them.
+- [x] **B1. Front end and interpreter (D6, D7).** Unreserve `try`/`except`/`raise`, and allow `as` in `except Name as e` only (it stays reserved elsewhere until `with`), with a regression test that `e` binds the exception; parse, infer and run them; `int(s)`/`float(s)` raise `ValueError`. CPython-differential corpus programs; deviations recorded in grammar.md.
+- [x] **B2. Error inference and `raises` (D8).** Inferred escaping errors for loose functions; tempered ones must declare them. `infer::Types::raises` gives each function's set (declared, else inferred) for B3; a value of unknown exception name escapes as `Exception`. Corpus `raises` (matches CPython loosened) and `raises_undeclared`.
 - [ ] **B3. Native lowering.** Calls return a tag plus value and branch on it ([ir.md](research/ir.md)); native corpus parity for every B1 program.
 
 - [ ] **M5 close.** A test that no diagnostic says "borrow", "lifetime" or "move out of"; docs updated; exit criteria checked.

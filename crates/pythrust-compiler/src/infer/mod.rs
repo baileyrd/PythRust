@@ -15,6 +15,7 @@
 
 mod builtins;
 mod expr;
+mod raises;
 pub(crate) mod scope;
 mod solve;
 mod stmt;
@@ -32,6 +33,7 @@ use crate::ast::{Block, FuncDef, Module, StmtKind, TypeExpr};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 
+pub use raises::{Escape, Raises};
 use solve::{Constraint, Need};
 use subst::Subst;
 pub use ty::{FuncType, ParamType, Type, TypeVar};
@@ -41,6 +43,7 @@ pub use ty::{FuncType, ParamType, Type, TypeVar};
 pub struct Types {
     nodes: HashMap<Span, Type>,
     funcs: HashMap<String, FuncType>,
+    raises: HashMap<String, Raises>,
 }
 
 impl Types {
@@ -52,6 +55,12 @@ impl Types {
     /// The signature of the top-level function `name`.
     pub fn func(&self, name: &str) -> Option<&FuncType> {
         self.funcs.get(name)
+    }
+
+    /// The exceptions that may escape the top-level function `name`:
+    /// declared by its `raises` clause (or tempering), else inferred.
+    pub fn raises(&self, name: &str) -> Option<&Raises> {
+        self.raises.get(name)
     }
 }
 
@@ -75,8 +84,9 @@ pub fn infer(module: &Module) -> Result<Types> {
     // variables stay unconstrained in the typed view.
     solve::default_assigns(&mut c.subst, mem::take(&mut c.pending))?;
     c.resolve_schemes()?;
-    let types = c.finish();
+    let mut types = c.finish();
     temper::check(&defs, &types)?;
+    types.raises = raises::check(module, &defs, &types)?;
     Ok(types)
 }
 
@@ -440,7 +450,11 @@ impl Checker {
                 (name.clone(), subst.zonk_func(sig))
             })
             .collect();
-        Types { nodes, funcs }
+        Types {
+            nodes,
+            funcs,
+            raises: HashMap::new(),
+        }
     }
 }
 

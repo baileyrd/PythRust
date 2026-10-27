@@ -243,6 +243,7 @@ fn def(n: &str, params: Vec<(&str, Option<Expr>)>, body: Vec<Stmt>) -> Stmt {
         name: ident(n),
         params,
         returns: None,
+        raises: Vec::new(),
         body,
         span: Z,
     }))

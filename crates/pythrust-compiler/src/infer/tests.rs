@@ -253,6 +253,7 @@ impl B {
             name: self.id(name),
             params,
             returns,
+            raises: Vec::new(),
             body,
             span: self.sp(),
         }))

@@ -1,0 +1,19 @@
+# deviation: undeclared escapes are a compile error (D8); CPython has no `raises`.
+# expect-error: tempered `f` can raise ValueError here, so it must declare it; write `-> int raises ValueError`
+# expect-exit: 1
+# A call before a shadowing `def` runs reaches the builtin `int`.
+temper def f() -> int:
+    return int("bad")
+
+
+try:
+    print(f())
+except ValueError:
+    print("escaped")
+
+
+temper def int(s: str) -> int:
+    return 0
+
+
+print(f())
