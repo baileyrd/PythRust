@@ -124,13 +124,9 @@ impl<'a> FnBuilder<'_, 'a> {
     /// `and` / `or`: the result is one of the operands, adapted to the
     /// result's type (`x or 7` on an `int | None` wraps the 7).
     fn logical(&mut self, op: LogicalOp, left: &Expr, right: &Expr, span: Span) -> Result<Operand> {
-        // Open in generic code until a `return` decides it: then the left
-        // operand, which always lowers first, decides it.
-        let open = match self.live_ty_at(span) {
-            Ok(ty) => Some(ty),
-            Err(_) if self.open_ret.is_some() => None,
-            Err(e) => return Err(e),
-        };
+        // Until its type settles, the left operand, which always lowers
+        // first, decides it.
+        let open = self.settled_ty_at(span)?;
         let l = self.expr(left)?;
         let ty = match open {
             Some(ty) => ty,
@@ -373,12 +369,9 @@ impl<'a> FnBuilder<'_, 'a> {
     }
 
     fn if_exp(&mut self, test: &Expr, body: &Expr, orelse: &Expr, span: Span) -> Result<Operand> {
-        // Open in generic code until a branch decides it; see `if_branch`.
-        let mut dest = match self.live_ty_at(span) {
-            Ok(ty) => Some((self.pooled(ty), ty)),
-            Err(_) if self.open_ret.is_some() => None,
-            Err(e) => return Err(e),
-        };
+        // Until its type settles, a branch decides it; see `if_branch`.
+        let settled = self.settled_ty_at(span)?;
+        let mut dest = settled.map(|ty| (self.pooled(ty), ty));
         let (then, other, end) = (self.new_block(), self.new_block(), self.new_block());
         let t = self.expr(test)?;
         let cond = self.truthy(t, span);

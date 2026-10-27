@@ -101,20 +101,26 @@ impl FnBuilder<'_, '_> {
             let what = format!("reading `{name}`, a global, from a function");
             return Err(unsupported(span, &what));
         }
-        match self.hints.get(name) {
-            Some(Hint::Typed(ty)) => return Ok(self.new_var(name, *ty, span)),
+        let node = self.node_type(span)?;
+        match self.hints.get(name).copied() {
+            Some(Hint::Typed(ty)) => {
+                // As the assignment that gave it would have, bind what it
+                // decides (an element type), for the code before it.
+                super::bind(node, ty, &self.cx.seqs, &mut self.subst);
+                return Ok(self.new_var(name, ty, span));
+            }
             Some(Hint::Unbound) => {
                 return Err(super::internal(span, "assigning a variable never assigned"))
             }
             None => {}
         }
-        // Settled only when no variable is left anywhere in its type: an
-        // open element (`[x * x]` in generic code) is not yet `None`.
-        let node = self.node_type(span)?;
-        let ty = match (super::is_closed(node, &self.subst), value) {
-            (true, _) => self.live_ty_at(span)?,
-            (false, Some(ty)) => ty,
-            (false, None) => {
+        let ty = match (self.settled_ty_at(span)?, value) {
+            (Some(ty), _) => ty,
+            (None, Some(ty)) => {
+                super::bind(node, ty, &self.cx.seqs, &mut self.subst);
+                ty
+            }
+            (None, None) => {
                 // Live code may type it later; typing it now from code
                 // that never runs could reject that code.
                 self.pending.push(name.to_string());

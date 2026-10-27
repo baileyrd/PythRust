@@ -781,11 +781,17 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
         concrete(t, &both, &mut self.cx.seqs, span)
     }
 
-    /// The node type at `span` under live bindings only: in generic
-    /// code, still open until a live value decides it.
-    fn live_ty_at(&mut self, span: Span) -> Result<Ty> {
+    /// The node type at `span` if it has settled: no variable is left
+    /// anywhere in it under live bindings. In generic code an open one
+    /// (`[x * x]`'s element) waits for a live value to decide it; the
+    /// `None` defaulting [`concrete`] does for an unconstrained element
+    /// (`not []`) is no such decision.
+    fn settled_ty_at(&mut self, span: Span) -> Result<Option<Ty>> {
         let t = self.node_type(span)?;
-        concrete(t, &self.subst, &mut self.cx.seqs, span)
+        if !is_closed(t, &self.subst) {
+            return Ok(None);
+        }
+        concrete(t, &self.subst, &mut self.cx.seqs, span).map(Some)
     }
 }
 

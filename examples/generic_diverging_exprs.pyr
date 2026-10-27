@@ -1,0 +1,33 @@
+# Conditional and `and` / `or` results whose element type generic code
+# decides, beside a branch that never returns: the type waits for the
+# live branch instead of defaulting an open element to `None`; an
+# unconstrained empty list still defaults.
+def spin(n):
+    return spin(n - 1)
+
+
+def h(n, x):
+    return spin(n) if n else [x * x]
+
+
+def k(n, x):
+    return [x * x] or spin(n)
+
+
+def hn(n, x):
+    return spin(n) if n else [(x, [x * 2])]
+
+
+def kn(n, x):
+    return [[x + 1]] or spin(n)
+
+
+def o(x):
+    return len(h(0, x)) + len(k(0, x)) + len(hn(0, x)) + len(kn(0, x))
+
+
+print(o(3), o(1.5))
+print(h(0, 2), k(0, 0.5), hn(0, 2), kn(0, 1.5))
+a = [] if 0 else []
+b = [] or []
+print(a, b, len(a))
