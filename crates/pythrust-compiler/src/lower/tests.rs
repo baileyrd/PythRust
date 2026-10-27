@@ -632,6 +632,14 @@ fn a_never_returning_branch_decides_nothing() {
 }
 
 #[test]
+fn a_variable_only_a_never_returning_call_typed_takes_the_live_type() {
+    for (arg, ty) in [("3", Ty::Int), ("1.5", Ty::Float)] {
+        let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n    if n:\n        y = spin(n)\n    if n:\n        print(y)\n    y = x * x\n    return y\n\n\ndef o(x):\n    return h(0, x) + 1\n\n\nprint(o({arg}))\n");
+        assert_eq!(ret_of(&lowered(&src), "h"), ty, "{arg}");
+    }
+}
+
+#[test]
 fn never_returning_results_assigned_or_in_and_or_lower() {
     for src in [
         "def f(n):\n    return f(n - 1) + 1\n\n\nx = f(1)\nprint(x)\n",

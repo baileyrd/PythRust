@@ -58,6 +58,29 @@ enum Body {
     Undecided(Subst, bool),
 }
 
+/// Types for variables first read where only a call that never returns
+/// typed them, from the live value a later assignment gave them.
+type Hints = HashMap<String, Ty>;
+
+/// One try at lowering a body.
+enum Attempt<T> {
+    Done(T),
+    /// Lower again, with this variable typed so.
+    Retype(String, Ty),
+}
+
+/// Lowers a body with `attempt` until no variable needs retyping: each
+/// retry fixes one more variable, so it ends.
+fn with_hints<T>(mut attempt: impl FnMut(&Hints) -> Result<Attempt<T>>) -> Result<T> {
+    let mut hints = Hints::new();
+    loop {
+        match attempt(&hints)? {
+            Attempt::Done(t) => return Ok(t),
+            Attempt::Retype(name, ty) => hints.insert(name, ty),
+        };
+    }
+}
+
 /// What [`Cx::open_instance`] knows of a call's result.
 enum Found {
     Known(OpenInstance),
@@ -88,15 +111,18 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         diverges: HashSet::new(),
     };
     let main = cx.reserve();
-    let mut b = FnBuilder::new(
-        &mut cx,
-        Subst::new(),
-        scope::assigned(&module.body),
-        Ty::None,
-    );
-    b.defined = Some(HashSet::new());
-    b.block(&module.body)?;
-    let func = b.finish("<module>", Vec::new());
+    let func = with_hints(|hints| {
+        let scope = scope::assigned(&module.body);
+        let mut b = FnBuilder::new(&mut cx, Subst::new(), scope, Ty::None);
+        b.defined = Some(HashSet::new());
+        b.hints = hints.clone();
+        let lowered = b.block(&module.body);
+        if let Some((name, ty)) = b.retype.take() {
+            return Ok(Attempt::Retype(name, ty));
+        }
+        lowered?;
+        Ok(Attempt::Done(b.finish("<module>", Vec::new())))
+    })?;
     cx.funcs[main.0] = Some(func);
     while let Some(job) = cx.queue.pop() {
         let Body::Lowered(func, _) = cx.instance_body(&job)? else {
@@ -316,10 +342,15 @@ impl<'a> Cx<'a> {
     /// The function `job` asks for, unless no `return` decided its open
     /// result type.
     fn instance_body(&mut self, job: &Job<'a>) -> Result<Body> {
+        with_hints(|hints| self.instance_attempt(job, hints))
+    }
+
+    fn instance_attempt(&mut self, job: &Job<'a>, hints: &Hints) -> Result<Attempt<Body>> {
         let f = job.def;
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
         let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret.unwrap_or(Ty::None));
+        b.hints = hints.clone();
         if job.ret.is_none() {
             let sig = b.cx.types.func(&f.name.name);
             b.open_ret = Some(sig.map_or(Type::None, |sig| sig.ret.clone()));
@@ -336,13 +367,18 @@ impl<'a> Cx<'a> {
             );
             params.push(id);
         }
-        b.block(&f.body)?;
+        let lowered = b.block(&f.body);
+        if let Some((name, ty)) = b.retype.take() {
+            return Ok(Attempt::Retype(name, ty));
+        }
+        lowered?;
         if b.open_ret.is_some() {
             let returns = b.may_return || b.reachable(b.cur);
-            return Ok(Body::Undecided(b.subst, returns));
+            return Ok(Attempt::Done(Body::Undecided(b.subst, returns)));
         }
         let skipped = b.skipped;
-        Ok(Body::Lowered(b.finish(&f.name.name, params), skipped))
+        let func = b.finish(&f.name.name, params);
+        Ok(Attempt::Done(Body::Lowered(func, skipped)))
     }
 }
 
@@ -450,6 +486,13 @@ struct FnBuilder<'c, 'a> {
     /// exist (a variable only such a call assigns), used where `subst`
     /// has none, and never evidence against what a live value decides.
     dead: Subst,
+    /// Variable types to use before any other ([`with_hints`]).
+    hints: Hints,
+    /// Variables typed only by `dead`.
+    dead_typed: HashSet<String>,
+    /// Set with the error when a live value meets a variable typed only
+    /// by `dead`: lower again with it typed by the value.
+    retype: Option<(String, Ty)>,
     /// Names local to this function, as Python decides them.
     scope: BTreeSet<String>,
     names: HashMap<String, vars::Var>,
@@ -494,6 +537,9 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             cx,
             subst,
             dead: Subst::new(),
+            hints: Hints::new(),
+            dead_typed: HashSet::new(),
+            retype: None,
             scope,
             names: HashMap::new(),
             always_bound: HashSet::new(),

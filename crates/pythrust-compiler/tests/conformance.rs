@@ -273,6 +273,7 @@ const NATIVE: &[&str] = &[
     "generic_diverging_mutual",
     "generic_diverging_ops",
     "generic_diverging_paths",
+    "generic_diverging_retype",
     "generic_never_returns",
     "generic_results",
     "generic_spin",

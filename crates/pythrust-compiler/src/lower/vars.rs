@@ -48,6 +48,9 @@ impl FnBuilder<'_, '_> {
     pub(super) fn write(&mut self, name: &str, value: Operand, span: Span) -> Result<()> {
         let var = self.var(name, span)?;
         let value = self.fit(value, self.locals[var.local.0], span);
+        if self.ty(value) != self.locals[var.local.0] && self.dead_typed.contains(name) {
+            self.retype = Some((name.to_string(), self.ty(value)));
+        }
         if self.ty(value) != self.locals[var.local.0] {
             let what = format!("assigning `{name}` a value of another type than inferred");
             return Err(unsupported(span, &what));
@@ -89,7 +92,18 @@ impl FnBuilder<'_, '_> {
             let what = format!("reading `{name}`, a global, from a function");
             return Err(unsupported(span, &what));
         }
-        let ty = self.ty_at(span)?;
+        if let Some(ty) = self.hints.get(name) {
+            return Ok(self.new_var(name, *ty, span));
+        }
+        let ty = match self.live_ty_at(span) {
+            Ok(ty) => ty,
+            Err(_) => {
+                // Only a call that never returns typed it so far.
+                let ty = self.ty_at(span)?;
+                self.dead_typed.insert(name.to_string());
+                ty
+            }
+        };
         Ok(self.new_var(name, ty, span))
     }
 
