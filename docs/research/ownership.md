@@ -1,6 +1,6 @@
 # Research G.2: Ownership inference (phase 4)
 
-**Status: decided 2026-10-25** (direction and vocabulary; Nano accepted the recommendations). Exact M5 syntax is still to be written.
+**Status: decided 2026-10-25** (direction and vocabulary; Nano accepted the recommendations). M5 syntax and scope were decided 2026-10-27; see [grammar.md](../grammar.md#phase-4-m5-tempering-ownership-exceptions-nano-2026-10-27).
 
 **Recommendation:** loose code keeps Python's aliasing meaning, implemented as reference counting that the compiler elides wherever it can prove a single owner. Ownership is inferred per function as a *summary* of how each parameter is used. Tempered code must have every value resolve to a single owner or an explicit borrow; anything that would need a hidden refcount is either spelled out or rejected.
 
@@ -47,7 +47,7 @@ The phase-2 subset needs **no lifetime annotations**: there are no classes, clos
 3. **Returning an alias of a parameter**: the signature must say so (a mode on the return type), so callers do not depend on an inferred fact that can change.
 4. **Later phases:** closures capturing mutable state, borrowed values stored in objects, Rust crate calls.
 
-Proposed vocabulary: `read`, `mut`, `owned` as parameter modifiers (Mojo uses the same three words). No lifetimes, no `&`, no `'a`. The exact syntax is an open question for M5 and is not proposed for the grammar yet.
+Vocabulary: `read`, `mut`, `owned` as parameter modifiers (Mojo uses the same three words). No lifetimes, no `&`, no `'a`. Syntax decided 2026-10-27 (grammar.md D2): contextual prefixes, `read` implicit.
 
 ## Loose and tempered at a boundary
 

@@ -184,6 +184,19 @@ Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts 
 
 `pause`, `shared` and `with` stay reserved until those features land, so adopting them breaks no programs. `temper` is already live in `func_def`.
 
+### Phase 4 (M5): tempering, ownership, exceptions (Nano, 2026-10-27)
+
+Decided, not yet implemented; [roadmap.md](roadmap.md#phase-4-m5-plan) orders the work. Ownership direction and vocabulary are in [research/ownership.md](research/ownership.md).
+
+- **D1, what tempering requires:** a `temper def` annotates every parameter and its return, uses no `dyn` in its signature or body, and writes the `mut`/`owned` modes its body needs (D2).
+- **D2, ownership modes:** a contextual prefix on a parameter, `def grow(mut xs: list[int])`, `def keep(owned xs: list[int])`. `read` is the default and is never written. `mut` and `owned` are not reserved, so `mut = 1` stays legal. Loose functions may write modes; the compiler checks them against the body.
+- **D3, returned aliases:** tempered code may not return an alias of a parameter (`return xs`); the fix-it is `return list(xs)`. Loose code may, tracked by the inferred summary. A new builtin `list(xs)` makes a shallow copy.
+- **D4, aliased mutation:** in tempered code, two live names for one list with a mutation through either (`b = a`, then `b.append(1)` while `a` is used) is an error; the fix-it is `b = list(a)`. There is no share marker in phase 4. Loose code keeps Python's aliasing.
+- **D5, tempered calling loose:** a tempered function calls only tempered functions and builtins; otherwise the error says "temper `f` first". The crossing annotation in [design.md](design.md#core-idea-tempering) waits for module tempering or the Python bridge.
+- **D6, exception surface:** builtin exception names only: `ValueError`, `IndexError`, `ZeroDivisionError`, `OverflowError`, `RecursionError`. `raise ValueError("msg")`; `try:` with one or more `except Name [as e]:` clauses; `str(e)` and `print(e)` give the message. Bare `except:`, `else`, `finally`, chaining and user-defined exceptions are later; their words stay reserved.
+- **D7, what can be caught:** faults that mean a bug stay fatal as today: overflow, index out of range, division by zero, unpacking arity, recursion depth. Only `raise` and the parse builtins `int(s)` / `float(s)` (which raise `ValueError`) can be caught. A deviation from Python: `except IndexError` around `xs[10]` never catches.
+- **D8, declared errors:** a tempered function lists the errors that escape it with a contextual `raises` clause after the return type, `temper def parse(s: str) -> int raises ValueError:`. Loose functions infer theirs. Explicit `Result[T, E]` types and a `?` operator are later.
+
 ## Open syntax questions (M3 blockers)
 
 None.
