@@ -13,7 +13,7 @@
 //! before it runs (a parameter, a call's result) is [`Escape::Unknown`],
 //! written `Exception`, which only `raises Exception` covers.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use crate::ast::{
@@ -105,6 +105,7 @@ pub(super) fn check(
     let mut a = Analysis {
         types,
         defs: defs.iter().map(|f| (f.name.name.as_str(), *f)).collect(),
+        early: early(module),
         globals,
         sets: declared.clone(),
     };
@@ -118,6 +119,24 @@ pub(super) fn check(
     }
     let sets = a.sets.into_iter().map(|(n, s)| (n.to_string(), s));
     Ok(sets.collect())
+}
+
+/// The functions whose `def` runs before any other code: before every
+/// other kind of module statement and every parameter default, its own
+/// included. Any other `def` binds its name only when it runs, and a call
+/// before that reaches the builtin of that name (`run` does this too).
+fn early(module: &Module) -> HashSet<&str> {
+    let mut out = HashSet::new();
+    for s in &module.body {
+        let StmtKind::FuncDef(f) = &s.kind else {
+            break;
+        };
+        if f.params.iter().any(|p| p.default.is_some()) {
+            break;
+        }
+        out.insert(f.name.name.as_str());
+    }
+    out
 }
 
 /// `f`'s declared set: its `raises` clause, or nothing for a tempered
@@ -249,6 +268,9 @@ fn caught<'a>(binding: Option<&'a Ident>, name: &str, out: &mut Bindings<'a>) {
 struct Analysis<'a> {
     types: &'a Types,
     defs: HashMap<&'a str, &'a FuncDef>,
+    /// Functions bound before any code runs, so a call by their name
+    /// never reaches the builtin they may shadow.
+    early: HashSet<&'a str>,
     globals: Bindings<'a>,
     sets: HashMap<&'a str, Raises>,
 }
@@ -285,6 +307,7 @@ impl<'a> Analysis<'a> {
         let cx = Cx {
             a: self,
             locals: &locals,
+            module: false,
         };
         cx.block(&f.body)
     }
@@ -345,6 +368,9 @@ fn clause(set: &Raises) -> String {
 struct Cx<'s, 'a> {
     a: &'s Analysis<'a>,
     locals: &'s Bindings<'a>,
+    /// Whether `locals` are the module's: names there fall back to the
+    /// builtins until bound, where a function's locals do not.
+    module: bool,
 }
 
 impl<'a> Cx<'_, 'a> {
@@ -469,12 +495,16 @@ impl<'a> Cx<'_, 'a> {
 
     /// A call by name: a top-level function lets its set escape here;
     /// `int(s)` and `float(s)` raise `ValueError` unless `s` is a number.
+    /// A call may reach a builtin that a `def` shadows when the `def` may
+    /// not have run yet, so both count.
     fn call(&self, name: &str, first: Option<&Arg>, at: Span, out: &mut Raises) {
         if self.a.defs.contains_key(name) {
             let set = self.a.sets.get(name);
             set.into_iter()
                 .flat_map(Raises::escapes)
                 .for_each(|e| out.add(e, at));
+        }
+        if self.a.early.contains(name) {
             return;
         }
         let parses = matches!(name, "int" | "float")
@@ -510,26 +540,43 @@ impl<'a> Cx<'_, 'a> {
         }
     }
 
-    /// A variable's kinds, from all its bindings; or, for a name that is
-    /// no variable, the builtin exception it names (`raise ValueError`).
+    /// A variable's kinds, from all its bindings. A module-level name
+    /// may also be read before it is bound, which finds the builtin
+    /// exception of that name (`raise ValueError`); a local cannot.
     fn name_kinds(&self, name: &'a str, seen: &mut BTreeSet<&'a str>) -> BTreeSet<Escape> {
-        if let Some(sources) = self.locals.get(name) {
-            if !seen.insert(name) {
-                return BTreeSet::new();
+        if !self.module {
+            if let Some(sources) = self.locals.get(name) {
+                return self.sources(name, sources, seen);
             }
-            return sources.iter().flat_map(|s| self.source(s, seen)).collect();
-        }
-        if self.a.globals.contains_key(name) {
             let module = Cx {
                 a: self.a,
                 locals: &self.a.globals,
+                module: true,
             };
             return module.name_kinds(name, &mut BTreeSet::new());
         }
-        exception(name).map_or_else(
-            || BTreeSet::from([Escape::Unknown]),
-            |n| BTreeSet::from([Escape::Named(n)]),
-        )
+        let mut out: BTreeSet<Escape> = exception(name).map(Escape::Named).into_iter().collect();
+        match self.locals.get(name) {
+            Some(sources) => out.extend(self.sources(name, sources, seen)),
+            None if out.is_empty() => {
+                out.insert(Escape::Unknown);
+            }
+            None => {}
+        }
+        out
+    }
+
+    /// The kinds `name`'s bindings give it; nothing on a cycle back to it.
+    fn sources(
+        &self,
+        name: &'a str,
+        sources: &[Source<'a>],
+        seen: &mut BTreeSet<&'a str>,
+    ) -> BTreeSet<Escape> {
+        if !seen.insert(name) {
+            return BTreeSet::new();
+        }
+        sources.iter().flat_map(|s| self.source(s, seen)).collect()
     }
 
     fn source(&self, s: &Source<'a>, seen: &mut BTreeSet<&'a str>) -> BTreeSet<Escape> {
@@ -829,6 +876,64 @@ temper def f(s: str) -> int:
             err(global),
             "`IndexError` is redefined, so it no longer names the builtin exception"
         );
+    }
+
+    #[test]
+    fn a_call_before_a_shadowing_def_runs_reaches_the_builtin() {
+        let late = "\
+temper def f() -> int:
+    return int(\"bad\")
+
+print(f())
+
+temper def int(s: str) -> int:
+    return 0
+";
+        assert_eq!(
+            err(late),
+            "tempered `f` can raise ValueError here, so it must declare it; \
+             write `-> int raises ValueError`"
+        );
+        let early = "\
+temper def int(s: str) -> int:
+    return 0
+
+temper def f() -> int:
+    return int(\"bad\")
+
+print(f())
+";
+        assert_eq!(raises(early, "f"), "");
+        // A default runs before the `def` after it binds its name.
+        let default = "\
+def g(n: int = 0):
+    return n
+
+def f():
+    return int(\"bad\")
+
+def int(s: str) -> int:
+    return 0
+";
+        assert_eq!(raises(default, "f"), "ValueError");
+    }
+
+    #[test]
+    fn a_global_read_before_it_is_bound_is_the_builtin() {
+        let src = "\
+temper def f() -> None raises IndexError:
+    raise ValueError
+
+f()
+ValueError = IndexError()
+";
+        assert_eq!(
+            err(src),
+            "`f` can raise ValueError here, which its `raises` clause does not list; \
+             write `raises IndexError, ValueError`"
+        );
+        let module = "x = ValueError\nValueError = IndexError()\ndef f():\n    raise x\n";
+        assert_eq!(raises(module, "f"), "IndexError, ValueError");
     }
 
     #[test]
