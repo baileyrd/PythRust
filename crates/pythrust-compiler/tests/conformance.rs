@@ -268,6 +268,7 @@ const NATIVE: &[&str] = &[
     "float_to_int_range",
     "floats",
     "functions",
+    "generic_diverging_branch",
     "generic_diverging_logical",
     "generic_diverging_mutual",
     "generic_diverging_ops",

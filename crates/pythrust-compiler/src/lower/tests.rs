@@ -614,6 +614,16 @@ fn a_never_returning_elif_test_keeps_the_join() {
 }
 
 #[test]
+fn a_never_returning_branch_decides_nothing() {
+    for ret in ["spin(n) if n else x * x", "x * x if not n else spin(n)"] {
+        for (arg, ty) in [("3", Ty::Int), ("1.5", Ty::Float)] {
+            let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n    return {ret}\n\n\ndef o(x):\n    return h(0, x) + 1\n\n\nprint(o({arg}))\n");
+            assert_eq!(ret_of(&lowered(&src), "h"), ty, "{ret} on {arg}");
+        }
+    }
+}
+
+#[test]
 fn never_returning_results_assigned_or_in_and_or_lower() {
     for src in [
         "def f(n):\n    return f(n - 1) + 1\n\n\nx = f(1)\nprint(x)\n",

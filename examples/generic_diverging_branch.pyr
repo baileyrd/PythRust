@@ -1,0 +1,27 @@
+# A branch that calls a generic function that never returns decides
+# nothing: the branch that returns decides the result type, in either
+# order and for ints and floats alike.
+def spin(n):
+    return spin(n - 1)
+
+
+def first(n, x):
+    return spin(n) if n else x * x
+
+
+def second(n, x):
+    return x * x if not n else spin(n)
+
+
+def either(n, x):
+    return x + 1 or spin(n)
+
+
+def prefer(n, x):
+    return x - x and spin(n)
+
+
+print(first(0, 3) + 1, first(0, 1.5) + 1)
+print(second(0, 3) + 1, second(0, 1.5) + 1)
+print(either(0, 3) + 1, either(0, 1.5) + 1)
+print(prefer(0, 3) + 1, prefer(0, 1.5) + 1)

@@ -126,7 +126,7 @@ impl<'a> FnBuilder<'_, 'a> {
     fn logical(&mut self, op: LogicalOp, left: &Expr, right: &Expr, span: Span) -> Result<Operand> {
         // Open in generic code until a `return` decides it: then the left
         // operand, which always lowers first, decides it.
-        let open = match self.ty_at(span) {
+        let open = match self.live_ty_at(span) {
             Ok(ty) => Some(ty),
             Err(_) if self.open_ret.is_some() => None,
             Err(e) => return Err(e),
@@ -374,7 +374,7 @@ impl<'a> FnBuilder<'_, 'a> {
 
     fn if_exp(&mut self, test: &Expr, body: &Expr, orelse: &Expr, span: Span) -> Result<Operand> {
         // Open in generic code until a branch decides it; see `if_branch`.
-        let mut dest = match self.ty_at(span) {
+        let mut dest = match self.live_ty_at(span) {
             Ok(ty) => Some((self.pooled(ty), ty)),
             Err(_) if self.open_ret.is_some() => None,
             Err(e) => return Err(e),
@@ -575,7 +575,12 @@ impl<'a> FnBuilder<'_, 'a> {
                 return Err(unsupported(span, super::stmt::OPEN_RESULT));
             }
         };
-        super::bind(node, ret, &self.cx.seqs, &mut self.subst);
+        // A result that never exists decides nothing for live code.
+        let subst = match self.cx.diverges.contains(&id) {
+            true => &mut self.dead,
+            false => &mut self.subst,
+        };
+        super::bind(node, ret, &self.cx.seqs, subst);
         Ok((id, ret))
     }
 

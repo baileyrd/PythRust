@@ -446,6 +446,10 @@ struct Loop {
 struct FnBuilder<'c, 'a> {
     cx: &'c mut Cx<'a>,
     subst: Subst,
+    /// What calls that never return bind: types for values that never
+    /// exist (a variable only such a call assigns), used where `subst`
+    /// has none, and never evidence against what a live value decides.
+    dead: Subst,
     /// Names local to this function, as Python decides them.
     scope: BTreeSet<String>,
     names: HashMap<String, vars::Var>,
@@ -489,6 +493,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
         let mut b = FnBuilder {
             cx,
             subst,
+            dead: Subst::new(),
             scope,
             names: HashMap::new(),
             always_bound: HashSet::new(),
@@ -703,7 +708,22 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             .ok_or_else(|| internal(span, "node has no type"))
     }
 
+    /// `t` under this instance's bindings, else those of calls that
+    /// never return.
     fn concrete(&mut self, t: &Type, span: Span) -> Result<Ty> {
+        let live = concrete(t, &self.subst, &mut self.cx.seqs, span);
+        if live.is_ok() || self.dead.is_empty() {
+            return live;
+        }
+        let mut both = self.dead.clone();
+        both.extend(self.subst.iter().map(|(v, ty)| (*v, *ty)));
+        concrete(t, &both, &mut self.cx.seqs, span)
+    }
+
+    /// The node type at `span` under live bindings only: in generic
+    /// code, still open until a live value decides it.
+    fn live_ty_at(&mut self, span: Span) -> Result<Ty> {
+        let t = self.node_type(span)?;
         concrete(t, &self.subst, &mut self.cx.seqs, span)
     }
 }
