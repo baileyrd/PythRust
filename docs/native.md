@@ -71,5 +71,5 @@ M4 closed with these open, and with generic functions where no `return` decides 
 
 - **Reference ownership** is checked for leaks in CI (the debug runtime's count) but for use-after-free only by running the examples under valgrind by hand.
 - **Binary size** is dominated by the runtime and Rust's standard library (about 5 MB in debug builds).
-- **Targets:** CI covers Linux x86-64 only. macOS and AArch64 are expected to work (Cranelift and `cc` serve them) but are untested.
-- **Diagnostics:** for a native program that fails, `corpus_matches_native` requires its stderr to equal `run`'s byte for byte (message, location, carets). This is only checked on Linux x86-64 in CI.
+- **Targets:** CI covers x86-64 Linux, AArch64 Linux and AArch64 macOS, one runner each, since codegen targets the host and links with the host `cc`. x86-64 macOS is untested. Windows is unsupported: `build` drives a Unix `cc` with Unix link libraries.
+- **Diagnostics:** for a native program that fails, `corpus_matches_native` requires its stderr to equal `run`'s byte for byte (message, location, carets). CI checks this on every target above.

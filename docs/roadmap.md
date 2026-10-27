@@ -51,9 +51,9 @@ M4 is done, as Nano chose (2026-10-26): fix the last subset gaps (#29, #30, #31,
 
 Follow-ups, none blocking M4:
 
-- [ ] **Targets:** CI is Linux x86-64 only; macOS and AArch64 are untested.
+- [x] **Targets:** PR #33 runs CI, including the native corpus, on x86-64 Linux, AArch64 Linux and AArch64 macOS. Windows is unsupported: `build` drives a Unix `cc`, so it needs a linker-driver change, not just a runner. x86-64 macOS is untested.
 - [ ] **Use-after-free checking** is valgrind by hand; CI checks only for leaks (the debug runtime's count).
 - [ ] **Binary size** (about 5 MB in debug builds, mostly the runtime and Rust's standard library).
 - [ ] **Generic functions where no `return` decides the result type** are backend errors, such as one declared `-> list | None` that only ever returns `None`, or one whose every `return` needs a recursive call first (see the monomorphization note in [native.md](native.md)). Nano accepted deferring this whole class, nonrecursive cases included, at closure (2026-10-26); the decision named the `-> list | None` example.
 
-Native validation evidence is Linux x86-64 only, including the required native corpus subset and diagnostics compared with `run`; macOS and AArch64 are untested. Preserve the wider interpreter language decisions when extending the backend; a backend limitation is not a new language restriction.
+Native validation evidence (the required native corpus subset and diagnostics compared with `run`) covers x86-64 Linux, AArch64 Linux and AArch64 macOS; Windows and x86-64 macOS are not tested. Preserve the wider interpreter language decisions when extending the backend; a backend limitation is not a new language restriction.
