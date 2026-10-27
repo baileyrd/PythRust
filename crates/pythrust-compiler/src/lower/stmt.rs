@@ -42,6 +42,7 @@ impl FnBuilder<'_, '_> {
                     self.jump_away(Term::Unreachable);
                     // What follows in this block is never reached.
                     if diverged {
+                        self.dead_assigns(s);
                         return Ok(());
                     }
                 }

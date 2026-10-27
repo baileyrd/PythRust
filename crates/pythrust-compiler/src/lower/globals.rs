@@ -10,12 +10,13 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ast::{FuncDef, Module};
+use crate::ast::{FuncDef, Module, Stmt};
 use crate::diag::Result;
 use crate::infer::scope;
-use crate::ir::{CmpOp, GlobalId, Inst, Operand, Rvalue, Ty};
+use crate::ir::{CmpOp, GlobalId, Inst, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
+use super::vars::runtime;
 use super::{unsupported, Cx, FnBuilder};
 
 /// A mirrored module variable.
@@ -31,6 +32,12 @@ pub(super) struct Globals {
     /// Module variables some function refers to.
     shared: BTreeSet<String>,
     mirrors: HashMap<String, Mirror>,
+    /// Shared module variables an assignment that never completes (it
+    /// calls a function that never returns) assigns.
+    dead: BTreeSet<String>,
+    /// Of those, the ones a function read while no completing assignment
+    /// had typed them: the read always fails, so none may follow.
+    failing: BTreeSet<String>,
     /// By function name and parameter index.
     defaults: HashMap<(String, usize), GlobalId>,
     tys: Vec<Ty>,
@@ -98,6 +105,10 @@ impl FnBuilder<'_, '_> {
         if self.defined.is_none() || !self.cx.is_shared(name) {
             return Ok(());
         }
+        if self.cx.globals.failing.contains(name) {
+            let what = format!("assigning `{name}` after a function read it as never assigned");
+            return Err(unsupported(span, &what));
+        }
         let m = self.cx.globals.mirror(name, self.ty(value), span)?;
         self.emit(Inst::SetGlobal {
             global: m.value,
@@ -110,18 +121,40 @@ impl FnBuilder<'_, '_> {
         Ok(())
     }
 
+    /// In module code, notes the shared variables module statement `s`,
+    /// cut short by a call that never returns, would have assigned.
+    pub(super) fn dead_assigns(&mut self, s: &Stmt) {
+        if self.defined.is_none() {
+            return;
+        }
+        let globals = &mut self.cx.globals;
+        let assigned = scope::assigned(std::slice::from_ref(s));
+        let shared = assigned.into_iter().filter(|n| globals.shared.contains(n));
+        globals.dead.extend(shared.collect::<Vec<String>>());
+    }
+
     /// A function's read of module variable `name`: `NameError` until
     /// the module has assigned it.
     pub(super) fn read_global(&mut self, name: &str, span: Span) -> Result<Operand> {
         // The module's own type: inference may have narrowed this read.
+        let message = format!("NameError: name '{name}' is not defined");
         let ty = match self.cx.globals.mirrors.get(name) {
             Some(m) => self.cx.globals.tys[m.value.0],
-            None => self.ty_at(span)?,
+            None => match self.ty_at(span) {
+                Ok(ty) => ty,
+                // Only an assignment that never completes has assigned
+                // it, so the read fails, and ends its path.
+                Err(_) if self.cx.globals.dead.contains(name) => {
+                    self.cx.globals.failing.insert(name.to_string());
+                    self.jump_away(Term::Fail(runtime(span, &message)));
+                    return Err(self.diverge(span));
+                }
+                Err(e) => return Err(e),
+            },
         };
         let m = self.cx.globals.mirror(name, ty, span)?;
         let bound = self.temp(Ty::Bool, Rvalue::Global(m.bound), span);
         let unbound = Rvalue::Cmp(CmpOp::Eq, bound, Operand::Bool(false));
-        let message = format!("NameError: name '{name}' is not defined");
         self.fail_if(unbound, span, &message);
         let v = self.temp(ty, Rvalue::Global(m.value), span);
         self.narrow(v, span)

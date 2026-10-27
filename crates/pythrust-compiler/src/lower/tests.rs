@@ -674,6 +674,20 @@ fn an_open_element_waits_for_the_live_branch() {
 }
 
 #[test]
+fn a_global_only_a_never_returning_call_assigns_fails_when_read() {
+    let p = lowered("def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    y = spin(1)\n\n\ndef f():\n    return y\n\n\nprint(f())\n");
+    let f = p.funcs.iter().find(|f| f.name == "f");
+    let failing = f.map(|f| {
+        f.blocks
+            .iter()
+            .filter(|b| matches!(b.term, Term::Fail(_)))
+            .count()
+    });
+    assert_eq!(failing, Some(1));
+    assert_eq!(prints(&p.funcs[p.main.0]), 0);
+}
+
+#[test]
 fn a_variable_only_a_never_returning_call_assigns_fails_when_read() {
     let p =
         lowered("def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    z = spin(1)\nprint(z * 2)\n");
