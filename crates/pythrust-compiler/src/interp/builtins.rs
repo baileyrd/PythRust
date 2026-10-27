@@ -1,9 +1,11 @@
-//! The closed set of builtins: `print len list range str int float bool`.
+//! The closed set of builtins: `print len list range str int float bool`,
+//! and the builtin exceptions, which build an exception value when called.
 
 use std::io::Write;
+use std::rc::Rc;
 
-use super::rt_err;
-use super::value::{str_repr, Num, Range, Value};
+use super::value::{str_repr, Exc, ExcKind, Num, Range, Value};
+use super::{rt_err, value_error, Exec};
 use crate::ast::Ident;
 use crate::diag::Result;
 use crate::span::Span;
@@ -18,6 +20,7 @@ pub(super) enum Builtin {
     Int,
     Float,
     Bool,
+    Exception(ExcKind),
 }
 
 /// Evaluated call arguments, in source order within each kind.
@@ -38,7 +41,7 @@ impl Builtin {
             "int" => Builtin::Int,
             "float" => Builtin::Float,
             "bool" => Builtin::Bool,
-            _ => return None,
+            _ => return ExcKind::lookup(name).map(Builtin::Exception),
         })
     }
 
@@ -52,28 +55,44 @@ impl Builtin {
             Builtin::Int => "int",
             Builtin::Float => "float",
             Builtin::Bool => "bool",
+            Builtin::Exception(kind) => kind.name(),
+        }
+    }
+
+    /// The exception this builtin builds, if it is one.
+    pub fn exception(self) -> Option<ExcKind> {
+        match self {
+            Builtin::Exception(kind) => Some(kind),
+            _ => None,
         }
     }
 }
 
-/// Calls a builtin. `print` is the only one that writes to `out`.
-pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Result<Value<'m>> {
+/// Calls a builtin. `print` is the only one that writes to `out`; `int`
+/// and `float` of a malformed string raise a catchable `ValueError`.
+pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<'m, Value<'m>> {
     if b != Builtin::Print {
         reject_keywords(b.name(), &args)?;
     }
     let (pos, span) = (args.positional.as_slice(), args.span);
-    match b {
-        Builtin::Len => len(one(b, pos, span)?, span),
-        Builtin::List => copy_list(one(b, pos, span)?, span),
-        Builtin::Range => range(pos, span),
-        Builtin::Str => Ok(Value::str(
-            &opt(b, pos, span)?.map_or(Ok(String::new()), |v| v.to_str(span))?,
-        )),
-        Builtin::Int => opt(b, pos, span)?.map_or(Ok(Value::Int(0)), |v| to_int(v, span)),
-        Builtin::Float => opt(b, pos, span)?.map_or(Ok(Value::Float(0.0)), |v| to_float(v, span)),
-        Builtin::Bool => Ok(Value::Bool(opt(b, pos, span)?.is_some_and(Value::truthy))),
-        Builtin::Print => print(&args, out),
-    }
+    Ok(match b {
+        Builtin::Len => len(one(b, pos, span)?, span)?,
+        Builtin::List => copy_list(one(b, pos, span)?, span)?,
+        Builtin::Range => range(pos, span)?,
+        Builtin::Str => {
+            Value::str(&opt(b, pos, span)?.map_or(Ok(String::new()), |v| v.to_str(span))?)
+        }
+        Builtin::Int => opt(b, pos, span)?.map_or(Ok(Value::Int(0)), |v| to_int(v, span))?,
+        Builtin::Float => {
+            opt(b, pos, span)?.map_or(Ok(Value::Float(0.0)), |v| to_float(v, span))?
+        }
+        Builtin::Bool => Value::Bool(opt(b, pos, span)?.is_some_and(Value::truthy)),
+        Builtin::Print => print(&args, out)?,
+        Builtin::Exception(kind) => {
+            let arg = opt(b, pos, span)?.cloned();
+            Value::Exc(Rc::new(Exc { kind, arg }))
+        }
+    })
 }
 
 /// `xs.append(v)`.
@@ -214,10 +233,10 @@ fn range<'m>(args: &[Value<'m>], span: Span) -> Result<Value<'m>> {
     Ok(Value::Range(Range { start, stop, step }))
 }
 
-fn to_int<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
+fn to_int<'m>(v: &Value<'m>, span: Span) -> Exec<'m, Value<'m>> {
     match (v, v.num()) {
         (_, Some(Num::Int(i))) => Ok(Value::Int(i)),
-        (_, Some(Num::Float(f))) => float_to_int(f, span),
+        (_, Some(Num::Float(f))) => Ok(float_to_int(f, span)?),
         (Value::Str(s), None) => parse_int(s, span),
         _ => Err(rt_err(
             span,
@@ -225,7 +244,8 @@ fn to_int<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
                 "TypeError: int() argument must be a string or a number, not '{}'",
                 v.type_name()
             ),
-        )),
+        )
+        .into()),
     }
 }
 
@@ -248,15 +268,12 @@ fn float_to_int<'m>(f: f64, span: Span) -> Result<Value<'m>> {
     Ok(Value::Int(f.trunc() as i64))
 }
 
-fn parse_int<'m>(s: &str, span: Span) -> Result<Value<'m>> {
+/// A malformed string raises a catchable `ValueError`; one out of range
+/// is an overflow fault (D7).
+fn parse_int<'m>(s: &str, span: Span) -> Exec<'m, Value<'m>> {
     let invalid = || {
-        rt_err(
-            span,
-            format!(
-                "ValueError: invalid literal for int() with base 10: {}",
-                str_repr(s)
-            ),
-        )
+        let message = format!("invalid literal for int() with base 10: {}", str_repr(s));
+        value_error(message, span)
     };
     let text = strip_underscores(s.trim()).ok_or_else(invalid)?;
     let digits = text.strip_prefix(['+', '-']).unwrap_or(&text);
@@ -264,12 +281,12 @@ fn parse_int<'m>(s: &str, span: Span) -> Result<Value<'m>> {
         return Err(invalid());
     }
     // Only digits and a sign remain, so the one failure left is range.
-    text.parse()
-        .map(Value::Int)
-        .map_err(|_| rt_err(span, "OverflowError: int too large for i64".to_string()))
+    let parsed = text.parse().map(Value::Int);
+    Ok(parsed.map_err(|_| rt_err(span, "OverflowError: int too large for i64".to_string()))?)
 }
 
-fn to_float<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
+/// A malformed string raises a catchable `ValueError`.
+fn to_float<'m>(v: &Value<'m>, span: Span) -> Exec<'m, Value<'m>> {
     if let Some(n) = v.num() {
         return Ok(Value::Float(n.float()));
     }
@@ -280,19 +297,15 @@ fn to_float<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
                 "TypeError: float() argument must be a string or a number, not '{}'",
                 v.type_name()
             ),
-        ));
+        )
+        .into());
     };
     strip_underscores(s.trim())
         .and_then(|t| t.parse().ok())
         .map(Value::Float)
         .ok_or_else(|| {
-            rt_err(
-                span,
-                format!(
-                    "ValueError: could not convert string to float: {}",
-                    str_repr(s)
-                ),
-            )
+            let message = format!("could not convert string to float: {}", str_repr(s));
+            value_error(message, span)
         })
 }
 

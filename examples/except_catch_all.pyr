@@ -1,0 +1,7 @@
+# expect-exit: 1
+# deviation: catching every exception (`except Exception`, bare `except:`) is not supported yet (D6); it is a compile error
+# expect-error: catching every exception is not supported yet
+try:
+    print(int("x"))
+except Exception:
+    print("caught")

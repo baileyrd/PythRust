@@ -11,8 +11,8 @@
 //! keyword argument.
 
 use crate::ast::{
-    Arg, BinOp, Block, Branch, CmpOp, Expr, ExprKind, FuncDef, Ident, LogicalOp, Mode, Module,
-    Param, Stmt, StmtKind, Target, TargetKind, TypeExpr, UnaryOp,
+    Arg, BinOp, Block, Branch, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp, Mode,
+    Module, Param, Stmt, StmtKind, Target, TargetKind, TypeExpr, UnaryOp,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
@@ -116,6 +116,9 @@ impl<'a> Parser<'a> {
 
     fn unexpected(&self, expected: &str) -> Diagnostic {
         let tok = self.tok(0);
+        if tok.kind == TokenKind::As {
+            return error(tok.span, "'as' is reserved outside `except Name as e`");
+        }
         let found = describe(&tok.kind);
         error(tok.span, format!("expected {expected}, found {found}"))
     }
@@ -178,6 +181,7 @@ impl<'a> Parser<'a> {
             TokenKind::If => self.if_stmt(),
             TokenKind::While => self.while_stmt(),
             TokenKind::For => self.for_stmt(),
+            TokenKind::Try => self.try_stmt(),
             _ => {
                 let stmt = self.simple_stmt()?;
                 self.expect(&TokenKind::Newline)?;
@@ -210,6 +214,7 @@ impl<'a> Parser<'a> {
         let start = self.tok(0).span;
         let kind = match self.peek() {
             TokenKind::Return => self.return_stmt()?,
+            TokenKind::Raise => self.raise_stmt()?,
             TokenKind::Break => self.loop_jump(StmtKind::Break, "break")?,
             TokenKind::Continue => self.loop_jump(StmtKind::Continue, "continue")?,
             TokenKind::Pass => {
@@ -233,6 +238,17 @@ impl<'a> Parser<'a> {
             return Ok(StmtKind::Return(None));
         }
         Ok(StmtKind::Return(Some(self.expr_list()?)))
+    }
+
+    /// `'raise' expr`. A bare `raise` (re-raise) is not supported yet.
+    fn raise_stmt(&mut self) -> Result<StmtKind> {
+        let span = self.bump().span;
+        if !starts_expr(self.peek()) {
+            let msg = "bare `raise` is not supported yet; catch with `except Name as e` \
+                       and write `raise e`";
+            return Err(error(span, msg));
+        }
+        Ok(StmtKind::Raise(self.expr()?))
     }
 
     fn loop_jump(&mut self, kind: StmtKind, word: &str) -> Result<StmtKind> {
@@ -403,6 +419,49 @@ impl<'a> Parser<'a> {
         };
         Ok(Stmt {
             kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `'try' ':' block handler+`. `else` and `finally` clauses are later.
+    fn try_stmt(&mut self) -> Result<Stmt> {
+        let start = self.bump().span;
+        self.expect(&TokenKind::Colon)?;
+        let body = self.block()?;
+        let mut handlers = vec![self.handler()?];
+        while self.at(&TokenKind::Except) {
+            handlers.push(self.handler()?);
+        }
+        if self.at(&TokenKind::Else) {
+            let span = self.tok(0).span;
+            return Err(error(span, "`else` on `try` is not supported yet"));
+        }
+        Ok(Stmt {
+            kind: StmtKind::Try { body, handlers },
+            span: self.span_from(start),
+        })
+    }
+
+    /// `'except' NAME ['as' NAME] ':' block`
+    fn handler(&mut self) -> Result<Handler> {
+        let start = self.expect(&TokenKind::Except)?.span;
+        if self.at(&TokenKind::Colon) {
+            let msg = "bare `except:` is not supported yet; name the exception, \
+                       as in `except ValueError:`";
+            return Err(error(self.tok(0).span, msg));
+        }
+        let exception = self.expect_name("an exception name, such as `ValueError`")?;
+        let binding = if self.eat(&TokenKind::As) {
+            Some(self.expect_name("a name to bind the exception to")?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Colon)?;
+        let body = self.block()?;
+        Ok(Handler {
+            exception,
+            binding,
+            body,
             span: self.span_from(start),
         })
     }
@@ -1022,6 +1081,10 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::None => "None",
         TokenKind::Temper => "temper",
         TokenKind::Is => "is",
+        TokenKind::Try => "try",
+        TokenKind::Except => "except",
+        TokenKind::Raise => "raise",
+        TokenKind::As => "as",
         TokenKind::Pipe => "|",
         TokenKind::Plus => "+",
         TokenKind::Minus => "-",
