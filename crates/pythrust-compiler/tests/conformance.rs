@@ -241,6 +241,8 @@ const NATIVE: &[&str] = &[
     "float_to_int_range",
     "floats",
     "functions",
+    "generic_diverging_mutual",
+    "generic_diverging_ops",
     "generic_never_returns",
     "generic_results",
     "generic_spin",

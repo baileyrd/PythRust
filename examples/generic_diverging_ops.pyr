@@ -1,0 +1,17 @@
+# expect-exit: 1
+# An operation on the result of a generic function that never returns
+# never runs: it builds natively, a short-circuit skips the call, and
+# the call fails as `run` does.
+def grow(n):
+    return grow(n - 1) + 1
+
+
+def halve(n):
+    return [halve(n + 1)[0] // 2] if n else [halve(n - 1)[0] - 1]
+
+
+print("start")
+print(0 > 1 < grow(3))
+if 1 > 2 < halve(3)[0]:
+    print("unreachable")
+print(grow(3) * 2)

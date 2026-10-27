@@ -27,13 +27,15 @@ pub(super) type Bounds = (Operand, Operand, Operand);
 impl FnBuilder<'_, '_> {
     /// Lowers `block`'s statements. In an instance whose result type is
     /// still undecided, a statement stuck on a recursive call is skipped
-    /// (the instance is lowered again once a `return` decides it).
+    /// (the instance is lowered again once a `return` decides it). A
+    /// statement that calls an instance that never returns ends there.
     pub(super) fn block(&mut self, block: &Block) -> Result<()> {
         for s in block {
             let (pools, loops) = (self.pools.len(), self.loops.len());
             match self.pooled_stmt(|b| b.stmt(s)) {
-                Err(_) if self.stuck => {
-                    (self.stuck, self.skipped) = (false, true);
+                Err(_) if self.stuck || self.diverged => {
+                    self.skipped |= self.stuck;
+                    (self.stuck, self.diverged) = (false, false);
                     self.pools.truncate(pools);
                     self.loops.truncate(loops);
                     self.jump_away(Term::Unreachable);
@@ -168,7 +170,7 @@ impl FnBuilder<'_, '_> {
         let open_optional =
             matches!(declared, Type::Optional(_)) && !super::is_closed(declared, &self.subst);
         if have == Ty::None && open_optional {
-            self.stuck = true;
+            (self.stuck, self.may_return) = (true, true);
             return Err(unsupported(span, OPEN_RESULT));
         }
         let ret = self.shape(declared, have, span)?;

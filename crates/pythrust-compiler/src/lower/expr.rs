@@ -1,7 +1,7 @@
 //! Expressions: each lowers to an operand, emitting what it needs first.
 
 use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
-use crate::diag::Result;
+use crate::diag::{Diagnostic, Result};
 use crate::infer::Type;
 use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
@@ -149,7 +149,10 @@ impl<'a> FnBuilder<'_, 'a> {
         self.move_into(dest, l, span);
         self.terminate(Term::Goto(end));
         self.switch_to(rhs);
-        let r = self.expr(right)?;
+        let Some(r) = self.on_branch(right, true)? else {
+            self.switch_to(end);
+            return Ok(Operand::Local(dest));
+        };
         let r = self.fit(r, ty, span);
         if self.ty(r) != ty {
             return Err(unsupported(
@@ -163,6 +166,26 @@ impl<'a> FnBuilder<'_, 'a> {
         Ok(Operand::Local(dest))
     }
 
+    /// `e`'s value; `None` when `e` calls an instance that never returns
+    /// and `branch` (it is evaluated on one branch only): its block then
+    /// ends, unreachable, and the other branches carry on. Stuck there,
+    /// the statement may still return another way.
+    fn on_branch(&mut self, e: &Expr, branch: bool) -> Result<Option<Operand>> {
+        match self.expr(e) {
+            Err(_) if self.diverged && branch => {
+                self.diverged = false;
+                self.terminate(Term::Unreachable);
+                Ok(None)
+            }
+            // The other branches may still complete the statement.
+            Err(e) if self.stuck && branch => {
+                self.may_return = true;
+                Err(e)
+            }
+            r => r.map(Some),
+        }
+    }
+
     /// `a < b < c`: each operand evaluated once, stopping at the first
     /// false comparison.
     fn compare(&mut self, left: &Expr, rest: &[(ast::CmpOp, Expr)], span: Span) -> Result<Operand> {
@@ -170,7 +193,11 @@ impl<'a> FnBuilder<'_, 'a> {
         let end = self.new_block();
         let mut l = self.expr(left)?;
         for (i, (op, right)) in rest.iter().enumerate() {
-            let r = self.expr(right)?;
+            // Past the first link, a path that never returns ends only
+            // its own branch.
+            let Some(r) = self.on_branch(right, i > 0)? else {
+                break;
+            };
             let c = self.cmp(*op, l, r, span)?;
             self.assign(dest, Rvalue::Use(c), span);
             if i + 1 == rest.len() {
@@ -350,18 +377,30 @@ impl<'a> FnBuilder<'_, 'a> {
             then,
             orelse: other,
         });
-        let mut stuck = None;
+        let (mut stuck, mut stuck_both, mut diverged) = (None, false, 0);
         for (block, e) in [(then, body), (other, orelse)] {
             self.switch_to(block);
             match self.if_branch(e, &mut dest, span) {
-                Err(err) if self.stuck => (self.stuck, stuck) = (false, Some(err)),
+                Err(err) if self.stuck => {
+                    stuck_both = stuck.is_some();
+                    (self.stuck, stuck) = (false, Some(err));
+                }
+                Err(_) if self.diverged => {
+                    (self.diverged, diverged) = (false, diverged + 1);
+                    self.terminate(Term::Unreachable);
+                }
                 r => r?,
             }
             self.terminate(Term::Goto(end));
         }
         if let Some(err) = stuck {
+            // The other branch may still complete the statement.
+            self.may_return |= !stuck_both && diverged == 0;
             self.stuck = true;
             return Err(err);
+        }
+        if diverged == 2 {
+            return Err(self.diverge(span));
         }
         let (dest, _) = dest.ok_or_else(|| super::internal(span, "an untyped conditional"))?;
         self.switch_to(end);
@@ -486,7 +525,18 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.emit(Inst::Forget(l));
             }
         }
+        if self.cx.diverges.contains(&id) {
+            // Its result, of a settled type, is never there to use.
+            return Err(self.diverge(span));
+        }
         Ok(result)
+    }
+
+    /// Abandons the expression being lowered: the path never gets past
+    /// `span`. The statement or branch it ends catches the error.
+    fn diverge(&mut self, span: Span) -> Diagnostic {
+        self.diverged = true;
+        super::internal(span, "code after a call that never returns")
     }
 
     /// The instance of `def` for `tys` whose result type, open in
@@ -500,11 +550,18 @@ impl<'a> FnBuilder<'_, 'a> {
         node: &Type,
         span: Span,
     ) -> Result<(FuncId, Ty)> {
-        let Some((id, ret)) = self.cx.open_instance(def, tys, span)? else {
-            self.stuck = self.open_ret.is_some();
-            return Err(unsupported(span, super::stmt::OPEN_RESULT));
+        let (id, ret) = match self.cx.open_instance(def, tys, span)? {
+            super::Found::Known(found) => found,
+            super::Found::Unknown(returns) => {
+                self.stuck = self.open_ret.is_some();
+                self.may_return |= returns;
+                return Err(unsupported(span, super::stmt::OPEN_RESULT));
+            }
         };
-        super::bind(node, ret, &self.cx.seqs, &mut self.subst);
+        // A settled type is no evidence for the nodes sharing it.
+        if !self.cx.diverges.contains(&id) {
+            super::bind(node, ret, &self.cx.seqs, &mut self.subst);
+        }
         Ok((id, ret))
     }
 

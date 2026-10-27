@@ -525,17 +525,58 @@ fn a_function_that_never_returns_settles_its_result_as_none() {
     assert_eq!(ret_of(&p, "spin"), Ty::None);
 }
 
+fn prints(f: &Func) -> usize {
+    let insts = f.blocks.iter().flat_map(|b| &b.insts);
+    insts.filter(|i| matches!(i, Inst::Print { .. })).count()
+}
+
+/// Whether a block of `f` calls and then ends, unreachable.
+fn ends_after_a_call(f: &Func) -> bool {
+    f.blocks.iter().any(|b| {
+        let call = matches!(
+            b.insts.last(),
+            Some(Inst::Assign {
+                value: Rvalue::Call(..),
+                ..
+            })
+        );
+        call && matches!(b.term, Term::Unreachable)
+    })
+}
+
 #[test]
-fn an_operation_on_a_never_returning_result_stays_unsupported() {
-    // Settled as `None`, `f(n - 1) + 1` cannot lower, though it never
-    // runs: a follow-up in docs/roadmap.md.
-    let (d, text) = rejected("def f(n):\n    return f(n - 1) + 1\n\n\nprint(f(1))\n");
-    assert!(
-        d.message.contains("arithmetic on a non-number"),
-        "{}",
-        d.message
+fn an_operation_on_a_never_returning_result_is_unreachable() {
+    let p = lowered("def f(n):\n    return f(n - 1) + 1\n\n\nprint(f(1))\n");
+    assert_eq!(ret_of(&p, "f"), Ty::None);
+    let main = &p.funcs[p.main.0];
+    assert!(ends_after_a_call(main));
+    assert_eq!(prints(main), 0);
+    let f = p.funcs.iter().find(|f| f.name == "f");
+    assert!(f.is_some_and(ends_after_a_call));
+}
+
+#[test]
+fn a_short_circuit_past_a_never_returning_call_continues() {
+    let p = lowered(
+        "def f(n):\n    return f(n - 1) * 2\n\n\nprint(0 > 1 < f(1))\nprint(1 if 0 else 2)\n",
     );
-    assert_eq!(text, "f(n - 1) + 1");
+    let main = &p.funcs[p.main.0];
+    assert!(ends_after_a_call(main));
+    assert_eq!(prints(main), 2);
+}
+
+#[test]
+fn mutual_recursion_through_ops_never_returns() {
+    let p = lowered("def ping(n):\n    return pong(n) + 1\n\n\ndef pong(n):\n    return ping(n - 1) * 2\n\n\nprint(ping(3))\n");
+    assert_eq!(prints(&p.funcs[p.main.0]), 0);
+}
+
+#[test]
+fn returning_none_through_a_waiting_callee_is_not_never_returning() {
+    // `fold` returns only through `unfold`, which waits on `fold` but
+    // may return `None` itself.
+    let p = lowered("def fold(n):\n    return unfold(n)\n\n\ndef unfold(n) -> list | None:\n    if n:\n        return fold(n - 1)\n    return None\n\n\nprint(fold(3))\n");
+    assert_eq!(prints(&p.funcs[p.main.0]), 1);
 }
 
 #[test]
@@ -566,6 +607,9 @@ fn an_optional_only_none_settles_its_open_element() {
 fn a_conditional_decides_from_its_nonrecursive_branch() {
     let p = lowered("def h(n, x):\n    return h(n - 1, x) if n else x * x\n\n\ndef o(x):\n    return h(2, x) + 1\n\n\nprint(o(1.5))\n");
     assert_eq!(ret_of(&p, "h"), Ty::Float);
+    // Its other branch returns, so `h` is not taken for one that never
+    // does: no call ends a path.
+    assert!(!p.funcs.iter().any(ends_after_a_call));
 }
 
 #[test]
