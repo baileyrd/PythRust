@@ -197,6 +197,8 @@ pub enum Rvalue {
     },
     /// `str(x)` for anything but a `Str`.
     ToStr(Operand),
+    /// `list(xs)`: a new list holding a list's elements (a shallow copy).
+    CopyList(Operand),
     /// A new list or tuple, of the destination's type, holding `items`.
     NewSeq(Vec<Operand>),
     /// Field `k` of a tuple.

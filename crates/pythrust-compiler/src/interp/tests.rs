@@ -818,8 +818,16 @@ fn assigned_names_are_local_throughout() {
 #[test]
 fn undefined_name() {
     assert_eq!(
-        show_err(name("list")),
-        "NameError: name 'list' is not defined"
+        show_err(name("nope")),
+        "NameError: name 'nope' is not defined"
+    );
+}
+
+#[test]
+fn list_copies_only_lists() {
+    assert_eq!(
+        show_err(call("list", vec![int(1)])),
+        "TypeError: 'int' object is not iterable"
     );
 }
 
