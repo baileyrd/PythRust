@@ -52,7 +52,7 @@ impl FnBuilder<'_, '_> {
     /// mismatch (inference and lowering disagreeing) is refused here
     /// rather than miscompiled.
     pub(super) fn write(&mut self, name: &str, value: Operand, span: Span) -> Result<()> {
-        let var = self.var(name, span)?;
+        let var = self.var_of(name, span, Some(self.ty(value)))?;
         let value = self.fit(value, self.locals[var.local.0], span);
         if self.ty(value) != self.locals[var.local.0] {
             let what = format!("assigning `{name}` a value of another type than inferred");
@@ -88,6 +88,12 @@ impl FnBuilder<'_, '_> {
     /// The variable `name`, created on first use with the type of the
     /// node at `span`, and its flag cleared in the entry block.
     fn var(&mut self, name: &str, span: Span) -> Result<Var> {
+        self.var_of(name, span, None)
+    }
+
+    /// [`var`](Self::var), for an assignment of a `value` of that type:
+    /// a live value types a variable live code has not typed yet.
+    fn var_of(&mut self, name: &str, span: Span, value: Option<Ty>) -> Result<Var> {
         if let Some(var) = self.names.get(name) {
             return Ok(*var);
         }
@@ -102,20 +108,28 @@ impl FnBuilder<'_, '_> {
             }
             None => {}
         }
-        let Ok(ty) = self.live_ty_at(span) else {
-            // Live code may type it later; typing it now from code that
-            // never runs could reject that code.
-            self.pending.push(name.to_string());
-            self.stuck = true;
-            return Err(unsupported(span, "a variable typed only by later code"));
+        // Settled only when no variable is left anywhere in its type: an
+        // open element (`[x * x]` in generic code) is not yet `None`.
+        let node = self.node_type(span)?;
+        let ty = match (super::is_closed(node, &self.subst), value) {
+            (true, _) => self.live_ty_at(span)?,
+            (false, Some(ty)) => ty,
+            (false, None) => {
+                // Live code may type it later; typing it now from code
+                // that never runs could reject that code.
+                self.pending.push(name.to_string());
+                self.stuck = true;
+                return Err(unsupported(span, "a variable typed only by later code"));
+            }
         };
         Ok(self.new_var(name, ty, span))
     }
 
     /// Hints for the variables first met untyped: the types live code
-    /// gave them since; if it gave none, that they are never assigned.
-    /// `None` if no variable was met untyped.
-    pub(super) fn pending_hints(&self) -> Option<Hints> {
+    /// gave them since; if it gave none and the body otherwise lowered
+    /// (`lowered`), that they are never assigned. `None` if no variable
+    /// was met untyped, or the body's own error stands.
+    pub(super) fn pending_hints(&self, lowered: bool) -> Option<Hints> {
         if self.pending.is_empty() {
             return None;
         }
@@ -129,6 +143,9 @@ impl FnBuilder<'_, '_> {
             .collect();
         if !typed.is_empty() {
             return Some(typed);
+        }
+        if !lowered {
+            return None;
         }
         let unbound = self.pending.iter().map(|n| (n.clone(), Hint::Unbound));
         Some(unbound.collect())

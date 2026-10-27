@@ -646,6 +646,19 @@ fn a_variable_only_a_never_returning_call_typed_takes_the_live_type() {
 }
 
 #[test]
+fn a_variable_with_an_open_element_waits_for_its_live_type() {
+    for (arg, elem) in [("3", Ty::Int), ("1.5", Ty::Float)] {
+        let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n    if n:\n        y = spin(n)\n    i = 0\n    while i < 2:\n        if i:\n            print(y)\n        y = [x * x]\n        i += 1\n    return y\n\n\ndef o(x):\n    return len(h(0, x))\n\n\nprint(o({arg}))\n");
+        let p = lowered(&src);
+        let elem_of = match ret_of(&p, "h") {
+            Ty::List(id) => p.types.get(id.0),
+            _ => None,
+        };
+        assert_eq!(elem_of, Some(&Compound::List(elem)), "{arg}");
+    }
+}
+
+#[test]
 fn a_variable_only_a_never_returning_call_assigns_fails_when_read() {
     let p =
         lowered("def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    z = spin(1)\nprint(z * 2)\n");

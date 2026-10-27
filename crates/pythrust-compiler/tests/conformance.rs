@@ -287,6 +287,7 @@ const NATIVE: &[&str] = &[
     "floats",
     "functions",
     "generic_diverging_branch",
+    "generic_diverging_containers",
     "generic_diverging_logical",
     "generic_diverging_mutual",
     "generic_diverging_ops",

@@ -129,7 +129,7 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         b.defined = Some(HashSet::new());
         b.hints = hints.clone();
         let lowered = b.block(&module.body);
-        if let Some(more) = b.pending_hints() {
+        if let Some(more) = b.pending_hints(lowered.is_ok()) {
             return Ok(Attempt::Retype(more));
         }
         lowered?;
@@ -381,7 +381,7 @@ impl<'a> Cx<'a> {
             params.push(id);
         }
         let lowered = b.block(&f.body);
-        if let Some(more) = b.pending_hints() {
+        if let Some(more) = b.pending_hints(lowered.is_ok()) {
             return Ok(Attempt::Retype(more));
         }
         lowered?;
