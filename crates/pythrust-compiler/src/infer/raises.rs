@@ -22,7 +22,7 @@ use crate::ast::{
 use crate::diag::Result;
 use crate::span::Span;
 
-use super::builtins::EXCEPTIONS;
+use super::builtins::{self, EXCEPTIONS};
 use super::{error, scope, Type, Types};
 
 /// One exception that may escape.
@@ -102,10 +102,16 @@ pub(super) fn check(
             declared.insert(f.name.name.as_str(), set);
         }
     }
+    let early = early(module);
+    let late_shadow = defs
+        .iter()
+        .map(|f| f.name.name.as_str())
+        .any(|n| builtins::is_builtin(n) && !early.contains(n));
     let mut a = Analysis {
         types,
         defs: defs.iter().map(|f| (f.name.name.as_str(), *f)).collect(),
-        early: early(module),
+        early,
+        typed: !late_shadow,
         globals,
         sets: declared.clone(),
     };
@@ -271,6 +277,11 @@ struct Analysis<'a> {
     /// Functions bound before any code runs, so a call by their name
     /// never reaches the builtin they may shadow.
     early: HashSet<&'a str>,
+    /// Whether every value has its inferred type when it runs. Not when a
+    /// `def` shadowing a builtin may run late: inference types its calls
+    /// by the `def`, but a call before it runs gets the builtin's result
+    /// (`int(str(x))` with a later `def str(...) -> int`).
+    typed: bool,
     globals: Bindings<'a>,
     sets: HashMap<&'a str, Raises>,
 }
@@ -494,7 +505,8 @@ impl<'a> Cx<'_, 'a> {
     }
 
     /// A call by name: a top-level function lets its set escape here;
-    /// `int(s)` and `float(s)` raise `ValueError` unless `s` is a number.
+    /// `int(s)` and `float(s)` raise `ValueError` unless `s` is surely a
+    /// number.
     /// A call may reach a builtin that a `def` shadows when the `def` may
     /// not have run yet, so both count.
     fn call(&self, name: &str, first: Option<&Arg>, at: Span, out: &mut Raises) {
@@ -508,7 +520,8 @@ impl<'a> Cx<'_, 'a> {
             return;
         }
         let parses = matches!(name, "int" | "float")
-            && first.is_some_and(|arg| may_be_str(self.a.types.at(arg.value.span)));
+            && first
+                .is_some_and(|arg| !self.a.typed || may_be_str(self.a.types.at(arg.value.span)));
         if parses {
             out.add(Escape::Named("ValueError"), at);
         }
@@ -916,6 +929,37 @@ def int(s: str) -> int:
     return 0
 ";
         assert_eq!(raises(default, "f"), "ValueError");
+    }
+
+    #[test]
+    fn a_late_shadow_makes_no_argument_surely_a_number() {
+        let nested = "\
+temper def f() -> int:
+    return int(str(\"bad\"))
+
+print(f())
+
+temper def str(s: str) -> int:
+    return 0
+";
+        assert_eq!(
+            err(nested),
+            "tempered `f` can raise ValueError here, so it must declare it; \
+             write `-> int raises ValueError`"
+        );
+        let assigned = nested.replace(
+            "    return int(str(\"bad\"))",
+            "    x = str(\"bad\")\n    return int(x)",
+        );
+        assert!(err(&assigned).starts_with("tempered `f` can raise ValueError here"));
+        let early = "\
+temper def str(s: str) -> int:
+    return 0
+
+temper def f() -> int:
+    return int(str(\"bad\"))
+";
+        assert_eq!(raises(early, "f"), "");
     }
 
     #[test]
