@@ -43,8 +43,10 @@ pub enum Mode {
 pub struct Param {
     pub mode: Mode,
     /// Whether the result may be, or hold, the parameter or a list
-    /// inside it.
+    /// inside it, including one the body stored there.
     pub result_aliases: bool,
+    /// Whether the call may leave a list a global holds inside it.
+    pub holds_global: bool,
 }
 
 /// A function's summary.
@@ -62,8 +64,8 @@ pub enum Precision {
     /// Inferred from every lowered body.
     Precise,
     /// The program does not lower, for this reason: every parameter is
-    /// [`Mode::Owned`] and may alias the result, as may the module's
-    /// values. Sound, but nothing may
+    /// [`Mode::Owned`], may alias the result and may come to hold a
+    /// global's list, and the result may alias the module's values. Sound, but nothing may
     /// be diagnosed from it.
     Conservative(Diagnostic),
 }
@@ -123,6 +125,7 @@ impl Summary {
         let param = Param {
             mode: Mode::Read,
             result_aliases: false,
+            holds_global: false,
         };
         Summary {
             params: vec![param; arity],
@@ -135,6 +138,7 @@ impl Summary {
         let param = Param {
             mode: Mode::Owned,
             result_aliases: true,
+            holds_global: true,
         };
         Summary {
             params: vec![param; arity],
@@ -148,6 +152,7 @@ impl Summary {
         for (p, q) in self.params.iter_mut().zip(&other.params) {
             p.mode = p.mode.max(q.mode);
             p.result_aliases |= q.result_aliases;
+            p.holds_global |= q.holds_global;
         }
         self.result_global |= other.result_global;
     }

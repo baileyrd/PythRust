@@ -148,6 +148,7 @@ fn conservative(src: &str) {
     let owned = Param {
         mode: OWNED,
         result_aliases: true,
+        holds_global: true,
     };
     for (name, s) in &a.funcs {
         assert!(s.params.iter().all(|p| *p == owned), "{name}: {s:?}");
@@ -180,4 +181,55 @@ fn a_rebound_parameter_is_summarized_over_every_binding() {
     // Flow-insensitive: sound, if coarser than the body needs.
     let src = "def f(xs: list[int]):\n    xs = [1]\n    xs.append(2)\nf([0])\n";
     assert_eq!(modes(src, "f"), (vec![MUT], vec![false]));
+}
+
+#[test]
+fn a_fresh_result_may_be_nested_to_any_depth() {
+    let src = "def make() -> list[list[list[int]]]:\n    return [[]]\ndef f(xs: list[int]) -> list[list[list[int]]]:\n    box = make()\n    box[0].append(xs)\n    return box\ndef g(ys: list[int]):\n    b = f(ys)\n    b[0][0].append(1)\nprint(f([1]))\ng([2])\n";
+    // Sound but coarse: `box[0]` stands for every list in `box`, and
+    // `xs` is one, so appending to it may change `xs`.
+    assert_eq!(modes(src, "f"), (vec![MUT], vec![true]));
+    assert_eq!(modes(src, "g"), (vec![MUT], vec![false]));
+}
+
+#[test]
+fn a_changed_argument_may_come_to_hold_a_global() {
+    let src = "saved: list[list[int]] = []\ndef stash(dst: list[list[list[int]]]):\n    dst.append(saved)\ndef f(xs: list[int]):\n    box: list[list[list[int]]] = []\n    stash(box)\n    box[0].append(xs)\nf([1])\n";
+    assert_eq!(modes(src, "stash"), (vec![MUT], vec![false]));
+    assert!(params(src, "stash")[0].holds_global);
+    assert_eq!(modes(src, "f"), (vec![OWNED], vec![false]));
+}
+
+#[test]
+fn a_changed_argument_may_come_to_hold_a_fresh_list() {
+    let src = "def fill(dst: list[list[list[int]]]):\n    dst.append([])\ndef f(xs: list[int]) -> list[list[list[int]]]:\n    box: list[list[list[int]]] = []\n    fill(box)\n    box[0].append(xs)\n    return box\nprint(f([1]))\n";
+    assert_eq!(modes(src, "fill"), (vec![MUT], vec![false]));
+    assert!(!params(src, "fill")[0].holds_global);
+    // Coarse as above: `box[0]` may be `xs`.
+    assert_eq!(modes(src, "f"), (vec![MUT], vec![true]));
+}
+
+#[test]
+fn a_result_stored_in_a_parameter_or_global_aliases_it() {
+    let src = "kept: list[list[int]] = []\ndef make(out: list[list[int]]) -> list[int]:\n    child: list[int] = []\n    out.append(child)\n    return child\ndef leak() -> list[int]:\n    child: list[int] = []\n    kept.append(child)\n    return child\ndef g(xs: list[list[int]]):\n    c = make(xs)\n    c.append(1)\ndef h(ys: list[int]):\n    leak().append(1)\n    c = leak()\n    c.append(len(ys))\nprint(make([[0]]))\ng([[0]])\nh([0])\n";
+    assert_eq!(modes(src, "make"), (vec![MUT], vec![true]));
+    assert!(!analyzed(src).funcs["make"].result_global);
+    assert!(analyzed(src).funcs["leak"].result_global);
+    assert_eq!(modes(src, "g"), (vec![MUT], vec![false]));
+    assert_eq!(modes(src, "h"), (vec![READ], vec![false]));
+}
+
+#[test]
+fn storing_a_list_of_a_parameter_elsewhere_keeps_it() {
+    // `child` joins `xs`, then `ys` keeps it.
+    let src = "def f(xs: list[list[int]], ys: list[list[int]]):\n    child: list[int] = []\n    xs.append(child)\n    ys.append(child)\nf([[0]], [[1]])\n";
+    assert_eq!(modes(src, "f"), (vec![OWNED, OWNED], vec![false, false]));
+}
+
+#[test]
+fn recursion_building_nested_results_aliases_its_parameter() {
+    let src = "def deep(xs: list[int], n: int) -> list[list[int]]:\n    if n == 0:\n        return [xs]\n    r = deep(xs, n - 1)\n    r.append([n])\n    return r\nprint(deep([1], 2))\n";
+    // Coarse: a result that may hold `xs` may also be it, so
+    // `r.append` may change `xs`.
+    assert_eq!(modes(src, "deep"), (vec![MUT, READ], vec![true, false]));
 }

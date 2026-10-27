@@ -2,10 +2,17 @@
 //!
 //! A flow-insensitive points-to analysis over abstract lists: each
 //! parameter, the module's values ([`Obj::World`]), and one list per
-//! local that allocates. A parameter stands for itself and every list
-//! inside it, so `xs[0]` of a parameter is the parameter. Points-to sets
-//! are found to a fixpoint first, then read off for the summary. Being
-//! flow-insensitive, it is sound for slots assigned more than once.
+//! local that allocates. Every abstract list stands for itself and every
+//! list inside it that nothing stored there explicitly, so `xs[0]` of
+//! any list may be the list itself: a callee's fresh result can be
+//! nested to any depth. Points-to sets are found to a fixpoint first,
+//! then read off for the summary. Being flow-insensitive, it is sound
+//! for slots assigned more than once.
+//!
+//! A parameter's *region* is the lists it may hold that belong to it:
+//! itself, and what the body stores in it, short of another parameter
+//! or the module's values. Its mode and aliasing are about its region;
+//! another parameter or a global it comes to hold answers for itself.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -144,16 +151,22 @@ impl<'a> Flow<'a> {
     }
 
     /// A callee that keeps an argument may store it in the module's
-    /// values or in any list it may change.
+    /// values or in any list it may change; one may leave a global's
+    /// list inside an argument.
     fn call_stores(&mut self, f: FuncId, args: &[Operand]) -> bool {
         let params = &self.summaries[f.0].params;
+        let mut changed = false;
+        for (a, p) in args.iter().zip(params).filter(|(_, p)| p.holds_global) {
+            let inside = self.reachable(&self.of(*a));
+            changed |= self.store_all(&inside, &Objs::from([Obj::World]));
+        }
         let kept = self.passed(args, params, Mode::Owned);
         if kept.is_empty() {
-            return false;
+            return changed;
         }
         let mut targets = self.passed(args, params, Mode::Mut);
         targets.insert(Obj::World);
-        self.store_all(&targets, &kept)
+        self.store_all(&targets, &kept) | changed
     }
 
     /// Every list reachable from an argument whose mode is at least
@@ -181,29 +194,57 @@ impl<'a> Flow<'a> {
                 returned.extend(self.reachable(&self.of(*op)));
             }
         }
-        // Stored in a list the caller or the module can see: kept.
-        let visible = self
-            .stored
-            .iter()
-            .filter(|(o, _)| !matches!(o, Obj::Fresh(_)));
-        let visible: Objs = visible.flat_map(|(_, s)| s.iter().copied()).collect();
-        kept.extend(self.reachable(&visible));
-        let params = (0..self.func.params.len()).map(|i| {
-            let p = Obj::Param(i);
-            let mode = match (kept.contains(&p), mutated.contains(&p)) {
+        let arity = self.func.params.len();
+        let regions: Vec<Objs> = (0..arity).map(|i| self.region(Obj::Param(i))).collect();
+        let world = self.region(Obj::World);
+        let params = regions.iter().enumerate().map(|(i, region)| {
+            let others = regions.iter().enumerate().filter(|(j, _)| *j != i);
+            let mut others = others.map(|(_, r)| r).chain([&world]);
+            let stored_elsewhere = others.any(|r| self.stores_into(r, region));
+            let mode = match (
+                stored_elsewhere || meets(&kept, region),
+                meets(&mutated, region),
+            ) {
                 (true, _) => Mode::Owned,
                 (false, true) => Mode::Mut,
                 (false, false) => Mode::Read,
             };
+            let inside = self.reachable(&Objs::from([Obj::Param(i)]));
             Param {
                 mode,
-                result_aliases: returned.contains(&p),
+                result_aliases: meets(&returned, region),
+                holds_global: meets(&inside, &world),
             }
         });
         Summary {
             params: params.collect(),
-            result_global: returned.contains(&Obj::World),
+            result_global: meets(&returned, &world),
         }
+    }
+
+    /// `root` and what is stored in it, transitively, short of another
+    /// parameter or the module's values.
+    fn region(&self, root: Obj) -> Objs {
+        let mut out = Objs::from([root]);
+        let mut todo = vec![root];
+        while let Some(o) = todo.pop() {
+            let Some(inner) = self.stored.get(&o) else {
+                continue;
+            };
+            for i in inner.iter().filter(|i| matches!(i, Obj::Fresh(_))) {
+                if out.insert(*i) {
+                    todo.push(*i);
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether a list in `from` may hold a list of `region`.
+    fn stores_into(&self, from: &Objs, region: &Objs) -> bool {
+        from.iter()
+            .filter_map(|o| self.stored.get(o))
+            .any(|s| meets(s, region))
     }
 
     fn effects(&self, inst: &Inst, mutated: &mut Objs, kept: &mut Objs) {
@@ -239,14 +280,11 @@ impl<'a> Flow<'a> {
         stored.len() > before
     }
 
-    /// What `lists` may hold: what was stored in them, and a parameter
-    /// or the module's values hold themselves.
+    /// What `lists` may hold: what was stored in them, and each list
+    /// itself, standing for the lists inside it nothing stored.
     fn contents(&self, lists: &Objs) -> Objs {
-        let mut out = Objs::new();
+        let mut out = lists.clone();
         for o in lists {
-            if !matches!(o, Obj::Fresh(_)) {
-                out.insert(*o);
-            }
             if let Some(s) = self.stored.get(o) {
                 out.extend(s.iter().copied());
             }
@@ -289,4 +327,9 @@ impl<'a> Flow<'a> {
             _ => Objs::new(),
         }
     }
+}
+
+/// Whether `a` and `b` share a list.
+fn meets(a: &Objs, b: &Objs) -> bool {
+    a.iter().any(|o| b.contains(o))
 }
