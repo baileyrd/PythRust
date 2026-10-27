@@ -551,7 +551,7 @@ impl<'a> FnBuilder<'_, 'a> {
 
     /// Abandons the expression being lowered: the path never gets past
     /// `span`. The statement or branch it ends catches the error.
-    fn diverge(&mut self, span: Span) -> Diagnostic {
+    pub(super) fn diverge(&mut self, span: Span) -> Diagnostic {
         self.diverged = true;
         super::internal(span, "code after a call that never returns")
     }

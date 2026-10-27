@@ -633,10 +633,24 @@ fn a_never_returning_branch_decides_nothing() {
 
 #[test]
 fn a_variable_only_a_never_returning_call_typed_takes_the_live_type() {
-    for (arg, ty) in [("3", Ty::Int), ("1.5", Ty::Float)] {
-        let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n    if n:\n        y = spin(n)\n    if n:\n        print(y)\n    y = x * x\n    return y\n\n\ndef o(x):\n    return h(0, x) + 1\n\n\nprint(o({arg}))\n");
-        assert_eq!(ret_of(&lowered(&src), "h"), ty, "{arg}");
+    let dead = "    if n:\n        y = spin(n)\n";
+    for read in ["print(y)", "print(y * y)", "print(y * y + 1)"] {
+        let read = format!("    if n:\n        {read}\n");
+        for body in [format!("{dead}{read}"), format!("{read}{dead}")] {
+            for (arg, ty) in [("3", Ty::Int), ("1.5", Ty::Float)] {
+                let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n{body}    y = x * x\n    return y\n\n\ndef o(x):\n    return h(0, x) + 1\n\n\nprint(o({arg}))\n");
+                assert_eq!(ret_of(&lowered(&src), "h"), ty, "{body} on {arg}");
+            }
+        }
     }
+}
+
+#[test]
+fn a_variable_only_a_never_returning_call_assigns_fails_when_read() {
+    let p =
+        lowered("def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    z = spin(1)\nprint(z * 2)\n");
+    assert_eq!(fails(&p), 1);
+    assert_eq!(prints(&p.funcs[p.main.0]), 0);
 }
 
 #[test]

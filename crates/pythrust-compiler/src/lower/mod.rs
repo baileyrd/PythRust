@@ -58,26 +58,38 @@ enum Body {
     Undecided(Subst, bool),
 }
 
-/// Types for variables first read where only a call that never returns
-/// typed them, from the live value a later assignment gave them.
-type Hints = HashMap<String, Ty>;
+/// What later code says of a variable first met untyped.
+#[derive(Clone, Copy)]
+enum Hint {
+    /// The type a live assignment gave it.
+    Typed(Ty),
+    /// No live assignment: only code that never completes assigns it,
+    /// so every read of it fails as unbound.
+    Unbound,
+}
+
+/// Hints by variable name ([`with_hints`]).
+type Hints = HashMap<String, Hint>;
 
 /// One try at lowering a body.
 enum Attempt<T> {
     Done(T),
-    /// Lower again, with this variable typed so.
-    Retype(String, Ty),
+    /// Lower again, with these variables typed so.
+    Retype(Hints),
 }
 
-/// Lowers a body with `attempt` until no variable needs retyping: each
-/// retry fixes one more variable, so it ends.
+/// Lowers a body with `attempt` until every variable is typed before
+/// its first use. A variable's type is fixed only once the whole body
+/// has been seen, so a read that comes first (in a branch, or in a loop
+/// before the assignment) never types it from code that never runs.
+/// Each retry hints at least one more variable, so it ends.
 fn with_hints<T>(mut attempt: impl FnMut(&Hints) -> Result<Attempt<T>>) -> Result<T> {
     let mut hints = Hints::new();
     loop {
         match attempt(&hints)? {
             Attempt::Done(t) => return Ok(t),
-            Attempt::Retype(name, ty) => hints.insert(name, ty),
-        };
+            Attempt::Retype(more) => hints.extend(more),
+        }
     }
 }
 
@@ -117,8 +129,8 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         b.defined = Some(HashSet::new());
         b.hints = hints.clone();
         let lowered = b.block(&module.body);
-        if let Some((name, ty)) = b.retype.take() {
-            return Ok(Attempt::Retype(name, ty));
+        if let Some(more) = b.pending_hints() {
+            return Ok(Attempt::Retype(more));
         }
         lowered?;
         Ok(Attempt::Done(b.finish("<module>", Vec::new())))
@@ -368,8 +380,8 @@ impl<'a> Cx<'a> {
             params.push(id);
         }
         let lowered = b.block(&f.body);
-        if let Some((name, ty)) = b.retype.take() {
-            return Ok(Attempt::Retype(name, ty));
+        if let Some(more) = b.pending_hints() {
+            return Ok(Attempt::Retype(more));
         }
         lowered?;
         if b.open_ret.is_some() {
@@ -488,11 +500,10 @@ struct FnBuilder<'c, 'a> {
     dead: Subst,
     /// Variable types to use before any other ([`with_hints`]).
     hints: Hints,
-    /// Variables typed only by `dead`.
-    dead_typed: HashSet<String>,
-    /// Set with the error when a live value meets a variable typed only
-    /// by `dead`: lower again with it typed by the value.
-    retype: Option<(String, Ty)>,
+    /// Variables first met before live code typed them: the statement
+    /// is skipped and the body lowered again once the rest has had its
+    /// say ([`with_hints`]).
+    pending: Vec<String>,
     /// Names local to this function, as Python decides them.
     scope: BTreeSet<String>,
     names: HashMap<String, vars::Var>,
@@ -538,8 +549,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             subst,
             dead: Subst::new(),
             hints: Hints::new(),
-            dead_typed: HashSet::new(),
-            retype: None,
+            pending: Vec::new(),
             scope,
             names: HashMap::new(),
             always_bound: HashSet::new(),
