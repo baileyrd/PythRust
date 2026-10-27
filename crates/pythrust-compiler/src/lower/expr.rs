@@ -3,7 +3,7 @@
 use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
 use crate::diag::Result;
 use crate::infer::Type;
-use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, Operand, Rvalue, Term, Ty};
+use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 use super::vars::runtime;
@@ -336,8 +336,12 @@ impl<'a> FnBuilder<'_, 'a> {
     }
 
     fn if_exp(&mut self, test: &Expr, body: &Expr, orelse: &Expr, span: Span) -> Result<Operand> {
-        let ty = self.ty_at(span)?;
-        let dest = self.pooled(ty);
+        // Open in generic code until a branch decides it; see `if_branch`.
+        let mut dest = match self.ty_at(span) {
+            Ok(ty) => Some((self.pooled(ty), ty)),
+            Err(_) if self.open_ret.is_some() => None,
+            Err(e) => return Err(e),
+        };
         let (then, other, end) = (self.new_block(), self.new_block(), self.new_block());
         let t = self.expr(test)?;
         let cond = self.truthy(t, span);
@@ -346,21 +350,50 @@ impl<'a> FnBuilder<'_, 'a> {
             then,
             orelse: other,
         });
+        let mut stuck = None;
         for (block, e) in [(then, body), (other, orelse)] {
             self.switch_to(block);
-            let v = self.expr(e)?;
-            let v = self.fit(v, ty, span);
-            if self.ty(v) != ty {
-                return Err(unsupported(
-                    span,
-                    "a conditional expression whose branches differ in type",
-                ));
+            match self.if_branch(e, &mut dest, span) {
+                Err(err) if self.stuck => (self.stuck, stuck) = (false, Some(err)),
+                r => r?,
             }
-            self.move_into(dest, v, span);
             self.terminate(Term::Goto(end));
         }
+        if let Some(err) = stuck {
+            self.stuck = true;
+            return Err(err);
+        }
+        let (dest, _) = dest.ok_or_else(|| super::internal(span, "an untyped conditional"))?;
         self.switch_to(end);
         Ok(Operand::Local(dest))
+    }
+
+    /// One branch of a conditional expression, moved into `dest`. With
+    /// `dest` open (its type depends on a result still undecided), the
+    /// first branch that lowers decides it, and binds the variables of
+    /// its type: a branch stuck on a recursive call skips the statement,
+    /// but the other may still decide the function's result type.
+    fn if_branch(&mut self, e: &Expr, dest: &mut Option<(LocalId, Ty)>, span: Span) -> Result<()> {
+        let v = self.expr(e)?;
+        let (local, ty) = match *dest {
+            Some(d) => d,
+            None => {
+                let node = self.node_type(span)?;
+                let have = self.ty(v);
+                let ty = self.shape(node, have, span)?;
+                super::bind(node, ty, &self.cx.seqs, &mut self.subst);
+                *dest.insert((self.pooled(ty), ty))
+            }
+        };
+        let v = self.fit(v, ty, span);
+        if self.ty(v) != ty {
+            return Err(unsupported(
+                span,
+                "a conditional expression whose branches differ in type",
+            ));
+        }
+        self.move_into(local, v, span);
+        Ok(())
     }
 
     /// Python truthiness as a `Bool` operand.

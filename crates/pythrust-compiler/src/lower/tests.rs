@@ -491,11 +491,78 @@ fn recursion_before_the_deciding_return_lowers_in_a_second_pass() {
     let recs: Vec<&Func> = p.funcs.iter().filter(|f| f.name == "rec").collect();
     assert_eq!(recs.len(), 1);
     assert_eq!(recs[0].ret, Ty::Int);
-    let (d, text) = rejected(
+}
+
+/// The result type of the one instance of `name` in `p`.
+fn ret_of(p: &Program, name: &str) -> Ty {
+    let mut funcs = p.funcs.iter().filter(|f| f.name == name);
+    let ret = funcs.next().map(|f| f.ret);
+    assert!(funcs.next().is_none(), "one instance of `{name}`");
+    ret.unwrap_or_else(|| panic!("no instance of `{name}`"))
+}
+
+/// `Some(elem)` if `ty` is `list[elem] | None`.
+fn optional_list_elem(p: &Program, ty: Ty) -> Option<Ty> {
+    let Ty::Opt(id) = ty else { return None };
+    let Some(Compound::Opt(Ty::List(list))) = p.types.get(id.0) else {
+        return None;
+    };
+    match p.types.get(list.0) {
+        Some(Compound::List(elem)) => Some(*elem),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_function_that_never_returns_settles_its_result_as_none() {
+    let p = lowered(
         "def f(n):\n    return f(n - 1)\n\n\ndef g(x):\n    return f(x)\n\n\nprint(g(1))\n",
     );
-    assert!(d.message.contains("no `return` decides"), "{}", d.message);
-    assert_eq!(text, "g(1)");
+    assert_eq!(ret_of(&p, "f"), Ty::None);
+    assert_eq!(ret_of(&p, "g"), Ty::None);
+    let p =
+        lowered("def spin(n):\n    return spin(n + 1) if n else spin(n - 1)\n\n\nprint(spin(1))\n");
+    assert_eq!(ret_of(&p, "spin"), Ty::None);
+}
+
+#[test]
+fn an_optional_only_none_settles_its_open_element() {
+    for body in [
+        "    return None\n",
+        "    print(x)\n",
+        "    if x:\n        return None\n",
+    ] {
+        let src = format!(
+            "def f(x) -> list | None:\n{body}\n\ndef g(x):\n    return f(x)\n\n\nprint(g(1))\n"
+        );
+        let p = lowered(&src);
+        assert_eq!(
+            optional_list_elem(&p, ret_of(&p, "f")),
+            Some(Ty::None),
+            "{body}"
+        );
+        assert_eq!(
+            optional_list_elem(&p, ret_of(&p, "g")),
+            Some(Ty::None),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_conditional_decides_from_its_nonrecursive_branch() {
+    let p = lowered("def h(n, x):\n    return h(n - 1, x) if n else x * x\n\n\ndef o(x):\n    return h(2, x) + 1\n\n\nprint(o(1.5))\n");
+    assert_eq!(ret_of(&p, "h"), Ty::Float);
+}
+
+#[test]
+fn an_instance_waiting_on_its_caller_is_not_settled() {
+    // `pong` alone decides nothing, but `ping`, which it calls back,
+    // decides later: settling `pong` early would make it `None`.
+    let src = "def ping(n, x):\n    if n > 0:\n        return pong(n - 1, x)\n    return x * x\n\n\ndef pong(n, x):\n    return ping(n, x)\n\n\ndef o(x):\n    return ping(2, x) + 1\n\n\nprint(o(3))\n";
+    let p = lowered(src);
+    assert_eq!(ret_of(&p, "ping"), Ty::Int);
+    assert_eq!(ret_of(&p, "pong"), Ty::Int);
 }
 
 #[test]

@@ -54,6 +54,6 @@ Follow-ups, none blocking M4:
 - [ ] **Targets:** CI is Linux x86-64 only; macOS and AArch64 are untested.
 - [ ] **Use-after-free checking** is valgrind by hand; CI checks only for leaks (the debug runtime's count).
 - [ ] **Binary size** (about 5 MB in debug builds, mostly the runtime and Rust's standard library).
-- [ ] **Generic functions where no `return` decides the result type** are backend errors, such as one declared `-> list | None` that only ever returns `None`, or one whose every `return` needs a recursive call first (see the monomorphization note in [native.md](native.md)). Nano accepted deferring this whole class, nonrecursive cases included, at closure (2026-10-26); the decision named the `-> list | None` example.
+- [x] **Generic functions where no `return` decides the result type** build: one declared `-> list | None` that only ever returns `None` (or has no `return`), and one whose every `return` needs a recursive call first, are settled (see the monomorphization note in [native.md](native.md)). Nano accepted deferring this class at closure (2026-10-26); `generic_undecided` and `generic_never_returns` in the corpus cover it.
 
 Native validation evidence is Linux x86-64 only, including the required native corpus subset and diagnostics compared with `run`; macOS and AArch64 are untested. Preserve the wider interpreter language decisions when extending the backend; a backend limitation is not a new language restriction.
