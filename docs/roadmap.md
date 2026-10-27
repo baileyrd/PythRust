@@ -53,7 +53,7 @@ Follow-ups, none blocking M4:
 
 - [x] **Targets:** PR #33 runs CI, including the native corpus, on x86-64 Linux, AArch64 Linux and AArch64 macOS. Windows is unsupported: `build` drives a Unix `cc`, so it needs a linker-driver change, not just a runner. x86-64 macOS is untested.
 - [x] **Use-after-free checking:** CI's `memcheck` job runs the native corpus under valgrind (`PYTHRUST_VALGRIND=1`), on x86-64 Linux only.
-- [ ] **Binary size** (about 5 MB in debug builds, mostly the runtime and Rust's standard library).
+- [x] **Binary size:** about 0.5 MB on x86-64 Linux, down from 5.5 to 6.3 MB, by linking with dead-code removal and without debug info ([native.md](native.md#choices-made-inside-the-settled-design)).
 - [x] **Generic functions where no `return` decides the result type** build: one declared `-> list | None` that only ever returns `None` (or has no `return`), and one whose every `return` needs a recursive call first, are settled (see the monomorphization note in [native.md](native.md)). Nano accepted deferring this class at closure (2026-10-26); `generic_undecided`, `generic_never_returns` and `generic_spin` in the corpus cover it.
 - [ ] **An operation on the result of a generic function that never returns**, such as `return f(n - 1) + 1`, is still a backend error: the settled `None` meets an `int` operation in lowering, though the operation never runs. Found in review of #36; the fix needs a divergence analysis that conditionals and `and`/`or` do not break.
 
