@@ -189,14 +189,23 @@ fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
 }
 
 /// Links `object` with the runtime into the executable for `path`.
+/// Every path handed to the linker is absolute, so none can read as an
+/// option (`-work/...`) or a response file (`@scope/...`).
 fn link(path: &str, object: &[u8]) -> Result<(), String> {
-    let out = output_path(path)?;
-    let runtime = runtime_lib()?;
+    let out = absolute(&output_path(path)?)?;
+    let runtime = absolute(&runtime_lib()?)?;
     let dir = private_dir(output_dir(&out))?;
     let linked = link_in(&dir, object, &runtime, &out);
     let removed = std::fs::remove_dir_all(&dir)
         .map_err(|e| format!("pythrust: cannot remove {}: {e}\n", dir.display()));
     linked.and(removed)
+}
+
+/// `path` made absolute against the current directory, without touching
+/// the file system.
+fn absolute(path: &Path) -> Result<PathBuf, String> {
+    std::path::absolute(path)
+        .map_err(|e| format!("pythrust: cannot resolve {}: {e}\n", path.display()))
 }
 
 /// The directory `out` is written to: `.` for a bare file name.

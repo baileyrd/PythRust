@@ -728,6 +728,40 @@ fn corpus_matches_native() -> Res<()> {
     Ok(())
 }
 
+/// A relative source under a directory named like a linker option (`-`)
+/// or a response file (`@`, as in `@scope`) still builds and runs.
+#[test]
+fn build_takes_option_like_directories_as_paths() -> Res<()> {
+    build_runtime()?;
+    let root = scratch("option-dirs")?;
+    let mut failures = Vec::new();
+    for sub in ["-work", "@scope"] {
+        fs::create_dir(root.join(sub)).map_err(|e| e.to_string())?;
+        let source = format!("{sub}/hello.pyr");
+        write(&root.join(&source), "print(\"hi\")\n")?;
+        let out = Command::new(pythrust_bin()?)
+            .arg("build")
+            .arg(&source)
+            .current_dir(&root)
+            .output()
+            .map_err(|e| format!("cannot run pythrust build: {e}"))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            failures.push(format!("{source}: build failed:\n{stderr}"));
+            continue;
+        }
+        let exe = root
+            .join(&source)
+            .with_extension(std::env::consts::EXE_EXTENSION);
+        let got = run(&mut Command::new(&exe), TIMEOUT)?;
+        if got.stdout != "hi\n" || got.status != 0 {
+            failures.push(format!("{source}: ran as {got:?}"));
+        }
+    }
+    report(failures);
+    cleanup(&root)
+}
+
 #[test]
 fn corpus_is_complete() -> Res<()> {
     let dir = corpus_dir()?;
