@@ -17,7 +17,13 @@ env:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Native builds emit host code and link with the host `cc`, so each
+    # target needs its own runner: x86-64 and AArch64 Linux, AArch64 macOS.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
