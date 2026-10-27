@@ -121,14 +121,16 @@ impl FnBuilder<'_, '_> {
         Ok(())
     }
 
-    /// In module code, notes the shared variables module statement `s`,
-    /// cut short by a call that never returns, would have assigned.
-    pub(super) fn dead_assigns(&mut self, s: &Stmt) {
+    /// In module code, notes the shared variables `dead` would have
+    /// assigned: the statements from one cut short by a call that never
+    /// returns to the end of its block, never lowered, at any depth and
+    /// in any target.
+    pub(super) fn dead_assigns(&mut self, dead: &[Stmt]) {
         if self.defined.is_none() {
             return;
         }
         let globals = &mut self.cx.globals;
-        let assigned = scope::assigned(std::slice::from_ref(s));
+        let assigned = scope::assigned(dead);
         let shared = assigned.into_iter().filter(|n| globals.shared.contains(n));
         globals.dead.extend(shared.collect::<Vec<String>>());
     }

@@ -30,7 +30,7 @@ impl FnBuilder<'_, '_> {
     /// (the instance is lowered again once a `return` decides it). A
     /// statement that calls an instance that never returns ends there.
     pub(super) fn block(&mut self, block: &Block) -> Result<()> {
-        for s in block {
+        for (i, s) in block.iter().enumerate() {
             let (pools, loops) = (self.pools.len(), self.loops.len());
             match self.pooled_stmt(|b| b.stmt(s)) {
                 Err(_) if self.stuck || self.diverged => {
@@ -42,7 +42,7 @@ impl FnBuilder<'_, '_> {
                     self.jump_away(Term::Unreachable);
                     // What follows in this block is never reached.
                     if diverged {
-                        self.dead_assigns(s);
+                        self.dead_assigns(&block[i..]);
                         return Ok(());
                     }
                 }

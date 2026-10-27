@@ -688,6 +688,18 @@ fn a_global_only_a_never_returning_call_assigns_fails_when_read() {
 }
 
 #[test]
+fn globals_after_a_never_returning_call_fail_when_read() {
+    let module = "def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    spin(1)\n    y = spin(1)\n    if 1:\n        a, b = (spin(1), 2)\n    for c in range(2):\n        d = spin(1)\ni = 0\nwhile i < 0:\n    spin(1)\n    e = spin(2)\n\n\n";
+    for (name, read) in [("f", "y"), ("g", "a"), ("h", "d"), ("k", "e")] {
+        let src = format!("{module}def {name}():\n    return {read}\n\n\nprint({name}())\n");
+        let p = lowered(&src);
+        let f = p.funcs.iter().find(|f| f.name == name);
+        let failing = f.map(|f| f.blocks.iter().any(|b| matches!(b.term, Term::Fail(_))));
+        assert_eq!(failing, Some(true), "{read}");
+    }
+}
+
+#[test]
 fn a_variable_only_a_never_returning_call_assigns_fails_when_read() {
     let p =
         lowered("def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    z = spin(1)\nprint(z * 2)\n");
