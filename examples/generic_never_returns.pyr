@@ -1,0 +1,13 @@
+# expect-exit: 1
+# A generic function whose every `return` needs its own result never
+# returns: it builds natively and fails as `run` does.
+def f(n):
+    return f(n - 1)
+
+
+def g(x):
+    return f(x)
+
+
+print("start")
+print(g(1))

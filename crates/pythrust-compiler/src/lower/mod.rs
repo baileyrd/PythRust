@@ -37,13 +37,25 @@ type OpenInstance = (FuncId, Ty);
 /// Where an instance whose result type its body decides stands.
 #[derive(Clone, Copy)]
 enum Open {
-    /// Being lowered: a call back into it cannot know its result yet.
-    Lowering,
+    /// Being lowered, this many open instances deep: a call back into it
+    /// cannot know its result yet.
+    Lowering(usize),
     /// Lowered with this result type.
     Done(OpenInstance),
     /// Every `return` needed a call into an instance still being
-    /// lowered; lowered again, under the same id, when called again.
+    /// lowered beneath it; lowered again, under the same id, when called
+    /// again.
     Undecided(FuncId),
+}
+
+/// What lowering an instance's body gave.
+enum Body {
+    /// The function, and whether a statement was skipped for a call
+    /// whose result was unknown.
+    Lowered(Func, bool),
+    /// No `return` decided the open result type; the variables the body
+    /// bound on the way.
+    Undecided(Subst),
 }
 
 /// Lowers `module`, typed by `types`, to IR.
@@ -63,6 +75,8 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         queue: Vec::new(),
         seqs: types::SeqTypes::default(),
         open: HashMap::new(),
+        lowering: 0,
+        waits: usize::MAX,
     };
     let main = cx.reserve();
     let mut b = FnBuilder::new(
@@ -76,9 +90,9 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
     let func = b.finish("<module>", Vec::new());
     cx.funcs[main.0] = Some(func);
     while let Some(job) = cx.queue.pop() {
-        let lowered = cx.instance_body(&job)?;
-        let (func, _) =
-            lowered.ok_or_else(|| internal(module.span, "a queued instance undecided"))?;
+        let Body::Lowered(func, _) = cx.instance_body(&job)? else {
+            return Err(internal(module.span, "a queued instance undecided"));
+        };
         cx.funcs[job.id.0] = Some(func);
     }
     let funcs = std::mem::take(&mut cx.funcs);
@@ -107,8 +121,13 @@ struct Cx<'a> {
     seqs: types::SeqTypes,
     globals: globals::Globals,
     /// Instances lowered by [`Cx::open_instance`], by function name and
-    /// argument types; `None` while being lowered.
+    /// argument types.
     open: HashMap<(String, Vec<Ty>), Open>,
+    /// How many open instances are being lowered, one inside another.
+    lowering: usize,
+    /// The depth of the shallowest instance still being lowered whose
+    /// result a body needed, since the innermost open instance began.
+    waits: usize,
 }
 
 /// An instance waiting to be lowered.
@@ -168,9 +187,14 @@ impl<'a> Cx<'a> {
     ///
     /// `None` while the result type is unknown: for a call back into an
     /// instance still being lowered, or into one whose every `return`
-    /// needed such a call. The caller then skips the statement if it can
-    /// ([`FnBuilder::block`]); a body that skipped one is lowered again
-    /// once a `return` has decided the result type.
+    /// needed a call into an instance beneath it. The caller then skips
+    /// the statement if it can ([`FnBuilder::block`]); a body that
+    /// skipped one is lowered again once its result type is decided.
+    ///
+    /// An instance no `return` decides on its own (every `return` needs
+    /// its own result, or returns `None` into an open optional, or there
+    /// is none) never returns anything else, so its open variables are
+    /// settled ([`settle`]) and it is lowered again with that type.
     fn open_instance(
         &mut self,
         def: &'a FuncDef,
@@ -181,7 +205,10 @@ impl<'a> Cx<'a> {
         let key = (name.clone(), args.clone());
         let id = match self.open.get(&key) {
             Some(Open::Done(found)) => return Ok(Some(*found)),
-            Some(Open::Lowering) => return Ok(None),
+            Some(Open::Lowering(depth)) => {
+                self.waits = self.waits.min(*depth);
+                return Ok(None);
+            }
             Some(Open::Undecided(id)) => *id,
             None => self.reserve(),
         };
@@ -197,7 +224,8 @@ impl<'a> Cx<'a> {
         {
             return Err(internal(span, &format!("call does not match `{name}`")));
         }
-        self.open.insert(key.clone(), Open::Lowering);
+        let depth = self.lowering;
+        self.open.insert(key.clone(), Open::Lowering(depth));
         let mut job = Job {
             id,
             def,
@@ -205,23 +233,55 @@ impl<'a> Cx<'a> {
             args: args.clone(),
             ret: None,
         };
-        let Some((mut func, skipped)) = self.instance_body(&job)? else {
-            self.open.insert(key, Open::Undecided(id));
-            return Ok(None);
+        let (body, waits) = self.nested_body(&job);
+        let ret = match body? {
+            Body::Lowered(func, false) => {
+                let ret = func.ret;
+                self.decided(key, id, ret);
+                self.funcs[id.0] = Some(func);
+                return Ok(Some((id, ret)));
+            }
+            Body::Lowered(func, true) => func.ret,
+            Body::Undecided(_) if waits < depth => {
+                self.open.insert(key, Open::Undecided(id));
+                return Ok(None);
+            }
+            Body::Undecided(bound) => settle(&sig.ret, &job.subst, &bound, &mut self.seqs),
         };
-        let ret = func.ret;
-        self.instances.insert((name.clone(), args, ret), id);
-        self.open.insert(key, Open::Done((id, ret)));
-        if skipped {
-            bind(&sig.ret, ret, &self.seqs, &mut job.subst);
-            job.ret = Some(ret);
-            func = self
-                .instance_body(&job)?
-                .ok_or_else(|| internal(span, "an instance undecided with its result known"))?
-                .0;
-        }
+        // Decided before lowering again, so recursive calls find it.
+        self.decided(key, id, ret);
+        bind(&sig.ret, ret, &self.seqs, &mut job.subst);
+        job.ret = Some(ret);
+        let Body::Lowered(func, _) = self.instance_body(&job)? else {
+            return Err(internal(
+                span,
+                "an instance undecided with its result known",
+            ));
+        };
         self.funcs[id.0] = Some(func);
         Ok(Some((id, ret)))
+    }
+
+    /// Lowers `job`'s body one open instance deeper, and the depth of
+    /// the shallowest instance still being lowered whose result it needed.
+    fn nested_body(&mut self, job: &Job<'a>) -> (Result<Body>, usize) {
+        let outer = std::mem::replace(&mut self.waits, usize::MAX);
+        self.lowering += 1;
+        let body = self.instance_body(job);
+        self.lowering -= 1;
+        let waits = std::mem::replace(&mut self.waits, outer);
+        // Waiting on this instance, or on one inside it, ends here.
+        if waits < self.lowering {
+            self.waits = self.waits.min(waits);
+        }
+        (body, waits)
+    }
+
+    /// Records that the open instance `key` is `id`, returning `ret`.
+    fn decided(&mut self, key: (String, Vec<Ty>), id: FuncId, ret: Ty) {
+        self.instances
+            .insert((key.0.clone(), key.1.clone(), ret), id);
+        self.open.insert(key, Open::Done((id, ret)));
     }
 
     /// The id an instance of `name` for `args` lowered undecided holds,
@@ -238,10 +298,9 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// The function `job` asks for, and whether a statement was skipped
-    /// for a call whose result was unknown; `None` if no `return`
-    /// decided an open result type.
-    fn instance_body(&mut self, job: &Job<'a>) -> Result<Option<(Func, bool)>> {
+    /// The function `job` asks for, unless no `return` decided its open
+    /// result type.
+    fn instance_body(&mut self, job: &Job<'a>) -> Result<Body> {
         let f = job.def;
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
@@ -263,11 +322,11 @@ impl<'a> Cx<'a> {
             params.push(id);
         }
         b.block(&f.body)?;
-        if b.skipped && b.open_ret.is_some() {
-            return Ok(None);
+        if b.open_ret.is_some() {
+            return Ok(Body::Undecided(b.subst));
         }
         let skipped = b.skipped;
-        Ok(Some((b.finish(&f.name.name, params), skipped)))
+        Ok(Body::Lowered(b.finish(&f.name.name, params), skipped))
     }
 }
 
@@ -278,6 +337,34 @@ fn is_closed(t: &Type, subst: &Subst) -> bool {
         Type::List(t) | Type::Optional(t) => is_closed(t, subst),
         Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
+    }
+}
+
+/// The IR type of a result type no `return` decided: a variable `subst`
+/// leaves open takes what the body bound it to, else `None`. The instance
+/// never returns a value of that type (only `None`, or nothing), so
+/// any type is sound; this one matches what the body built.
+fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) -> Ty {
+    match t {
+        Type::Var(v) => subst.get(v).or(bound.get(v)).copied().unwrap_or(Ty::None),
+        Type::List(t) => {
+            let elem = settle(t, subst, bound, seqs);
+            seqs.list(elem)
+        }
+        Type::Optional(t) => {
+            let present = settle(t, subst, bound, seqs);
+            seqs.optional(present)
+        }
+        Type::Tuple(ts) => {
+            let fields = ts.iter().map(|t| settle(t, subst, bound, seqs)).collect();
+            seqs.tuple(fields)
+        }
+        Type::Int => Ty::Int,
+        Type::Float => Ty::Float,
+        Type::Bool => Ty::Bool,
+        Type::None => Ty::None,
+        Type::Str => Ty::Str,
+        Type::Range => Ty::Range,
     }
 }
 
