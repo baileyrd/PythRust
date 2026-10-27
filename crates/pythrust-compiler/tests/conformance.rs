@@ -210,16 +210,34 @@ fn wait(child: &mut Child, timeout: Duration) -> Res<i32> {
     }
 }
 
+/// The oracle interpreter: `$PYTHON`, else `python3`, or `python` on
+/// Windows, where `python3` may be the Microsoft Store stub.
+fn python() -> String {
+    let default = if cfg!(windows) { "python" } else { "python3" };
+    std::env::var("PYTHON").unwrap_or_else(|_| default.to_string())
+}
+
 fn run_cpython(source: &Path) -> Res<Run> {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-    let mut cmd = Command::new(python);
+    let mut cmd = Command::new(python());
     // -I: isolated mode, so nothing from the environment or cwd leaks in.
-    cmd.arg("-I");
+    // -X utf8: UTF-8 stdout even where the locale's code page is not.
+    cmd.args(["-I", "-X", "utf8"]);
     match loosen(&read(source)?) {
         Some(loose) => cmd.arg("-c").arg(loose),
         None => cmd.arg(source),
     };
-    run(&mut cmd, TIMEOUT)
+    let mut got = run(&mut cmd, TIMEOUT)?;
+    got.stdout = universal_newlines(got.stdout);
+    Ok(got)
+}
+
+/// Undoes text-mode stdout's newline translation: CPython on Windows
+/// writes each `\n` as `\r\n`. Pythrust writes `\n` everywhere.
+fn universal_newlines(stdout: String) -> String {
+    match cfg!(windows) {
+        true => stdout.replace("\r\n", "\n"),
+        false => stdout,
+    }
 }
 
 /// `src` with each `temper ` prefix removed, or `None` if it has none.
@@ -390,7 +408,7 @@ fn build_native(source: &Path, dir: &Path) -> Res<Option<PathBuf>> {
         .map_err(|e| format!("cannot run pythrust build: {e}"))?;
     let stderr = String::from_utf8_lossy(&out.stderr);
     match (out.status.success(), stderr.contains(NATIVE_UNSUPPORTED)) {
-        (true, _) => Ok(Some(copy.with_extension(""))),
+        (true, _) => Ok(Some(copy.with_extension(std::env::consts::EXE_EXTENSION))),
         (false, true) => Ok(None),
         (false, false) => Err(format!("{}: build failed:\n{stderr}", source.display())),
     }
@@ -654,6 +672,19 @@ fn oversized(exe: &Path) -> Res<Option<String>> {
         .then(|| format!("{}: {size} bytes exceeds {MAX_NATIVE_BYTES}", exe.display())))
 }
 
+/// `pythrust build` links in a private directory beside the executable
+/// and must remove it, whether linking worked or not.
+fn leftover_build_dirs(dir: &Path) -> Res<Vec<String>> {
+    let mut left = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let name = entry.map_err(|e| e.to_string())?.file_name();
+        if name.to_string_lossy().starts_with(".pythrust-build-") {
+            left.push(format!("build directory left behind: {name:?}"));
+        }
+    }
+    Ok(left)
+}
+
 #[test]
 fn corpus_matches_native() -> Res<()> {
     build_runtime()?;
@@ -686,6 +717,7 @@ fn corpus_matches_native() -> Res<()> {
                 .map(|s| s.to_string_lossy().into_owned()),
         );
     }
+    failures.extend(leftover_build_dirs(&dir)?);
     fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     for name in NATIVE {
         if !built.iter().any(|b| b == name) {
@@ -694,6 +726,40 @@ fn corpus_matches_native() -> Res<()> {
     }
     report(failures);
     Ok(())
+}
+
+/// A relative source under a directory named like a linker option (`-`)
+/// or a response file (`@`, as in `@scope`) still builds and runs.
+#[test]
+fn build_takes_option_like_directories_as_paths() -> Res<()> {
+    build_runtime()?;
+    let root = scratch("option-dirs")?;
+    let mut failures = Vec::new();
+    for sub in ["-work", "@scope"] {
+        fs::create_dir(root.join(sub)).map_err(|e| e.to_string())?;
+        let source = format!("{sub}/hello.pyr");
+        write(&root.join(&source), "print(\"hi\")\n")?;
+        let out = Command::new(pythrust_bin()?)
+            .arg("build")
+            .arg(&source)
+            .current_dir(&root)
+            .output()
+            .map_err(|e| format!("cannot run pythrust build: {e}"))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            failures.push(format!("{source}: build failed:\n{stderr}"));
+            continue;
+        }
+        let exe = root
+            .join(&source)
+            .with_extension(std::env::consts::EXE_EXTENSION);
+        let got = run(&mut Command::new(&exe), TIMEOUT)?;
+        if got.stdout != "hi\n" || got.status != 0 {
+            failures.push(format!("{source}: ran as {got:?}"));
+        }
+    }
+    report(failures);
+    cleanup(&root)
 }
 
 #[test]
@@ -910,7 +976,7 @@ fn bless_skips_deviations() -> Res<()> {
 
 #[test]
 fn run_kills_on_timeout() {
-    let mut cmd = Command::new("python3");
+    let mut cmd = Command::new(python());
     cmd.args(["-I", "-c", "while True: pass"]);
     let got = run(&mut cmd, Duration::from_millis(200));
     assert!(got.is_err_and(|e| e.contains("timed out")));
