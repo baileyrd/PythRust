@@ -52,7 +52,7 @@ M4 is done, as Nano chose (2026-10-26): fix the last subset gaps (#29, #30, #31,
 Follow-ups, none blocking M4:
 
 - [ ] **Targets:** CI is Linux x86-64 only; macOS and AArch64 are untested.
-- [ ] **Use-after-free checking** is valgrind by hand; CI checks only for leaks (the debug runtime's count).
+- [x] **Use-after-free checking:** CI's `memcheck` job runs the native corpus under valgrind (`PYTHRUST_VALGRIND=1`), on Linux x86-64 only.
 - [ ] **Binary size** (about 5 MB in debug builds, mostly the runtime and Rust's standard library).
 - [ ] **Generic functions where no `return` decides the result type** are backend errors, such as one declared `-> list | None` that only ever returns `None`, or one whose every `return` needs a recursive call first (see the monomorphization note in [native.md](native.md)). Nano accepted deferring this whole class, nonrecursive cases included, at closure (2026-10-26); the decision named the `-> list | None` example.
 

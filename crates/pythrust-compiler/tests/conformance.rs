@@ -26,6 +26,9 @@
 //!   this test run).
 //! - `PYTHRUST_BLESS=1` write non-deviation goldens from CPython, creating
 //!   missing ones; a golden whose exit status disagrees is kept.
+//! - `PYTHRUST_VALGRIND=1` also run every native program under valgrind's
+//!   memcheck, failing on invalid reads, writes and frees (use-after-free)
+//!   and on definitely lost blocks. CI sets it on Linux x86-64.
 
 use std::fs;
 use std::io::Read;
@@ -528,9 +531,44 @@ fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
     }))
 }
 
+/// Memcheck's exit status for a program it found errors in; corpus
+/// programs exit 0 or 1, so it cannot be mistaken for theirs.
+const MEMCHECK_EXIT: i32 = 97;
+
+/// Whether `PYTHRUST_VALGRIND=1` asks for memcheck runs.
+fn memcheck_requested() -> bool {
+    std::env::var_os("PYTHRUST_VALGRIND").is_some_and(|v| v == "1")
+}
+
+/// Runs `exe` under memcheck. The debug runtime already fails leaked
+/// strings and sequences; memcheck adds use-after-free, double frees and
+/// lost blocks outside that count. Runtime errors exit without releasing,
+/// which leaves blocks reachable, not lost, so they pass.
+fn memcheck(exe: &Path) -> Res<Option<String>> {
+    let out = Command::new("valgrind")
+        .args([
+            "--quiet",
+            "--leak-check=full",
+            "--errors-for-leak-kinds=definite",
+        ])
+        .arg(format!("--error-exitcode={MEMCHECK_EXIT}"))
+        .arg(exe)
+        .output()
+        .map_err(|e| format!("cannot run valgrind (PYTHRUST_VALGRIND=1): {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Ok(memcheck_failure(exe, out.status.code(), &stderr))
+}
+
+/// The report for a memcheck run that ended with `status`, if it failed.
+fn memcheck_failure(exe: &Path, status: Option<i32>, stderr: &str) -> Option<String> {
+    (status == Some(MEMCHECK_EXIT))
+        .then(|| format!("{}\n  memcheck errors:\n{stderr}", exe.display()))
+}
+
 #[test]
 fn corpus_matches_native() -> Res<()> {
     build_runtime()?;
+    let memchecked = memcheck_requested();
     let dir = std::env::temp_dir().join(format!("pythrust-native-{}", std::process::id()));
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut failures = Vec::new();
@@ -548,6 +586,9 @@ fn corpus_matches_native() -> Res<()> {
         failures.extend(failed);
         if errored {
             failures.extend(stderr_mismatch(&exe)?);
+        }
+        if memchecked {
+            failures.extend(memcheck(&exe)?);
         }
         built.extend(
             case.source
@@ -668,6 +709,17 @@ fn mismatch_reports_status_and_stdout() {
         status: 0,
     };
     assert!(mismatch(&case, &bad_out).is_some());
+}
+
+#[test]
+fn memcheck_fails_only_on_its_own_status() {
+    let exe = Path::new("p");
+    assert_eq!(memcheck_failure(exe, Some(0), ""), None);
+    // A program's own runtime error is not a memcheck error.
+    assert_eq!(memcheck_failure(exe, Some(1), "Traceback"), None);
+    assert_eq!(memcheck_failure(exe, None, ""), None);
+    let failed = memcheck_failure(exe, Some(MEMCHECK_EXIT), "Invalid read of size 8");
+    assert!(failed.is_some_and(|f| f.contains("Invalid read")));
 }
 
 #[test]
