@@ -305,6 +305,27 @@ pub unsafe extern "C" fn pt_seq_push(s: *const PtSeq, v: u64) {
     items.push(v);
 }
 
+/// `list(s)`: a new list with `s`'s type and elements, each gaining a
+/// reference (a shallow copy).
+///
+/// # Safety
+///
+/// `s` is a live list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_copy(s: *const PtSeq) -> *mut PtSeq {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let items = s.items.borrow().clone();
+    let desc = slot(s.desc, 0);
+    items.iter().for_each(|v| inc(desc, *v));
+    LIVE.fetch_add(1, Relaxed);
+    Box::into_raw(Box::new(PtSeq {
+        rc: Cell::new(1),
+        desc: s.desc,
+        items: RefCell::new(items),
+    }))
+}
+
 /// `len(s)`.
 ///
 /// # Safety
@@ -620,6 +641,24 @@ mod tests {
             assert_eq!(seq(inner as u64).rc.get(), 3);
             pt_seq_dec(outer);
             assert_eq!(seq(inner as u64).rc.get(), 1);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn copies_are_shallow_and_independent() {
+        let inner = make(b"li", &[1]);
+        let outer = make(b"lli", &[inner as u64]);
+        // SAFETY: live until the final decs.
+        unsafe {
+            let copy = pt_list_copy(outer);
+            assert_eq!(seq(inner as u64).rc.get(), 3);
+            assert_eq!(pt_seq_eq(copy, outer), 1);
+            pt_seq_push(copy, inner as u64);
+            assert_eq!((pt_seq_len(copy), pt_seq_len(outer)), (2, 1));
+            pt_seq_dec(copy);
+            assert_eq!(seq(inner as u64).rc.get(), 2);
+            pt_seq_dec(outer);
             pt_seq_dec(inner);
         }
     }

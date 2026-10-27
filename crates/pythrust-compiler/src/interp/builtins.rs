@@ -1,4 +1,4 @@
-//! The closed set of phase-2 builtins: `print len range str int float bool`.
+//! The closed set of builtins: `print len list range str int float bool`.
 
 use std::io::Write;
 
@@ -12,6 +12,7 @@ use crate::span::Span;
 pub(super) enum Builtin {
     Print,
     Len,
+    List,
     Range,
     Str,
     Int,
@@ -31,6 +32,7 @@ impl Builtin {
         Some(match name {
             "print" => Builtin::Print,
             "len" => Builtin::Len,
+            "list" => Builtin::List,
             "range" => Builtin::Range,
             "str" => Builtin::Str,
             "int" => Builtin::Int,
@@ -44,6 +46,7 @@ impl Builtin {
         match self {
             Builtin::Print => "print",
             Builtin::Len => "len",
+            Builtin::List => "list",
             Builtin::Range => "range",
             Builtin::Str => "str",
             Builtin::Int => "int",
@@ -61,6 +64,7 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Resul
     let (pos, span) = (args.positional.as_slice(), args.span);
     match b {
         Builtin::Len => len(one(b, pos, span)?, span),
+        Builtin::List => copy_list(one(b, pos, span)?, span),
         Builtin::Range => range(pos, span),
         Builtin::Str => Ok(Value::str(
             &opt(b, pos, span)?.map_or(Ok(String::new()), |v| v.to_str(span))?,
@@ -165,6 +169,17 @@ fn len<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
             "OverflowError: length does not fit in an int".to_string(),
         )
     })
+}
+
+/// `list(xs)`: a shallow copy.
+fn copy_list<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
+    match v {
+        Value::List(l) => Ok(Value::list(l.borrow().clone())),
+        other => Err(rt_err(
+            span,
+            format!("TypeError: '{}' object is not iterable", other.type_name()),
+        )),
+    }
 }
 
 /// `range(stop)`, `range(start, stop)`, `range(start, stop, step)`.

@@ -19,3 +19,5 @@ Directives go in the leading comment block, which Python ignores:
 Blessing creates missing goldens, but it refuses to overwrite one when CPython's exit status differs from `expect-exit`. Each program is killed after 10 seconds, so a hang fails the test instead of stalling CI.
 
 Adding a program: write `<name>.pyr` in the phase-2 subset, bless, read the `.out` before committing. Keep programs well-typed (homogeneous lists, one type per variable) so `pythrust check` can run over the corpus too.
+
+`temper def` is not Python, so CPython runs every program *loosened*, with each `temper ` prefix removed. `tempered_matches_loose` runs the loosened programs under Pythrust too, checking that tempering never changes meaning.

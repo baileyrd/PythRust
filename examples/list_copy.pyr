@@ -1,0 +1,28 @@
+# `list(xs)` is a shallow copy: a new list holding the same elements.
+# A tempered function returns a copy, not its parameter (D3).
+temper def snapshot(xs: list[int]) -> list[int]:
+    return list(xs)
+
+a = [1, 2, 3]
+b = list(a)
+b.append(4)
+b[0] = 10
+print(a, b, a == list(a))
+
+grid = [[1], [2]]
+flat = list(grid)
+flat[0].append(5)
+flat[1] = [9]
+print(grid, flat)
+
+words = ["x", "y"]
+kept = list(words)
+words[0] = "z"
+print(kept, words)
+
+empty: list[str] = []
+print(list(empty), len(list(empty)))
+
+s = snapshot(a)
+s.append(0)
+print(a, s, list([(1, "one")]))
