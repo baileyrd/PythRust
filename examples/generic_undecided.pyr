@@ -1,0 +1,99 @@
+# Generic functions where no `return` decides the result type: the
+# native backend settles it, since such a function only returns `None`
+# or never returns.
+def nothing(x) -> list | None:
+    return None
+
+
+def quiet(x) -> list | None:
+    print("quiet", x)
+
+
+def maybe_none(x) -> list | None:
+    if x:
+        return None
+
+
+def got(x):
+    return nothing(x)
+
+
+def heard(x):
+    return quiet(x)
+
+
+def size(x):
+    y = maybe_none(x)
+    if y is None:
+        return -1
+    return len(y)
+
+
+print(got(1), got("a"), got(2) is None)
+print(heard(2), heard(2.5) is None)
+print(size(1), size(0), size("a"))
+
+
+# Recursion that only ever ends in `None`.
+def find(xs, i, want) -> list | None:
+    if i >= len(xs):
+        return None
+    if xs[i] == want:
+        print("found at", i)
+    return find(xs, i + 1, want)
+
+
+def lookup(xs, want):
+    return find(xs, 0, want)
+
+
+def ping(n):
+    if n > 0:
+        return pong(n - 1)
+
+
+def pong(n):
+    return ping(n)
+
+
+r = lookup([3, 4, 3], 3)
+print(r, r is None, lookup(["a"], "b"))
+print(ping(3), pong(2))
+
+
+# A body that binds the open element type though no `return` decides it.
+def built(x) -> list | None:
+    if x:
+        return None
+    xs = [x * x]
+    if xs == built(x + 1):
+        print("equal")
+
+
+def via_built(x):
+    return built(x)
+
+
+print(via_built(0), via_built(2.5))
+
+
+# A conditional whose recursive branch comes first: the other decides.
+def h(n, x):
+    return h(n - 1, x) if n else x * x
+
+
+def m(n, x):
+    return x * x if not n else m(n - 1, x) + x
+
+
+def w(n, x):
+    while n > 0:
+        return w(n - 1, x)
+    return [x]
+
+
+def outer(x):
+    return h(2, x) + 0, m(2, x) + 0, w(1, x)
+
+
+print(outer(3), outer(1.5))
