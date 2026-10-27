@@ -1,5 +1,6 @@
 # `list(xs)` is a shallow copy: a new list holding the same elements.
-def snapshot(xs: list[int]) -> list[int]:
+# A tempered function returns a copy, not its parameter (D3).
+temper def snapshot(xs: list[int]) -> list[int]:
     return list(xs)
 
 a = [1, 2, 3]
