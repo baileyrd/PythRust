@@ -11,6 +11,10 @@
 //! Stdout and exit status are compared; stderr is not, because diagnostics
 //! and tracebacks differ by design.
 //!
+//! `temper def` is not Python, so CPython runs each program loosened (every
+//! `temper ` prefix removed). `tempered_matches_loose` runs the loosened
+//! programs under Pythrust too: tempering never changes meaning.
+//!
 //! Directives in the leading comment block of a program:
 //! - `# expect-exit: N` expected exit status (default 0).
 //! - `# deviation: why` a documented deviation from Python (see
@@ -205,8 +209,28 @@ fn wait(child: &mut Child, timeout: Duration) -> Res<i32> {
 
 fn run_cpython(source: &Path) -> Res<Run> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
+    let mut cmd = Command::new(python);
     // -I: isolated mode, so nothing from the environment or cwd leaks in.
-    run(Command::new(python).arg("-I").arg(source), TIMEOUT)
+    cmd.arg("-I");
+    match loosen(&read(source)?) {
+        Some(loose) => cmd.arg("-c").arg(loose),
+        None => cmd.arg(source),
+    };
+    run(&mut cmd, TIMEOUT)
+}
+
+/// `src` with each `temper ` prefix removed, or `None` if it has none.
+/// `def` is top-level only, so the prefix always starts a line.
+fn loosen(src: &str) -> Option<String> {
+    const TEMPER: &str = "temper ";
+    if !src.lines().any(|l| l.starts_with(TEMPER)) {
+        return None;
+    }
+    let lines: Vec<&str> = src
+        .lines()
+        .map(|l| l.strip_prefix(TEMPER).unwrap_or(l))
+        .collect();
+    Some(lines.join("\n") + "\n")
 }
 
 fn pythrust_bin() -> Res<PathBuf> {
@@ -285,6 +309,7 @@ const NATIVE: &[&str] = &[
     "str_loop_exits",
     "str_repeat_error",
     "strings",
+    "tempered",
     "tuple_loops",
     "tuples",
     "unbound_augassign",
@@ -508,6 +533,35 @@ fn corpus_matches_pythrust() -> Res<()> {
     }
     report(failures);
     Ok(())
+}
+
+#[test]
+fn tempered_matches_loose() -> Res<()> {
+    let dir = scratch("loose")?;
+    let mut failures = Vec::new();
+    let mut tempered = 0;
+    for case in load_corpus(&corpus_dir()?)? {
+        let Some(loose) = loosen(&read(&case.source)?) else {
+            continue;
+        };
+        tempered += 1;
+        let copy = dir.join(case.source.file_name().ok_or("source has no file name")?);
+        write(&copy, &loose)?;
+        let got = run_pythrust(&copy)?;
+        failures.extend(mismatch(&case, &got));
+    }
+    cleanup(&dir)?;
+    assert!(tempered > 0, "the corpus has no tempered program");
+    report(failures);
+    Ok(())
+}
+
+#[test]
+fn loosen_strips_only_the_prefix() {
+    assert_eq!(loosen("def f():\n    pass\n"), None);
+    let src = "temper def f() -> None:\n    print(\"temper \")\n";
+    let want = "def f() -> None:\n    print(\"temper \")\n";
+    assert_eq!(loosen(src).as_deref(), Some(want));
 }
 
 /// A native program that failed must print exactly what `pythrust run`

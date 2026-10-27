@@ -1,0 +1,38 @@
+# Tempered functions (grammar.md D1, D5). CPython runs this with `temper`
+# removed; tempering never changes meaning, so the output is the same.
+temper def total(xs: list[int], start: int = 0) -> int:
+    t = start
+    for x in xs:
+        t += x
+    return t
+
+
+temper def mean(xs: list[int]) -> float | None:
+    if len(xs) == 0:
+        return None
+    return total(xs) / len(xs)
+
+
+temper def evens(n: int) -> list[int]:
+    out: list[int] = []
+    for i in range(n):
+        if i % 2 == 0:
+            out.append(i)
+    return out
+
+
+temper def is_even(n: int) -> bool:
+    return n == 0 or is_odd(n - 1)
+
+
+temper def is_odd(n: int) -> bool:
+    return n != 0 and is_even(n - 1)
+
+
+def report(xs):
+    print(total(xs), total(xs, 100), mean(xs))
+
+
+report(evens(10))
+report([])
+print(is_even(10), is_odd(7), is_even(3))

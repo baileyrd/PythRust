@@ -19,6 +19,7 @@ pub(crate) mod scope;
 mod solve;
 mod stmt;
 mod subst;
+mod temper;
 mod ty;
 
 #[cfg(test)]
@@ -74,7 +75,9 @@ pub fn infer(module: &Module) -> Result<Types> {
     // variables stay unconstrained in the typed view.
     solve::default_assigns(&mut c.subst, mem::take(&mut c.pending))?;
     c.resolve_schemes()?;
-    Ok(c.finish())
+    let types = c.finish();
+    temper::check(&defs, &types)?;
+    Ok(types)
 }
 
 fn top_level_defs(module: &Module) -> Result<Vec<&FuncDef>> {

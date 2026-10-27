@@ -66,7 +66,7 @@ Language decisions D1 to D8 are in [grammar.md](grammar.md#phase-4-m5-tempering-
 Track A, tempering and ownership:
 
 - [x] **A0. Generic results no `return` decides** build natively (#36), so lowering covers nearly every checked program. The ownership analysis runs on the IR; the remaining gap above (an operation on a never-returning generic result) must be closed or handled before A3 relies on lowering.
-- [ ] **A1. Tempered signatures (D1, D5).** Required annotations, no `dyn`, tempered calls only tempered functions and builtins. Corpus property: removing `temper` from a passing program leaves its output unchanged.
+- [x] **A1. Tempered signatures (D1, D5).** Required annotations, no `dyn`, tempered calls only tempered functions and builtins. Corpus property: removing `temper` from a passing program leaves its output unchanged; the harness runs CPython on loosened programs and `tempered_matches_loose` checks Pythrust too.
 - [ ] **A2. `list(xs)` copy builtin (D3, D4)** in inference, interpreter and native.
 - [ ] **A3. Parameter mode inference.** Wire `check` and `run` through lowering (analysis only; `run` still interprets), then an `own` stage over the IR: per-function `read`/`mut`/`owned` per parameter and whether the result aliases one, bottom-up with a fixpoint per strongly connected component. No user-visible change.
 - [ ] **A4. Mode syntax (D2).** Parse contextual `mut`/`owned`; check written modes against inferred ones; tempered functions must write them.
