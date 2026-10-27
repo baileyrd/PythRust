@@ -1,6 +1,6 @@
 # Research G.2: Ownership inference (phase 4)
 
-**Status: decided 2026-10-25** (direction and vocabulary; Nano accepted the recommendations). Exact M5 syntax is still to be written.
+**Status: decided 2026-10-25** (direction and vocabulary; Nano accepted the recommendations). M5 syntax and scope were decided 2026-10-27; see [grammar.md](../grammar.md#phase-4-m5-tempering-ownership-exceptions-nano-2026-10-27).
 
 **Recommendation:** loose code keeps Python's aliasing meaning, implemented as reference counting that the compiler elides wherever it can prove a single owner. Ownership is inferred per function as a *summary* of how each parameter is used. Tempered code must have every value resolve to a single owner or an explicit borrow; anything that would need a hidden refcount is either spelled out or rejected.
 
@@ -42,17 +42,17 @@ The phase-2 subset needs **no lifetime annotations**: there are no classes, clos
 
 ## Where annotations must surface (tempered only)
 
-1. **Mutable aliasing** the compiler cannot rule out: `f(xs, xs)` where one parameter is `mut`. Loose: refcount and Python behaviour. Tempered: error, or an explicit copy or share at the call.
-2. **A shared mutable value kept in two places**: `b = a` followed by mutation through either while both are live. Tempered asks for an explicit share marker on `b = a`.
-3. **Returning an alias of a parameter**: the signature must say so (a mode on the return type), so callers do not depend on an inferred fact that can change.
+1. **Mutable aliasing** the compiler cannot rule out: `f(xs, xs)` where one parameter is `mut`. Loose: refcount and Python behaviour. Tempered: error, or an explicit copy at the call (no share marker in phase 4, per D4).
+2. **A shared mutable value kept in two places**: `b = a` followed by mutation through either while both are live. ~~Tempered asks for an explicit share marker on `b = a`.~~ Superseded for phase 4 by grammar.md D4: tempered rejects it and the fix-it is `b = list(a)`; no share marker.
+3. **Returning an alias of a parameter**: ~~the signature must say so (a mode on the return type), so callers do not depend on an inferred fact that can change.~~ Superseded for phase 4 by grammar.md D3: tempered code may not return a parameter's alias (fix-it `return list(xs)`); no return mode.
 4. **Later phases:** closures capturing mutable state, borrowed values stored in objects, Rust crate calls.
 
-Proposed vocabulary: `read`, `mut`, `owned` as parameter modifiers (Mojo uses the same three words). No lifetimes, no `&`, no `'a`. The exact syntax is an open question for M5 and is not proposed for the grammar yet.
+Vocabulary: `read`, `mut`, `owned` as parameter modifiers (Mojo uses the same three words). No lifetimes, no `&`, no `'a`. Syntax decided 2026-10-27 (grammar.md D2): contextual prefixes, `read` implicit.
 
 ## Loose and tempered at a boundary
 
 - **Loose calls tempered:** free. The tempered signature is the contract. The loose caller adapts: it borrows from a refcounted value when the mode is `read` or `mut`, and increments when it is `owned`. If a loose caller passes the same list to two parameters and one is `mut`, the call site fails to compile even in loose code, with a message about the call, not the callee. This is a narrow exception to design.md's "loose code may call tempered code freely" (see question 2).
-- **Tempered calls loose:** the loose callee's summary is inferred and can change when its body changes (the "inference ripple" from design.md). The crossing annotation pins it: the tempered caller declares the modes it expects, the compiler checks the callee's inferred summary against that, and a later change fails at the crossing instead of somewhere deep in the tempered code.
+- **Tempered calls loose:** the loose callee's summary is inferred and can change when its body changes (the "inference ripple" from design.md). The crossing annotation pins it: the tempered caller declares the modes it expects, the compiler checks the callee's inferred summary against that, and a later change fails at the crossing instead of somewhere deep in the tempered code. **Superseded for phase 4 by grammar.md D5:** tempered code calls only tempered functions and builtins; the crossing annotation is deferred to module tempering or the Python bridge.
 
 ## Diagnostics without borrow-checker vocabulary
 
