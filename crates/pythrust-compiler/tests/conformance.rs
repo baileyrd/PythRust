@@ -622,6 +622,19 @@ fn oversized(exe: &Path) -> Res<Option<String>> {
         .then(|| format!("{}: {size} bytes exceeds {MAX_NATIVE_BYTES}", exe.display())))
 }
 
+/// `pythrust build` links in a private directory beside the executable
+/// and must remove it, whether linking worked or not.
+fn leftover_build_dirs(dir: &Path) -> Res<Vec<String>> {
+    let mut left = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let name = entry.map_err(|e| e.to_string())?.file_name();
+        if name.to_string_lossy().starts_with(".pythrust-build-") {
+            left.push(format!("build directory left behind: {name:?}"));
+        }
+    }
+    Ok(left)
+}
+
 #[test]
 fn corpus_matches_native() -> Res<()> {
     build_runtime()?;
@@ -654,6 +667,7 @@ fn corpus_matches_native() -> Res<()> {
                 .map(|s| s.to_string_lossy().into_owned()),
         );
     }
+    failures.extend(leftover_build_dirs(&dir)?);
     fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     for name in NATIVE {
         if !built.iter().any(|b| b == name) {

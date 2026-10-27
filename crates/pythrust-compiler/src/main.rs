@@ -192,11 +192,19 @@ fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
 fn link(path: &str, object: &[u8]) -> Result<(), String> {
     let out = output_path(path)?;
     let runtime = runtime_lib()?;
-    let dir = private_dir()?;
+    let dir = private_dir(output_dir(&out))?;
     let linked = link_in(&dir, object, &runtime, &out);
     let removed = std::fs::remove_dir_all(&dir)
         .map_err(|e| format!("pythrust: cannot remove {}: {e}\n", dir.display()));
     linked.and(removed)
+}
+
+/// The directory `out` is written to: `.` for a bare file name.
+fn output_dir(out: &Path) -> &Path {
+    match out.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    }
 }
 
 /// The executable `pythrust build` writes for `path`, refused if it would
@@ -300,20 +308,23 @@ fn output_args(out: &Path) -> Vec<std::ffi::OsString> {
     vec![arg]
 }
 
-/// A fresh directory under the system temp dir that only this user can
-/// read, so no other process can swap or read the object before the linker
-/// does. On Unix it is created mode 0700; on Windows the temp dir is
-/// already per-user (`%LOCALAPPDATA%\Temp`) and the new directory inherits
-/// its owner-only ACL.
-/// Created exclusively: an existing path is never reused.
-fn private_dir() -> Result<PathBuf, String> {
-    let base = std::env::temp_dir();
+/// A fresh build directory in `base`, the directory the executable goes
+/// to. The object becomes that executable, so it is kept exactly as safe:
+/// whoever could swap or read it there could swap or read the output too.
+/// The system temp dir would promise more than it holds, since `TMP` may
+/// name a shared directory and Windows offers no owner-only mode without
+/// writing an ACL. On Unix the directory is also mode 0700. Created
+/// exclusively: an existing path is never reused.
+fn private_dir(base: &Path) -> Result<PathBuf, String> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     let builder = owner_only_builder();
     for attempt in 0..100 {
-        let dir = base.join(format!("pythrust-{}-{nanos}-{attempt}", std::process::id()));
+        let dir = base.join(format!(
+            ".pythrust-build-{}-{nanos}-{attempt}",
+            std::process::id()
+        ));
         match builder.create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -333,7 +344,7 @@ fn owner_only_builder() -> std::fs::DirBuilder {
     builder
 }
 
-/// Windows ACLs come from the per-user temp dir; see [`private_dir`].
+/// Windows ACLs are inherited from the output directory; see [`private_dir`].
 #[cfg(not(unix))]
 fn owner_only_builder() -> std::fs::DirBuilder {
     std::fs::DirBuilder::new()
@@ -498,8 +509,21 @@ mod tests {
     }
 
     #[test]
+    fn build_dirs_go_beside_the_output() {
+        assert_eq!(output_dir(Path::new("fib.exe")), Path::new("."));
+        assert_eq!(output_dir(Path::new("a/fib")), Path::new("a"));
+        let base = private_dir(&std::env::temp_dir()).unwrap();
+        let dir = private_dir(&base).unwrap();
+        assert_eq!(dir.parent(), Some(base.as_path()));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn private_dirs_are_fresh_and_owner_only() {
-        let (a, b) = (private_dir().unwrap(), private_dir().unwrap());
+        let (a, b) = (
+            private_dir(&std::env::temp_dir()).unwrap(),
+            private_dir(&std::env::temp_dir()).unwrap(),
+        );
         assert_ne!(a, b);
         #[cfg(unix)]
         {
@@ -520,7 +544,7 @@ mod tests {
 
     #[test]
     fn build_refuses_to_overwrite_its_source() {
-        let dir = private_dir().unwrap();
+        let dir = private_dir(&std::env::temp_dir()).unwrap();
         let source = dir.join(SELF_NAMED);
         std::fs::write(&source, "print(1)\n").unwrap();
         let err = link(source.to_str().unwrap(), b"object").unwrap_err();
@@ -533,7 +557,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn build_refuses_an_executable_name_linked_to_its_source() {
-        let dir = private_dir().unwrap();
+        let dir = private_dir(&std::env::temp_dir()).unwrap();
         let source = dir.join("p.pyr");
         std::fs::write(&source, "print(1)\n").unwrap();
         std::os::unix::fs::symlink(&source, dir.join("p")).unwrap();
@@ -545,7 +569,7 @@ mod tests {
 
     #[test]
     fn output_path_allows_a_distinct_or_missing_executable() {
-        let dir = private_dir().unwrap();
+        let dir = private_dir(&std::env::temp_dir()).unwrap();
         let source = dir.join("p.pyr");
         std::fs::write(&source, "").unwrap();
         let path = source.to_str().unwrap();
