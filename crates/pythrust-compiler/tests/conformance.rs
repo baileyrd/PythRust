@@ -243,6 +243,7 @@ const NATIVE: &[&str] = &[
     "functions",
     "generic_never_returns",
     "generic_results",
+    "generic_spin",
     "generic_undecided",
     "global_unbound",
     "globals_defaults",

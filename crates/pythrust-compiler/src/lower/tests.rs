@@ -526,6 +526,19 @@ fn a_function_that_never_returns_settles_its_result_as_none() {
 }
 
 #[test]
+fn an_operation_on_a_never_returning_result_stays_unsupported() {
+    // Settled as `None`, `f(n - 1) + 1` cannot lower, though it never
+    // runs: a follow-up in docs/roadmap.md.
+    let (d, text) = rejected("def f(n):\n    return f(n - 1) + 1\n\n\nprint(f(1))\n");
+    assert!(
+        d.message.contains("arithmetic on a non-number"),
+        "{}",
+        d.message
+    );
+    assert_eq!(text, "f(n - 1) + 1");
+}
+
+#[test]
 fn an_optional_only_none_settles_its_open_element() {
     for body in [
         "    return None\n",
