@@ -51,13 +51,13 @@ M4 is done, as Nano chose (2026-10-26): fix the last subset gaps (#29, #30, #31,
 
 Follow-ups, none blocking M4:
 
-- [x] **Targets:** PR #33 runs CI, including the native corpus, on x86-64 Linux, AArch64 Linux and AArch64 macOS. Windows is unsupported: `build` drives a Unix `cc`, so it needs a linker-driver change, not just a runner. x86-64 macOS is untested.
+- [x] **Targets:** PR #33 runs CI, including the native corpus, on x86-64 Linux, AArch64 Linux and AArch64 macOS; PR #42 adds x86-64 Windows, linking with MSVC's `link.exe` (Nano, 2026-10-27: Windows must be supported). x86-64 macOS and AArch64 Windows are untested.
 - [x] **Use-after-free checking:** CI's `memcheck` job runs the native corpus under valgrind (`PYTHRUST_VALGRIND=1`), on x86-64 Linux only.
 - [x] **Binary size:** about 0.5 MB on x86-64 Linux, down from 5.5 to 6.3 MB, by linking with dead-code removal and without debug info ([native.md](native.md#choices-made-inside-the-settled-design)).
 - [x] **Generic functions where no `return` decides the result type** build: one declared `-> list | None` that only ever returns `None` (or has no `return`), and one whose every `return` needs a recursive call first, are settled (see the monomorphization note in [native.md](native.md)). Nano accepted deferring this class at closure (2026-10-26); `generic_undecided`, `generic_never_returns` and `generic_spin` in the corpus cover it.
 - [ ] **An operation on the result of a generic function that never returns**, such as `return f(n - 1) + 1`, is still a backend error: the settled `None` meets an `int` operation in lowering, though the operation never runs. Found in review of #36; the fix needs a divergence analysis that conditionals and `and`/`or` do not break.
 
-Native validation evidence (the required native corpus subset and diagnostics compared with `run`) covers x86-64 Linux, AArch64 Linux and AArch64 macOS; Windows and x86-64 macOS are not tested. Preserve the wider interpreter language decisions when extending the backend; a backend limitation is not a new language restriction.
+Native validation evidence (the required native corpus subset and diagnostics compared with `run`) covers x86-64 Linux, AArch64 Linux, AArch64 macOS and x86-64 Windows; x86-64 macOS and AArch64 Windows are not tested. Preserve the wider interpreter language decisions when extending the backend; a backend limitation is not a new language restriction.
 
 ## Phase 4 (M5) plan
 

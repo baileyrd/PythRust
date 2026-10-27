@@ -13,6 +13,11 @@ cranelift-module = "0.137"
 cranelift-object = "0.137"
 target-lexicon = "0.13"
 
+# Locates MSVC's link.exe and its library paths the way rustc does. From
+# the cc-rs project; no dependencies of its own.
+[target.'cfg(windows)'.dependencies]
+find-msvc-tools = "0.1"
+
 [[bin]]
 name = "pythrust"
 path = "src/main.rs"

@@ -2,7 +2,8 @@
 //!
 //! The only place that does I/O. Stages are pure; this file reads the
 //! file, calls them, renders diagnostics as `path:line:col`, and for
-//! `build` writes the object file and links it with the system `cc`.
+//! `build` writes the object file and links it with the system linker:
+//! `cc` on Unix, MSVC's `link.exe` on Windows.
 
 #![forbid(unsafe_code)]
 
@@ -16,14 +17,23 @@ const USAGE: &str = "usage: pythrust <run|check|build> <file>";
 
 /// The runtime library every native program links against. Found next
 /// to this executable, where `cargo build` puts it, unless overridden.
+#[cfg(not(windows))]
 const RUNTIME_LIB: &str = "libpythrust_rt.a";
+#[cfg(windows)]
+const RUNTIME_LIB: &str = "pythrust_rt.lib";
 const RUNTIME_ENV: &str = "PYTHRUST_RT";
+
+/// The compiled program's object file, in the private build directory.
+#[cfg(not(windows))]
+const OBJECT: &str = "program.o";
+#[cfg(windows)]
+const OBJECT: &str = "program.obj";
 
 /// System libraries a Rust static library needs (`rustc --print
 /// native-static-libs`).
 #[cfg(target_os = "macos")]
 const NATIVE_LIBS: &[&str] = &["-lSystem", "-lc", "-lm"];
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const NATIVE_LIBS: &[&str] = &[
     "-lgcc_s",
     "-lutil",
@@ -33,17 +43,32 @@ const NATIVE_LIBS: &[&str] = &[
     "-ldl",
     "-lc",
 ];
+/// `msvcrt.lib` is the dynamic C runtime, as Rust's MSVC targets use;
+/// it also supplies `mainCRTStartup`, which calls the runtime's `main`.
+#[cfg(windows)]
+const NATIVE_LIBS: &[&str] = &[
+    "kernel32.lib",
+    "ntdll.lib",
+    "userenv.lib",
+    "ws2_32.lib",
+    "dbghelp.lib",
+    "msvcrt.lib",
+];
 
 /// Linker flags that keep only what the program reaches and drop debug
 /// info, as Cargo's release profile does (`strip = "debuginfo"`). Without
 /// them a binary carries the standard library's debug info and its unused
 /// code: 5.5 to 6.3 MB instead of 0.44 to 0.52 MB on x86-64 Linux.
 /// Symbols stay for backtraces. On macOS, ld64's `-S` is the analogue of
-/// `--strip-debug`: it leaves out the debug map.
+/// `--strip-debug`: it leaves out the debug map. MSVC writes debug info
+/// only with `/DEBUG`, so there it only needs unreferenced code dropped
+/// (`/OPT:REF`) and identical code folded (`/OPT:ICF`).
 #[cfg(target_os = "macos")]
 const LINK_FLAGS: &[&str] = &["-Wl,-dead_strip", "-Wl,-S"];
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const LINK_FLAGS: &[&str] = &["-Wl,--gc-sections", "-Wl,--strip-debug"];
+#[cfg(windows)]
+const LINK_FLAGS: &[&str] = &["/NOLOGO", "/SUBSYSTEM:CONSOLE", "/OPT:REF", "/OPT:ICF"];
 
 /// A subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +77,9 @@ enum Command {
     Run,
     /// Lex, parse, and infer. Never executes the program.
     Check,
-    /// Compile to a native executable beside the source, without its
-    /// extension: `fib.pyr` builds `fib`.
+    /// Compile to a native executable beside the source, named like it
+    /// with the host's executable extension: `fib.pyr` builds `fib`, or
+    /// `fib.exe` on Windows.
     Build,
 }
 
@@ -163,61 +189,151 @@ fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
 }
 
 /// Links `object` with the runtime into the executable for `path`.
+/// Every path handed to the linker is absolute, so none can read as an
+/// option (`-work/...`) or a response file (`@scope/...`).
 fn link(path: &str, object: &[u8]) -> Result<(), String> {
-    let out = Path::new(path).with_extension("");
-    if out == Path::new(path) {
-        return Err(format!(
-            "pythrust: {path} has no extension to strip for the output name\n"
-        ));
-    }
-    let runtime = runtime_lib()?;
-    let dir = private_dir()?;
+    let out = absolute(&output_path(path)?)?;
+    let runtime = absolute(&runtime_lib()?)?;
+    let dir = private_dir(output_dir(&out))?;
     let linked = link_in(&dir, object, &runtime, &out);
     let removed = std::fs::remove_dir_all(&dir)
         .map_err(|e| format!("pythrust: cannot remove {}: {e}\n", dir.display()));
     linked.and(removed)
 }
 
+/// `path` made absolute against the current directory, without touching
+/// the file system.
+fn absolute(path: &Path) -> Result<PathBuf, String> {
+    std::path::absolute(path)
+        .map_err(|e| format!("pythrust: cannot resolve {}: {e}\n", path.display()))
+}
+
+/// The directory `out` is written to: `.` for a bare file name.
+fn output_dir(out: &Path) -> &Path {
+    match out.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    }
+}
+
+/// The executable `pythrust build` writes for `path`, refused if it would
+/// be the source itself. Names alone cannot tell: Windows and macOS file
+/// systems ignore case, so `foo.EXE` builds `foo.exe` over itself.
+fn output_path(path: &str) -> Result<PathBuf, String> {
+    let source = Path::new(path);
+    let out = source.with_extension(std::env::consts::EXE_EXTENSION);
+    if out == source || same_file(&out, source)? {
+        return Err(format!(
+            "pythrust: cannot build {path}: the executable would overwrite it\n"
+        ));
+    }
+    Ok(out)
+}
+
+/// Whether existing `a` is the file at `b`, after the file system resolves
+/// case, short names and symlinks. A missing `a` is no file at all.
+fn same_file(a: &Path, b: &Path) -> Result<bool, String> {
+    let exists = a
+        .try_exists()
+        .map_err(|e| format!("pythrust: cannot inspect {}: {e}\n", a.display()))?;
+    if !exists {
+        return Ok(false);
+    }
+    let canonical = |p: &Path| {
+        std::fs::canonicalize(p)
+            .map_err(|e| format!("pythrust: cannot resolve {}: {e}\n", p.display()))
+    };
+    Ok(canonical(a)? == canonical(b)?)
+}
+
 /// Writes `object` into `dir` and links it with `runtime` into `out`.
 fn link_in(dir: &Path, object: &[u8], runtime: &Path, out: &Path) -> Result<(), String> {
-    let obj = dir.join("program.o");
+    let obj = dir.join(OBJECT);
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&obj)
         .and_then(|mut f| f.write_all(object))
         .map_err(|e| format!("pythrust: cannot write {}: {e}\n", obj.display()))?;
-    let status = std::process::Command::new("cc")
+    let mut linker = linker()?;
+    let output = linker
         .arg(&obj)
         .arg(runtime)
         .args(NATIVE_LIBS)
         .args(LINK_FLAGS)
-        .arg("-o")
-        .arg(out)
-        .status()
-        .map_err(|e| format!("pythrust: cannot run cc: {e}\n"))?;
-    match status.success() {
-        true => Ok(()),
-        false => Err(format!(
-            "pythrust: linking {} failed: cc {status}\n",
-            out.display()
-        )),
+        .args(output_args(out))
+        .output()
+        .map_err(|e| format!("pythrust: cannot run {}: {e}\n", linker_name(&linker)))?;
+    if output.status.success() {
+        return Ok(());
     }
+    // `link.exe` reports errors on stdout, `cc` on stderr; show both.
+    Err(format!(
+        "pythrust: linking {} failed: {} {}\n{}{}",
+        out.display(),
+        linker_name(&linker),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    ))
 }
 
-/// A fresh directory under the system temp dir that only this user can
-/// read, so no other process can swap or read the object before `cc` does.
-/// Created exclusively: an existing path is never reused.
-fn private_dir() -> Result<PathBuf, String> {
-    let base = std::env::temp_dir();
+/// The system C compiler driver, which runs the linker.
+#[cfg(not(windows))]
+fn linker() -> Result<std::process::Command, String> {
+    Ok(std::process::Command::new("cc"))
+}
+
+/// MSVC's `link.exe`, from a developer prompt's `PATH` or the newest
+/// installed Visual Studio, with its library paths set, as Cargo finds it.
+#[cfg(windows)]
+fn linker() -> Result<std::process::Command, String> {
+    find_msvc_tools::find(std::env::consts::ARCH, "link.exe").ok_or_else(|| {
+        "pythrust: cannot find the MSVC linker link.exe; install Visual Studio Build Tools with the C++ workload\n"
+            .to_string()
+    })
+}
+
+/// The linker's program name, for messages.
+fn linker_name(linker: &std::process::Command) -> String {
+    let program = Path::new(linker.get_program());
+    program
+        .file_name()
+        .unwrap_or(program.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The arguments naming the executable to write.
+#[cfg(not(windows))]
+fn output_args(out: &Path) -> Vec<std::ffi::OsString> {
+    vec!["-o".into(), out.into()]
+}
+
+#[cfg(windows)]
+fn output_args(out: &Path) -> Vec<std::ffi::OsString> {
+    let mut arg = std::ffi::OsString::from("/OUT:");
+    arg.push(out);
+    vec![arg]
+}
+
+/// A fresh build directory in `base`, the directory the executable goes
+/// to. The object becomes that executable, so it is kept exactly as safe:
+/// whoever could swap or read it there could swap or read the output too.
+/// The system temp dir would promise more than it holds, since `TMP` may
+/// name a shared directory and Windows offers no owner-only mode without
+/// writing an ACL. On Unix the directory is also mode 0700. Created
+/// exclusively: an existing path is never reused.
+fn private_dir(base: &Path) -> Result<PathBuf, String> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let builder = owner_only_builder();
     for attempt in 0..100 {
-        let dir = base.join(format!("pythrust-{}-{nanos}-{attempt}", std::process::id()));
+        let dir = base.join(format!(
+            ".pythrust-build-{}-{nanos}-{attempt}",
+            std::process::id()
+        ));
         match builder.create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -228,6 +344,19 @@ fn private_dir() -> Result<PathBuf, String> {
         "pythrust: no free temporary directory in {}\n",
         base.display()
     ))
+}
+
+#[cfg(unix)]
+fn owner_only_builder() -> std::fs::DirBuilder {
+    let mut builder = std::fs::DirBuilder::new();
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+}
+
+/// Windows ACLs are inherited from the output directory; see [`private_dir`].
+#[cfg(not(unix))]
+fn owner_only_builder() -> std::fs::DirBuilder {
+    std::fs::DirBuilder::new()
 }
 
 /// The runtime library: `$PYTHRUST_RT`, or next to this executable.
@@ -389,8 +518,21 @@ mod tests {
     }
 
     #[test]
+    fn build_dirs_go_beside_the_output() {
+        assert_eq!(output_dir(Path::new("fib.exe")), Path::new("."));
+        assert_eq!(output_dir(Path::new("a/fib")), Path::new("a"));
+        let base = private_dir(&std::env::temp_dir()).unwrap();
+        let dir = private_dir(&base).unwrap();
+        assert_eq!(dir.parent(), Some(base.as_path()));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn private_dirs_are_fresh_and_owner_only() {
-        let (a, b) = (private_dir().unwrap(), private_dir().unwrap());
+        let (a, b) = (
+            private_dir(&std::env::temp_dir()).unwrap(),
+            private_dir(&std::env::temp_dir()).unwrap(),
+        );
         assert_ne!(a, b);
         #[cfg(unix)]
         {
@@ -400,6 +542,51 @@ mod tests {
         }
         std::fs::remove_dir(&a).unwrap();
         std::fs::remove_dir(&b).unwrap();
+    }
+
+    /// A source whose executable name is itself: no extension on Unix,
+    /// `.EXE` in another case on Windows.
+    #[cfg(windows)]
+    const SELF_NAMED: &str = "p.EXE";
+    #[cfg(not(windows))]
+    const SELF_NAMED: &str = "p";
+
+    #[test]
+    fn build_refuses_to_overwrite_its_source() {
+        let dir = private_dir(&std::env::temp_dir()).unwrap();
+        let source = dir.join(SELF_NAMED);
+        std::fs::write(&source, "print(1)\n").unwrap();
+        let err = link(source.to_str().unwrap(), b"object").unwrap_err();
+        assert!(err.contains("would overwrite"), "{err}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"print(1)\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Where the names differ but the file is the same.
+    #[cfg(unix)]
+    #[test]
+    fn build_refuses_an_executable_name_linked_to_its_source() {
+        let dir = private_dir(&std::env::temp_dir()).unwrap();
+        let source = dir.join("p.pyr");
+        std::fs::write(&source, "print(1)\n").unwrap();
+        std::os::unix::fs::symlink(&source, dir.join("p")).unwrap();
+        let err = link(source.to_str().unwrap(), b"object").unwrap_err();
+        assert!(err.contains("would overwrite"), "{err}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"print(1)\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn output_path_allows_a_distinct_or_missing_executable() {
+        let dir = private_dir(&std::env::temp_dir()).unwrap();
+        let source = dir.join("p.pyr");
+        std::fs::write(&source, "").unwrap();
+        let path = source.to_str().unwrap();
+        let want = source.with_extension(std::env::consts::EXE_EXTENSION);
+        assert_eq!(output_path(path), Ok(want.clone()));
+        std::fs::write(&want, "old build").unwrap();
+        assert_eq!(output_path(path), Ok(want));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
