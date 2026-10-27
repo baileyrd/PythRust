@@ -42,6 +42,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use pythrust_compiler::own::{self, Precision};
 use pythrust_compiler::{infer, lexer, parser};
 
 type Res<T> = std::result::Result<T, String>;
@@ -552,6 +553,41 @@ fn corpus_checks() -> Res<()> {
     }
     report(failures);
     Ok(())
+}
+
+/// The ownership analysis behind `check` and `run` is a coverage gate:
+/// every checked program gets summaries, precise for each program the
+/// native backend builds, and otherwise conservative only for a gap the
+/// backend names, never an internal error.
+#[test]
+fn corpus_ownership_coverage() -> Res<()> {
+    let mut failures = Vec::new();
+    for case in load_corpus(&corpus_dir()?)? {
+        if case.expect.check_error.is_some() {
+            continue;
+        }
+        let name = stem(&case.source);
+        let src = read(&case.source)?;
+        let module =
+            parser::parse(&lexer::lex(&src).map_err(|d| d.message)?).map_err(|d| d.message)?;
+        let types = infer::infer(&module).map_err(|d| d.message)?;
+        let failure = match own::analyze(&module, &types).precision {
+            Precision::Precise => None,
+            Precision::Conservative(_) if NATIVE.contains(&name.as_str()) => Some(format!(
+                "{name}: builds natively, but its summaries are conservative"
+            )),
+            Precision::Conservative(gap) if gap.message.contains("does not support") => None,
+            Precision::Conservative(gap) => Some(format!("{name}: {}", gap.message)),
+        };
+        failures.extend(failure);
+    }
+    report(failures);
+    Ok(())
+}
+
+fn stem(source: &Path) -> String {
+    let stem = source.file_stem().unwrap_or_default();
+    stem.to_string_lossy().into_owned()
 }
 
 #[test]
