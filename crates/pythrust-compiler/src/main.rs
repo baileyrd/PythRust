@@ -2,7 +2,8 @@
 //!
 //! The only place that does I/O. Stages are pure; this file reads the
 //! file, calls them, renders diagnostics as `path:line:col`, and for
-//! `build` writes the object file and links it with the system `cc`.
+//! `build` writes the object file and links it with the system linker:
+//! `cc` on Unix, MSVC's `link.exe` on Windows.
 
 #![forbid(unsafe_code)]
 
@@ -16,14 +17,23 @@ const USAGE: &str = "usage: pythrust <run|check|build> <file>";
 
 /// The runtime library every native program links against. Found next
 /// to this executable, where `cargo build` puts it, unless overridden.
+#[cfg(not(windows))]
 const RUNTIME_LIB: &str = "libpythrust_rt.a";
+#[cfg(windows)]
+const RUNTIME_LIB: &str = "pythrust_rt.lib";
 const RUNTIME_ENV: &str = "PYTHRUST_RT";
+
+/// The compiled program's object file, in the private build directory.
+#[cfg(not(windows))]
+const OBJECT: &str = "program.o";
+#[cfg(windows)]
+const OBJECT: &str = "program.obj";
 
 /// System libraries a Rust static library needs (`rustc --print
 /// native-static-libs`).
 #[cfg(target_os = "macos")]
 const NATIVE_LIBS: &[&str] = &["-lSystem", "-lc", "-lm"];
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const NATIVE_LIBS: &[&str] = &[
     "-lgcc_s",
     "-lutil",
@@ -33,17 +43,32 @@ const NATIVE_LIBS: &[&str] = &[
     "-ldl",
     "-lc",
 ];
+/// `msvcrt.lib` is the dynamic C runtime, as Rust's MSVC targets use;
+/// it also supplies `mainCRTStartup`, which calls the runtime's `main`.
+#[cfg(windows)]
+const NATIVE_LIBS: &[&str] = &[
+    "kernel32.lib",
+    "ntdll.lib",
+    "userenv.lib",
+    "ws2_32.lib",
+    "dbghelp.lib",
+    "msvcrt.lib",
+];
 
 /// Linker flags that keep only what the program reaches and drop debug
 /// info, as Cargo's release profile does (`strip = "debuginfo"`). Without
 /// them a binary carries the standard library's debug info and its unused
 /// code: 5.5 to 6.3 MB instead of 0.44 to 0.52 MB on x86-64 Linux.
 /// Symbols stay for backtraces. On macOS, ld64's `-S` is the analogue of
-/// `--strip-debug`: it leaves out the debug map.
+/// `--strip-debug`: it leaves out the debug map. MSVC writes debug info
+/// only with `/DEBUG`, so there it only needs unreferenced code dropped
+/// (`/OPT:REF`) and identical code folded (`/OPT:ICF`).
 #[cfg(target_os = "macos")]
 const LINK_FLAGS: &[&str] = &["-Wl,-dead_strip", "-Wl,-S"];
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const LINK_FLAGS: &[&str] = &["-Wl,--gc-sections", "-Wl,--strip-debug"];
+#[cfg(windows)]
+const LINK_FLAGS: &[&str] = &["/NOLOGO", "/SUBSYSTEM:CONSOLE", "/OPT:REF", "/OPT:ICF"];
 
 /// A subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +77,9 @@ enum Command {
     Run,
     /// Lex, parse, and infer. Never executes the program.
     Check,
-    /// Compile to a native executable beside the source, without its
-    /// extension: `fib.pyr` builds `fib`.
+    /// Compile to a native executable beside the source, named like it
+    /// with the host's executable extension: `fib.pyr` builds `fib`, or
+    /// `fib.exe` on Windows.
     Build,
 }
 
@@ -164,10 +190,10 @@ fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
 
 /// Links `object` with the runtime into the executable for `path`.
 fn link(path: &str, object: &[u8]) -> Result<(), String> {
-    let out = Path::new(path).with_extension("");
+    let out = Path::new(path).with_extension(std::env::consts::EXE_EXTENSION);
     if out == Path::new(path) {
         return Err(format!(
-            "pythrust: {path} has no extension to strip for the output name\n"
+            "pythrust: cannot build {path}: the executable would overwrite it\n"
         ));
     }
     let runtime = runtime_lib()?;
@@ -180,42 +206,87 @@ fn link(path: &str, object: &[u8]) -> Result<(), String> {
 
 /// Writes `object` into `dir` and links it with `runtime` into `out`.
 fn link_in(dir: &Path, object: &[u8], runtime: &Path, out: &Path) -> Result<(), String> {
-    let obj = dir.join("program.o");
+    let obj = dir.join(OBJECT);
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&obj)
         .and_then(|mut f| f.write_all(object))
         .map_err(|e| format!("pythrust: cannot write {}: {e}\n", obj.display()))?;
-    let status = std::process::Command::new("cc")
+    let mut linker = linker()?;
+    let output = linker
         .arg(&obj)
         .arg(runtime)
         .args(NATIVE_LIBS)
         .args(LINK_FLAGS)
-        .arg("-o")
-        .arg(out)
-        .status()
-        .map_err(|e| format!("pythrust: cannot run cc: {e}\n"))?;
-    match status.success() {
-        true => Ok(()),
-        false => Err(format!(
-            "pythrust: linking {} failed: cc {status}\n",
-            out.display()
-        )),
+        .args(output_args(out))
+        .output()
+        .map_err(|e| format!("pythrust: cannot run {}: {e}\n", linker_name(&linker)))?;
+    if output.status.success() {
+        return Ok(());
     }
+    // `link.exe` reports errors on stdout, `cc` on stderr; show both.
+    Err(format!(
+        "pythrust: linking {} failed: {} {}\n{}{}",
+        out.display(),
+        linker_name(&linker),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    ))
+}
+
+/// The system C compiler driver, which runs the linker.
+#[cfg(not(windows))]
+fn linker() -> Result<std::process::Command, String> {
+    Ok(std::process::Command::new("cc"))
+}
+
+/// MSVC's `link.exe`, from a developer prompt's `PATH` or the newest
+/// installed Visual Studio, with its library paths set, as Cargo finds it.
+#[cfg(windows)]
+fn linker() -> Result<std::process::Command, String> {
+    find_msvc_tools::find(std::env::consts::ARCH, "link.exe").ok_or_else(|| {
+        "pythrust: cannot find the MSVC linker link.exe; install Visual Studio Build Tools with the C++ workload\n"
+            .to_string()
+    })
+}
+
+/// The linker's program name, for messages.
+fn linker_name(linker: &std::process::Command) -> String {
+    let program = Path::new(linker.get_program());
+    program
+        .file_name()
+        .unwrap_or(program.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The arguments naming the executable to write.
+#[cfg(not(windows))]
+fn output_args(out: &Path) -> Vec<std::ffi::OsString> {
+    vec!["-o".into(), out.into()]
+}
+
+#[cfg(windows)]
+fn output_args(out: &Path) -> Vec<std::ffi::OsString> {
+    let mut arg = std::ffi::OsString::from("/OUT:");
+    arg.push(out);
+    vec![arg]
 }
 
 /// A fresh directory under the system temp dir that only this user can
-/// read, so no other process can swap or read the object before `cc` does.
+/// read, so no other process can swap or read the object before the linker
+/// does. On Unix it is created mode 0700; on Windows the temp dir is
+/// already per-user (`%LOCALAPPDATA%\Temp`) and the new directory inherits
+/// its owner-only ACL.
 /// Created exclusively: an existing path is never reused.
 fn private_dir() -> Result<PathBuf, String> {
     let base = std::env::temp_dir();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let builder = owner_only_builder();
     for attempt in 0..100 {
         let dir = base.join(format!("pythrust-{}-{nanos}-{attempt}", std::process::id()));
         match builder.create(&dir) {
@@ -228,6 +299,19 @@ fn private_dir() -> Result<PathBuf, String> {
         "pythrust: no free temporary directory in {}\n",
         base.display()
     ))
+}
+
+#[cfg(unix)]
+fn owner_only_builder() -> std::fs::DirBuilder {
+    let mut builder = std::fs::DirBuilder::new();
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+}
+
+/// Windows ACLs come from the per-user temp dir; see [`private_dir`].
+#[cfg(not(unix))]
+fn owner_only_builder() -> std::fs::DirBuilder {
+    std::fs::DirBuilder::new()
 }
 
 /// The runtime library: `$PYTHRUST_RT`, or next to this executable.

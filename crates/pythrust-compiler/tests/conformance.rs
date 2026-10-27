@@ -206,10 +206,33 @@ fn wait(child: &mut Child, timeout: Duration) -> Res<i32> {
     }
 }
 
+/// The oracle interpreter: `$PYTHON`, else `python3`, or `python` on
+/// Windows, where `python3` may be the Microsoft Store stub.
+fn python() -> String {
+    let default = if cfg!(windows) { "python" } else { "python3" };
+    std::env::var("PYTHON").unwrap_or_else(|_| default.to_string())
+}
+
 fn run_cpython(source: &Path) -> Res<Run> {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
     // -I: isolated mode, so nothing from the environment or cwd leaks in.
-    run(Command::new(python).arg("-I").arg(source), TIMEOUT)
+    // -X utf8: UTF-8 stdout even where the locale's code page is not.
+    let mut got = run(
+        Command::new(python())
+            .args(["-I", "-X", "utf8"])
+            .arg(source),
+        TIMEOUT,
+    )?;
+    got.stdout = universal_newlines(got.stdout);
+    Ok(got)
+}
+
+/// Undoes text-mode stdout's newline translation: CPython on Windows
+/// writes each `\n` as `\r\n`. Pythrust writes `\n` everywhere.
+fn universal_newlines(stdout: String) -> String {
+    match cfg!(windows) {
+        true => stdout.replace("\r\n", "\n"),
+        false => stdout,
+    }
 }
 
 fn pythrust_bin() -> Res<PathBuf> {
@@ -364,7 +387,7 @@ fn build_native(source: &Path, dir: &Path) -> Res<Option<PathBuf>> {
         .map_err(|e| format!("cannot run pythrust build: {e}"))?;
     let stderr = String::from_utf8_lossy(&out.stderr);
     match (out.status.success(), stderr.contains(NATIVE_UNSUPPORTED)) {
-        (true, _) => Ok(Some(copy.with_extension(""))),
+        (true, _) => Ok(Some(copy.with_extension(std::env::consts::EXE_EXTENSION))),
         (false, true) => Ok(None),
         (false, false) => Err(format!("{}: build failed:\n{stderr}", source.display())),
     }
@@ -855,7 +878,7 @@ fn bless_skips_deviations() -> Res<()> {
 
 #[test]
 fn run_kills_on_timeout() {
-    let mut cmd = Command::new("python3");
+    let mut cmd = Command::new(python());
     cmd.args(["-I", "-c", "while True: pass"]);
     let got = run(&mut cmd, Duration::from_millis(200));
     assert!(got.is_err_and(|e| e.contains("timed out")));
