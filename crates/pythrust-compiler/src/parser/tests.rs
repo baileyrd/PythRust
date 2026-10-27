@@ -772,6 +772,9 @@ fn try_except_errors() {
     let with_else =
         format!("{body} except ValueError : NL INDENT y NL DEDENT else : NL INDENT z NL DEDENT");
     assert_eq!(err(&with_else), "`else` on `try` is not supported yet");
+    let reserved = "'as' is reserved outside `except Name as e`";
+    assert_eq!(err("as = 1 NL"), reserved);
+    assert_eq!(err("x = y as z NL"), reserved);
     assert_eq!(
         err("except ValueError : NL INDENT y NL DEDENT"),
         "expected an expression, found `except`"

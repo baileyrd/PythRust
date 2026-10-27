@@ -116,6 +116,9 @@ impl<'a> Parser<'a> {
 
     fn unexpected(&self, expected: &str) -> Diagnostic {
         let tok = self.tok(0);
+        if tok.kind == TokenKind::As {
+            return error(tok.span, "'as' is reserved outside `except Name as e`");
+        }
         let found = describe(&tok.kind);
         error(tok.span, format!("expected {expected}, found {found}"))
     }

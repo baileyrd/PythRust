@@ -1837,3 +1837,16 @@ fn break_inside_try_belongs_to_the_loop() {
     let forever = "def f() -> int:\n    while True:\n        try:\n            pass\n        except ValueError:\n            pass\n";
     assert!(infer_src(forever).is_ok());
 }
+
+#[test]
+fn a_shadowing_def_is_seen_whichever_comes_first() {
+    let handler =
+        "def f():\n    try:\n        raise IndexError()\n    except ValueError:\n        pass\n";
+    let shadow = "def ValueError():\n    pass\n";
+    for src in [format!("{handler}{shadow}"), format!("{shadow}{handler}")] {
+        assert!(
+            src_err(&src).contains("no longer names the builtin exception"),
+            "{src}"
+        );
+    }
+}

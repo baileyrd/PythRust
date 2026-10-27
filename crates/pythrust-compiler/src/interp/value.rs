@@ -75,11 +75,19 @@ pub(super) struct Exc<'m> {
 }
 
 impl Exc<'_> {
-    /// `str(e)`: the argument as a string, or empty without one.
+    /// `str(e)`: the argument as a string, or empty without one. An
+    /// exception argument gives its own message (`str(ValueError(inner))`
+    /// is `str(inner)`), followed in a loop so deep chains cannot
+    /// exhaust the stack.
     pub fn message(&self, span: Span) -> Result<String> {
-        self.arg
-            .as_ref()
-            .map_or(Ok(String::new()), |v| v.to_str(span))
+        let mut exc = self;
+        loop {
+            match &exc.arg {
+                None => return Ok(String::new()),
+                Some(Value::Exc(inner)) => exc = inner,
+                Some(v) => return v.to_str(span),
+            }
+        }
     }
 
     /// The last line CPython prints for an uncaught exception:
@@ -516,12 +524,14 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
             return write_items(t, id, ("(", close), active, out, span);
         }
         Value::Exc(e) => {
+            enter_repr(active, Rc::as_ptr(e).cast::<()>(), span)?;
             out.push_str(e.kind.name());
             out.push('(');
             if let Some(arg) = &e.arg {
                 write_repr(arg, active, out, span)?;
             }
             out.push(')');
+            active.pop();
             return Ok(());
         }
         Value::None => "None".to_string(),
@@ -541,14 +551,9 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
     Ok(())
 }
 
-fn write_items(
-    items: &[Value],
-    id: *const (),
-    (open, close): (&str, &str),
-    active: &mut Vec<*const ()>,
-    out: &mut String,
-    span: Span,
-) -> Result<()> {
+/// Pushes the container or exception `id` being rendered, unless that
+/// would nest deeper than `MAX_NESTING`.
+fn enter_repr(active: &mut Vec<*const ()>, id: *const (), span: Span) -> Result<()> {
     if active.len() >= MAX_NESTING {
         return Err(rt_err(
             span,
@@ -557,6 +562,18 @@ fn write_items(
         ));
     }
     active.push(id);
+    Ok(())
+}
+
+fn write_items(
+    items: &[Value],
+    id: *const (),
+    (open, close): (&str, &str),
+    active: &mut Vec<*const ()>,
+    out: &mut String,
+    span: Span,
+) -> Result<()> {
+    enter_repr(active, id, span)?;
     out.push_str(open);
     for (i, item) in items.iter().enumerate() {
         if i > 0 {

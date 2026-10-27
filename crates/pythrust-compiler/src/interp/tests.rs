@@ -1296,3 +1296,14 @@ fn raising_or_catching_a_non_exception_is_a_type_error() {
     let shadowed = "ValueError = 1\ntry:\n    raise IndexError()\nexcept ValueError:\n    pass\n";
     assert!(fails_src(shadowed).starts_with("TypeError: catching classes"));
 }
+
+#[test]
+fn nested_exception_arguments_are_bounded() {
+    let chain = "e = ValueError(\"leaf\")\nfor i in range(10001):\n    e = ValueError(e)\n";
+    assert_eq!(ok_src(&format!("{chain}print(e, str(e))\n")), "leaf leaf\n");
+    assert_eq!(fails_src(&format!("{chain}raise e\n")), "ValueError: leaf");
+    let repr = fails_src(&format!("{chain}print([e])\n"));
+    assert!(repr.starts_with("RecursionError"), "{repr}");
+    let shallow = "print([ValueError(IndexError([1]))], str(ValueError(IndexError(2))))\n";
+    assert_eq!(ok_src(shallow), "[ValueError(IndexError([1]))] 2\n");
+}

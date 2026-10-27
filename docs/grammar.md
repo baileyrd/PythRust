@@ -13,7 +13,7 @@ Notation: EBNF. `A*` zero or more, `A+` one or more, `[A]` optional, `A | B` cho
   - `INT`: decimal digits, `_` separators allowed. Ints are `i64`; arithmetic overflow is a runtime error, never a silent wrap. An `INT` literal above `i64::MAX` is a compile error, except `9223372036854775808` directly under unary `-`, which the parser folds to `i64::MIN`. Arbitrary precision may be added later as an opt-in type.
   - `FLOAT`: digits with `.` or exponent.
   - `STRING`: single or double quoted, with Python's `\` escapes except `\N{...}`. An unknown escape is an error. No string prefixes (`f`, `r`, `b`, `u`) or triple quotes yet; the lexer rejects them by name.
-- Keywords: `def return if elif else while for in break continue pass and or not is True False None temper try except raise as`.
+- Keywords: `def return if elif else while for in break continue pass and or not is True False None temper try except raise as` `as` is allowed only in `except Name as e`; anywhere else it is an error saying it is reserved, until `with` lands.
 - Reserved for later (rejected by the lexer so programs stay forward-compatible): `finally assert class import from with lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
 
 ## Program

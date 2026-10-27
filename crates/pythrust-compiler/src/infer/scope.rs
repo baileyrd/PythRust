@@ -180,6 +180,13 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             body.iter().chain(orelse).for_each(|s| stmt_names(s, out));
         }
         StmtKind::Try { body, handlers } => {
+            // A handler's name is read too: a `def` that shadows it must be
+            // inferred first, so the handler sees the shadowing.
+            out.extend(
+                handlers
+                    .iter()
+                    .map(|h| (h.exception.name.as_str(), h.exception.span)),
+            );
             let bodies = handlers.iter().flat_map(|h| &h.body);
             body.iter().chain(bodies).for_each(|s| stmt_names(s, out));
         }
