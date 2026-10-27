@@ -124,8 +124,18 @@ impl<'a> FnBuilder<'_, 'a> {
     /// `and` / `or`: the result is one of the operands, adapted to the
     /// result's type (`x or 7` on an `int | None` wraps the 7).
     fn logical(&mut self, op: LogicalOp, left: &Expr, right: &Expr, span: Span) -> Result<Operand> {
-        let ty = self.ty_at(span)?;
+        // Open in generic code until a `return` decides it: then the left
+        // operand, which always lowers first, decides it.
+        let open = match self.ty_at(span) {
+            Ok(ty) => Some(ty),
+            Err(_) if self.open_ret.is_some() => None,
+            Err(e) => return Err(e),
+        };
         let l = self.expr(left)?;
+        let ty = match open {
+            Some(ty) => ty,
+            None => self.decide_open(span, l)?,
+        };
         let dest = self.pooled(ty);
         let test = self.truthy(l, span);
         let (short, rhs, end) = (self.new_block(), self.new_block(), self.new_block());
@@ -417,10 +427,7 @@ impl<'a> FnBuilder<'_, 'a> {
         let (local, ty) = match *dest {
             Some(d) => d,
             None => {
-                let node = self.node_type(span)?;
-                let have = self.ty(v);
-                let ty = self.shape(node, have, span)?;
-                super::bind(node, ty, &self.cx.seqs, &mut self.subst);
+                let ty = self.decide_open(span, v)?;
                 *dest.insert((self.pooled(ty), ty))
             }
         };
@@ -433,6 +440,16 @@ impl<'a> FnBuilder<'_, 'a> {
         }
         self.move_into(local, v, span);
         Ok(())
+    }
+
+    /// The type of the open node at `span`, decided by `v`, one of the
+    /// values it may take, in the node's shape; binds the node's variables.
+    fn decide_open(&mut self, span: Span, v: Operand) -> Result<Ty> {
+        let node = self.node_type(span)?;
+        let have = self.ty(v);
+        let ty = self.shape(node, have, span)?;
+        super::bind(node, ty, &self.cx.seqs, &mut self.subst);
+        Ok(ty)
     }
 
     /// Python truthiness as a `Bool` operand.
@@ -558,10 +575,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 return Err(unsupported(span, super::stmt::OPEN_RESULT));
             }
         };
-        // A settled type is no evidence for the nodes sharing it.
-        if !self.cx.diverges.contains(&id) {
-            super::bind(node, ret, &self.cx.seqs, &mut self.subst);
-        }
+        super::bind(node, ret, &self.cx.seqs, &mut self.subst);
         Ok((id, ret))
     }
 

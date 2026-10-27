@@ -1,0 +1,44 @@
+# expect-exit: 1
+# A call that never returns ends only its own path: an `elif` test, a
+# loop test and dead assignments leave the other paths running, and a
+# function that may still fall off is not taken for one that never
+# returns.
+def spin(n):
+    return spin(n - 1)
+
+
+def grow(n):
+    return grow(n - 1) + 1
+
+
+def big(n) -> list | None:
+    if n > 5:
+        print("big")
+    elif big(n + 1):
+        print("never")
+
+
+def late(c):
+    if c:
+        x = grow(1)
+    print(x)
+
+
+if True:
+    print("ok")
+elif spin(1):
+    print("never")
+print("done")
+print(big(6))
+i = 0
+while i < 2 or spin(1):
+    i += 1
+    if i == 2:
+        break
+print("loop", i)
+t = 3
+if 0:
+    t += grow(1)
+    y = (grow(1), 2)
+print(t)
+late(0)

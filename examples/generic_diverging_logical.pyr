@@ -1,0 +1,15 @@
+# expect-exit: 1
+# `and` / `or` on results of a generic function that never returns, and
+# a variable assigned one: the call fails as `run` does.
+def either(n):
+    return either(n - 1) or either(n + 1)
+
+
+def both(n):
+    return both(n - 1) and both(n + 1)
+
+
+print("start")
+x = either(1)
+print(x)
+print(both(1))

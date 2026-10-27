@@ -34,11 +34,16 @@ impl FnBuilder<'_, '_> {
             let (pools, loops) = (self.pools.len(), self.loops.len());
             match self.pooled_stmt(|b| b.stmt(s)) {
                 Err(_) if self.stuck || self.diverged => {
+                    let diverged = self.diverged;
                     self.skipped |= self.stuck;
                     (self.stuck, self.diverged) = (false, false);
                     self.pools.truncate(pools);
                     self.loops.truncate(loops);
                     self.jump_away(Term::Unreachable);
+                    // What follows in this block is never reached.
+                    if diverged {
+                        return Ok(());
+                    }
                 }
                 r => r?,
             }
@@ -185,12 +190,28 @@ impl FnBuilder<'_, '_> {
     }
 
     /// A loop or branch condition, as a `Bool`. Its strings are released
-    /// before the branch.
-    fn cond(&mut self, test: &Expr) -> Result<Operand> {
-        self.pooled_stmt(|b| {
+    /// before the branch. One that calls an instance that never returns
+    /// ends its path there; the statement's other paths (an earlier
+    /// branch to the join) carry on. `branch`: evaluated only when an
+    /// earlier test failed (`elif`), so stuck there, the statement may
+    /// still return another way.
+    fn cond(&mut self, test: &Expr, branch: bool) -> Result<Operand> {
+        let cond = self.pooled_stmt(|b| {
             let t = b.expr(test)?;
             Ok(b.truthy(t, test.span))
-        })
+        });
+        match cond {
+            Err(_) if self.diverged => {
+                self.diverged = false;
+                self.jump_away(Term::Unreachable);
+                Ok(Operand::Bool(false))
+            }
+            Err(e) if self.stuck && branch => {
+                self.may_return = true;
+                Err(e)
+            }
+            r => r,
+        }
     }
 
     /// A top-level `def` (inference rejects nested ones). Its body is
@@ -221,9 +242,9 @@ impl FnBuilder<'_, '_> {
 
     fn if_stmt(&mut self, branch: &Branch, elifs: &[Branch], orelse: &Block) -> Result<()> {
         let end = self.new_block();
-        for b in std::iter::once(branch).chain(elifs) {
+        for (i, b) in std::iter::once(branch).chain(elifs).enumerate() {
             let (then, next) = (self.new_block(), self.new_block());
-            let cond = self.cond(&b.test)?;
+            let cond = self.cond(&b.test, i > 0)?;
             self.terminate(Term::Branch {
                 cond,
                 then,
@@ -249,7 +270,7 @@ impl FnBuilder<'_, '_> {
         );
         self.terminate(Term::Goto(head));
         self.switch_to(head);
-        let cond = self.cond(&branch.test)?;
+        let cond = self.cond(&branch.test, false)?;
         self.terminate(Term::Branch {
             cond,
             then: body,

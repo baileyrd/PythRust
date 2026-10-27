@@ -572,6 +572,60 @@ fn mutual_recursion_through_ops_never_returns() {
 }
 
 #[test]
+fn a_stuck_elif_test_is_not_never_returning() {
+    // `big` falls off (returns `None`) through the first branch.
+    let p = lowered("def big(n) -> list | None:\n    if n > 5:\n        print(1)\n    elif big(n + 1):\n        print(2)\n\n\nprint(big(6))\n");
+    let main = &p.funcs[p.main.0];
+    assert!(!ends_after_a_call(main));
+    assert_eq!(prints(main), 1);
+}
+
+/// The int literals that prints in blocks of `f` reachable from its
+/// entry print first.
+fn reachable_prints(f: &Func) -> Vec<i64> {
+    let (mut seen, mut todo) = (vec![false; f.blocks.len()], vec![0]);
+    let mut out = Vec::new();
+    while let Some(b) = todo.pop() {
+        if std::mem::replace(&mut seen[b], true) {
+            continue;
+        }
+        let block = &f.blocks[b];
+        for i in &block.insts {
+            if let Inst::Print { args, .. } = i {
+                if let Some(Operand::Int(n)) = args.first() {
+                    out.push(*n);
+                }
+            }
+        }
+        match &block.term {
+            Term::Goto(t) => todo.push(t.0),
+            Term::Branch { then, orelse, .. } => todo.extend([then.0, orelse.0]),
+            _ => {}
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn a_never_returning_elif_test_keeps_the_join() {
+    let p = lowered("def spin(n):\n    return spin(n - 1)\n\n\nif True:\n    print(1)\nelif spin(1):\n    print(2)\nprint(3)\n");
+    assert_eq!(reachable_prints(&p.funcs[p.main.0]), vec![1, 3]);
+}
+
+#[test]
+fn never_returning_results_assigned_or_in_and_or_lower() {
+    for src in [
+        "def f(n):\n    return f(n - 1) + 1\n\n\nx = f(1)\nprint(x)\n",
+        "def f(n):\n    return f(n - 1) or f(n + 1)\n\n\nprint(f(1))\n",
+        "def f(n):\n    return f(n - 1) and f(n + 1)\n\n\nprint(f(1))\n",
+    ] {
+        let p = lowered(src);
+        assert_eq!(prints(&p.funcs[p.main.0]), 0, "{src}");
+    }
+}
+
+#[test]
 fn returning_none_through_a_waiting_callee_is_not_never_returning() {
     // `fold` returns only through `unfold`, which waits on `fold` but
     // may return `None` itself.
