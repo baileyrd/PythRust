@@ -554,11 +554,7 @@ fn memcheck(case: &Case, exe: &Path) -> Res<Option<String>> {
     let log = exe.with_extension("memcheck");
     let got = run(
         Command::new("valgrind")
-            .args([
-                "--quiet",
-                "--leak-check=full",
-                "--errors-for-leak-kinds=definite",
-            ])
+            .args(["--leak-check=full", "--errors-for-leak-kinds=definite"])
             .arg(format!("--error-exitcode={MEMCHECK_EXIT}"))
             .arg(format!("--log-file={}", log.display()))
             .arg(exe),
@@ -568,18 +564,23 @@ fn memcheck(case: &Case, exe: &Path) -> Res<Option<String>> {
     Ok(memcheck_failure(case, got, &report))
 }
 
+/// Memcheck's closing line for a run it watched to the end with no errors.
+const MEMCHECK_CLEAN: &str = "ERROR SUMMARY: 0 errors";
+
 /// The report for a memcheck run, if it failed. It fails closed: the
 /// instrumented run must finish exactly as the golden says (stdout and
-/// status, so an expected runtime error still passes), and a run that could
-/// not start, timed out or died by a signal fails.
+/// status, so an expected runtime error still passes) and its log must end
+/// clean, which proves memcheck ran the program to completion. A run that
+/// could not start, timed out, died by a signal or left no log fails.
 fn memcheck_failure(case: &Case, got: Res<Run>, report: &str) -> Option<String> {
     let why = match got {
         Err(e) => format!("memcheck run failed: {e}"),
         Ok(run) if run.status == MEMCHECK_EXIT => "memcheck errors".to_string(),
-        Ok(run) => format!(
-            "memcheck run differs from the golden: {}",
-            mismatch(case, &run)?
-        ),
+        Ok(run) => match mismatch(case, &run) {
+            Some(m) => format!("memcheck run differs from the golden: {m}"),
+            None if report.contains(MEMCHECK_CLEAN) => return None,
+            None => format!("memcheck did not report a clean finish ({MEMCHECK_CLEAN})"),
+        },
     };
     Some(format!(
         "{}\n  {why}\n  memcheck log:\n{report}",
@@ -735,34 +736,46 @@ fn mismatch_reports_status_and_stdout() {
 
 #[test]
 fn memcheck_fails_closed() {
-    let case = |status: i32| Case {
+    let case = |stdout: &str, status: i32| Case {
         source: PathBuf::from("p.pyr"),
-        stdout: "1\n".to_string(),
+        stdout: stdout.to_string(),
         expect: Expect {
             status,
             deviation: None,
             check_error: None,
         },
     };
-    let ran = |status: i32| -> Res<Run> {
+    let ran = |stdout: &str, status: i32| -> Res<Run> {
         Ok(Run {
-            stdout: "1\n".to_string(),
+            stdout: stdout.to_string(),
             status,
         })
     };
-    assert_eq!(memcheck_failure(&case(0), ran(0), ""), None);
-    // An expected runtime error is not a memcheck error.
-    assert_eq!(memcheck_failure(&case(1), ran(1), ""), None);
+    let clean = "==1== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)\n";
+    assert_eq!(
+        memcheck_failure(&case("1\n", 0), ran("1\n", 0), clean),
+        None
+    );
+    // An expected runtime error that memcheck saw through is not an error.
+    assert_eq!(memcheck_failure(&case("", 1), ran("", 1), clean), None);
     // A program that should succeed but exits 1 under memcheck fails.
-    assert!(memcheck_failure(&case(0), ran(1), "").is_some());
-    let silent = Ok(Run {
-        stdout: String::new(),
-        status: 0,
-    });
-    assert!(memcheck_failure(&case(0), silent, "").is_some());
-    let errors = memcheck_failure(&case(1), ran(MEMCHECK_EXIT), "Invalid read of size 8");
+    assert!(memcheck_failure(&case("1\n", 0), ran("1\n", 1), clean).is_some());
+    assert!(memcheck_failure(&case("1\n", 0), ran("", 0), clean).is_some());
+    // A tool failure can look like an expected silent runtime error; only
+    // the clean summary tells them apart.
+    let no_log = "no memcheck log: No such file or directory (os error 2)";
+    let tool_failed = "valgrind: failed to start tool 'memcheck' for platform 'amd64-linux'\n";
+    for report in [no_log, tool_failed, ""] {
+        let failed = memcheck_failure(&case("", 1), ran("", 1), report);
+        assert!(failed.is_some_and(|f| f.contains("clean finish") && f.contains(report)));
+    }
+    let errors = memcheck_failure(
+        &case("", 1),
+        ran("", MEMCHECK_EXIT),
+        "Invalid read of size 8",
+    );
     assert!(errors.is_some_and(|f| f.contains("memcheck errors") && f.contains("Invalid read")));
-    let killed = memcheck_failure(&case(0), Err("killed by a signal".to_string()), "");
+    let killed = memcheck_failure(&case("", 0), Err("killed by a signal".to_string()), clean);
     assert!(killed.is_some_and(|f| f.contains("killed by a signal")));
 }
 
