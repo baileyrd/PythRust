@@ -281,6 +281,7 @@ const NATIVE: &[&str] = &[
     "int_parse_overflow",
     "int_pow_negative",
     "keyword_args",
+    "list_copy",
     "list_ownership",
     "list_semantics",
     "list_set_error",

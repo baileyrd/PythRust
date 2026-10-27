@@ -1,5 +1,5 @@
-//! The closed builtin functions: `print len range str int float bool`, and
-//! the builtin exceptions (D6), which build an `Exception` when called.
+//! The closed builtin functions: `print len list range str int float bool`,
+//! and the builtin exceptions (D6), which build an `Exception` when called.
 
 use crate::ast::Arg;
 use crate::diag::Result;
@@ -21,7 +21,7 @@ pub(super) const EXCEPTIONS: [&str; 5] = [
 pub(super) fn is_builtin(name: &str) -> bool {
     let function = matches!(
         name,
-        "print" | "len" | "range" | "str" | "int" | "float" | "bool"
+        "print" | "len" | "list" | "range" | "str" | "int" | "float" | "bool"
     );
     function || is_exception(name)
 }
@@ -41,6 +41,7 @@ impl Checker {
                 }
                 Ok(Type::Int)
             }
+            "list" => self.copy_list(args, span),
             "range" => self.range(args, span),
             "str" | "bool" => {
                 self.positional(name, args, 0, 1, span)?;
@@ -72,6 +73,15 @@ impl Checker {
             self.expect(arg.value.span, &Type::Str, &t, &what)?;
         }
         Ok(Type::None)
+    }
+
+    /// `list(xs)`: a shallow copy of a list, of the same type.
+    fn copy_list(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        let list = Type::List(Box::new(self.subst.fresh()));
+        for (t, at) in self.positional("list", args, 1, 1, span)? {
+            self.expect(at, &list, &t, "`list` copies a list")?;
+        }
+        Ok(list)
     }
 
     fn range(&mut self, args: &[Arg], span: Span) -> Result<Type> {

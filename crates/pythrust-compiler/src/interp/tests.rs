@@ -818,8 +818,16 @@ fn assigned_names_are_local_throughout() {
 #[test]
 fn undefined_name() {
     assert_eq!(
-        show_err(name("list")),
-        "NameError: name 'list' is not defined"
+        show_err(name("nope")),
+        "NameError: name 'nope' is not defined"
+    );
+}
+
+#[test]
+fn list_copies_only_lists() {
+    assert_eq!(
+        show_err(call("list", vec![int(1)])),
+        "TypeError: 'int' object is not iterable"
     );
 }
 
@@ -1306,4 +1314,18 @@ fn nested_exception_arguments_are_bounded() {
     assert!(repr.starts_with("RecursionError"), "{repr}");
     let shallow = "print([ValueError(IndexError([1]))], str(ValueError(IndexError(2))))\n";
     assert_eq!(ok_src(shallow), "[ValueError(IndexError([1]))] 2\n");
+}
+
+#[test]
+fn list_copy_composes_with_exceptions() {
+    let src = "def parse_all(xs: list[str]) -> list[int]:\n    out = []\n    for s in list(xs):\n        try:\n            out.append(int(s))\n        except ValueError as e:\n            xs.append(\"seen\")\n            print(e)\n    return list(out)\n\
+               words = [\"1\", \"x\"]\nprint(parse_all(words), words)\n\
+               try:\n    list(ValueError(1))\nexcept ValueError:\n    print(\"caught\")\n";
+    let (out, err) = exec_src(src);
+    assert_eq!(
+        out,
+        "invalid literal for int() with base 10: 'x'\n[1] ['1', 'x', 'seen']\n"
+    );
+    let err = err.expect("list() of a non-list is a fault");
+    assert!(err.message.starts_with("TypeError"), "{}", err.message);
 }
