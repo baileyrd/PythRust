@@ -235,8 +235,12 @@ fn sx_def(f: &FuncDef) -> String {
         .returns
         .as_ref()
         .map_or(String::new(), |t| format!(" -> {}", sx_type(t)));
+    let raises = match f.raises.as_slice() {
+        [] => String::new(),
+        names => format!(" raises {}", join(names.iter().map(|n| n.name.clone()))),
+    };
     format!(
-        "({word} {} ({params}){returns} {})",
+        "({word} {} ({params}){returns}{raises} {})",
         f.name.name,
         sx_block(&f.body)
     )
@@ -640,6 +644,35 @@ fn function_definitions() {
     assert_eq!(
         ok("def f ( a : int = 0 ) -> None : NL INDENT return NL DEDENT"),
         "(def f ([a: int = 0]) -> None ((return)))"
+    );
+}
+
+#[test]
+fn raises_clauses() {
+    assert_eq!(
+        ok("temper def f ( ) -> int raises ValueError : NL INDENT pass NL DEDENT"),
+        "(temper-def f () -> int raises ValueError (pass))"
+    );
+    assert_eq!(
+        ok("def f ( ) raises ValueError , Exception : NL INDENT pass NL DEDENT"),
+        "(def f () raises ValueError Exception (pass))"
+    );
+    // Contextual: still an ordinary name everywhere else.
+    assert_eq!(
+        ok("def raises ( raises ) : NL INDENT return raises NL DEDENT"),
+        "(def raises (raises) ((return raises)))"
+    );
+    assert_eq!(
+        err("def f ( ) raises : NL"),
+        "expected an exception name after `raises`, found `:`"
+    );
+    assert_eq!(
+        err("def f ( ) raises ValueError , : NL"),
+        "expected an exception name after `,`, found `:`"
+    );
+    assert_eq!(
+        err("def f ( ) -> int raises ValueError IndexError : NL"),
+        "expected `:`, found name `IndexError`"
     );
 }
 

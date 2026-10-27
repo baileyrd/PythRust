@@ -11,9 +11,10 @@
 //! Stdout and exit status are compared; stderr is not, because diagnostics
 //! and tracebacks differ by design.
 //!
-//! `temper def` is not Python, so CPython runs each program loosened (every
-//! `temper ` prefix removed). `tempered_matches_loose` runs the loosened
-//! programs under Pythrust too: tempering never changes meaning.
+//! `temper def` and `raises` clauses are not Python, so CPython runs each
+//! program loosened (every `temper ` prefix and `raises` clause removed).
+//! `tempered_matches_loose` runs the loosened programs that `check` accepts
+//! under Pythrust too: tempering and declaring never change meaning.
 //!
 //! Directives in the leading comment block of a program:
 //! - `# expect-exit: N` expected exit status (default 0).
@@ -240,18 +241,35 @@ fn universal_newlines(stdout: String) -> String {
     }
 }
 
-/// `src` with each `temper ` prefix removed, or `None` if it has none.
-/// `def` is top-level only, so the prefix always starts a line.
+/// `src` as Python: each `temper ` prefix and `raises` clause removed,
+/// or `None` if it has neither. `def` is top-level only, so the prefix
+/// always starts a line, and a clause ends its `def` line.
 fn loosen(src: &str) -> Option<String> {
-    const TEMPER: &str = "temper ";
-    if !src.lines().any(|l| l.starts_with(TEMPER)) {
-        return None;
+    let lines: Vec<String> = src.lines().map(loosen_line).collect();
+    let changed = lines.iter().zip(src.lines()).any(|(a, b)| a != b);
+    changed.then(|| lines.join("\n") + "\n")
+}
+
+fn loosen_line(line: &str) -> String {
+    let line = line.strip_prefix("temper ").unwrap_or(line);
+    if !line.starts_with("def ") {
+        return line.to_string();
     }
-    let lines: Vec<&str> = src
-        .lines()
-        .map(|l| l.strip_prefix(TEMPER).unwrap_or(l))
-        .collect();
-    Some(lines.join("\n") + "\n")
+    let Some((head, names)) = line
+        .strip_suffix(':')
+        .and_then(|l| l.rsplit_once(" raises "))
+    else {
+        return line.to_string();
+    };
+    let is_list = names.split(',').all(|n| {
+        let n = n.trim();
+        !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    if is_list {
+        format!("{head}:")
+    } else {
+        line.to_string()
+    }
 }
 
 fn pythrust_bin() -> Res<PathBuf> {
@@ -573,6 +591,10 @@ fn tempered_matches_loose() -> Res<()> {
     let mut failures = Vec::new();
     let mut tempered = 0;
     for case in load_corpus(&corpus_dir()?)? {
+        // A program tempering rejects means nothing tempered to compare.
+        if case.expect.check_error.is_some() {
+            continue;
+        }
         let Some(loose) = loosen(&read(&case.source)?) else {
             continue;
         };
@@ -594,6 +616,17 @@ fn loosen_strips_only_the_prefix() {
     let src = "temper def f() -> None:\n    print(\"temper \")\n";
     let want = "def f() -> None:\n    print(\"temper \")\n";
     assert_eq!(loosen(src).as_deref(), Some(want));
+}
+
+#[test]
+fn loosen_strips_raises_clauses() {
+    let src = "temper def f(s: str) -> int raises ValueError, IndexError:\n    pass\n";
+    let want = "def f(s: str) -> int:\n    pass\n";
+    assert_eq!(loosen(src).as_deref(), Some(want));
+    let loose = "def g(s) raises ValueError:\n    print(\" raises X:\")\n";
+    let want = "def g(s):\n    print(\" raises X:\")\n";
+    assert_eq!(loosen(loose).as_deref(), Some(want));
+    assert_eq!(loosen("def raises(raises):\n    pass\n"), None);
 }
 
 /// A native program that failed must print exactly what `pythrust run`

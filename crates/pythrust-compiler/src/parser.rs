@@ -335,6 +335,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let raises = self.raises()?;
         self.expect(&TokenKind::Colon)?;
         self.in_func = true;
         let body = self.block();
@@ -345,6 +346,7 @@ impl<'a> Parser<'a> {
             name,
             params,
             returns,
+            raises,
             body: body?,
             span,
         };
@@ -352,6 +354,20 @@ impl<'a> Parser<'a> {
             kind: StmtKind::FuncDef(def),
             span,
         })
+    }
+
+    /// `['raises' NAME (',' NAME)*]`. `raises` is contextual: a keyword
+    /// only here, so it stays usable as a name.
+    fn raises(&mut self) -> Result<Vec<Ident>> {
+        if !matches!(self.peek(), TokenKind::Name(n) if n == "raises") {
+            return Ok(Vec::new());
+        }
+        self.bump();
+        let mut names = vec![self.expect_name("an exception name after `raises`")?];
+        while self.eat(&TokenKind::Comma) {
+            names.push(self.expect_name("an exception name after `,`")?);
+        }
+        Ok(names)
     }
 
     fn param(&mut self) -> Result<Param> {

@@ -20,4 +20,4 @@ Blessing creates missing goldens, but it refuses to overwrite one when CPython's
 
 Adding a program: write `<name>.pyr` in the phase-2 subset, bless, read the `.out` before committing. Keep programs well-typed (homogeneous lists, one type per variable) so `pythrust check` can run over the corpus too.
 
-`temper def` is not Python, so CPython runs every program *loosened*, with each `temper ` prefix removed. `tempered_matches_loose` runs the loosened programs under Pythrust too, checking that tempering never changes meaning.
+`temper def` and `raises` clauses are not Python, so CPython runs every program *loosened*, with each `temper ` prefix and `raises` clause removed. `tempered_matches_loose` runs the loosened programs that `check` accepts under Pythrust too, checking that tempering and declaring never change meaning.
