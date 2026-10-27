@@ -61,22 +61,22 @@ Native validation evidence is Linux x86-64 only, including the required native c
 
 ## Phase 4 (M5) plan
 
-Language decisions D1 to D8 are in [grammar.md](grammar.md#phase-4-m5-tempering-ownership-exceptions-nano-2026-10-27) (Nano, 2026-10-27). Exit (from [handoff.md](handoff.md)): a tempered function rejects what a loose one accepts, with diagnostics a Python programmer can act on, and no leaked borrow-checker vocabulary. One PR per item, in order within a track; track B needs only A1.
+Language decisions D1 to D8 are in [grammar.md](grammar.md#phase-4-m5-tempering-ownership-exceptions-nano-2026-10-27) (Nano, 2026-10-27). Exit (from [handoff.md](handoff.md)): a tempered function rejects what a loose one accepts, with diagnostics a Python programmer can act on, and no leaked borrow-checker vocabulary. One PR per item, in order within a track; track B needs only A1, and A6 waits for B3.
 
 Track A, tempering and ownership:
 
 - [x] **A0. Generic results no `return` decides** build natively (#36), so lowering covers nearly every checked program. The ownership analysis runs on the IR; the remaining gap above (an operation on a never-returning generic result) must be closed or handled before A3 relies on lowering.
 - [x] **A1. Tempered signatures (D1, D5).** Required annotations, no `dyn`, tempered calls only tempered functions and builtins. Corpus property: removing `temper` from a passing program leaves its output unchanged; the harness runs CPython on loosened programs and `tempered_matches_loose` checks Pythrust too.
 - [ ] **A2. `list(xs)` copy builtin (D3, D4)** in inference, interpreter and native.
-- [ ] **A3. Parameter mode inference.** Wire `check` and `run` through lowering (analysis only; `run` still interprets), then an `own` stage over the IR: per-function `read`/`mut`/`owned` per parameter and whether the result aliases one, bottom-up with a fixpoint per strongly connected component. No user-visible change.
+- [ ] **A3. Parameter mode inference.** Wire `check` and `run` through lowering (analysis only; `run` still interprets), behind a coverage gate: every program `check`/`run` accepts today keeps passing, so a lowering gap is never a new language restriction. A function lowering cannot express gets a conservative summary (every parameter `owned`, result may alias any parameter), which is sound for loose code. Known gaps to keep as regression fixtures: a call to a builtin before the `def` that shadows it (`x = print(7)` then `def print(n): return 1`, rejected in `lower/expr.rs`), an operation on a never-returning generic result, and `try`/`raise` until B3. Then an `own` stage over the IR: per-function `read`/`mut`/`owned` per parameter and whether the result aliases one, bottom-up with a fixpoint per strongly connected component. No user-visible change.
 - [ ] **A4. Mode syntax (D2).** Parse contextual `mut`/`owned`; check written modes against inferred ones; tempered functions must write them.
-- [ ] **A5. Loose call-site aliasing.** `f(xs, xs)` against a `mut` parameter is an error about the call ([ownership.md](research/ownership.md#decided)).
-- [ ] **A6. Tempered body checks (D3, D4).** Non-lexical alias check over the CFG, diagnostics in Python terms.
+- [ ] **A5. Loose call-site aliasing.** `f(xs, xs)` against a `mut` parameter of a **tempered** callee is an error about the call ([ownership.md](research/ownership.md#decided)). Loose-to-loose calls keep Python aliasing, even when the loose callee writes its modes.
+- [ ] **A6. Tempered body checks (D3, D4).** Non-lexical alias check over the CFG, diagnostics in Python terms. Needs every tempered body to lower: lands after B3 so tempered `try`/`raise` lower, and closes any other lowering gap a tempered body can reach instead of rejecting it.
 - [ ] **A7. Refcount elision in native.** Use the summaries and last-use analysis to drop `Retain`/`Release` pairs; rerun the benchmarks and valgrind the corpus. Can follow A3 in parallel with A4 to A6.
 
 Track B, exceptions:
 
-- [ ] **B1. Front end and interpreter (D6, D7).** Unreserve `try`/`except`/`raise`; parse, infer and run them; `int(s)`/`float(s)` raise `ValueError`. CPython-differential corpus programs; deviations recorded in grammar.md.
+- [ ] **B1. Front end and interpreter (D6, D7).** Unreserve `try`/`except`/`raise`, and allow `as` in `except Name as e` only (it stays reserved elsewhere until `with`), with a regression test that `e` binds the exception; parse, infer and run them; `int(s)`/`float(s)` raise `ValueError`. CPython-differential corpus programs; deviations recorded in grammar.md.
 - [ ] **B2. Error inference and `raises` (D8).** Inferred escaping errors for loose functions; tempered ones must declare them.
 - [ ] **B3. Native lowering.** Calls return a tag plus value and branch on it ([ir.md](research/ir.md)); native corpus parity for every B1 program.
 
