@@ -40,7 +40,7 @@ A string is a pointer to an immutable runtime object holding a count, its length
 
 A list or tuple is a pointer to one runtime object: a count, a descriptor, and a vector of 64-bit slots. A slot holds an int, a float's bits, a bool or `None` as 0 or 1, or a pointer the sequence owns a reference to. The descriptor is a prefix code the compiler emits as read-only data (`i f b n s`, `l` and the element, `t`, a field-count byte and the fields, `o` and an optional's present type), which tells the runtime how to compare, print and drop slots. Runtime functions borrow their arguments and give new references, like the string ones. Static types rule out a sequence containing itself, so counts never form a cycle.
 
-A runtime error exits without releasing; nothing else does. The runtime counts live strings and sequences, and a debug build of it fails a program that ends normally with any still live (`pythrust-rt: N objects leaked`, exit 1), so the native corpus run checks for leaks.
+A runtime error exits without releasing; nothing else does. The runtime counts live strings and sequences, and a debug build of it fails a program that ends normally with any still live (`pythrust-rt: N objects leaked`, exit 1), so the native corpus run checks for leaks. With `PYTHRUST_VALGRIND=1`, `corpus_matches_native` also runs every native program under valgrind's memcheck and fails on invalid reads, writes or frees, on definitely lost blocks, and on any instrumented run that does not finish as its golden says or whose log lacks memcheck's clean `ERROR SUMMARY: 0 errors` line (so a valgrind that cannot start, is killed or times out fails too); CI's `memcheck` job does this on x86-64 Linux.
 
 Everything else is a compile error, `backend error: the native backend does not support X yet`, pointing at X. Nothing is guessed. `corpus_matches_native` in `tests/conformance.rs` builds every corpus program, runs what builds against its golden, and requires the programs in `NATIVE` to build.
 
@@ -70,6 +70,5 @@ M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.m
 
 M4 closed with these open; [roadmap.md](roadmap.md#phase-3-native-status-m4-done) tracks them as follow-ups. Generic functions where no `return` decides the result type, the other M4 follow-up, now build, except an operation on the result of one that never returns (see the monomorphization note above).
 
-- **Reference ownership** is checked for leaks in CI (the debug runtime's count) but for use-after-free only by running the examples under valgrind by hand.
 - **Targets:** CI covers x86-64 Linux, AArch64 Linux and AArch64 macOS, one runner each, since codegen targets the host and links with the host `cc`. x86-64 macOS is untested. Windows is unsupported: `build` drives a Unix `cc` with Unix link libraries.
 - **Diagnostics:** for a native program that fails, `corpus_matches_native` requires its stderr to equal `run`'s byte for byte (message, location, carets). CI checks this on every target above.
