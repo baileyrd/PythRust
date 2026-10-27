@@ -2,8 +2,9 @@
 //!
 //! The semantic reference, not the fast path. Runs untyped AST, so every
 //! type error the checker would catch is also a runtime error here.
-//! Runtime errors are uncatchable in phase 2: the first one stops the
-//! program (see `docs/grammar.md`, Runtime errors).
+//! A fault (overflow, a bad index, ...) stops the program; `try` catches
+//! only what `raise` and `int(s)`/`float(s)` raise (`docs/grammar.md`,
+//! Runtime errors).
 
 mod builtins;
 mod ops;
@@ -18,13 +19,13 @@ use std::iter;
 use std::rc::Rc;
 
 use crate::ast::{
-    Arg, BinOp, Block, CmpOp, Expr, ExprKind, FuncDef, Ident, LogicalOp, Module, Stmt, StmtKind,
-    Target, TargetKind,
+    Arg, BinOp, Block, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp, Module, Stmt,
+    StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 use builtins::{Args, Builtin};
-use value::{Func, Value};
+use value::{Exc, ExcKind, Func, Value};
 
 /// Python's default recursion limit.
 pub(crate) const MAX_DEPTH: usize = 1000;
@@ -71,7 +72,11 @@ fn run_here(module: &Module, out: &mut dyn Write) -> Result<()> {
         frames: Vec::new(),
         out,
     };
-    let flow = interp.exec_block(&module.body)?;
+    let flow = match interp.exec_block(&module.body) {
+        Ok(flow) => flow,
+        Err(Unwind::Fault(d)) => return Err(d),
+        Err(Unwind::Raise(exc, span)) => return Err(rt_err(span, exc.uncaught(span)?)),
+    };
     match unlooped(flow)? {
         Some((_, span)) => Err(rt_err(
             span,
@@ -88,6 +93,34 @@ fn rt_err(span: Span, message: String) -> Diagnostic {
         message,
         kind: DiagKind::Runtime,
     }
+}
+
+/// Why execution stopped before a statement or expression finished.
+enum Unwind<'m> {
+    /// A fault (D7): stops the program; `try` never catches it.
+    Fault(Diagnostic),
+    /// A raised exception and the span it was raised at.
+    Raise(Rc<Exc<'m>>, Span),
+}
+
+impl From<Diagnostic> for Unwind<'_> {
+    fn from(d: Diagnostic) -> Self {
+        Unwind::Fault(d)
+    }
+}
+
+/// The interpreter's result: a value, or an unwind.
+type Exec<'m, T> = std::result::Result<T, Unwind<'m>>;
+
+/// The catchable `ValueError` that `int(s)` and `float(s)` raise for a
+/// malformed string.
+fn value_error<'m>(message: String, span: Span) -> Unwind<'m> {
+    let arg = Some(Value::str(&message));
+    let exc = Exc {
+        kind: ExcKind::Value,
+        arg,
+    };
+    Unwind::Raise(Rc::new(exc), span)
 }
 
 struct Interp<'m, 'o> {
@@ -137,7 +170,7 @@ fn unlooped(flow: Flow) -> Result<Option<(Value, Span)>> {
 }
 
 impl<'m> Interp<'m, '_> {
-    fn exec_block(&mut self, block: &'m [Stmt]) -> Result<Flow<'m>> {
+    fn exec_block(&mut self, block: &'m [Stmt]) -> Exec<'m, Flow<'m>> {
         for stmt in block {
             let flow = self.exec(stmt)?;
             if !matches!(flow, Flow::Next) {
@@ -147,7 +180,7 @@ impl<'m> Interp<'m, '_> {
         Ok(Flow::Next)
     }
 
-    fn exec(&mut self, stmt: &'m Stmt) -> Result<Flow<'m>> {
+    fn exec(&mut self, stmt: &'m Stmt) -> Exec<'m, Flow<'m>> {
         match &stmt.kind {
             StmtKind::Assign { target, value } => {
                 let v = self.eval(value)?;
@@ -192,8 +225,71 @@ impl<'m> Interp<'m, '_> {
                 body,
                 orelse,
             } => return self.exec_for(target, iter, body, orelse),
+            StmtKind::Raise(value) => {
+                let exc = self.exception(value)?;
+                return Err(Unwind::Raise(exc, stmt.span));
+            }
+            StmtKind::Try { body, handlers } => return self.exec_try(body, handlers),
         }
         Ok(Flow::Next)
+    }
+
+    /// What `raise value` raises. `raise ValueError` raises a new one
+    /// without an argument, as `raise ValueError()` does.
+    fn exception(&mut self, value: &'m Expr) -> Exec<'m, Rc<Exc<'m>>> {
+        match self.eval(value)? {
+            Value::Exc(exc) => Ok(exc),
+            Value::Builtin(Builtin::Exception(kind)) => Ok(Rc::new(Exc { kind, arg: None })),
+            _ => Err(rt_err(
+                value.span,
+                "TypeError: exceptions must derive from BaseException".to_string(),
+            )
+            .into()),
+        }
+    }
+
+    /// `try`: an exception the body raises runs the first handler that
+    /// names it. Faults, unmatched exceptions and other flow pass through.
+    fn exec_try(&mut self, body: &'m Block, handlers: &'m [Handler]) -> Exec<'m, Flow<'m>> {
+        let (exc, span) = match self.exec_block(body) {
+            Err(Unwind::Raise(exc, span)) => (exc, span),
+            done => return done,
+        };
+        for h in handlers {
+            if self.catches(h, exc.kind)? {
+                return self.exec_handler(h, exc);
+            }
+        }
+        Err(Unwind::Raise(exc, span))
+    }
+
+    /// Whether `h` names `kind`. The name is looked up only now, as Python
+    /// evaluates it.
+    fn catches(&self, h: &Handler, kind: ExcKind) -> Result<bool> {
+        let name = &h.exception;
+        match self.lookup(&name.name, name.span)? {
+            Value::Builtin(Builtin::Exception(k)) => Ok(k == kind),
+            _ => Err(rt_err(
+                name.span,
+                "TypeError: catching classes that do not inherit from BaseException is not allowed"
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// Runs `h` with its `as` name bound to `exc`, then unbinds the name,
+    /// as Python does.
+    fn exec_handler(&mut self, h: &'m Handler, exc: Rc<Exc<'m>>) -> Exec<'m, Flow<'m>> {
+        let Some(binding) = &h.binding else {
+            return self.exec_block(&h.body);
+        };
+        self.store(&binding.name, Value::Exc(exc));
+        let flow = self.exec_block(&h.body);
+        match self.frames.last_mut() {
+            Some(frame) => frame.vars.remove(binding.name.as_str()),
+            None => self.globals.remove(binding.name.as_str()),
+        };
+        flow
     }
 
     fn exec_while(
@@ -201,7 +297,7 @@ impl<'m> Interp<'m, '_> {
         test: &'m Expr,
         body: &'m Block,
         orelse: &'m Block,
-    ) -> Result<Flow<'m>> {
+    ) -> Exec<'m, Flow<'m>> {
         while self.eval(test)?.truthy() {
             if let Some(flow) = loop_exit(self.exec_block(body)?) {
                 return Ok(flow);
@@ -216,7 +312,7 @@ impl<'m> Interp<'m, '_> {
         iter: &'m Expr,
         body: &'m Block,
         orelse: &'m Block,
-    ) -> Result<Flow<'m>> {
+    ) -> Exec<'m, Flow<'m>> {
         for v in self.eval(iter)?.iter(iter.span)? {
             self.assign(target, v)?;
             if let Some(flow) = loop_exit(self.exec_block(body)?) {
@@ -227,18 +323,19 @@ impl<'m> Interp<'m, '_> {
     }
 
     /// `def`: evaluates defaults now, as Python does, and binds the name.
-    fn define(&mut self, def: &'m FuncDef) -> Result<()> {
+    fn define(&mut self, def: &'m FuncDef) -> Exec<'m, ()> {
         if !self.frames.is_empty() {
             return Err(rt_err(
                 def.span,
                 "SyntaxError: 'def' is only allowed at module top level".to_string(),
-            ));
+            )
+            .into());
         }
         let defaults = def
             .params
             .iter()
             .map(|p| p.default.as_ref().map(|e| self.eval(e)).transpose())
-            .collect::<Result<_>>()?;
+            .collect::<Exec<_>>()?;
         let func = Func {
             def,
             defaults,
@@ -248,7 +345,7 @@ impl<'m> Interp<'m, '_> {
         Ok(())
     }
 
-    fn assign(&mut self, target: &'m Target, v: Value<'m>) -> Result<()> {
+    fn assign(&mut self, target: &'m Target, v: Value<'m>) -> Exec<'m, ()> {
         match &target.kind {
             TargetKind::Name(name) => {
                 self.store(name, v);
@@ -257,13 +354,13 @@ impl<'m> Interp<'m, '_> {
             TargetKind::Subscript { value, index } => {
                 let container = self.eval(value)?;
                 let index = self.eval(index)?;
-                set_item(&container, &index, v, target.span)
+                Ok(set_item(&container, &index, v, target.span)?)
             }
             TargetKind::Tuple(targets) => self.unpack(targets, v, target.span),
         }
     }
 
-    fn unpack(&mut self, targets: &'m [Target], v: Value<'m>, span: Span) -> Result<()> {
+    fn unpack(&mut self, targets: &'m [Target], v: Value<'m>, span: Span) -> Exec<'m, ()> {
         // Take one extra to detect "too many" without draining a long range.
         let values: Vec<Value> = v.iter(span)?.take(targets.len() + 1).collect();
         if values.len() != targets.len() {
@@ -273,7 +370,7 @@ impl<'m> Interp<'m, '_> {
             } else {
                 format!("ValueError: not enough values to unpack (expected {want}, got {got})")
             };
-            return Err(rt_err(span, message));
+            return Err(rt_err(span, message).into());
         }
         targets
             .iter()
@@ -290,7 +387,7 @@ impl<'m> Interp<'m, '_> {
         op: BinOp,
         value: &'m Expr,
         span: Span,
-    ) -> Result<()> {
+    ) -> Exec<'m, ()> {
         match &target.kind {
             TargetKind::Name(name) => {
                 let current = self.lookup(name, target.span)?;
@@ -308,12 +405,13 @@ impl<'m> Interp<'m, '_> {
                 let current = get_item(&container, &index, target.span)?;
                 let rhs = self.eval(value)?;
                 let new = in_place(op, current, &rhs, span)?;
-                set_item(&container, &index, new, target.span)
+                Ok(set_item(&container, &index, new, target.span)?)
             }
             TargetKind::Tuple(_) => Err(rt_err(
                 target.span,
                 "SyntaxError: illegal expression for augmented assignment".to_string(),
-            )),
+            )
+            .into()),
         }
     }
 
@@ -343,9 +441,9 @@ impl<'m> Interp<'m, '_> {
             .ok_or_else(|| rt_err(span, format!("NameError: name '{name}' is not defined")))
     }
 
-    fn eval(&mut self, e: &'m Expr) -> Result<Value<'m>> {
+    fn eval(&mut self, e: &'m Expr) -> Exec<'m, Value<'m>> {
         match &e.kind {
-            ExprKind::Name(name) => self.lookup(name, e.span),
+            ExprKind::Name(name) => Ok(self.lookup(name, e.span)?),
             ExprKind::Int(i) => Ok(Value::Int(*i)),
             ExprKind::Float(f) => Ok(Value::Float(*f)),
             ExprKind::Str(s) => Ok(Value::str(s)),
@@ -353,11 +451,11 @@ impl<'m> Interp<'m, '_> {
             ExprKind::None => Ok(Value::None),
             ExprKind::Tuple(items) => Ok(Value::Tuple(self.eval_all(items)?.into())),
             ExprKind::List(items) => Ok(Value::list(self.eval_all(items)?)),
-            ExprKind::Unary { op, operand } => ops::unary(*op, &self.eval(operand)?, e.span),
+            ExprKind::Unary { op, operand } => Ok(ops::unary(*op, &self.eval(operand)?, e.span)?),
             ExprKind::Binary { op, left, right } => {
                 let l = self.eval(left)?;
                 let r = self.eval(right)?;
-                ops::binary(*op, &l, &r, e.span)
+                Ok(ops::binary(*op, &l, &r, e.span)?)
             }
             ExprKind::Logical { op, left, right } => {
                 let l = self.eval(left)?;
@@ -383,19 +481,19 @@ impl<'m> Interp<'m, '_> {
             ExprKind::Subscript { value, index } => {
                 let container = self.eval(value)?;
                 let index = self.eval(index)?;
-                get_item(&container, &index, e.span)
+                Ok(get_item(&container, &index, e.span)?)
             }
-            ExprKind::Attr { value, attr } => get_attr(self.eval(value)?, attr),
+            ExprKind::Attr { value, attr } => Ok(get_attr(self.eval(value)?, attr)?),
         }
     }
 
-    fn eval_all(&mut self, items: &'m [Expr]) -> Result<Vec<Value<'m>>> {
+    fn eval_all(&mut self, items: &'m [Expr]) -> Exec<'m, Vec<Value<'m>>> {
         items.iter().map(|e| self.eval(e)).collect()
     }
 
     /// `a < b < c`: each operand is evaluated once, and evaluation stops at
     /// the first false link. A failing link's span covers its two operands.
-    fn eval_compare(&mut self, left: &'m Expr, rest: &'m [(CmpOp, Expr)]) -> Result<Value<'m>> {
+    fn eval_compare(&mut self, left: &'m Expr, rest: &'m [(CmpOp, Expr)]) -> Exec<'m, Value<'m>> {
         let mut l = self.eval(left)?;
         let mut l_span = left.span;
         for (op, right) in rest {
@@ -408,7 +506,7 @@ impl<'m> Interp<'m, '_> {
         Ok(Value::Bool(true))
     }
 
-    fn eval_call(&mut self, func: &'m Expr, args: &'m [Arg], span: Span) -> Result<Value<'m>> {
+    fn eval_call(&mut self, func: &'m Expr, args: &'m [Arg], span: Span) -> Exec<'m, Value<'m>> {
         let callee = self.eval(func)?;
         let mut evaluated = Args {
             positional: Vec::new(),
@@ -425,20 +523,22 @@ impl<'m> Interp<'m, '_> {
         match callee {
             Value::Func(f) => self.call_func(f, evaluated),
             Value::Builtin(b) => builtins::call(b, evaluated, self.out),
-            Value::Append(list) => builtins::append(&list, evaluated),
+            Value::Append(list) => Ok(builtins::append(&list, evaluated)?),
             other => Err(rt_err(
                 span,
                 format!("TypeError: '{}' object is not callable", other.type_name()),
-            )),
+            )
+            .into()),
         }
     }
 
-    fn call_func(&mut self, func: Rc<Func<'m>>, args: Args<'m>) -> Result<Value<'m>> {
+    fn call_func(&mut self, func: Rc<Func<'m>>, args: Args<'m>) -> Exec<'m, Value<'m>> {
         if self.frames.len() >= MAX_DEPTH {
             return Err(rt_err(
                 args.span,
                 "RecursionError: maximum recursion depth exceeded".to_string(),
-            ));
+            )
+            .into());
         }
         let vars = bind(&func, args)?;
         let body = &func.def.body;
@@ -563,6 +663,13 @@ fn collect_block<'m>(block: &'m [Stmt], names: &mut HashSet<&'m str>) {
             StmtKind::While { branch, orelse } => {
                 collect_block(&branch.body, names);
                 collect_block(orelse, names);
+            }
+            StmtKind::Try { body, handlers } => {
+                collect_block(body, names);
+                for h in handlers {
+                    names.extend(h.binding.as_ref().map(|b| b.name.as_str()));
+                    collect_block(&h.body, names);
+                }
             }
             _ => {}
         }

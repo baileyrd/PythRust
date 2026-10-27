@@ -1745,3 +1745,95 @@ fn guard_narrows_only_when_it_proves_not_none() {
     let body = vec![opt(), b.while_(b.bl(true), after)];
     assert_eq!(err(body), unsupported);
 }
+
+// ---- exceptions (D6) -------------------------------------------------------
+
+/// Infers parsed `src`: the types, or the first error's message.
+fn infer_src(src: &str) -> Result<Types, String> {
+    let parsed = crate::lexer::lex(src).and_then(|t| crate::parser::parse(&t));
+    let module = parsed.map_err(|e| format!("does not parse: {}", e.message))?;
+    infer(&module).map_err(|e| e.message)
+}
+
+fn src_err(src: &str) -> String {
+    match infer_src(src) {
+        Ok(_) => "no error".to_string(),
+        Err(e) => e,
+    }
+}
+
+#[test]
+fn exceptions_are_values_of_one_type() {
+    let src = "def parse(s: str) -> int:\n    try:\n        return int(s)\n    except ValueError as e:\n        print(e)\n    except IndexError as e:\n        print(str(e))\n    return 0\n\
+               err = ZeroDivisionError(\"x\")\nraise err\n";
+    let types = infer_src(src).unwrap_or_else(|e| panic!("{e}"));
+    let at = src.find("ZeroDivisionError").unwrap_or(0);
+    let span = Span {
+        start: at,
+        end: at + "ZeroDivisionError(\"x\")".len(),
+    };
+    assert_eq!(types.at(span), Some(&Type::Exception));
+    let ann = "def show(e: Exception) -> str:\n    return str(e)\nprint(show(ValueError(1)))\n";
+    assert!(infer_src(ann).is_ok());
+}
+
+#[test]
+fn raise_needs_an_exception() {
+    assert!(src_err("raise 5\n").starts_with("`raise` needs an exception"));
+    assert!(infer_src("raise ValueError\n").is_ok());
+    assert!(src_err("ValueError = 1\nraise ValueError\n").starts_with("`raise` needs an exception"));
+    let ctor = src_err("raise ValueError(1, 2)\n");
+    assert_eq!(ctor, "`ValueError` takes 0 to 1 arguments but 2 were given");
+}
+
+#[test]
+fn except_names_a_builtin_exception() {
+    let handler = |name: &str| format!("try:\n    pass\nexcept {name}:\n    pass\n");
+    for name in [
+        "ValueError",
+        "IndexError",
+        "ZeroDivisionError",
+        "OverflowError",
+        "RecursionError",
+    ] {
+        assert!(infer_src(&handler(name)).is_ok(), "{name}");
+    }
+    assert!(src_err(&handler("KeyError")).starts_with("`KeyError` is not an exception"));
+    assert!(src_err(&handler("Exception")).starts_with("catching every exception"));
+    let shadowed = format!("def ValueError():\n    pass\n{}", handler("ValueError"));
+    assert!(src_err(&shadowed).contains("no longer names the builtin exception"));
+}
+
+#[test]
+fn handler_name_has_one_fixed_type() {
+    let src = "e = 1\ntry:\n    pass\nexcept ValueError as e:\n    pass\n";
+    assert!(src_err(src).starts_with("cannot change the type of `e`"));
+    let reuse = "try:\n    pass\nexcept ValueError as e:\n    pass\nexcept IndexError as e:\n    print(e + 1)\n";
+    assert!(src_err(reuse).contains("Exception"));
+}
+
+#[test]
+fn raise_ends_a_path() {
+    let f = "def f(n: int) -> int:\n    if n > 0:\n        return n\n    raise ValueError(\"n\")\n";
+    assert!(infer_src(f).is_ok());
+    let both = "def f(s: str) -> int:\n    try:\n        return int(s)\n    except ValueError:\n        raise IndexError()\n";
+    assert!(infer_src(both).is_ok());
+    let open = "def f(s: str) -> int:\n    try:\n        return int(s)\n    except ValueError:\n        pass\n";
+    assert!(src_err(open).contains("can reach its end"));
+}
+
+#[test]
+fn raise_guard_narrows_the_rest_of_the_block() {
+    let src = "def f(x: int | None) -> int:\n    if x is None:\n        raise ValueError(\"x\")\n    return x + 1\n";
+    assert!(infer_src(src).is_ok());
+    let in_try = "def f(x: int | None) -> int:\n    try:\n        if x is None:\n            raise ValueError(\"x\")\n        return x + 1\n    except ValueError:\n        return x + 1\n";
+    assert!(src_err(in_try).contains("int | None"));
+}
+
+#[test]
+fn break_inside_try_belongs_to_the_loop() {
+    let src = "def f() -> int:\n    while True:\n        try:\n            break\n        except ValueError:\n            pass\n";
+    assert!(src_err(src).contains("can reach its end"));
+    let forever = "def f() -> int:\n    while True:\n        try:\n            pass\n        except ValueError:\n            pass\n";
+    assert!(infer_src(forever).is_ok());
+}

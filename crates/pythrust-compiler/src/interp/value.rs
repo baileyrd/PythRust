@@ -31,6 +31,67 @@ pub(super) enum Value<'m> {
     Builtin(Builtin),
     /// `xs.append`, bound to its list.
     Append(ListRef<'m>),
+    Exc(Rc<Exc<'m>>),
+}
+
+/// A builtin exception name (`docs/grammar.md`, D6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExcKind {
+    Value,
+    Index,
+    ZeroDivision,
+    Overflow,
+    Recursion,
+}
+
+impl ExcKind {
+    pub fn lookup(name: &str) -> Option<ExcKind> {
+        Some(match name {
+            "ValueError" => ExcKind::Value,
+            "IndexError" => ExcKind::Index,
+            "ZeroDivisionError" => ExcKind::ZeroDivision,
+            "OverflowError" => ExcKind::Overflow,
+            "RecursionError" => ExcKind::Recursion,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ExcKind::Value => "ValueError",
+            ExcKind::Index => "IndexError",
+            ExcKind::ZeroDivision => "ZeroDivisionError",
+            ExcKind::Overflow => "OverflowError",
+            ExcKind::Recursion => "RecursionError",
+        }
+    }
+}
+
+/// An exception value: its kind and the argument it was built with.
+#[derive(Debug)]
+pub(super) struct Exc<'m> {
+    pub kind: ExcKind,
+    pub arg: Option<Value<'m>>,
+}
+
+impl Exc<'_> {
+    /// `str(e)`: the argument as a string, or empty without one.
+    pub fn message(&self, span: Span) -> Result<String> {
+        self.arg
+            .as_ref()
+            .map_or(Ok(String::new()), |v| v.to_str(span))
+    }
+
+    /// The last line CPython prints for an uncaught exception:
+    /// `ValueError: bad`, or only the name when the message is empty.
+    pub fn uncaught(&self, span: Span) -> Result<String> {
+        let message = self.message(span)?;
+        let name = self.kind.name();
+        Ok(match message.is_empty() {
+            true => name.to_string(),
+            false => format!("{name}: {message}"),
+        })
+    }
 }
 
 /// `range(start, stop, step)`. Invariant: `step != 0`.
@@ -93,7 +154,7 @@ impl<'m> Value<'m> {
             Value::List(l) => !l.borrow().is_empty(),
             Value::Tuple(t) => !t.is_empty(),
             Value::Range(r) => r.len() != 0,
-            Value::Func(_) | Value::Builtin(_) | Value::Append(_) => true,
+            Value::Func(_) | Value::Builtin(_) | Value::Append(_) | Value::Exc(_) => true,
         }
     }
 
@@ -109,7 +170,9 @@ impl<'m> Value<'m> {
             Value::Tuple(_) => "tuple",
             Value::Range(_) => "range",
             Value::Func(_) => "function",
+            Value::Builtin(b) if b.exception().is_some() => "type",
             Value::Builtin(_) | Value::Append(_) => "builtin_function_or_method",
+            Value::Exc(e) => e.kind.name(),
         }
     }
 
@@ -117,6 +180,7 @@ impl<'m> Value<'m> {
     pub fn to_str(&self, span: Span) -> Result<String> {
         match self {
             Value::Str(s) => Ok(s.to_string()),
+            Value::Exc(e) => e.message(span),
             other => other.repr(span),
         }
     }
@@ -249,6 +313,7 @@ fn eq_at<'m>(a: &Value<'m>, b: &Value<'m>, depth: usize, span: Span) -> Result<b
         (Value::Func(x), Value::Func(y)) => Rc::ptr_eq(x, y),
         (Value::Builtin(x), Value::Builtin(y)) => x == y,
         (Value::Append(x), Value::Append(y)) => Rc::ptr_eq(x, y),
+        (Value::Exc(x), Value::Exc(y)) => Rc::ptr_eq(x, y),
         _ => false,
     })
 }
@@ -450,6 +515,15 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
             let close = if t.len() == 1 { ",)" } else { ")" };
             return write_items(t, id, ("(", close), active, out, span);
         }
+        Value::Exc(e) => {
+            out.push_str(e.kind.name());
+            out.push('(');
+            if let Some(arg) = &e.arg {
+                write_repr(arg, active, out, span)?;
+            }
+            out.push(')');
+            return Ok(());
+        }
         Value::None => "None".to_string(),
         Value::Bool(true) => "True".to_string(),
         Value::Bool(false) => "False".to_string(),
@@ -459,6 +533,7 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
         Value::Range(r) if r.step == 1 => format!("range({}, {})", r.start, r.stop),
         Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
         Value::Func(f) => format!("<function {}>", f.def.name.name),
+        Value::Builtin(b) if b.exception().is_some() => format!("<class '{}'>", b.name()),
         Value::Builtin(b) => format!("<built-in function {}>", b.name()),
         Value::Append(_) => "<built-in method append of list object>".to_string(),
     };

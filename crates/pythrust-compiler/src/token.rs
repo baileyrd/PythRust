@@ -45,6 +45,11 @@ pub enum TokenKind {
     Temper,
     /// `is`, only as `is None` / `is not None`.
     Is,
+    Try,
+    Except,
+    Raise,
+    /// `as`, only in `except Name as e`.
+    As,
 
     // Arithmetic operators.
     Plus,

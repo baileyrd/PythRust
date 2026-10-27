@@ -1159,3 +1159,140 @@ fn is_compares_only_with_none() {
         show_err(cmp(int(1), vec![(CmpOp::Is, int(1))])).contains("`is` compares only with None")
     );
 }
+
+// ---- exceptions (D6, D7) --------------------------------------------------
+
+/// Lexes, parses and runs `src` (unchecked, as `run` takes any AST).
+fn exec_src(src: &str) -> (String, Option<Diagnostic>) {
+    let tokens = crate::lexer::lex(src).expect("lexes");
+    let parsed = crate::parser::parse(&tokens).expect("parses");
+    let mut out = Vec::new();
+    let result = run(&parsed, &mut out);
+    (String::from_utf8(out).expect("utf-8 output"), result.err())
+}
+
+fn ok_src(src: &str) -> String {
+    let (out, err) = exec_src(src);
+    assert_eq!(err, None, "unexpected error; output so far: {out}");
+    out
+}
+
+/// The runtime error `src` stops with.
+fn fails_src(src: &str) -> String {
+    let (_, err) = exec_src(src);
+    let err = err.expect("program should fail");
+    assert_eq!(err.kind, DiagKind::Runtime);
+    err.message
+}
+
+#[test]
+fn raise_is_caught_by_the_first_matching_handler_across_calls() {
+    let src =
+        "def check(n):\n    if n < 0:\n        raise ValueError(\"negative\")\n    return n\n\
+               try:\n    check(1)\n    check(-1)\n    print(\"unreachable\")\n\
+               except IndexError:\n    print(\"index\")\n\
+               except ValueError as e:\n    print(\"caught\", e)\n\
+               except ValueError:\n    print(\"second\")\n";
+    assert_eq!(ok_src(src), "caught negative\n");
+}
+
+#[test]
+fn an_unmatched_exception_reaches_an_outer_try() {
+    let src = "try:\n    try:\n        raise IndexError(3)\n    except ValueError:\n        print(\"inner\")\n    print(\"skipped\")\n\
+               except IndexError as e:\n    print(\"outer\", e)\n";
+    assert_eq!(ok_src(src), "outer 3\n");
+}
+
+#[test]
+fn uncaught_exceptions_report_as_cpython_does() {
+    assert_eq!(fails_src("raise ValueError(\"bad\")\n"), "ValueError: bad");
+    assert_eq!(fails_src("raise IndexError(7)\n"), "IndexError: 7");
+    assert_eq!(
+        fails_src("raise ZeroDivisionError()\n"),
+        "ZeroDivisionError"
+    );
+    assert_eq!(fails_src("raise OverflowError\n"), "OverflowError");
+    assert_eq!(fails_src("raise RecursionError(\"\")\n"), "RecursionError");
+    let reraise = "try:\n    raise ValueError(\"a\")\nexcept ValueError as e:\n    raise e\n";
+    assert_eq!(fails_src(reraise), "ValueError: a");
+}
+
+#[test]
+fn uncaught_exception_points_at_its_raise() {
+    let src = "def f():\n    raise ValueError(\"x\")\nf()\n";
+    let (_, err) = exec_src(src);
+    let span = err.expect("fails").span;
+    assert_eq!(&src[span.start..span.end], "raise ValueError(\"x\")");
+}
+
+#[test]
+fn parse_builtins_raise_catchable_value_errors() {
+    let src = "for s in [\"12\", \"x\", \"1.5\"]:\n    try:\n        print(int(s))\n    except ValueError as e:\n        print(e)\n\
+               try:\n    float(\"nope\")\nexcept ValueError as e:\n    print(e)\n";
+    let expected = "12\ninvalid literal for int() with base 10: 'x'\n\
+                    invalid literal for int() with base 10: '1.5'\n\
+                    could not convert string to float: 'nope'\n";
+    assert_eq!(ok_src(src), expected);
+    let uncaught = fails_src("int(\"x\")\n");
+    assert_eq!(
+        uncaught,
+        "ValueError: invalid literal for int() with base 10: 'x'"
+    );
+}
+
+#[test]
+fn faults_are_never_caught() {
+    let faults = [
+        ("[1][5]", "IndexError: list index out of range"),
+        ("1 // 0", "ZeroDivisionError"),
+        ("9223372036854775807 + 1", "OverflowError"),
+        ("int(\"99999999999999999999\")", "OverflowError"),
+        (
+            "int(float(\"nan\"))",
+            "ValueError: cannot convert float NaN",
+        ),
+    ];
+    for (expr, msg) in faults {
+        let kind = msg.split(':').next().unwrap_or(msg);
+        let src = format!("try:\n    print({expr})\nexcept {kind}:\n    print(\"caught\")\n");
+        assert!(fails_src(&src).starts_with(msg), "{expr}");
+    }
+    let unpack = "try:\n    a, b = [1]\nexcept ValueError:\n    print(\"caught\")\n";
+    assert!(fails_src(unpack).starts_with("ValueError: not enough values"));
+    let deep = "def f(n):\n    return f(n + 1)\ntry:\n    f(0)\nexcept RecursionError:\n    print(\"caught\")\n";
+    assert!(fails_src(deep).starts_with("RecursionError"));
+}
+
+#[test]
+fn handler_unbinds_its_name_afterwards() {
+    let module = "try:\n    raise ValueError(1)\nexcept ValueError as e:\n    print(e)\nprint(e)\n";
+    assert_eq!(fails_src(module), "NameError: name 'e' is not defined");
+    let local = "def f():\n    try:\n        raise ValueError(1)\n    except ValueError as e:\n        pass\n    return e\nf()\n";
+    assert!(fails_src(local).starts_with("UnboundLocalError"));
+}
+
+#[test]
+fn flow_passes_through_try() {
+    let src = "def f():\n    try:\n        return 1\n    except ValueError:\n        return 2\n\
+               for i in range(3):\n    try:\n        if i == 1:\n            continue\n        if i == 2:\n            break\n        print(i)\n    except ValueError:\n        pass\n\
+               print(f())\n";
+    assert_eq!(ok_src(src), "0\n1\n");
+}
+
+#[test]
+fn exception_values_print_as_python_does() {
+    let src = "e = ValueError(\"bad\")\nprint(e, str(e), [e], (IndexError(),), e == e, ValueError(\"bad\") == e)\nprint(ValueError)\n";
+    let expected = "bad bad [ValueError('bad')] (IndexError(),) True False\n<class 'ValueError'>\n";
+    assert_eq!(ok_src(src), expected);
+}
+
+#[test]
+fn raising_or_catching_a_non_exception_is_a_type_error() {
+    let raise = fails_src("raise 5\n");
+    assert_eq!(
+        raise,
+        "TypeError: exceptions must derive from BaseException"
+    );
+    let shadowed = "ValueError = 1\ntry:\n    raise IndexError()\nexcept ValueError:\n    pass\n";
+    assert!(fails_src(shadowed).starts_with("TypeError: catching classes"));
+}

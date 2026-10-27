@@ -590,3 +590,17 @@ fn open_display_items_decide_the_display_type() {
     });
     assert_eq!(elem, Some(Some(&crate::ir::Compound::List(Ty::Int))));
 }
+
+#[test]
+fn exceptions_are_backend_errors_until_b3() {
+    let cases = [
+        ("try:\n    pass\nexcept ValueError:\n    pass\n", "try:"),
+        ("raise ValueError(\"x\")\n", "raise ValueError(\"x\")"),
+        ("e = ValueError(\"x\")\n", "ValueError(\"x\")"),
+    ];
+    for (src, at) in cases {
+        let (d, text) = rejected(src);
+        assert!(d.message.contains("does not support"), "{d}");
+        assert!(text.starts_with(at), "{text}");
+    }
+}
