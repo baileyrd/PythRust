@@ -33,7 +33,7 @@ def looped(n, x):
     i = 0
     while i < 2:
         if i:
-            print(y * 2)
+            print(y * y)
         y = x * x
         i += 1
     return y
