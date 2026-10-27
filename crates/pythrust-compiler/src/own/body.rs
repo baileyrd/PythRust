@@ -156,7 +156,7 @@ impl<'a> Flow<'a> {
     fn call_stores(&mut self, f: FuncId, args: &[Operand]) -> bool {
         let params = &self.summaries[f.0].params;
         let mut changed = false;
-        for (a, p) in args.iter().zip(params).filter(|(_, p)| p.holds_global) {
+        for (a, _) in args.iter().zip(params).filter(|(_, p)| p.holds_global) {
             let inside = self.reachable(&self.of(*a));
             changed |= self.store_all(&inside, &Objs::from([Obj::World]));
         }
