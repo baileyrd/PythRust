@@ -76,6 +76,23 @@ pub enum StmtKind {
         body: Block,
         orelse: Block,
     },
+    /// `'raise' expr`
+    Raise(Expr),
+    /// `'try' ':' block handler+`. `handlers` is never empty.
+    Try {
+        body: Block,
+        handlers: Vec<Handler>,
+    },
+}
+
+/// `'except' NAME ['as' NAME] ':' block`. `exception` names a builtin
+/// exception (checked by inference); `binding` is the `as` name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Handler {
+    pub exception: Ident,
+    pub binding: Option<Ident>,
+    pub body: Block,
+    pub span: Span,
 }
 
 /// A condition and the block it guards.

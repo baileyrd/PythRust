@@ -1,0 +1,3 @@
+# expect-exit: 1
+# expect-error: `raise` needs an exception
+raise "error"

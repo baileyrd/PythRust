@@ -1,0 +1,10 @@
+# expect-exit: 1
+def check(n: int) -> int:
+    if n < 0:
+        raise ValueError("negative: " + str(n))
+    return n
+
+
+print(check(3))
+print(check(-1))
+print("unreachable")

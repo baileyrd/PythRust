@@ -397,6 +397,7 @@ impl Checker {
             "str" => Type::Str,
             "bool" => Type::Bool,
             "None" => Type::None,
+            "Exception" => Type::Exception,
             "list" => return self.list_annotation(args, t.span),
             "tuple" if args.is_empty() => {
                 let msg = "`tuple` needs its element types, as in `tuple[int, str]`";

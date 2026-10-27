@@ -73,7 +73,7 @@ fn spellable(t: &Type) -> bool {
         Type::Var(_) | Type::Range => false,
         Type::List(inner) | Type::Optional(inner) => spellable(inner),
         Type::Tuple(items) => !items.is_empty() && items.iter().all(spellable),
-        Type::Int | Type::Float | Type::Str | Type::Bool | Type::None => true,
+        Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Exception => true,
     }
 }
 

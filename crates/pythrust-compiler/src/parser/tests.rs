@@ -40,6 +40,10 @@ fn kind_of(word: &str) -> TokenKind {
         "False" => T::False,
         "None" => T::None,
         "temper" => T::Temper,
+        "try" => T::Try,
+        "except" => T::Except,
+        "raise" => T::Raise,
+        "as" => T::As,
         "+" => T::Plus,
         "-" => T::Minus,
         "*" => T::Star,
@@ -192,7 +196,22 @@ fn sx_stmt(s: &Stmt) -> String {
             sx_block(body),
             sx_else(orelse)
         ),
+        StmtKind::Raise(e) => format!("(raise {})", sx(e)),
+        StmtKind::Try { body, handlers } => {
+            let handlers = handlers.iter().map(sx_handler);
+            format!("(try {}{})", sx_block(body), handlers.collect::<String>())
+        }
     }
+}
+
+fn sx_handler(h: &Handler) -> String {
+    let binding = h.binding.as_ref().map(|b| format!(" as {}", b.name));
+    let binding = binding.unwrap_or_default();
+    format!(
+        " (except {}{binding} {})",
+        h.exception.name,
+        sx_block(&h.body)
+    )
 }
 
 fn sx_branch(b: &Branch) -> String {
@@ -688,6 +707,77 @@ fn break_and_continue_only_inside_loop() {
     assert_eq!(
         ok("while x : NL INDENT if y : NL INDENT break NL DEDENT continue NL DEDENT"),
         "(while x ((if y (break)) continue))"
+    );
+}
+
+#[test]
+fn raise_statement() {
+    assert_eq!(
+        ok("raise ValueError ( 'bad' ) NL"),
+        "(raise (call ValueError 'bad'))"
+    );
+    assert_eq!(ok("raise e NL"), "(raise e)");
+    assert!(err("raise NL").starts_with("bare `raise` is not supported yet"));
+    assert_eq!(err("raise a , b NL"), "expected newline, found `,`");
+}
+
+#[test]
+fn try_except() {
+    assert_eq!(
+        ok("try : NL INDENT x NL DEDENT except ValueError : NL INDENT y NL DEDENT"),
+        "(try (x) (except ValueError (y)))"
+    );
+    let two = "try : NL INDENT x NL DEDENT except ValueError as e : NL INDENT y NL DEDENT \
+               except IndexError : NL INDENT z NL DEDENT w NL";
+    assert_eq!(
+        ok(two),
+        "(try (x) (except ValueError as e (y)) (except IndexError (z))) w"
+    );
+}
+
+#[test]
+fn try_spans_cover_every_handler() {
+    let src = "try : NL INDENT x NL DEDENT except ValueError as e : NL INDENT y NL DEDENT";
+    let stmt = &parse_src(src).body[0];
+    assert_eq!(text(src, stmt.span), &src[..src.len() - " NL DEDENT".len()]);
+    let StmtKind::Try { handlers, .. } = &stmt.kind else {
+        panic!("not a try");
+    };
+    let binding = handlers[0].binding.as_ref().map(|b| text(src, b.span));
+    assert_eq!(binding, Some("e"));
+    assert!(text(src, handlers[0].span).starts_with("except ValueError"));
+}
+
+#[test]
+fn try_except_errors() {
+    let body = "try : NL INDENT x NL DEDENT";
+    assert_eq!(
+        err(&format!("{body} y NL")),
+        "expected `except`, found name `y`"
+    );
+    assert!(err(&format!("{body} except : NL INDENT y NL DEDENT"))
+        .starts_with("bare `except:` is not supported yet"));
+    assert_eq!(
+        err(&format!(
+            "{body} except ( ValueError ) : NL INDENT y NL DEDENT"
+        )),
+        "expected an exception name, such as `ValueError`, found `(`"
+    );
+    assert_eq!(
+        err(&format!(
+            "{body} except ValueError as : NL INDENT y NL DEDENT"
+        )),
+        "expected a name to bind the exception to, found `:`"
+    );
+    let with_else =
+        format!("{body} except ValueError : NL INDENT y NL DEDENT else : NL INDENT z NL DEDENT");
+    assert_eq!(err(&with_else), "`else` on `try` is not supported yet");
+    let reserved = "'as' is reserved outside `except Name as e`";
+    assert_eq!(err("as = 1 NL"), reserved);
+    assert_eq!(err("x = y as z NL"), reserved);
+    assert_eq!(
+        err("except ValueError : NL INDENT y NL DEDENT"),
+        "expected an expression, found `except`"
     );
 }
 

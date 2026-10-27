@@ -20,6 +20,10 @@ pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
         StmtKind::AnnAssign { target, .. } => {
             out.insert(target.name.clone());
         }
+        StmtKind::Try { handlers, .. } => {
+            let bindings = handlers.iter().filter_map(|h| h.binding.as_ref());
+            out.extend(bindings.map(|b| b.name.clone()));
+        }
         _ => {}
     });
     out
@@ -61,6 +65,10 @@ fn walk<'a>(block: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
                     .chain(elifs)
                     .for_each(|b| walk(&b.body, f));
                 walk(orelse, f);
+            }
+            StmtKind::Try { body, handlers } => {
+                walk(body, f);
+                handlers.iter().for_each(|h| walk(&h.body, f));
             }
             _ => {}
         }
@@ -139,7 +147,9 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             e(value);
             target_exprs(target).into_iter().for_each(e);
         }
-        StmtKind::AnnAssign { value, .. } | StmtKind::Expr(value) => e(value),
+        StmtKind::AnnAssign { value, .. } | StmtKind::Expr(value) | StmtKind::Raise(value) => {
+            e(value)
+        }
         StmtKind::Return(value) => value.iter().for_each(e),
         StmtKind::If {
             branch,
@@ -168,6 +178,17 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             e(iter);
             target_exprs(target).into_iter().for_each(e);
             body.iter().chain(orelse).for_each(|s| stmt_names(s, out));
+        }
+        StmtKind::Try { body, handlers } => {
+            // A handler's name is read too: a `def` that shadows it must be
+            // inferred first, so the handler sees the shadowing.
+            out.extend(
+                handlers
+                    .iter()
+                    .map(|h| (h.exception.name.as_str(), h.exception.span)),
+            );
+            let bodies = handlers.iter().flat_map(|h| &h.body);
+            body.iter().chain(bodies).for_each(|s| stmt_names(s, out));
         }
         StmtKind::FuncDef(_) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
     }
@@ -376,7 +397,7 @@ pub(super) fn guard(stmt: &Stmt) -> BTreeSet<String> {
 }
 
 /// Whether control never reaches the statement after `block`: every path
-/// ends in `return`, `break` or `continue`, or loops forever.
+/// ends in `return`, `raise`, `break` or `continue`, or loops forever.
 fn leaves(block: &[Stmt]) -> bool {
     exits(block, true)
 }
@@ -386,16 +407,20 @@ pub(super) fn falls_through(block: &[Stmt]) -> bool {
     !exits(block, false)
 }
 
-/// Whether every path through `block` ends in `return`, or loops
-/// forever; with `jumps`, a `break` or `continue` also ends a path.
+/// Whether every path through `block` ends in `return` or `raise`, or
+/// loops forever; with `jumps`, a `break` or `continue` also ends a path.
+/// A `try` exits when its body and every handler do.
 ///
 /// A loop with no `break` of its own either never ends or runs its
 /// `else`, so it exits when it loops forever or its `else` exits. A jump
 /// in its body only leaves that loop, so the body counts only for breaks.
 fn exits(block: &[Stmt], jumps: bool) -> bool {
     block.iter().any(|s| match &s.kind {
-        StmtKind::Return(_) => true,
+        StmtKind::Return(_) | StmtKind::Raise(_) => true,
         StmtKind::Break | StmtKind::Continue => jumps,
+        StmtKind::Try { body, handlers } => {
+            exits(body, jumps) && handlers.iter().all(|h| exits(&h.body, jumps))
+        }
         StmtKind::If {
             branch,
             elifs,
@@ -427,6 +452,10 @@ fn breaks(stmt: &Stmt) -> bool {
         } => {
             let bodies = std::iter::once(branch).chain(elifs).flat_map(|b| &b.body);
             bodies.chain(orelse).any(breaks)
+        }
+        StmtKind::Try { body, handlers } => {
+            let bodies = handlers.iter().flat_map(|h| &h.body);
+            body.iter().chain(bodies).any(breaks)
         }
         _ => false,
     }

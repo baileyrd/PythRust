@@ -2,14 +2,16 @@
 
 use std::collections::BTreeSet;
 
-use crate::ast::{BinOp, Block, Branch, Expr, Stmt, StmtKind, Target, TargetKind};
+use crate::ast::{
+    BinOp, Block, Branch, Expr, ExprKind, Handler, Stmt, StmtKind, Target, TargetKind,
+};
 use crate::diag::{Diagnostic, Result};
 use crate::span::Span;
 
 use super::expr::int_literal;
-use super::scope;
 use super::solve::{self, Access, Binary, Constraint, Need};
 use super::ty::Type;
+use super::{builtins, scope};
 use super::{error, Checker, TruthUse};
 
 const TRUTH_HINT: &str = "a truth test does not narrow";
@@ -91,7 +93,47 @@ impl Checker {
                 self.block(body)?;
                 self.block(orelse)
             }
+            StmtKind::Raise(value) => self.raise(value),
+            StmtKind::Try { body, handlers } => {
+                self.block(body)?;
+                handlers.iter().try_for_each(|h| self.handler(h))
+            }
         }
+    }
+
+    /// `raise e`, or `raise ValueError` for `raise ValueError()`.
+    fn raise(&mut self, value: &Expr) -> Result<()> {
+        if let ExprKind::Name(name) = &value.kind {
+            if self.is_exception_name(name) {
+                self.nodes.insert(value.span, Type::Exception);
+                return Ok(());
+            }
+        }
+        let t = self.expr(value)?;
+        let what = "`raise` needs an exception, such as `ValueError(\"...\")`";
+        self.expect(value.span, &Type::Exception, &t, what)
+    }
+
+    /// `except Name [as e]:` and its block. `Name` must be a builtin
+    /// exception that nothing shadows; `e` is an `Exception`.
+    fn handler(&mut self, h: &Handler) -> Result<()> {
+        let name = &h.exception.name;
+        if !self.is_exception_name(name) {
+            return Err(error(h.exception.span, not_an_exception(name)));
+        }
+        if let Some(b) = &h.binding {
+            self.bind_name(&b.name, b.span, &Type::Exception)?;
+            self.nodes.insert(b.span, Type::Exception);
+        }
+        self.block(&h.body)
+    }
+
+    /// Whether `name` here is a builtin exception: one of D6's names that
+    /// no variable or `def` shadows.
+    pub(super) fn is_exception_name(&self, name: &str) -> bool {
+        builtins::is_exception(name)
+            && self.lookup(name).is_none()
+            && !self.funcs.contains_key(name)
     }
 
     /// A clause's test narrows its body by holding and the later
@@ -275,4 +317,17 @@ impl Checker {
         }
         Ok(())
     }
+}
+
+/// Why `except name` names no builtin exception: shadowed, the base
+/// class, or unknown.
+fn not_an_exception(name: &str) -> String {
+    let names = builtins::EXCEPTIONS.join(", ");
+    if builtins::is_exception(name) {
+        return format!("`{name}` is redefined here, so it no longer names the builtin exception");
+    }
+    if name == "Exception" {
+        return format!("catching every exception is not supported yet; name one of {names}");
+    }
+    format!("`{name}` is not an exception; the builtin exceptions are {names}")
 }

@@ -299,6 +299,7 @@ impl<'a> Cx<'a> {
                     self.diverges.insert(id);
                 }
                 settle(&sig.ret, &job.subst, &bound, &mut self.seqs)
+                    .ok_or_else(|| unsupported(span, EXCEPTIONS))?
             }
         };
         // Decided before lowering again, so recursive calls find it.
@@ -401,26 +402,29 @@ fn is_closed(t: &Type, subst: &Subst) -> bool {
         Type::List(t) | Type::Optional(t) => is_closed(t, subst),
         Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
+        Type::Exception => true,
     }
 }
 
 /// The IR type of a result type no `return` decided: a variable `subst`
 /// leaves open takes what the body bound it to, else `None`. The instance
 /// never returns a value of that type (only `None`, or nothing), so
-/// any type is sound; this one matches what the body built.
-fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) -> Ty {
-    match t {
+/// any type is sound; this one matches what the body built. `None` if
+/// `t` holds a type the backend lacks.
+fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) -> Option<Ty> {
+    Some(match t {
         Type::Var(v) => subst.get(v).or(bound.get(v)).copied().unwrap_or(Ty::None),
         Type::List(t) => {
-            let elem = settle(t, subst, bound, seqs);
+            let elem = settle(t, subst, bound, seqs)?;
             seqs.list(elem)
         }
         Type::Optional(t) => {
-            let present = settle(t, subst, bound, seqs);
+            let present = settle(t, subst, bound, seqs)?;
             seqs.optional(present)
         }
         Type::Tuple(ts) => {
-            let fields = ts.iter().map(|t| settle(t, subst, bound, seqs)).collect();
+            let fields = ts.iter().map(|t| settle(t, subst, bound, seqs));
+            let fields = fields.collect::<Option<Vec<Ty>>>()?;
             seqs.tuple(fields)
         }
         Type::Int => Ty::Int,
@@ -429,7 +433,8 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::None => Ty::None,
         Type::Str => Ty::Str,
         Type::Range => Ty::Range,
-    }
+        Type::Exception => return None,
+    })
 }
 
 /// Every top-level function `name` may call, directly or not, and itself.
@@ -813,12 +818,16 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::None => Ok(Ty::None),
         Type::Str => Ok(Ty::Str),
         Type::Range => Ok(Ty::Range),
+        Type::Exception => Err(unsupported(span, EXCEPTIONS)),
         Type::Var(v) => subst
             .get(v)
             .copied()
             .ok_or_else(|| unsupported(span, "a value whose type depends on generic code")),
     }
 }
+
+/// What the backend lacks until phase 4's B3.
+pub(super) const EXCEPTIONS: &str = "exceptions (`try`, `raise`, `ValueError`)";
 
 pub(super) fn unsupported(span: Span, what: &str) -> Diagnostic {
     Diagnostic {

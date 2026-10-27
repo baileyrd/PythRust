@@ -1,4 +1,5 @@
-//! The closed builtin functions: `print len list range str int float bool`.
+//! The closed builtin functions: `print len list range str int float bool`,
+//! and the builtin exceptions (D6), which build an `Exception` when called.
 
 use crate::ast::Arg;
 use crate::diag::Result;
@@ -8,11 +9,25 @@ use super::solve::Need;
 use super::ty::Type;
 use super::{error, Checker};
 
+/// The builtin exceptions (`docs/grammar.md`, D6).
+pub(super) const EXCEPTIONS: [&str; 5] = [
+    "ValueError",
+    "IndexError",
+    "ZeroDivisionError",
+    "OverflowError",
+    "RecursionError",
+];
+
 pub(super) fn is_builtin(name: &str) -> bool {
-    matches!(
+    let function = matches!(
         name,
         "print" | "len" | "list" | "range" | "str" | "int" | "float" | "bool"
-    )
+    );
+    function || is_exception(name)
+}
+
+pub(super) fn is_exception(name: &str) -> bool {
+    EXCEPTIONS.contains(&name)
 }
 
 impl Checker {
@@ -34,6 +49,11 @@ impl Checker {
             }
             "int" => self.number("int", Type::Int, args, span),
             "float" => self.number("float", Type::Float, args, span),
+            // Any one value as the message, as `str(x)` takes.
+            _ if is_exception(name) => {
+                self.positional(name, args, 0, 1, span)?;
+                Ok(Type::Exception)
+            }
             _ => Err(error(span, format!("internal: `{name}` is not a builtin"))),
         }
     }

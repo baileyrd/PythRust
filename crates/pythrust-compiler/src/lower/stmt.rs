@@ -8,7 +8,7 @@ use crate::infer::Type;
 use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
-use super::{unsupported, FnBuilder, Loop};
+use super::{unsupported, FnBuilder, Loop, EXCEPTIONS};
 
 /// A `for` loop's parts other than what it iterates.
 struct Looped<'s> {
@@ -79,6 +79,7 @@ impl FnBuilder<'_, '_> {
                 body,
                 orelse,
             } => self.for_stmt(target, iter, body, orelse),
+            StmtKind::Raise(_) | StmtKind::Try { .. } => Err(unsupported(s.span, EXCEPTIONS)),
         }
     }
 

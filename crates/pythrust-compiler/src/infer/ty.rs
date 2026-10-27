@@ -22,6 +22,10 @@ pub enum Type {
     Tuple(Vec<Type>),
     /// `T | None`. `T` is never `None` or itself optional.
     Optional(Box<Type>),
+    /// A builtin exception value (`ValueError("bad")`), whichever its
+    /// name: one type, so `except ValueError as e` and `except IndexError
+    /// as e` can share `e`.
+    Exception,
     Var(TypeVar),
 }
 
@@ -61,6 +65,7 @@ impl fmt::Display for Type {
             Type::Bool => f.write_str("bool"),
             Type::None => f.write_str("None"),
             Type::Range => f.write_str("range"),
+            Type::Exception => f.write_str("Exception"),
             Type::List(elem) => write!(f, "list[{elem}]"),
             Type::Tuple(elems) if elems.is_empty() => f.write_str("tuple[()]"),
             Type::Tuple(elems) => write!(f, "tuple[{}]", join(elems)),
