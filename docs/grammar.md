@@ -13,8 +13,8 @@ Notation: EBNF. `A*` zero or more, `A+` one or more, `[A]` optional, `A | B` cho
   - `INT`: decimal digits, `_` separators allowed. Ints are `i64`; arithmetic overflow is a runtime error, never a silent wrap. An `INT` literal above `i64::MAX` is a compile error, except `9223372036854775808` directly under unary `-`, which the parser folds to `i64::MIN`. Arbitrary precision may be added later as an opt-in type.
   - `FLOAT`: digits with `.` or exponent.
   - `STRING`: single or double quoted, with Python's `\` escapes except `\N{...}`. An unknown escape is an error. No string prefixes (`f`, `r`, `b`, `u`) or triple quotes yet; the lexer rejects them by name.
-- Keywords: `def return if elif else while for in break continue pass and or not is True False None temper`.
-- Reserved for later (rejected by the lexer so programs stay forward-compatible): `try except finally raise assert class import from as with lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
+- Keywords: `def return if elif else while for in break continue pass and or not is True False None temper try except raise as`.
+- Reserved for later (rejected by the lexer so programs stay forward-compatible): `finally assert class import from with lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
 
 ## Program
 
@@ -27,17 +27,18 @@ block       = NEWLINE INDENT stmt+ DEDENT ;
 ## Statements
 
 ```ebnf
-simple_stmt = assign | ann_assign | aug_assign | return_stmt
+simple_stmt = assign | ann_assign | aug_assign | return_stmt | raise_stmt
             | 'break' | 'continue' | 'pass' | expr_list ;
 
 assign      = target_list '=' expr_list ;
 ann_assign  = NAME ':' type '=' expr ;
 aug_assign  = target ('+=' | '-=' | '*=' | '/=' | '//=' | '%=' | '**=') expr ;   # target must not be a tuple (checked after parsing)
 return_stmt = 'return' [expr_list] ;
+raise_stmt  = 'raise' expr ;                              # bare `raise` is later
 target_list = target (',' target)* [','] ;                # more than one, or a trailing comma, unpacks
 target      = NAME | postfix | '(' target_list ')' ;      # postfix must end in a subscript_op (checked after parsing)
 
-compound_stmt = func_def | if_stmt | while_stmt | for_stmt ;
+compound_stmt = func_def | if_stmt | while_stmt | for_stmt | try_stmt ;
 
 func_def    = ['temper'] 'def' NAME '(' [params] ')' ['->' type] ':' block ;
 params      = param (',' param)* [','] ;
@@ -46,6 +47,8 @@ param       = NAME [':' type] ['=' expr] ;
 if_stmt     = 'if' expr ':' block ('elif' expr ':' block)* ['else' ':' block] ;
 while_stmt  = 'while' expr ':' block ['else' ':' block] ;
 for_stmt    = 'for' target_list 'in' expr ':' block ['else' ':' block] ;
+try_stmt    = 'try' ':' block handler+ ;                  # `else` and `finally` are later
+handler     = 'except' NAME ['as' NAME] ':' block ;      # NAME is a builtin exception (checked by inference)
 ```
 
 ### Notes
@@ -58,6 +61,7 @@ for_stmt    = 'for' target_list 'in' expr ':' block ['else' ':' block] ;
 - Phase 2 parses and records `temper`; nothing about it is enforced until M5.
 - Rejected by the parser, as CPython rejects them before running: `return` outside a function, `break`/`continue` outside a loop (a loop's `else` is outside it), duplicate parameter names, a parameter without a default after one with a default, a positional argument after a keyword argument, and a repeated keyword argument.
 - Parameters: defaults are evaluated once, when `def` runs, as in Python. A call binds positional arguments first, then keyword arguments by name. An unknown name, a parameter bound twice, or a parameter left unbound is an error.
+- Exceptions (phase 4, D6/D7): `raise e` raises an exception value; `raise ValueError` means `raise ValueError()`. A `try` runs its first handler whose name matches the raised exception; an exception no handler names propagates, through calls, as in Python. `except Name as e` binds `e` for the handler and unbinds it afterwards, as Python does, so reading `e` after the handler is an unbound-name error. `raise` ends a path like `return` (no fall-through, post-terminator narrowing), and a `try` ends one when its body and every handler do. Only `raise` and `int(s)` / `float(s)` of a malformed string produce a catchable exception; see [Runtime errors](#runtime-errors).
 
 ## Types (annotation syntax)
 
@@ -66,7 +70,7 @@ type        = type_atom ['|' 'None'] ;                  # `None | None` is rejec
 type_atom   = (NAME | 'None') ['[' type (',' type)* ']'] ;
 ```
 
-Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`, `None`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. `T | None` (Optional) is in phase 2, including nested positions such as `list[int | None]`; general `A | B` unions remain later. Optional is one fixed union type, not permission to change a variable's type. PR #10 implements the token/AST contracts and Optional inference at module level; PR #13 implements this type syntax and `is` / `is not` parsing, including nested annotations. PR #14 implements supported post-terminator narrowing. PR #16 adds Optional fixtures and in-process lex/parse/infer diagnostic checks. PR #17 wires CLI `check`/`run` and validates the current 35-program executable corpus; this is not exhaustive edge-case coverage. `raise` stays deferred. See [open implementation work](roadmap.md#phase-2-open-implementation-work).
+Matches Python: `int`, `str`, `list[int]`, `tuple[int, str]`, `None`. Variable-length `tuple[int, ...]` is later. Names resolve in the type namespace. `T | None` (Optional) is in phase 2, including nested positions such as `list[int | None]`; general `A | B` unions remain later. Optional is one fixed union type, not permission to change a variable's type. PR #10 implements the token/AST contracts and Optional inference at module level; PR #13 implements this type syntax and `is` / `is not` parsing, including nested annotations. PR #14 implements supported post-terminator narrowing. PR #16 adds Optional fixtures and in-process lex/parse/infer diagnostic checks. PR #17 wires CLI `check`/`run` and validates the current 35-program executable corpus; this is not exhaustive edge-case coverage. `raise` narrows like `return` since phase 4 (B1). See [open implementation work](roadmap.md#phase-2-open-implementation-work).
 
 For example, `x: int | None = None` followed by `x = 5` keeps the same `int | None` type. Nano confirmed that a None-first variable intended to hold a value requires an explicit annotation. Without it, `x = None` fixes the type as `None`, so a later `x = 5` is a type error with a fix-it suggesting `x: int | None = None`. Do not relax loose-mode Optional inference yet; revisit only after the corpus shows how often the annotation is needed.
 
@@ -126,12 +130,15 @@ atom        = NAME | INT | FLOAT | STRING
 A closed set. Anything else is a name error.
 
 - Functions: `print len range str int float bool`.
+- Exceptions (phase 4, D6): `ValueError IndexError ZeroDivisionError OverflowError RecursionError`. Calling one with zero or one argument of any type builds an exception value; `str(e)` and `print(e)` give the argument as a string, empty without one.
 - Methods: `list.append`.
-- Type names: `int float str bool list tuple None`.
+- Type names: `int float str bool list tuple None Exception`. `Exception` is the one type of every exception value, so `except ValueError as e` and `except IndexError as e` can share `e`; it is not a name `except` accepts.
 
 ## Runtime errors
 
-Uncatchable in phase 2 (there is no `try`). A runtime error (overflow, index out of range, unpacking arity, division by zero, ...) stops the program, prints a diagnostic with its source span to stderr, and exits with status 1, as an uncaught CPython exception does.
+A fault (overflow, index out of range, unpacking arity, division by zero, recursion depth, ...) means a bug: `try` never catches it (D7). It stops the program, prints a diagnostic with its source span to stderr, and exits with status 1, as an uncaught CPython exception does.
+
+Only `raise` and `int(s)` / `float(s)` of a malformed string (a `ValueError`) produce a catchable exception. One no handler catches ends the program the same way, with CPython's last traceback line as the message (`ValueError: bad`, or just `ValueError` when the message is empty) and the span of its `raise` or call. `int` of a NaN float or of a numeric string outside `i64` stays a fault.
 
 A compile error (lexical, syntax, or type) is reported before anything runs: `pythrust run` prints the diagnostic to stderr, writes nothing to stdout, and exits with status 1.
 
@@ -158,21 +165,23 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 - `==` and `!=` between types that can never be equal (`1 == "a"`) are type errors; `int`, `float` and `bool` compare freely.
 - Functions are not values yet: a `def` name may only be called. A name cannot be both a `def` and a variable, and a `def` name is defined once.
 - A function that returns a value on some path must not fall off its end (that returns `None`) unless its return annotation is `T | None`.
-- `is` / `is not` compare only with `None`. In an `if`/`elif`/`while` whose test is `x is not None`, and in the clauses after an `x is None` test, a `T | None` name `x` has type `T`, unless that block assigns `x`. An `if x is None:` whose body always leaves (`return`, `break`, `continue`, also from a loop's `else` when that loop has no `break`), or an `if x is not None:` whose `else` always leaves, also narrows `x` for the rest of the enclosing block, unless the other side or the rest assigns `x`. An `if` with `elif` clauses does not. Tests compose with `and`, `or` and `not`: `a and b` holding proves what either side proves when holding, and failing proves only what both sides prove when failing; `or` is the mirror image, and `not` swaps holding and failing. So `if x is None or k > x:` narrows `x` in later clauses and `if x is None or y is None: return` narrows both. The same applies inside expressions: the right side of `a and b` sees what `a` holding proves, the right side of `a or b` what `a` failing proves, and `t if c else f` narrows `t` and `f` by `c` holding and failing. Truthiness (`if x:`) does not narrow, because `0` and `""` are false too; an error on such a name in the body suggests `x is not None` (Nano). CPython runs these programs.
+- `is` / `is not` compare only with `None`. In an `if`/`elif`/`while` whose test is `x is not None`, and in the clauses after an `x is None` test, a `T | None` name `x` has type `T`, unless that block assigns `x`. An `if x is None:` whose body always leaves (`return`, `raise`, `break`, `continue`, also from a loop's `else` when that loop has no `break`), or an `if x is not None:` whose `else` always leaves, also narrows `x` for the rest of the enclosing block, unless the other side or the rest assigns `x`. An `if` with `elif` clauses does not. Tests compose with `and`, `or` and `not`: `a and b` holding proves what either side proves when holding, and failing proves only what both sides prove when failing; `or` is the mirror image, and `not` swaps holding and failing. So `if x is None or k > x:` narrows `x` in later clauses and `if x is None or y is None: return` narrows both. The same applies inside expressions: the right side of `a and b` sees what `a` holding proves, the right side of `a or b` what `a` failing proves, and `t if c else f` narrows `t` and `f` by `c` holding and failing. Truthiness (`if x:`) does not narrow, because `0` and `""` are false too; an error on such a name in the body suggests `x is not None` (Nano). CPython runs these programs.
 - A variable first bound to `None` has type `None` unless annotated: `x = None` then `x = 5` is a type error; write `x: int | None = None`. `T` and `None` flow into `T | None` (also inside tuples); lists stay invariant, but a list or tuple literal takes its element types from where it goes (an annotation, argument, return or reassignment), so `xs: list[int | None] = [None, 1]` holds.
 - A negative `float` raised to a fractional power is a runtime error; Python returns a `complex`, which the subset lacks.
 - Mixed `int`/`float` arithmetic and comparison, and `int / int`, go through `f64`, so results can differ from Python's exact math for magnitudes above 2**53.
+- **Faults are fatal (D7):** overflow, index out of range, division by zero, unpacking arity and recursion depth are never caught: `except IndexError` around `xs[10]` does not run. Only `raise` and `int(s)` / `float(s)` of a malformed string raise catchable exceptions. Fixture `fault_not_caught`.
+- Catching every exception (`except Exception`, bare `except:`) is not supported yet (D6): the first is a type error, the second a parse error. Fixture `except_catch_all`.
 
 ## Deliberate omissions (phase 2)
 
-Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, exceptions, `with`, decorators, bitwise operators, chained assignment (`a = b = 1`), bare declarations (`x: int` with no value), `tuple[int, ...]`, general `A | B` unions (except phase-2 `T | None`). Each is additive: existing phase-2 programs keep their meaning.
+Dicts, sets, slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, `try` `else`/`finally`, bare `raise`, exception chaining and user-defined exceptions, `with`, decorators, bitwise operators, chained assignment (`a = b = 1`), bare declarations (`x: int` with no value), `tuple[int, ...]`, general `A | B` unions (except phase-2 `T | None`). Each is additive: existing phase-2 programs keep their meaning.
 
 ## Decided
 
 - **Integers:** `i64` with checked overflow (runtime error, no silent wrap).
 - **Fixed variable types (Nano):** one type per variable, inferred once; no rebinding to a different type. `total = 0` followed by `total += 1.5` is a compile error with a fix-it: "total is int here; write 0.0". Do not widen the variable from int to float: if the loop never runs, that changes the output from `0` to `0.0`, violating "tempering never changes meaning". Flow-sensitive type-changing rebinding such as `x = int(x)` is out of scope now; ship a clear error, then use the conformance corpus to decide whether to revisit it. A same-type assignment is unaffected.
 - **Optional (Nano):** pull `T | None` into phase 2 so None-initialized values can be represented without arbitrary type-changing rebinding. Optional remains one fixed union type. **None-first annotation confirmed by Nano:** write `x: int | None = None` when a None-first variable must later hold an int; unannotated `x = None` then `x = 5` is an error with that fix-it. Do not relax loose-mode Optional inference yet; revisit after corpus evidence shows how often the annotation is needed.
-- **Optional follow-ups (Nano, in order):** parser support for `'|' 'None'` and `is` / `is not`; then a separate PR for narrowing after a terminating `if x is None` branch (`return`, `break`, `continue`), with each implemented terminator tested and a fall-through negative case; then Optional conformance cases once parsing lands. These narrow an existing fixed union, not the variable's declared type. **Raise deferral confirmed by Nano:** implement and test `return`/`break`/`continue` narrowing now; defer the `raise` test until `raise` exists. `raise` remains reserved; do not expand exception syntax here.
+- **Optional follow-ups (Nano, in order):** parser support for `'|' 'None'` and `is` / `is not`; then a separate PR for narrowing after a terminating `if x is None` branch (`return`, `break`, `continue`), with each implemented terminator tested and a fall-through negative case; then Optional conformance cases once parsing lands. These narrow an existing fixed union, not the variable's declared type. **Raise deferral confirmed by Nano:** implement and test `return`/`break`/`continue` narrowing now; defer the `raise` test until `raise` exists. `raise` arrived in phase 4 (B1) and narrows like `return`, with its test.
 - **Lists and dyn (Nano):** homogeneous element types; `[1, "a"]` is an error unless the element type is `dyn`. A `dyn` variable may hold anything. `dyn` is the explicit Python-bridge escape hatch, not an implicit fallback.
 - **Integer powers (Nano):** `int ** int` returns `int`; negative exponents fail at runtime. A literal negative exponent with an integer base fails at compile time. Both diagnostics say "use a float base". `2.0 ** -1` remains legal. Checked overflow already makes `2 ** 64` a runtime error.
 - **Tempering marker:** `temper def f(...)`, a keyword prefix.

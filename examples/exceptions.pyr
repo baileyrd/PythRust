@@ -1,0 +1,76 @@
+# try/except/raise (D6): builtin exceptions, raised by `raise` or by
+# int(s)/float(s), caught by name.
+def parse(s: str) -> int:
+    try:
+        return int(s)
+    except ValueError as e:
+        print("bad input:", e)
+        return -1
+
+
+def checked_div(a: int, b: int) -> int:
+    if b == 0:
+        raise ZeroDivisionError("b is zero")
+    return a // b
+
+
+def first(xs: list[int]) -> int:
+    if len(xs) == 0:
+        raise IndexError
+    return xs[0]
+
+
+def mean(text: list[str]) -> float:
+    total = 0.0
+    for s in text:
+        try:
+            total += float(s)
+        except ValueError:
+            print("skipping", s)
+    return total / len(text)
+
+
+print(parse("42"), parse("4x2"), parse(" -7 "))
+print(mean(["1.5", "x", "2.5"]))
+
+for b in [2, 0]:
+    try:
+        print(checked_div(7, b))
+    except IndexError:
+        print("not this one")
+    except ZeroDivisionError as e:
+        print("caught:", e, [e])
+
+try:
+    try:
+        first([])
+    except ValueError:
+        print("inner does not match")
+    print("skipped")
+except IndexError as e:
+    print("outer caught", "[" + str(e) + "]")
+
+err = OverflowError("too big")
+try:
+    raise err
+except OverflowError as e:
+    print(e == err, str(e))
+
+try:
+    try:
+        raise ValueError("first")
+    except ValueError as e:
+        print("handling", e)
+        raise RecursionError("second")
+except RecursionError as e:
+    print("then", e)
+
+for i in range(4):
+    try:
+        if i == 1:
+            continue
+        if i == 3:
+            break
+        print("loop", i)
+    except ValueError:
+        pass

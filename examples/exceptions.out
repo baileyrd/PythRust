@@ -1,0 +1,12 @@
+bad input: invalid literal for int() with base 10: '4x2'
+42 -1 -7
+skipping x
+1.3333333333333333
+3
+caught: b is zero [ZeroDivisionError('b is zero')]
+outer caught []
+True too big
+handling first
+then second
+loop 0
+loop 2
