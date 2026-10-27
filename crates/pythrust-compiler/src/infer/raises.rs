@@ -959,7 +959,27 @@ temper def str(s: str) -> int:
 temper def f() -> int:
     return int(str(\"bad\"))
 ";
-        assert_eq!(raises(early, "f"), "");
+        assert_eq!(raises(early, "f"), ""); // Through a parameter, and an indexed composite result.
+        let param = "\
+temper def parse(n: int) -> int:
+    return int(n)
+
+print(parse(str(\"bad\")))
+
+temper def str(s: str) -> int:
+    return 0
+";
+        assert!(err(param).starts_with("tempered `parse` can raise ValueError here"));
+        let indexed = "\
+temper def f() -> int:
+    return int(list([\"bad\"])[0])
+
+print(f())
+
+temper def list(xs: list[str]) -> list[int]:
+    return [0]
+";
+        assert!(err(indexed).starts_with("tempered `f` can raise ValueError here"));
     }
 
     #[test]
