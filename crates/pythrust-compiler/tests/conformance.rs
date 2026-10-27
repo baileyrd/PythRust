@@ -30,6 +30,9 @@
 //!   this test run).
 //! - `PYTHRUST_BLESS=1` write non-deviation goldens from CPython, creating
 //!   missing ones; a golden whose exit status disagrees is kept.
+//! - `PYTHRUST_VALGRIND=1` also run every native program under valgrind's
+//!   memcheck, failing on invalid reads, writes and frees (use-after-free)
+//!   and on definitely lost blocks. CI sets it on x86-64 Linux. The instrumented run must also match the golden.
 
 use std::fs;
 use std::io::Read;
@@ -585,9 +588,75 @@ fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
     }))
 }
 
+/// Memcheck's exit status for a program it found errors in; corpus
+/// programs exit 0 or 1, so it cannot be mistaken for theirs.
+const MEMCHECK_EXIT: i32 = 97;
+
+/// Whether `PYTHRUST_VALGRIND=1` asks for memcheck runs.
+fn memcheck_requested() -> bool {
+    std::env::var_os("PYTHRUST_VALGRIND").is_some_and(|v| v == "1")
+}
+
+/// A memcheck run is many times slower than a plain one.
+const MEMCHECK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Runs `exe` under memcheck. The debug runtime already fails leaked
+/// strings and sequences; memcheck adds use-after-free, double frees and
+/// lost blocks outside that count. Runtime errors exit without releasing,
+/// which leaves blocks reachable, not lost, so they pass.
+fn memcheck(case: &Case, exe: &Path) -> Res<Option<String>> {
+    let log = exe.with_extension("memcheck");
+    let got = run(
+        Command::new("valgrind")
+            .args(["--leak-check=full", "--errors-for-leak-kinds=definite"])
+            .arg(format!("--error-exitcode={MEMCHECK_EXIT}"))
+            .arg(format!("--log-file={}", log.display()))
+            .arg(exe),
+        MEMCHECK_TIMEOUT,
+    );
+    let report = fs::read_to_string(&log).unwrap_or_else(|e| format!("no memcheck log: {e}"));
+    Ok(memcheck_failure(case, got, &report))
+}
+
+/// Memcheck's closing line for a run it watched to the end with no errors.
+const MEMCHECK_CLEAN: &str = "ERROR SUMMARY: 0 errors";
+
+/// The report for a memcheck run, if it failed. It fails closed: the
+/// instrumented run must finish exactly as the golden says (stdout and
+/// status, so an expected runtime error still passes) and its log must end
+/// clean, which proves memcheck ran the program to completion. A run that
+/// could not start, timed out, died by a signal or left no log fails.
+fn memcheck_failure(case: &Case, got: Res<Run>, report: &str) -> Option<String> {
+    let why = match got {
+        Err(e) => format!("memcheck run failed: {e}"),
+        Ok(run) if run.status == MEMCHECK_EXIT => "memcheck errors".to_string(),
+        Ok(run) => match mismatch(case, &run) {
+            Some(m) => format!("memcheck run differs from the golden: {m}"),
+            None if report.contains(MEMCHECK_CLEAN) => return None,
+            None => format!("memcheck did not report a clean finish ({MEMCHECK_CLEAN})"),
+        },
+    };
+    Some(format!(
+        "{}\n  {why}\n  memcheck log:\n{report}",
+        case.source.display()
+    ))
+}
+
+/// A corpus program links to about 0.5 MB. Without dead-code removal
+/// and debug-info stripping it is over 5 MB; this bound catches that.
+const MAX_NATIVE_BYTES: u64 = 1 << 20;
+
+/// Fails a native binary larger than [`MAX_NATIVE_BYTES`].
+fn oversized(exe: &Path) -> Res<Option<String>> {
+    let size = fs::metadata(exe).map_err(|e| e.to_string())?.len();
+    Ok((size > MAX_NATIVE_BYTES)
+        .then(|| format!("{}: {size} bytes exceeds {MAX_NATIVE_BYTES}", exe.display())))
+}
+
 #[test]
 fn corpus_matches_native() -> Res<()> {
     build_runtime()?;
+    let memchecked = memcheck_requested();
     let dir = std::env::temp_dir().join(format!("pythrust-native-{}", std::process::id()));
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut failures = Vec::new();
@@ -599,12 +668,16 @@ fn corpus_matches_native() -> Res<()> {
         let Some(exe) = build_native(&case.source, &dir)? else {
             continue;
         };
+        failures.extend(oversized(&exe)?);
         let got = run(&mut Command::new(&exe), TIMEOUT)?;
         let failed = mismatch(&case, &got);
         let errored = failed.is_none() && got.status != 0;
         failures.extend(failed);
         if errored {
             failures.extend(stderr_mismatch(&exe)?);
+        }
+        if memchecked {
+            failures.extend(memcheck(&case, &exe)?);
         }
         built.extend(
             case.source
@@ -725,6 +798,51 @@ fn mismatch_reports_status_and_stdout() {
         status: 0,
     };
     assert!(mismatch(&case, &bad_out).is_some());
+}
+
+#[test]
+fn memcheck_fails_closed() {
+    let case = |stdout: &str, status: i32| Case {
+        source: PathBuf::from("p.pyr"),
+        stdout: stdout.to_string(),
+        expect: Expect {
+            status,
+            deviation: None,
+            check_error: None,
+        },
+    };
+    let ran = |stdout: &str, status: i32| -> Res<Run> {
+        Ok(Run {
+            stdout: stdout.to_string(),
+            status,
+        })
+    };
+    let clean = "==1== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)\n";
+    assert_eq!(
+        memcheck_failure(&case("1\n", 0), ran("1\n", 0), clean),
+        None
+    );
+    // An expected runtime error that memcheck saw through is not an error.
+    assert_eq!(memcheck_failure(&case("", 1), ran("", 1), clean), None);
+    // A program that should succeed but exits 1 under memcheck fails.
+    assert!(memcheck_failure(&case("1\n", 0), ran("1\n", 1), clean).is_some());
+    assert!(memcheck_failure(&case("1\n", 0), ran("", 0), clean).is_some());
+    // A tool failure can look like an expected silent runtime error; only
+    // the clean summary tells them apart.
+    let no_log = "no memcheck log: No such file or directory (os error 2)";
+    let tool_failed = "valgrind: failed to start tool 'memcheck' for platform 'amd64-linux'\n";
+    for report in [no_log, tool_failed, ""] {
+        let failed = memcheck_failure(&case("", 1), ran("", 1), report);
+        assert!(failed.is_some_and(|f| f.contains("clean finish") && f.contains(report)));
+    }
+    let errors = memcheck_failure(
+        &case("", 1),
+        ran("", MEMCHECK_EXIT),
+        "Invalid read of size 8",
+    );
+    assert!(errors.is_some_and(|f| f.contains("memcheck errors") && f.contains("Invalid read")));
+    let killed = memcheck_failure(&case("", 0), Err("killed by a signal".to_string()), clean);
+    assert!(killed.is_some_and(|f| f.contains("killed by a signal")));
 }
 
 #[test]
