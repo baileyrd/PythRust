@@ -1,0 +1,64 @@
+# expect-exit: 1
+# A variable read before a later live assignment, where only a call that
+# never returns has assigned it so far, takes the live value's type: a
+# plain read or arithmetic, the dead assignment before or after the
+# read, in a loop, for ints and floats, through a generic wrapper. One
+# only such a call assigns is never bound, so reading it fails.
+def spin(n):
+    return spin(n - 1)
+
+
+def read_after(n, x):
+    if n:
+        y = spin(n)
+    if n:
+        print(y)
+        print(y * y)
+    y = x * x
+    return y
+
+
+def read_before(n, x):
+    if n:
+        print(y * y + 1)
+    if n:
+        y = spin(n)
+    y = x * x
+    return y
+
+
+def looped(n, x):
+    if n:
+        y = spin(n)
+    i = 0
+    while i < 2:
+        if i:
+            print(y * y)
+        y = x * x
+        i += 1
+    return y
+
+
+def a(x):
+    return read_after(0, x) + 1
+
+
+def b(x):
+    return read_before(0, x) + 1
+
+
+def c(x):
+    return looped(0, x) + 1
+
+
+print(a(3), a(1.5))
+print(b(3), b(1.5))
+print(c(3), c(1.5))
+if 0:
+    z = spin(1)
+if 0:
+    print(z * 2)
+print("z unread")
+if 0:
+    z = spin(2)
+print(z + 1)

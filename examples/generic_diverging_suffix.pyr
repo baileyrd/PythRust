@@ -1,0 +1,48 @@
+# expect-exit: 1
+# Module variables assigned only after a call that never returns, in
+# the rest of its block (nested, in tuple targets, in loop bodies): a
+# function reading one fails with NameError as `run` does, while a
+# variable the module assigns live reads normally.
+def spin(n):
+    return spin(n - 1)
+
+
+if 0:
+    spin(1)
+    y = spin(1)
+    if 1:
+        a, b = (spin(1), 2)
+    for c in range(2):
+        d = spin(1)
+i = 0
+while i < 0:
+    spin(1)
+    e = spin(2)
+i = 1
+
+
+def f():
+    return y
+
+
+def g():
+    return a, b
+
+
+def h():
+    return d
+
+
+def k():
+    return e
+
+
+def live():
+    return w
+
+
+w = 7
+print(live())
+if 0:
+    print(g(), h(), k())
+print(f())

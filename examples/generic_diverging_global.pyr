@@ -1,0 +1,28 @@
+# expect-exit: 1
+# A module variable only an assignment that never completes assigns:
+# a function reading it fails with NameError as `run` does, and a
+# caller using the result never runs.
+def spin(n):
+    return spin(n - 1)
+
+
+def g(x):
+    return [x * x]
+
+
+if 0:
+    y = spin(1)
+
+
+def f():
+    return y
+
+
+def h():
+    return len(f())
+
+
+print("start")
+if 0:
+    print(f())
+print(h())

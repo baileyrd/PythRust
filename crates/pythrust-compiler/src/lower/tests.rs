@@ -533,17 +533,198 @@ fn a_function_that_never_returns_settles_its_result_as_none() {
     assert_eq!(ret_of(&p, "spin"), Ty::None);
 }
 
+fn prints(f: &Func) -> usize {
+    let insts = f.blocks.iter().flat_map(|b| &b.insts);
+    insts.filter(|i| matches!(i, Inst::Print { .. })).count()
+}
+
+/// Whether a block of `f` calls and then ends, unreachable.
+fn ends_after_a_call(f: &Func) -> bool {
+    f.blocks.iter().any(|b| {
+        let call = matches!(
+            b.insts.last(),
+            Some(Inst::Assign {
+                value: Rvalue::Call(..),
+                ..
+            })
+        );
+        call && matches!(b.term, Term::Unreachable)
+    })
+}
+
 #[test]
-fn an_operation_on_a_never_returning_result_stays_unsupported() {
-    // Settled as `None`, `f(n - 1) + 1` cannot lower, though it never
-    // runs: a follow-up in docs/roadmap.md.
-    let (d, text) = rejected("def f(n):\n    return f(n - 1) + 1\n\n\nprint(f(1))\n");
-    assert!(
-        d.message.contains("arithmetic on a non-number"),
-        "{}",
-        d.message
+fn an_operation_on_a_never_returning_result_is_unreachable() {
+    let p = lowered("def f(n):\n    return f(n - 1) + 1\n\n\nprint(f(1))\n");
+    assert_eq!(ret_of(&p, "f"), Ty::None);
+    let main = &p.funcs[p.main.0];
+    assert!(ends_after_a_call(main));
+    assert_eq!(prints(main), 0);
+    let f = p.funcs.iter().find(|f| f.name == "f");
+    assert!(f.is_some_and(ends_after_a_call));
+}
+
+#[test]
+fn a_short_circuit_past_a_never_returning_call_continues() {
+    let p = lowered(
+        "def f(n):\n    return f(n - 1) * 2\n\n\nprint(0 > 1 < f(1))\nprint(1 if 0 else 2)\n",
     );
-    assert_eq!(text, "f(n - 1) + 1");
+    let main = &p.funcs[p.main.0];
+    assert!(ends_after_a_call(main));
+    assert_eq!(prints(main), 2);
+}
+
+#[test]
+fn mutual_recursion_through_ops_never_returns() {
+    let p = lowered("def ping(n):\n    return pong(n) + 1\n\n\ndef pong(n):\n    return ping(n - 1) * 2\n\n\nprint(ping(3))\n");
+    assert_eq!(prints(&p.funcs[p.main.0]), 0);
+}
+
+#[test]
+fn a_stuck_elif_test_is_not_never_returning() {
+    // `big` falls off (returns `None`) through the first branch.
+    let p = lowered("def big(n) -> list | None:\n    if n > 5:\n        print(1)\n    elif big(n + 1):\n        print(2)\n\n\nprint(big(6))\n");
+    let main = &p.funcs[p.main.0];
+    assert!(!ends_after_a_call(main));
+    assert_eq!(prints(main), 1);
+}
+
+/// The int literals that prints in blocks of `f` reachable from its
+/// entry print first.
+fn reachable_prints(f: &Func) -> Vec<i64> {
+    let (mut seen, mut todo) = (vec![false; f.blocks.len()], vec![0]);
+    let mut out = Vec::new();
+    while let Some(b) = todo.pop() {
+        if std::mem::replace(&mut seen[b], true) {
+            continue;
+        }
+        let block = &f.blocks[b];
+        for i in &block.insts {
+            if let Inst::Print { args, .. } = i {
+                if let Some(Operand::Int(n)) = args.first() {
+                    out.push(*n);
+                }
+            }
+        }
+        match &block.term {
+            Term::Goto(t) => todo.push(t.0),
+            Term::Branch { then, orelse, .. } => todo.extend([then.0, orelse.0]),
+            _ => {}
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn a_never_returning_elif_test_keeps_the_join() {
+    let p = lowered("def spin(n):\n    return spin(n - 1)\n\n\nif True:\n    print(1)\nelif spin(1):\n    print(2)\nprint(3)\n");
+    assert_eq!(reachable_prints(&p.funcs[p.main.0]), vec![1, 3]);
+}
+
+#[test]
+fn a_never_returning_branch_decides_nothing() {
+    for ret in ["spin(n) if n else x * x", "x * x if not n else spin(n)"] {
+        for (arg, ty) in [("3", Ty::Int), ("1.5", Ty::Float)] {
+            let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n    return {ret}\n\n\ndef o(x):\n    return h(0, x) + 1\n\n\nprint(o({arg}))\n");
+            assert_eq!(ret_of(&lowered(&src), "h"), ty, "{ret} on {arg}");
+        }
+    }
+}
+
+#[test]
+fn a_variable_only_a_never_returning_call_typed_takes_the_live_type() {
+    let dead = "    if n:\n        y = spin(n)\n";
+    for read in ["print(y)", "print(y * y)", "print(y * y + 1)"] {
+        let read = format!("    if n:\n        {read}\n");
+        for body in [format!("{dead}{read}"), format!("{read}{dead}")] {
+            for (arg, ty) in [("3", Ty::Int), ("1.5", Ty::Float)] {
+                let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n{body}    y = x * x\n    return y\n\n\ndef o(x):\n    return h(0, x) + 1\n\n\nprint(o({arg}))\n");
+                assert_eq!(ret_of(&lowered(&src), "h"), ty, "{body} on {arg}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_variable_with_an_open_element_waits_for_its_live_type() {
+    for (arg, elem) in [("3", Ty::Int), ("1.5", Ty::Float)] {
+        let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n    if n:\n        y = spin(n)\n    i = 0\n    while i < 2:\n        if i:\n            print(y)\n        y = [x * x]\n        i += 1\n    return y\n\n\ndef o(x):\n    return len(h(0, x))\n\n\nprint(o({arg}))\n");
+        let p = lowered(&src);
+        let elem_of = match ret_of(&p, "h") {
+            Ty::List(id) => p.types.get(id.0),
+            _ => None,
+        };
+        assert_eq!(elem_of, Some(&Compound::List(elem)), "{arg}");
+    }
+}
+
+#[test]
+fn an_open_element_waits_for_the_live_branch() {
+    for ret in ["spin(n) if n else [x * x]", "[x * x] or spin(n)"] {
+        for (arg, elem) in [("3", Ty::Int), ("1.5", Ty::Float)] {
+            let src = format!("def spin(n):\n    return spin(n - 1)\n\n\ndef h(n, x):\n    return {ret}\n\n\ndef o(x):\n    return len(h(0, x))\n\n\nprint(o({arg}))\n");
+            let p = lowered(&src);
+            let elem_of = match ret_of(&p, "h") {
+                Ty::List(id) => p.types.get(id.0),
+                _ => None,
+            };
+            assert_eq!(elem_of, Some(&Compound::List(elem)), "{ret} on {arg}");
+        }
+    }
+}
+
+#[test]
+fn a_global_only_a_never_returning_call_assigns_fails_when_read() {
+    let p = lowered("def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    y = spin(1)\n\n\ndef f():\n    return y\n\n\nprint(f())\n");
+    let f = p.funcs.iter().find(|f| f.name == "f");
+    let failing = f.map(|f| {
+        f.blocks
+            .iter()
+            .filter(|b| matches!(b.term, Term::Fail(_)))
+            .count()
+    });
+    assert_eq!(failing, Some(1));
+    assert_eq!(prints(&p.funcs[p.main.0]), 0);
+}
+
+#[test]
+fn globals_after_a_never_returning_call_fail_when_read() {
+    let module = "def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    spin(1)\n    y = spin(1)\n    if 1:\n        a, b = (spin(1), 2)\n    for c in range(2):\n        d = spin(1)\ni = 0\nwhile i < 0:\n    spin(1)\n    e = spin(2)\n\n\n";
+    for (name, read) in [("f", "y"), ("g", "a"), ("h", "d"), ("k", "e")] {
+        let src = format!("{module}def {name}():\n    return {read}\n\n\nprint({name}())\n");
+        let p = lowered(&src);
+        let f = p.funcs.iter().find(|f| f.name == name);
+        let failing = f.map(|f| f.blocks.iter().any(|b| matches!(b.term, Term::Fail(_))));
+        assert_eq!(failing, Some(true), "{read}");
+    }
+}
+
+#[test]
+fn a_variable_only_a_never_returning_call_assigns_fails_when_read() {
+    let p =
+        lowered("def spin(n):\n    return spin(n - 1)\n\n\nif 0:\n    z = spin(1)\nprint(z * 2)\n");
+    assert_eq!(fails(&p), 1);
+    assert_eq!(prints(&p.funcs[p.main.0]), 0);
+}
+
+#[test]
+fn never_returning_results_assigned_or_in_and_or_lower() {
+    for src in [
+        "def f(n):\n    return f(n - 1) + 1\n\n\nx = f(1)\nprint(x)\n",
+        "def f(n):\n    return f(n - 1) or f(n + 1)\n\n\nprint(f(1))\n",
+        "def f(n):\n    return f(n - 1) and f(n + 1)\n\n\nprint(f(1))\n",
+    ] {
+        let p = lowered(src);
+        assert_eq!(prints(&p.funcs[p.main.0]), 0, "{src}");
+    }
+}
+
+#[test]
+fn returning_none_through_a_waiting_callee_is_not_never_returning() {
+    // `fold` returns only through `unfold`, which waits on `fold` but
+    // may return `None` itself.
+    let p = lowered("def fold(n):\n    return unfold(n)\n\n\ndef unfold(n) -> list | None:\n    if n:\n        return fold(n - 1)\n    return None\n\n\nprint(fold(3))\n");
+    assert_eq!(prints(&p.funcs[p.main.0]), 1);
 }
 
 #[test]
@@ -574,6 +755,9 @@ fn an_optional_only_none_settles_its_open_element() {
 fn a_conditional_decides_from_its_nonrecursive_branch() {
     let p = lowered("def h(n, x):\n    return h(n - 1, x) if n else x * x\n\n\ndef o(x):\n    return h(2, x) + 1\n\n\nprint(o(1.5))\n");
     assert_eq!(ret_of(&p, "h"), Ty::Float);
+    // Its other branch returns, so `h` is not taken for one that never
+    // does: no call ends a path.
+    assert!(!p.funcs.iter().any(ends_after_a_call));
 }
 
 #[test]

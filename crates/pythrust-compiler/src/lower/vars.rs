@@ -10,7 +10,7 @@ use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::ir::{CmpOp, Inst, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
-use super::{unsupported, FnBuilder};
+use super::{unsupported, FnBuilder, Hint, Hints};
 
 /// A named local. `flag` is `None` for parameters, which are always bound.
 #[derive(Debug, Clone, Copy)]
@@ -24,6 +24,12 @@ impl FnBuilder<'_, '_> {
     pub(super) fn read(&mut self, name: &str, span: Span) -> Result<Operand> {
         if self.defined.is_none() && !self.scope.contains(name) && self.cx.is_shared(name) {
             return self.read_global(name, span);
+        }
+        if let Some(Hint::Unbound) = self.hints.get(name) {
+            // Never assigned by code that completes: the read fails.
+            let message = self.unbound_message(name);
+            self.jump_away(Term::Fail(runtime(span, &message)));
+            return Err(self.diverge(span));
         }
         let var = self.var(name, span)?;
         let v = Operand::Local(var.local);
@@ -46,7 +52,7 @@ impl FnBuilder<'_, '_> {
     /// mismatch (inference and lowering disagreeing) is refused here
     /// rather than miscompiled.
     pub(super) fn write(&mut self, name: &str, value: Operand, span: Span) -> Result<()> {
-        let var = self.var(name, span)?;
+        let var = self.var_of(name, span, Some(self.ty(value)))?;
         let value = self.fit(value, self.locals[var.local.0], span);
         if self.ty(value) != self.locals[var.local.0] {
             let what = format!("assigning `{name}` a value of another type than inferred");
@@ -82,6 +88,12 @@ impl FnBuilder<'_, '_> {
     /// The variable `name`, created on first use with the type of the
     /// node at `span`, and its flag cleared in the entry block.
     fn var(&mut self, name: &str, span: Span) -> Result<Var> {
+        self.var_of(name, span, None)
+    }
+
+    /// [`var`](Self::var), for an assignment of a `value` of that type:
+    /// a live value types a variable live code has not typed yet.
+    fn var_of(&mut self, name: &str, span: Span, value: Option<Ty>) -> Result<Var> {
         if let Some(var) = self.names.get(name) {
             return Ok(*var);
         }
@@ -89,8 +101,60 @@ impl FnBuilder<'_, '_> {
             let what = format!("reading `{name}`, a global, from a function");
             return Err(unsupported(span, &what));
         }
-        let ty = self.ty_at(span)?;
+        let node = self.node_type(span)?;
+        match self.hints.get(name).copied() {
+            Some(Hint::Typed(ty)) => {
+                // As the assignment that gave it would have, bind what it
+                // decides (an element type), for the code before it.
+                super::bind(node, ty, &self.cx.seqs, &mut self.subst);
+                return Ok(self.new_var(name, ty, span));
+            }
+            Some(Hint::Unbound) => {
+                return Err(super::internal(span, "assigning a variable never assigned"))
+            }
+            None => {}
+        }
+        let ty = match (self.settled_ty_at(span)?, value) {
+            (Some(ty), _) => ty,
+            (None, Some(ty)) => {
+                super::bind(node, ty, &self.cx.seqs, &mut self.subst);
+                ty
+            }
+            (None, None) => {
+                // Live code may type it later; typing it now from code
+                // that never runs could reject that code.
+                self.pending.push(name.to_string());
+                self.stuck = true;
+                return Err(unsupported(span, "a variable typed only by later code"));
+            }
+        };
         Ok(self.new_var(name, ty, span))
+    }
+
+    /// Hints for the variables first met untyped: the types live code
+    /// gave them since; if it gave none and the body otherwise lowered
+    /// (`lowered`), that they are never assigned. `None` if no variable
+    /// was met untyped, or the body's own error stands.
+    pub(super) fn pending_hints(&self, lowered: bool) -> Option<Hints> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let typed: Hints = self
+            .pending
+            .iter()
+            .filter_map(|name| {
+                let var = self.names.get(name)?;
+                Some((name.clone(), Hint::Typed(self.locals[var.local.0])))
+            })
+            .collect();
+        if !typed.is_empty() {
+            return Some(typed);
+        }
+        if !lowered {
+            return None;
+        }
+        let unbound = self.pending.iter().map(|n| (n.clone(), Hint::Unbound));
+        Some(unbound.collect())
     }
 
     /// Creates variable `name` of type `ty` unless it exists: for a loop

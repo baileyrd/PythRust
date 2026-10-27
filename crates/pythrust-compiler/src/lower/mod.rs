@@ -54,8 +54,51 @@ enum Body {
     /// whose result was unknown.
     Lowered(Func, bool),
     /// No `return` decided the open result type; the variables the body
-    /// bound on the way.
-    Undecided(Subst),
+    /// bound on the way, and whether it may return at all.
+    Undecided(Subst, bool),
+}
+
+/// What later code says of a variable first met untyped.
+#[derive(Clone, Copy)]
+enum Hint {
+    /// The type a live assignment gave it.
+    Typed(Ty),
+    /// No live assignment: only code that never completes assigns it,
+    /// so every read of it fails as unbound.
+    Unbound,
+}
+
+/// Hints by variable name ([`with_hints`]).
+type Hints = HashMap<String, Hint>;
+
+/// One try at lowering a body.
+enum Attempt<T> {
+    Done(T),
+    /// Lower again, with these variables typed so.
+    Retype(Hints),
+}
+
+/// Lowers a body with `attempt` until every variable is typed before
+/// its first use. A variable's type is fixed only once the whole body
+/// has been seen, so a read that comes first (in a branch, or in a loop
+/// before the assignment) never types it from code that never runs.
+/// Each retry hints at least one more variable, so it ends.
+fn with_hints<T>(mut attempt: impl FnMut(&Hints) -> Result<Attempt<T>>) -> Result<T> {
+    let mut hints = Hints::new();
+    loop {
+        match attempt(&hints)? {
+            Attempt::Done(t) => return Ok(t),
+            Attempt::Retype(more) => hints.extend(more),
+        }
+    }
+}
+
+/// What [`Cx::open_instance`] knows of a call's result.
+enum Found {
+    Known(OpenInstance),
+    /// Not yet: the callee waits on an instance still being lowered.
+    /// Whether it may return anyway (a `None`, or by falling off).
+    Unknown(bool),
 }
 
 /// Lowers `module`, typed by `types`, to IR.
@@ -77,17 +120,21 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         open: HashMap::new(),
         lowering: 0,
         waits: usize::MAX,
+        diverges: HashSet::new(),
     };
     let main = cx.reserve();
-    let mut b = FnBuilder::new(
-        &mut cx,
-        Subst::new(),
-        scope::assigned(&module.body),
-        Ty::None,
-    );
-    b.defined = Some(HashSet::new());
-    b.block(&module.body)?;
-    let func = b.finish("<module>", Vec::new());
+    let func = with_hints(|hints| {
+        let scope = scope::assigned(&module.body);
+        let mut b = FnBuilder::new(&mut cx, Subst::new(), scope, Ty::None);
+        b.defined = Some(HashSet::new());
+        b.hints = hints.clone();
+        let lowered = b.block(&module.body);
+        if let Some(more) = b.pending_hints(lowered.is_ok()) {
+            return Ok(Attempt::Retype(more));
+        }
+        lowered?;
+        Ok(Attempt::Done(b.finish("<module>", Vec::new())))
+    })?;
     cx.funcs[main.0] = Some(func);
     while let Some(job) = cx.queue.pop() {
         let Body::Lowered(func, _) = cx.instance_body(&job)? else {
@@ -128,6 +175,9 @@ struct Cx<'a> {
     /// The depth of the shallowest instance still being lowered whose
     /// result a body needed, since the innermost open instance began.
     waits: usize,
+    /// Settled instances that never return: every path through them
+    /// needs their own result first.
+    diverges: HashSet<FuncId>,
 }
 
 /// An instance waiting to be lowered.
@@ -194,20 +244,18 @@ impl<'a> Cx<'a> {
     /// An instance no `return` decides on its own (every `return` needs
     /// its own result, or returns `None` into an open optional, or there
     /// is none) never returns anything else, so its open variables are
-    /// settled ([`settle`]) and it is lowered again with that type.
-    fn open_instance(
-        &mut self,
-        def: &'a FuncDef,
-        args: Vec<Ty>,
-        span: Span,
-    ) -> Result<Option<OpenInstance>> {
+    /// settled ([`settle`]) and it is lowered again with that type. If
+    /// no path returns at all, it [`diverges`](Cx::diverges).
+    fn open_instance(&mut self, def: &'a FuncDef, args: Vec<Ty>, span: Span) -> Result<Found> {
         let name = &def.name.name;
         let key = (name.clone(), args.clone());
         let id = match self.open.get(&key) {
-            Some(Open::Done(found)) => return Ok(Some(*found)),
+            Some(Open::Done(found)) => return Ok(Found::Known(*found)),
+            // Assumed not to return: a body that returns only through
+            // this call never returns.
             Some(Open::Lowering(depth)) => {
                 self.waits = self.waits.min(*depth);
-                return Ok(None);
+                return Ok(Found::Unknown(false));
             }
             Some(Open::Undecided(id)) => *id,
             None => self.reserve(),
@@ -239,15 +287,20 @@ impl<'a> Cx<'a> {
                 let ret = func.ret;
                 self.decided(key, id, ret);
                 self.funcs[id.0] = Some(func);
-                return Ok(Some((id, ret)));
+                return Ok(Found::Known((id, ret)));
             }
             Body::Lowered(func, true) => func.ret,
-            Body::Undecided(_) if waits < depth => {
+            Body::Undecided(_, returns) if waits < depth => {
                 self.open.insert(key, Open::Undecided(id));
-                return Ok(None);
+                return Ok(Found::Unknown(returns));
             }
-            Body::Undecided(bound) => settle(&sig.ret, &job.subst, &bound, &mut self.seqs)
-                .ok_or_else(|| unsupported(span, EXCEPTIONS))?,
+            Body::Undecided(bound, returns) => {
+                if !returns {
+                    self.diverges.insert(id);
+                }
+                settle(&sig.ret, &job.subst, &bound, &mut self.seqs)
+                    .ok_or_else(|| unsupported(span, EXCEPTIONS))?
+            }
         };
         // Decided before lowering again, so recursive calls find it.
         self.decided(key, id, ret);
@@ -260,7 +313,7 @@ impl<'a> Cx<'a> {
             ));
         };
         self.funcs[id.0] = Some(func);
-        Ok(Some((id, ret)))
+        Ok(Found::Known((id, ret)))
     }
 
     /// Lowers `job`'s body one open instance deeper, and the depth of
@@ -302,10 +355,15 @@ impl<'a> Cx<'a> {
     /// The function `job` asks for, unless no `return` decided its open
     /// result type.
     fn instance_body(&mut self, job: &Job<'a>) -> Result<Body> {
+        with_hints(|hints| self.instance_attempt(job, hints))
+    }
+
+    fn instance_attempt(&mut self, job: &Job<'a>, hints: &Hints) -> Result<Attempt<Body>> {
         let f = job.def;
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
         let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret.unwrap_or(Ty::None));
+        b.hints = hints.clone();
         if job.ret.is_none() {
             let sig = b.cx.types.func(&f.name.name);
             b.open_ret = Some(sig.map_or(Type::None, |sig| sig.ret.clone()));
@@ -322,12 +380,18 @@ impl<'a> Cx<'a> {
             );
             params.push(id);
         }
-        b.block(&f.body)?;
+        let lowered = b.block(&f.body);
+        if let Some(more) = b.pending_hints(lowered.is_ok()) {
+            return Ok(Attempt::Retype(more));
+        }
+        lowered?;
         if b.open_ret.is_some() {
-            return Ok(Body::Undecided(b.subst));
+            let returns = b.may_return || b.reachable(b.cur);
+            return Ok(Attempt::Done(Body::Undecided(b.subst, returns)));
         }
         let skipped = b.skipped;
-        Ok(Body::Lowered(b.finish(&f.name.name, params), skipped))
+        let func = b.finish(&f.name.name, params);
+        Ok(Attempt::Done(Body::Lowered(func, skipped)))
     }
 }
 
@@ -435,6 +499,16 @@ struct Loop {
 struct FnBuilder<'c, 'a> {
     cx: &'c mut Cx<'a>,
     subst: Subst,
+    /// What calls that never return bind: types for values that never
+    /// exist (a variable only such a call assigns), used where `subst`
+    /// has none, and never evidence against what a live value decides.
+    dead: Subst,
+    /// Variable types to use before any other ([`with_hints`]).
+    hints: Hints,
+    /// Variables first met before live code typed them: the statement
+    /// is skipped and the body lowered again once the rest has had its
+    /// say ([`with_hints`]).
+    pending: Vec<String>,
     /// Names local to this function, as Python decides them.
     scope: BTreeSet<String>,
     names: HashMap<String, vars::Var>,
@@ -457,6 +531,13 @@ struct FnBuilder<'c, 'a> {
     /// statement holding it is then skipped and `skipped` set.
     stuck: bool,
     skipped: bool,
+    /// Set by a call into an instance that [diverges](Cx::diverges): the
+    /// rest of the path is unreachable, so the expression holding it is
+    /// abandoned up to the statement or branch it ends.
+    diverged: bool,
+    /// While `open_ret` is undecided: a skipped statement may return
+    /// (it returns `None`, or calls an instance that may).
+    may_return: bool,
     /// Where `return` leaves its value, created by the first `return`.
     ret_slot: Option<LocalId>,
     /// Where every `return` goes: it releases the function's strings.
@@ -471,6 +552,9 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
         let mut b = FnBuilder {
             cx,
             subst,
+            dead: Subst::new(),
+            hints: Hints::new(),
+            pending: Vec::new(),
             scope,
             names: HashMap::new(),
             always_bound: HashSet::new(),
@@ -484,6 +568,8 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             open_ret: None,
             stuck: false,
             skipped: false,
+            diverged: false,
+            may_return: false,
             ret_slot: None,
             exit: BlockId(1),
             pools: vec![Vec::new()],
@@ -509,9 +595,11 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
         };
         self.terminate(end);
         let ret = self.ret;
-        let value = match self.ret_slot {
-            Some(slot) if ret != Ty::None => Operand::Local(slot),
-            _ => Operand::None,
+        // A function that never returns has no `return` to create the
+        // slot; the exit, unreachable, still returns its type.
+        let value = match ret {
+            Ty::None => Operand::None,
+            _ => Operand::Local(self.return_slot()),
         };
         let strs = (0..self.locals.len()).map(LocalId);
         let owned = strs.filter(|l| self.locals[l.0].is_rc() && Some(*l) != self.ret_slot);
@@ -546,6 +634,24 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             term: None,
         });
         BlockId(self.blocks.len() - 1)
+    }
+
+    /// Whether `target` is reachable from the entry block.
+    fn reachable(&self, target: BlockId) -> bool {
+        let mut seen = HashSet::from([BlockId(0)]);
+        let mut todo = vec![BlockId(0)];
+        while let Some(b) = todo.pop() {
+            if b == target {
+                return true;
+            }
+            let next = match &self.blocks[b.0].term {
+                Some(Term::Goto(t)) => vec![*t],
+                Some(Term::Branch { then, orelse, .. }) => vec![*then, *orelse],
+                _ => Vec::new(),
+            };
+            todo.extend(next.into_iter().filter(|t| seen.insert(*t)));
+        }
+        false
     }
 
     fn new_local(&mut self, ty: Ty) -> LocalId {
@@ -663,8 +769,29 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             .ok_or_else(|| internal(span, "node has no type"))
     }
 
+    /// `t` under this instance's bindings, else those of calls that
+    /// never return.
     fn concrete(&mut self, t: &Type, span: Span) -> Result<Ty> {
-        concrete(t, &self.subst, &mut self.cx.seqs, span)
+        let live = concrete(t, &self.subst, &mut self.cx.seqs, span);
+        if live.is_ok() || self.dead.is_empty() {
+            return live;
+        }
+        let mut both = self.dead.clone();
+        both.extend(self.subst.iter().map(|(v, ty)| (*v, *ty)));
+        concrete(t, &both, &mut self.cx.seqs, span)
+    }
+
+    /// The node type at `span` if it has settled: no variable is left
+    /// anywhere in it under live bindings. In generic code an open one
+    /// (`[x * x]`'s element) waits for a live value to decide it; the
+    /// `None` defaulting [`concrete`] does for an unconstrained element
+    /// (`not []`) is no such decision.
+    fn settled_ty_at(&mut self, span: Span) -> Result<Option<Ty>> {
+        let t = self.node_type(span)?;
+        if !is_closed(t, &self.subst) {
+            return Ok(None);
+        }
+        concrete(t, &self.subst, &mut self.cx.seqs, span).map(Some)
     }
 }
 

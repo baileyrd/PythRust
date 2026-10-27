@@ -1,0 +1,70 @@
+# A variable a never-returning call assigns first, then a loop reads it
+# after a live assignment of a container whose element type generic
+# code decides (a list, a list of tuples, a nested list, an optional
+# list): its type settles only once nothing in it is open.
+def spin(n):
+    return spin(n - 1)
+
+
+def listed(n, x):
+    if n:
+        y = spin(n)
+    i = 0
+    while i < 2:
+        if i:
+            print(y)
+        y = [x * x]
+        i += 1
+    return y
+
+
+def pairs(n, x):
+    if n:
+        y = spin(n)
+    i = 0
+    while i < 2:
+        if i:
+            print(y, y[0][1], len(y))
+        y = [(x, x * x), (x + 1, x)]
+        i += 1
+    return y
+
+
+def nested(n, x):
+    if n:
+        z = spin(n)
+    i = 0
+    while i < 2:
+        if i:
+            print(z, z[0])
+        z = [[x * 2]]
+        i += 1
+    return z
+
+
+def pick(x, k) -> list | None:
+    if k:
+        return [x * x]
+    return None
+
+
+def maybe(n, x):
+    if n:
+        y = spin(n)
+    i = 0
+    while i < 3:
+        if i:
+            print(y, y is None)
+        y = pick(x, i % 2)
+        i += 1
+    return i
+
+
+def total(x):
+    return len(listed(0, x)) + len(pairs(0, x)) + len(nested(0, x)) + maybe(0, x)
+
+
+xs = []
+if 0:
+    xs = spin(1)
+print(total(3), total(1.5), xs)

@@ -1,0 +1,25 @@
+# expect-exit: 1
+# Mutually recursive generic functions: `ping` and `pong` never return,
+# so the operations on their results never run, while `fold` returns
+# `None` through `unfold` and is not taken for one that never returns.
+def ping(n):
+    return pong(n) + 1
+
+
+def pong(n):
+    return ping(n - 1) * 2
+
+
+def fold(n):
+    return unfold(n)
+
+
+def unfold(n) -> list | None:
+    if n:
+        return fold(n - 1)
+    return None
+
+
+print(fold(3))
+print(0 > 1 < ping(2))
+print(ping(3))
