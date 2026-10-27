@@ -34,6 +34,15 @@ const NATIVE_LIBS: &[&str] = &[
     "-lc",
 ];
 
+/// Linker flags that keep only what the program reaches and drop debug
+/// info, as Cargo's release profile does (`strip = "debuginfo"`). Without
+/// them a binary carries the standard library's debug info and its unused
+/// code: 5.5 to 6.3 MB instead of 0.44 to 0.52 MB. Symbols stay for backtraces.
+#[cfg(target_os = "macos")]
+const LINK_FLAGS: &[&str] = &["-Wl,-dead_strip"];
+#[cfg(not(target_os = "macos"))]
+const LINK_FLAGS: &[&str] = &["-Wl,--gc-sections", "-Wl,--strip-debug"];
+
 /// A subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command {
@@ -180,6 +189,7 @@ fn link_in(dir: &Path, object: &[u8], runtime: &Path, out: &Path) -> Result<(), 
         .arg(&obj)
         .arg(runtime)
         .args(NATIVE_LIBS)
+        .args(LINK_FLAGS)
         .arg("-o")
         .arg(out)
         .status()

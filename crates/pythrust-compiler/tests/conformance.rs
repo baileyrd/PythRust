@@ -528,6 +528,17 @@ fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
     }))
 }
 
+/// A corpus program links to about 0.5 MB. Without dead-code removal
+/// and debug-info stripping it is over 5 MB; this bound catches that.
+const MAX_NATIVE_BYTES: u64 = 1 << 20;
+
+/// Fails a native binary larger than [`MAX_NATIVE_BYTES`].
+fn oversized(exe: &Path) -> Res<Option<String>> {
+    let size = fs::metadata(exe).map_err(|e| e.to_string())?.len();
+    Ok((size > MAX_NATIVE_BYTES)
+        .then(|| format!("{}: {size} bytes exceeds {MAX_NATIVE_BYTES}", exe.display())))
+}
+
 #[test]
 fn corpus_matches_native() -> Res<()> {
     build_runtime()?;
@@ -542,6 +553,7 @@ fn corpus_matches_native() -> Res<()> {
         let Some(exe) = build_native(&case.source, &dir)? else {
             continue;
         };
+        failures.extend(oversized(&exe)?);
         let got = run(&mut Command::new(&exe), TIMEOUT)?;
         let failed = mismatch(&case, &got);
         let errored = failed.is_none() && got.status != 0;
