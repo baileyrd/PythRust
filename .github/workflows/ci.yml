@@ -17,12 +17,13 @@ env:
 
 jobs:
   check:
-    # Native builds emit host code and link with the host `cc`, so each
-    # target needs its own runner: x86-64 and AArch64 Linux, AArch64 macOS.
+    # Native builds emit host code and link with the host linker (`cc`,
+    # or MSVC's link.exe on Windows), so each target needs its own runner:
+    # x86-64 and AArch64 Linux, AArch64 macOS, x86-64 Windows.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
