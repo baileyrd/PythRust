@@ -190,18 +190,43 @@ fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
 
 /// Links `object` with the runtime into the executable for `path`.
 fn link(path: &str, object: &[u8]) -> Result<(), String> {
-    let out = Path::new(path).with_extension(std::env::consts::EXE_EXTENSION);
-    if out == Path::new(path) {
-        return Err(format!(
-            "pythrust: cannot build {path}: the executable would overwrite it\n"
-        ));
-    }
+    let out = output_path(path)?;
     let runtime = runtime_lib()?;
     let dir = private_dir()?;
     let linked = link_in(&dir, object, &runtime, &out);
     let removed = std::fs::remove_dir_all(&dir)
         .map_err(|e| format!("pythrust: cannot remove {}: {e}\n", dir.display()));
     linked.and(removed)
+}
+
+/// The executable `pythrust build` writes for `path`, refused if it would
+/// be the source itself. Names alone cannot tell: Windows and macOS file
+/// systems ignore case, so `foo.EXE` builds `foo.exe` over itself.
+fn output_path(path: &str) -> Result<PathBuf, String> {
+    let source = Path::new(path);
+    let out = source.with_extension(std::env::consts::EXE_EXTENSION);
+    if out == source || same_file(&out, source)? {
+        return Err(format!(
+            "pythrust: cannot build {path}: the executable would overwrite it\n"
+        ));
+    }
+    Ok(out)
+}
+
+/// Whether existing `a` is the file at `b`, after the file system resolves
+/// case, short names and symlinks. A missing `a` is no file at all.
+fn same_file(a: &Path, b: &Path) -> Result<bool, String> {
+    let exists = a
+        .try_exists()
+        .map_err(|e| format!("pythrust: cannot inspect {}: {e}\n", a.display()))?;
+    if !exists {
+        return Ok(false);
+    }
+    let canonical = |p: &Path| {
+        std::fs::canonicalize(p)
+            .map_err(|e| format!("pythrust: cannot resolve {}: {e}\n", p.display()))
+    };
+    Ok(canonical(a)? == canonical(b)?)
 }
 
 /// Writes `object` into `dir` and links it with `runtime` into `out`.
@@ -484,6 +509,51 @@ mod tests {
         }
         std::fs::remove_dir(&a).unwrap();
         std::fs::remove_dir(&b).unwrap();
+    }
+
+    /// A source whose executable name is itself: no extension on Unix,
+    /// `.EXE` in another case on Windows.
+    #[cfg(windows)]
+    const SELF_NAMED: &str = "p.EXE";
+    #[cfg(not(windows))]
+    const SELF_NAMED: &str = "p";
+
+    #[test]
+    fn build_refuses_to_overwrite_its_source() {
+        let dir = private_dir().unwrap();
+        let source = dir.join(SELF_NAMED);
+        std::fs::write(&source, "print(1)\n").unwrap();
+        let err = link(source.to_str().unwrap(), b"object").unwrap_err();
+        assert!(err.contains("would overwrite"), "{err}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"print(1)\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Where the names differ but the file is the same.
+    #[cfg(unix)]
+    #[test]
+    fn build_refuses_an_executable_name_linked_to_its_source() {
+        let dir = private_dir().unwrap();
+        let source = dir.join("p.pyr");
+        std::fs::write(&source, "print(1)\n").unwrap();
+        std::os::unix::fs::symlink(&source, dir.join("p")).unwrap();
+        let err = link(source.to_str().unwrap(), b"object").unwrap_err();
+        assert!(err.contains("would overwrite"), "{err}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"print(1)\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn output_path_allows_a_distinct_or_missing_executable() {
+        let dir = private_dir().unwrap();
+        let source = dir.join("p.pyr");
+        std::fs::write(&source, "").unwrap();
+        let path = source.to_str().unwrap();
+        let want = source.with_extension(std::env::consts::EXE_EXTENSION);
+        assert_eq!(output_path(path), Ok(want.clone()));
+        std::fs::write(&want, "old build").unwrap();
+        assert_eq!(output_path(path), Ok(want));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
