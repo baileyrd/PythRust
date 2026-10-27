@@ -1,0 +1,11 @@
+None None True
+quiet 2
+quiet 2.5
+None True
+-1 -1 -1
+found at 0
+found at 2
+None True None
+None None
+None None
+(9, 15, [3]) (2.25, 5.25, [1.5])

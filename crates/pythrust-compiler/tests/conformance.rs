@@ -28,7 +28,7 @@
 //!   missing ones; a golden whose exit status disagrees is kept.
 //! - `PYTHRUST_VALGRIND=1` also run every native program under valgrind's
 //!   memcheck, failing on invalid reads, writes and frees (use-after-free)
-//!   and on definitely lost blocks. CI sets it on Linux x86-64.
+//!   and on definitely lost blocks. CI sets it on x86-64 Linux. The instrumented run must also match the golden.
 
 use std::fs;
 use std::io::Read;
@@ -244,7 +244,10 @@ const NATIVE: &[&str] = &[
     "float_to_int_range",
     "floats",
     "functions",
+    "generic_never_returns",
     "generic_results",
+    "generic_spin",
+    "generic_undecided",
     "global_unbound",
     "globals_defaults",
     "hello",
