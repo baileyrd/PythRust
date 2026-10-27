@@ -45,7 +45,7 @@ Tools load on demand. If remind_me_* tools are not visible, run a tool search fo
 
 ## Layout
 
-`crates/pythrust-compiler`, one module per stage. Shared contract types: `span`, `diag`, `token`, `ast`, `ir`. Stages: `lexer`, `parser`, `infer`, `interp`, and for native code `lower`, `codegen` (`docs/native.md`). Stages meet only at the contract types. `crates/pythrust-rt` is the runtime native programs link against.
+`crates/pythrust-compiler`, one module per stage. Shared contract types: `span`, `diag`, `token`, `ast`, `ir`. Stages: `lexer`, `parser`, `infer`, `interp`, `own` (ownership summaries over the IR), and for native code `lower`, `codegen` (`docs/native.md`). Stages meet only at the contract types. `crates/pythrust-rt` is the runtime native programs link against.
 
 ## Engineering rules
 

@@ -11,7 +11,9 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use pythrust_compiler::{codegen, infer, interp, lexer, lower, parser, DiagKind, Diagnostic, Span};
+use pythrust_compiler::{
+    codegen, infer, interp, lexer, lower, own, parser, DiagKind, Diagnostic, Span,
+};
 
 const USAGE: &str = "usage: pythrust <run|check|build> <file>";
 
@@ -73,9 +75,11 @@ const LINK_FLAGS: &[&str] = &["/NOLOGO", "/SUBSYSTEM:CONSOLE", "/OPT:REF", "/OPT
 /// A subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command {
-    /// Lex, parse, infer, and interpret. A compile error runs nothing.
+    /// Lex, parse, infer, summarize ownership, and interpret. A compile
+    /// error runs nothing.
     Run,
-    /// Lex, parse, and infer. Never executes the program.
+    /// Lex, parse, infer, and summarize ownership. Never executes the
+    /// program.
     Check,
     /// Compile to a native executable beside the source, named like it
     /// with the host's executable extension: `fib.pyr` builds `fib`, or
@@ -148,7 +152,10 @@ fn execute(
 ) -> pythrust_compiler::Result<()> {
     let tokens = lexer::lex(src)?;
     let module = parser::parse(&tokens)?;
-    infer::infer(&module)?;
+    let types = infer::infer(&module)?;
+    // Analysis only, and it never fails: nothing depends on it until
+    // mode checks (roadmap A4), but every checked program runs it.
+    own::analyze(&module, &types);
     match command {
         Command::Check | Command::Build => Ok(()),
         Command::Run => interp::run(&module, out),

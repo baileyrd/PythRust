@@ -3,6 +3,7 @@
 //! Contract types shared by every stage: [`span`], [`diag`], [`token`],
 //! [`ast`], and [`ir`] for the backend. Stages: [`lexer`], [`parser`],
 //! [`infer`], [`interp`]; and for native code [`lower`], [`codegen`].
+//! [`own`] summarizes how functions use their parameters, on the IR.
 //! See `docs/grammar.md` for the language these types describe.
 
 #![forbid(unsafe_code)]
@@ -18,6 +19,7 @@ pub mod infer;
 pub mod interp;
 pub mod lexer;
 pub mod lower;
+pub mod own;
 pub mod parser;
 
 pub use diag::{DiagKind, Diagnostic, Result};
