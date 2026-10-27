@@ -1,4 +1,4 @@
-//! The closed phase-2 builtin functions: `print len range str int float bool`.
+//! The closed builtin functions: `print len list range str int float bool`.
 
 use crate::ast::Arg;
 use crate::diag::Result;
@@ -11,7 +11,7 @@ use super::{error, Checker};
 pub(super) fn is_builtin(name: &str) -> bool {
     matches!(
         name,
-        "print" | "len" | "range" | "str" | "int" | "float" | "bool"
+        "print" | "len" | "list" | "range" | "str" | "int" | "float" | "bool"
     )
 }
 
@@ -26,6 +26,7 @@ impl Checker {
                 }
                 Ok(Type::Int)
             }
+            "list" => self.copy_list(args, span),
             "range" => self.range(args, span),
             "str" | "bool" => {
                 self.positional(name, args, 0, 1, span)?;
@@ -52,6 +53,15 @@ impl Checker {
             self.expect(arg.value.span, &Type::Str, &t, &what)?;
         }
         Ok(Type::None)
+    }
+
+    /// `list(xs)`: a shallow copy of a list, of the same type.
+    fn copy_list(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        let list = Type::List(Box::new(self.subst.fresh()));
+        for (t, at) in self.positional("list", args, 1, 1, span)? {
+            self.expect(at, &list, &t, "`list` copies a list")?;
+        }
+        Ok(list)
     }
 
     fn range(&mut self, args: &[Arg], span: Span) -> Result<Type> {

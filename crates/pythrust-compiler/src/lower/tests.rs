@@ -400,6 +400,14 @@ fn conversions_pick_their_rvalue_by_type() {
 }
 
 #[test]
+fn list_copies_lower_to_their_own_rvalue() {
+    use crate::ir::Rvalue;
+    let p = lowered("a = [1]\nb = list(a)\nprint(b)\n");
+    let values = rvalues(&p.funcs[p.main.0]);
+    assert!(values.iter().any(|v| matches!(v, Rvalue::CopyList(_))));
+}
+
+#[test]
 fn loop_bindings_release_what_they_create_each_iteration() {
     // The item and the inner tuple's field are temporaries of the
     // per-iteration binding: each is released there and once more at

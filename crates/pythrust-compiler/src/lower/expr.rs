@@ -624,7 +624,9 @@ impl<'a> FnBuilder<'_, 'a> {
             return Err(unsupported(span, "keyword arguments"));
         }
         match name {
-            "len" | "str" | "int" | "float" | "bool" => self.unary_builtin(name, &ops, span),
+            "len" | "list" | "str" | "int" | "float" | "bool" => {
+                self.unary_builtin(name, &ops, span)
+            }
             "range" => {
                 let (start, stop, step) = self.range_bounds(args, &ops, span)?;
                 let items = vec![start, stop, step];
@@ -677,7 +679,7 @@ impl<'a> FnBuilder<'_, 'a> {
         Ok(Operand::None)
     }
 
-    /// `len`, `str`, `int`, `float` and `bool` of one argument.
+    /// `len`, `list`, `str`, `int`, `float` and `bool` of one argument.
     fn unary_builtin(&mut self, name: &str, args: &[Operand], span: Span) -> Result<Operand> {
         let [arg] = args else {
             return Err(unsupported(
@@ -693,6 +695,7 @@ impl<'a> FnBuilder<'_, 'a> {
             ("bool", _) => return Ok(self.truthy(arg, span)),
             ("len", Ty::Range) => return Ok(self.range_len(arg, span)),
             ("len", Ty::Str | Ty::List(_) | Ty::Tuple(_)) => (Ty::Int, Rvalue::Len(arg)),
+            ("list", ty @ Ty::List(_)) => (ty, Rvalue::CopyList(arg)),
             ("str", _) => (Ty::Str, Rvalue::ToStr(arg)),
             ("int", Ty::Float) => (Ty::Int, Rvalue::FloatToInt(arg)),
             ("int", Ty::Str) => (Ty::Int, Rvalue::ParseInt(arg)),

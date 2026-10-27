@@ -95,6 +95,7 @@ enum Rt {
     SeqEq,
     SeqCmp,
     ListContains,
+    ListCopy,
     WriteSeq,
     StrFromSeq,
     RangeLen,
@@ -104,7 +105,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 45] = [
+    const ALL: [Rt; 46] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -144,6 +145,7 @@ impl Rt {
         Rt::SeqEq,
         Rt::SeqCmp,
         Rt::ListContains,
+        Rt::ListCopy,
         Rt::WriteSeq,
         Rt::StrFromSeq,
         Rt::RangeLen,
@@ -193,6 +195,7 @@ impl Rt {
             Rt::SeqEq => "pt_seq_eq",
             Rt::SeqCmp => "pt_seq_cmp",
             Rt::ListContains => "pt_list_contains",
+            Rt::ListCopy => "pt_list_copy",
             Rt::WriteSeq => "pt_write_seq",
             Rt::StrFromSeq => "pt_str_from_seq",
             Rt::RangeLen => "pt_range_len",
@@ -238,7 +241,7 @@ impl Rt {
             Rt::SeqEq => (vec![ptr, ptr], Some(I8)),
             Rt::SeqCmp => (vec![ptr, ptr], Some(I64)),
             Rt::ListContains => (vec![ptr, I64], Some(I8)),
-            Rt::StrFromSeq => (vec![ptr], Some(ptr)),
+            Rt::StrFromSeq | Rt::ListCopy => (vec![ptr], Some(ptr)),
             Rt::RangeLen => (vec![ptr], Some(I64)),
             Rt::RangeGet => (vec![ptr, I64, ptr], Some(I64)),
             Rt::RangeContains => (vec![ptr, I64], Some(I8)),
@@ -696,6 +699,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let v = self.operand(*op);
                 Ok(self.b.ins().icmp_imm_s(IntCC::Equal, v, 0))
             }
+            Rvalue::CopyList(s) => self.rt_on(Rt::ListCopy, &[*s]),
             Rvalue::NewSeq(items) => self.new_seq(self.func.locals[dest.0], items),
             Rvalue::Field(t, k) => self.field(*t, *k, dest),
             Rvalue::Global(g) => {

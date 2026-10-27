@@ -803,8 +803,23 @@ fn builtins_are_typed() {
         type_of_value(&b, b.call("range", vec![b.i(1), b.i(9)])),
         Type::Range
     );
+    assert_eq!(
+        type_of_value(&b, b.call("list", vec![b.list(vec![b.s("a")])])),
+        list_of(Type::Str)
+    );
     let print = b.call_args("print", vec![b.arg(b.i(1)), b.kw("end", b.s(""))]);
     assert_eq!(type_of_value(&b, print), Type::None);
+}
+
+#[test]
+fn list_copy_shares_its_element_type() {
+    let b = B::default();
+    let body = vec![
+        b.assign("a", b.list(vec![b.i(1)])),
+        b.assign("c", b.call("list", vec![b.n("a")])),
+        b.ex(b.method(b.n("c"), "append", vec![b.s("x")])),
+    ];
+    assert!(err(body).contains("expected int, found str"));
 }
 
 #[test]
@@ -830,6 +845,14 @@ fn builtin_misuse_is_an_error() {
         (
             b.call("range", vec![b.s("a")]),
             "`range` takes ints: expected int, found str",
+        ),
+        (
+            b.call("list", vec![b.s("ab")]),
+            "`list` copies a list: expected list[T0], found str",
+        ),
+        (
+            b.call("list", vec![]),
+            "`list` takes 1 arguments but 0 were given",
         ),
     ];
     for (e, expected) in cases {
