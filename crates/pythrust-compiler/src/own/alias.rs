@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::body::{self, Flow, Obj, Objs};
+use super::body::{self, Age, Flow, Obj, Objs};
 use super::{holds_list, Mode, Summary};
 use crate::ast::{Mode as Temper, Module, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
@@ -341,7 +341,7 @@ impl<'a> Body<'a> {
     /// What `rv` may give `dest`.
     fn value(&self, dest: LocalId, rv: &Rvalue, state: &State) -> Val {
         let ty = self.ty(dest);
-        let fresh = Locs::from([root(Obj::Fresh(dest.0), ty)]);
+        let fresh = Locs::from([root(Obj::Fresh(dest.0, Age::Latest), ty)]);
         let locs = match rv {
             Rvalue::Use(a) | Rvalue::Wrap(a) | Rvalue::Unwrap(a) => return val(state, *a),
             Rvalue::Field(a, k) => return self.field(&val(state, *a), *k, ty),
@@ -400,7 +400,7 @@ impl<'a> Body<'a> {
     /// the module's values.
     fn call(&self, f: FuncId, args: &[Operand], dest: LocalId, state: &State) -> Locs {
         let summary = &self.summaries[f.0];
-        let mut out = Locs::from([root(Obj::Fresh(dest.0), self.ty(dest))]);
+        let mut out = Locs::from([root(Obj::Fresh(dest.0, Age::Latest), self.ty(dest))]);
         let aliased = args
             .iter()
             .zip(&summary.params)
@@ -778,7 +778,7 @@ impl<'a> Body<'a> {
         match obj {
             Obj::Param(_) => Objs::from([obj, Obj::World]),
             Obj::World => params.chain([Obj::World]).collect(),
-            Obj::Fresh(_) => Objs::from([obj]),
+            Obj::Fresh(..) => Objs::from([obj]),
         }
     }
 
@@ -817,7 +817,7 @@ fn anywhere(obj: Obj) -> Loc {
 /// Marks the latest list allocated into `dest` as an earlier one: `dest`
 /// is about to get a new one.
 fn age(state: &mut State, dest: LocalId) {
-    let latest = Obj::Fresh(dest.0);
+    let latest = Obj::Fresh(dest.0, Age::Latest);
     let age_all = |locs: &mut Locs| {
         let aged = std::mem::take(locs).into_iter().map(|l| Loc {
             earlier: l.earlier || (l.obj == latest && l.ty.is_some()),

@@ -20,7 +20,7 @@ use super::{Analysis, Mode, Precision, Summary};
 
 /// Checks every function's written modes against `analysis`, after a
 /// tempered body's aliasing.
-pub fn check(module: &Module, analysis: &Analysis) -> Result<()> {
+pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
     if analysis.precision != Precision::Precise {
         return Ok(());
     }
@@ -72,7 +72,7 @@ fn func(def: &FuncDef, summary: &Summary) -> Result<()> {
     Ok(())
 }
 
-fn written(mode: ParamMode) -> Mode {
+pub(super) fn written(mode: ParamMode) -> Mode {
     match mode {
         ParamMode::Read => Mode::Read,
         ParamMode::Mut => Mode::Mut,

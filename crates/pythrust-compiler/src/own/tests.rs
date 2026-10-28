@@ -511,6 +511,70 @@ fn an_exception_holding_a_list_leaves_aliasing_checked() {
     );
 }
 
+const ADD: &str = "temper def add(mut rows: list[list[int]], owned row: list[int]) -> None:\n    rows.append(row)\n";
+
+/// The source text of the call `check` rejects in `ADD` plus `rest`.
+fn shared_call(rest: &str) -> String {
+    let (message, call) = mode_err(&format!("{ADD}{rest}"));
+    assert_eq!(
+        message,
+        "tempered `add` keeps `row` after it returns, and this call may also pass that list as `rows`; pass a copy (`list(...)`)"
+    );
+    call
+}
+
+#[test]
+fn passing_one_list_twice_to_a_tempered_mut_parameter_is_rejected() {
+    let src = "temper def push(mut xs: list[int], ys: list[int]) -> None:\n    xs.append(len(ys))\na = [1]\npush(a, a)\n";
+    assert_eq!(
+        mode_err(src),
+        (
+            "tempered `push` changes `xs` in place, and this call may also pass that list as `ys`; pass a copy (`list(...)`)".into(),
+            "push(a, a)".into()
+        )
+    );
+    // The message names the parameter that changes, wherever it is.
+    let late = "temper def push(ys: list[int], mut xs: list[int]) -> None:\n    xs.append(len(ys))\na = [1]\npush(a, a)\n";
+    assert!(mode_err(late).0.starts_with("tempered `push` changes `xs`"));
+    let fixed = src.replace("push(a, a)", "push(a, list(a))");
+    assert_eq!(checked(&fixed), Ok(()));
+}
+
+#[test]
+fn a_list_inside_another_argument_is_shared() {
+    assert_eq!(shared_call("x = [1]\nadd([x], x)\n"), "add([x], x)");
+    let tuple = "temper def f(mut xs: list[int], t: tuple[list[int], int]) -> None:\n    xs.append(t[1])\na = [1]\nf(a, (a, 2))\n";
+    assert_eq!(mode_err(tuple).1, "f(a, (a, 2))");
+    // Elements of one list are not told apart.
+    let rows = "temper def push(mut xs: list[int], ys: list[int]) -> None:\n    xs.append(len(ys))\ndef g(rows: list[list[int]]):\n    push(rows[0], rows[1])\ng([[1], [2]])\n";
+    assert_eq!(mode_err(rows).1, "push(rows[0], rows[1])");
+}
+
+#[test]
+fn what_the_call_or_later_code_stores_does_not_count() {
+    let src = "rows: list[list[int]] = []\nrow = [1]\nadd(rows, row)\nrow = [2]\nadd(rows, row)\n";
+    assert_eq!(checked(&format!("{ADD}{src}")), Ok(()));
+    let looped = "rows: list[list[int]] = []\nfor i in range(3):\n    row = [i]\n    add(rows, row)\n    rows.append([0])\n";
+    assert_eq!(checked(&format!("{ADD}{looped}")), Ok(()));
+}
+
+#[test]
+fn what_earlier_code_stores_counts() {
+    let appended = "rows: list[list[int]] = []\nrow = [1]\nrows.append(row)\nadd(rows, row)\n";
+    assert_eq!(shared_call(appended), "add(rows, row)");
+    // The second iteration passes the list the first one kept.
+    let looped = "rows: list[list[int]] = []\nrow = [1]\nfor i in range(2):\n    add(rows, row)\n";
+    assert_eq!(shared_call(looped), "add(rows, row)");
+    // A rebinding moves the name, not the list.
+    let moved =
+        "rows: list[list[int]] = []\nrow = [1]\nb = row\nrow = [2]\nadd(rows, b)\nadd(rows, row)\n";
+    assert_eq!(checked(&format!("{ADD}{moved}")), Ok(()));
+    assert_eq!(
+        shared_call(&format!("{moved}add(rows, b)\n")),
+        "add(rows, b)"
+    );
+}
+
 #[test]
 fn one_list_may_sit_at_different_depths() {
     // A list has one type, not one depth: `(xs, [xs])`.
@@ -617,4 +681,145 @@ fn a_callee_changing_a_module_list_is_a_change() {
     assert_eq!(checked(reads), Ok(()));
     let typed = "saved = [\"a\"]\ntemper def touch() -> None:\n    saved.append(\"b\")\ntemper def f(xs: list[int]) -> int:\n    touch()\n    return len(xs)\nprint(f([1]))\n";
     assert_eq!(checked(typed), Ok(()));
+}
+
+#[test]
+fn read_parameters_and_values_without_lists_may_share() {
+    let read = "temper def both(xs: list[int], ys: list[int]) -> int:\n    return len(xs) + len(ys)\na = [1]\nprint(both(a, a))\n";
+    assert_eq!(checked(read), Ok(()));
+    let ints = "temper def push(mut xs: list[int], n: int) -> None:\n    xs.append(n)\na = [1]\npush(a, len(a))\n";
+    assert_eq!(checked(ints), Ok(()));
+    let distinct = "rows: list[list[int]] = []\nadd(rows, [1])\n";
+    assert_eq!(checked(&format!("{ADD}{distinct}")), Ok(()));
+}
+
+#[test]
+fn loose_callees_keep_python_aliasing() {
+    // Even when the loose callee writes its modes.
+    let src = "def add(mut rows, owned row):\n    rows.append(row)\nx = [1]\nadd([x], x)\ndef push(mut xs, ys):\n    xs.append(len(ys))\na = [1]\npush(a, a)\nprint(a)\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn calls_from_any_caller_are_checked() {
+    let tempered = "temper def first(owned rows: list[list[int]]) -> None:\n    add(rows, rows[0])\nfirst([[1]])\n";
+    assert_eq!(shared_call(tempered), "add(rows, rows[0])");
+    // A tempered caller's own aliasing (D4) is reported first: the first
+    // call may change `row` through `rows`, and `row` is used again.
+    let twice = "temper def twice(mut rows: list[list[int]], owned row: list[int]) -> None:\n    add(rows, row)\n    add(rows, row)\ntwice([], [1])\n";
+    assert_eq!(
+        mode_err(&format!("{ADD}{twice}")),
+        (
+            "tempered `twice` changes a list while `row` may be the same list and is used later; copy instead of sharing it: `row = list(...)`".into(),
+            "add(rows, row)".into()
+        )
+    );
+    // Two module variables a function reads count as one list: the
+    // module's code may have stored one in the other.
+    let globals = "rows: list[list[int]] = []\nrow = [1]\ndef g():\n    add(rows, row)\ng()\n";
+    assert_eq!(shared_call(globals), "add(rows, row)");
+    let param = "rows: list[list[int]] = []\ndef g(row: list[int]):\n    add(rows, row)\ng([1])\n";
+    assert_eq!(checked(&format!("{ADD}{param}")), Ok(()));
+}
+
+#[test]
+fn a_conservative_analysis_rejects_no_call() {
+    let src = "temper def push(mut xs: list[int], ys: list[int]) -> None:\n    xs.append(len(ys))\na = [1]\npush(a, a)\nx = print(7)\ndef print(n):\n    return 1\n";
+    conservative(src);
+    assert_eq!(checked(src), Ok(()));
+}
+
+const PUSH: &str =
+    "temper def push(mut xs: list[int], ys: list[int]) -> None:\n    xs.append(len(ys))\n";
+
+#[test]
+fn a_loose_function_passing_its_parameters_on_takes_the_contract() {
+    let forward =
+        format!("{PUSH}def forward(xs: list[int], ys: list[int]) -> None:\n    push(xs, ys)\n");
+    assert_eq!(
+        mode_err(&format!("{forward}a = [1]\nforward(a, a)\n")),
+        (
+            "this call may pass one list as `xs` and `ys` of `forward`, and from there tempered `push` changes `xs` in place; pass a copy (`list(...)`)".into(),
+            "forward(a, a)".into()
+        )
+    );
+    let distinct = format!("{forward}a = [1]\nb = [2]\nforward(a, b)\nforward(a, list(a))\n");
+    assert_eq!(checked(&distinct), Ok(()));
+    // Through two loose functions, with the parameters swapped.
+    let twice =
+        format!("{forward}def swap(p, q):\n    forward(q, p)\na = [1]\nswap(a, [2])\nswap(a, a)\n");
+    assert_eq!(mode_err(&twice).1, "swap(a, a)");
+    // A list inside one argument, reaching the other parameter.
+    let nested = format!("{PUSH}def nest(rows: list[list[int]], ys: list[int]) -> None:\n    push(rows[0], ys)\nr = [1]\nnest([[2]], r)\nnest([r], r)\n");
+    assert_eq!(mode_err(&nested).1, "nest([r], r)");
+}
+
+#[test]
+fn a_parameter_passed_on_beside_a_module_variable_must_not_be_it() {
+    let useg =
+        format!("{PUSH}g: list[int] = [7]\ndef useg(xs: list[int]) -> None:\n    push(xs, g)\n");
+    assert_eq!(
+        checked(&format!("{useg}useg([1])\na = [2]\nuseg(a)\n")),
+        Ok(())
+    );
+    assert_eq!(
+        mode_err(&format!("{useg}useg(g)\n")),
+        (
+            "this call may pass a list a module variable holds as `xs` of `useg`, and from there tempered `push` changes `xs` in place; pass a copy (`list(...)`)".into(),
+            "useg(g)".into()
+        )
+    );
+    // From a function too, where the module variable is one it reads.
+    let inner = format!("{useg}def outer():\n    useg(g)\nouter()\n");
+    assert_eq!(mode_err(&inner).1, "useg(g)");
+    // A tempered caller takes the need as a loose one does.
+    let tempered = format!("{PUSH}g: list[int] = [7]\ntemper def useg(mut xs: list[int]) -> None:\n    push(xs, g)\nuseg([1])\nuseg(g)\n");
+    assert_eq!(mode_err(&tempered).1, "useg(g)");
+}
+
+#[test]
+fn recursion_settles_needs() {
+    let src = format!("{PUSH}def down(xs: list[int], ys: list[int], n: int) -> None:\n    if n == 0:\n        push(xs, ys)\n    else:\n        down(ys, xs, n - 1)\na = [1]\ndown(a, [2], 3)\ndown(a, a, 3)\n");
+    assert_eq!(mode_err(&src).1, "down(a, a, 3)");
+}
+
+#[test]
+fn a_store_through_one_parameter_may_show_through_another() {
+    // The body stores `row` in `rows`, then hands `other[0]` and `row`
+    // on: when `rows` is `other`, `push` gets `row` twice.
+    let forward = format!("{PUSH}def forward(rows: list[list[int]], other: list[list[int]], row: list[int]) -> None:\n    rows.append(row)\n    push(other[0], row)\n");
+    let disjoint =
+        format!("{forward}shelf: list[list[int]] = []\nrow = [1]\nforward(shelf, [[2]], row)\n");
+    assert_eq!(checked(&disjoint), Ok(()));
+    assert_eq!(
+        mode_err(&format!("{forward}shelf: list[list[int]] = []\nrow = [1]\nforward(shelf, shelf, row)\n")),
+        (
+            "this call may pass one list as `rows` and `other` of `forward`, and from there tempered `push` changes `xs` in place; pass a copy (`list(...)`)".into(),
+            "forward(shelf, shelf, row)".into()
+        )
+    );
+    // Also when what is stored is a list the body made, and only that
+    // fresh list reaches the contract.
+    let local = format!("{PUSH}def forward(rows: list[list[int]], other: list[list[int]]) -> None:\n    row = [1]\n    rows.append(row)\n    push(other[0], row)\n");
+    let shelf = "shelf: list[list[int]] = []\n";
+    assert_eq!(
+        checked(&format!("{local}{shelf}forward(shelf, [[2]])\n")),
+        Ok(())
+    );
+    assert_eq!(
+        mode_err(&format!("{local}{shelf}forward(shelf, shelf)\n")).1,
+        "forward(shelf, shelf)"
+    );
+    // The same through a module variable the body reads.
+    let global = format!("{PUSH}g: list[list[int]] = [[0]]\ndef f(rows: list[list[int]], row: list[int]) -> None:\n    rows.append(row)\n    push(g[len(g) - 1], row)\nf([[1]], [5])\n");
+    assert_eq!(checked(&global), Ok(()));
+    let aliased = format!("{global}f(g, [6])\n");
+    assert_eq!(mode_err(&aliased).1, "f(g, [6])");
+    // A function that stores nothing may still take one list twice
+    // where no contract pairs them.
+    let reads = format!("{PUSH}def peek(a: list[int], b: list[int], c: list[int]) -> None:\n    push(c, [len(a) + len(b)])\nx = [1]\npeek(x, x, [2])\n");
+    assert_eq!(checked(&reads), Ok(()));
+    // Storing an int creates no sharing.
+    let ints = format!("{PUSH}def bump(a: list[int], b: list[int], c: list[int]) -> None:\n    a.append(1)\n    push(c, b)\nx = [1]\nbump(x, x, [2])\n");
+    assert_eq!(checked(&ints), Ok(()));
 }
