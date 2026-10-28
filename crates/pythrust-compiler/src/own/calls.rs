@@ -10,7 +10,10 @@
 //! the contract becomes theirs, as a *need* that two of their
 //! parameters, or one and the module's values, share no list. Needs
 //! flow up the call graph to a fixpoint, so `forward(a, a)` fails when
-//! `forward(xs, ys)` calls `push(xs, ys)`.
+//! `forward(xs, ys)` calls `push(xs, ys)`. A body is analyzed as if its
+//! parameters held unrelated lists; where it stores through one, a
+//! function with needs also needs that one unshared ([`entry`]), so a
+//! caller cannot make the store show through another unseen.
 //!
 //! "May share" is [`super::CallSite`], flow-sensitive, and errs toward
 //! the error: it cannot tell two elements of one list apart, so
@@ -25,7 +28,7 @@ use crate::ast::{FuncDef, Mode as Temper, Module, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
 
 use super::modes::written;
-use super::{Analysis, CallSite, Mode, Peer, Precision};
+use super::{Analysis, CallSite, Heap, Mode, Peer, Precision};
 
 /// A parameter, and the parameter or module values it may share no list
 /// with; a [`Peer::Param`] is always the higher index.
@@ -85,6 +88,9 @@ fn settle(analysis: &Analysis, defs: &HashMap<&str, &FuncDef>) -> Vec<Needs> {
         .collect();
     loop {
         let mut changed = false;
+        for (needs, heap) in needs.iter_mut().zip(&analysis.heaps) {
+            changed |= entry(needs, heap);
+        }
         for site in &analysis.calls {
             for (key, need) in passed_on(site, &needs[site.callee]) {
                 if let Entry::Vacant(slot) = needs[site.caller].entry(key) {
@@ -97,6 +103,39 @@ fn settle(analysis: &Analysis, defs: &HashMap<&str, &FuncDef>) -> Vec<Needs> {
             return needs;
         }
     }
+}
+
+/// A function with any need assumes its parameters hold unrelated
+/// lists, which a caller breaks by passing one list as two when the
+/// body stores through one of them: what it stores shows through the
+/// other, unseen. So such a function also needs, for each parameter or
+/// the module's values it stores into, that list unshared with every
+/// other; the module's values count only if the body can see them.
+/// Whether any key was added.
+fn entry(needs: &mut Needs, heap: &Heap) -> bool {
+    let Some(root) = needs.values().next().map(|n| n.root.clone()) else {
+        return false;
+    };
+    let peers = heap.lists.iter().map(|i| Peer::Param(*i));
+    let world = heap.sees_world.then_some(Peer::World);
+    let peers: Vec<Peer> = peers.chain(world).collect();
+    let mut changed = false;
+    for (n, p) in peers.iter().enumerate() {
+        for q in &peers[n + 1..] {
+            let touched = heap.stored.contains(p) || heap.stored.contains(q);
+            let Some(key) = key(*p, *q).filter(|_| touched) else {
+                continue;
+            };
+            if let Entry::Vacant(slot) = needs.entry(key) {
+                slot.insert(Need {
+                    root: root.clone(),
+                    other: None,
+                });
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// A tempered function's own needs: no list shared between a `mut` or

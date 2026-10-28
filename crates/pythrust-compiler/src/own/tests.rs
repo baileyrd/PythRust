@@ -498,3 +498,32 @@ fn recursion_settles_needs() {
     let src = format!("{PUSH}def down(xs: list[int], ys: list[int], n: int) -> None:\n    if n == 0:\n        push(xs, ys)\n    else:\n        down(ys, xs, n - 1)\na = [1]\ndown(a, [2], 3)\ndown(a, a, 3)\n");
     assert_eq!(mode_err(&src).1, "down(a, a, 3)");
 }
+
+#[test]
+fn a_store_through_one_parameter_may_show_through_another() {
+    // The body stores `row` in `rows`, then hands `other[0]` and `row`
+    // on: when `rows` is `other`, `push` gets `row` twice.
+    let forward = format!("{PUSH}def forward(rows: list[list[int]], other: list[list[int]], row: list[int]) -> None:\n    rows.append(row)\n    push(other[0], row)\n");
+    let disjoint =
+        format!("{forward}shelf: list[list[int]] = []\nrow = [1]\nforward(shelf, [[2]], row)\n");
+    assert_eq!(checked(&disjoint), Ok(()));
+    assert_eq!(
+        mode_err(&format!("{forward}shelf: list[list[int]] = []\nrow = [1]\nforward(shelf, shelf, row)\n")),
+        (
+            "this call may pass one list as `rows` and `other` of `forward`, and from there tempered `push` changes `xs` in place; pass a copy (`list(...)`)".into(),
+            "forward(shelf, shelf, row)".into()
+        )
+    );
+    // The same through a module variable the body reads.
+    let global = format!("{PUSH}g: list[list[int]] = [[0]]\ndef f(rows: list[list[int]], row: list[int]) -> None:\n    rows.append(row)\n    push(g[len(g) - 1], row)\nf([[1]], [5])\n");
+    assert_eq!(checked(&global), Ok(()));
+    let aliased = format!("{global}f(g, [6])\n");
+    assert_eq!(mode_err(&aliased).1, "f(g, [6])");
+    // A function that stores nothing may still take one list twice
+    // where no contract pairs them.
+    let reads = format!("{PUSH}def peek(a: list[int], b: list[int], c: list[int]) -> None:\n    push(c, [len(a) + len(b)])\nx = [1]\npeek(x, x, [2])\n");
+    assert_eq!(checked(&reads), Ok(()));
+    // Storing an int creates no sharing.
+    let ints = format!("{PUSH}def bump(a: list[int], b: list[int], c: list[int]) -> None:\n    a.append(1)\n    push(c, b)\nx = [1]\nbump(x, x, [2])\n");
+    assert_eq!(checked(&ints), Ok(()));
+}

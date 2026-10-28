@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{holds_list, CallSite, Mode, Param, Peer, Summary};
+use super::{holds_list, CallSite, Heap, Mode, Param, Peer, Summary};
 use crate::ir::{Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term};
 
 /// An abstract list.
@@ -67,6 +67,43 @@ pub(super) fn summarize(program: &Program, func: &Func, summaries: &[Summary]) -
     let mut flow = Flow::new(program, func, summaries, false);
     while flow.propagate() {}
     flow.summary()
+}
+
+/// Which of `func`'s parameters can hold a list, and which of them and
+/// the module's values the body may store a list into, anywhere inside,
+/// and whether it may get hold of a module value's list at all.
+/// Flow-insensitive, as [`summarize`] is.
+pub(super) fn heap(program: &Program, func: &Func, summaries: &[Summary]) -> Heap {
+    let mut flow = Flow::new(program, func, summaries, false);
+    while flow.propagate() {}
+    let grown: Objs = flow
+        .stored
+        .iter()
+        .filter(|(_, inner)| !inner.is_empty())
+        .map(|(list, _)| *list)
+        .collect();
+    let lists = func.params.iter().enumerate();
+    let lists: Vec<usize> = lists
+        .filter(|(_, p)| holds_list(program, func.locals[p.0]))
+        .map(|(i, _)| i)
+        .collect();
+    let roots = lists.iter().map(|i| (Peer::Param(*i), Obj::Param(*i)));
+    let roots = roots.chain([(Peer::World, Obj::World)]);
+    let stored = roots
+        .filter(|(_, o)| meets(&flow.reachable(&Objs::from([*o])), &grown))
+        .map(|(peer, _)| peer)
+        .collect();
+    let world = Obj::World;
+    let sees_world = flow
+        .pts
+        .iter()
+        .chain(flow.stored.values())
+        .any(|p| p.contains(&world));
+    Heap {
+        lists,
+        stored,
+        sees_world,
+    }
 }
 
 /// Every call in `func`, the `index`th function: which arguments may

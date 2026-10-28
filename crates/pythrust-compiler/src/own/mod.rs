@@ -88,6 +88,21 @@ pub struct CallSite {
     pub span: Span,
 }
 
+/// What a lowered function's heap effects look like to [`CallSite`]
+/// checks: its parameters are analyzed as holding unrelated lists, which
+/// holds only if no store through one shows through another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heap {
+    /// The parameters that can hold a list.
+    pub lists: Vec<usize>,
+    /// Of those and the module's values, the ones the body may store a
+    /// list into, anywhere inside.
+    pub stored: BTreeSet<Peer>,
+    /// Whether the body may get hold of a list the module's values hold:
+    /// if not, a parameter that is one cannot show it anything.
+    pub sees_world: bool,
+}
+
 /// How far [`Analysis::funcs`] can be trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Precision {
@@ -110,6 +125,9 @@ pub struct Analysis {
     /// function has its own), the module's code included; empty when
     /// conservative.
     pub names: Vec<String>,
+    /// Per lowered function, as [`Analysis::names`]; empty when
+    /// conservative.
+    pub heaps: Vec<Heap>,
     /// Every call of the program; empty when conservative.
     pub calls: Vec<CallSite>,
     pub precision: Precision,
@@ -127,6 +145,11 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
             Analysis {
                 funcs: by_name(&program, &summaries),
                 names: program.funcs.iter().map(|f| f.name.clone()).collect(),
+                heaps: program
+                    .funcs
+                    .iter()
+                    .map(|f| body::heap(&program, f, &summaries))
+                    .collect(),
                 calls: calls.collect(),
                 precision: Precision::Precise,
             }
@@ -134,6 +157,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
         Err(gap) => Analysis {
             funcs: conservative(module),
             names: Vec::new(),
+            heaps: Vec::new(),
             calls: Vec::new(),
             precision: Precision::Conservative(gap),
         },
