@@ -8,7 +8,7 @@ use crate::infer::Type;
 use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
-use super::{unsupported, FnBuilder, Loop, EXCEPTIONS};
+use super::{unsupported, FnBuilder, Loop};
 
 /// A `for` loop's parts other than what it iterates.
 struct Looped<'s> {
@@ -32,6 +32,7 @@ impl FnBuilder<'_, '_> {
     pub(super) fn block(&mut self, block: &Block) -> Result<()> {
         for (i, s) in block.iter().enumerate() {
             let (pools, loops) = (self.pools.len(), self.loops.len());
+            let (tries, unbinds) = (self.tries.len(), self.unbinds.len());
             match self.pooled_stmt(|b| b.stmt(s)) {
                 Err(_) if self.stuck || self.diverged => {
                     let diverged = self.diverged;
@@ -39,6 +40,8 @@ impl FnBuilder<'_, '_> {
                     (self.stuck, self.diverged) = (false, false);
                     self.pools.truncate(pools);
                     self.loops.truncate(loops);
+                    self.tries.truncate(tries);
+                    self.unbinds.truncate(unbinds);
                     self.jump_away(Term::Unreachable);
                     // What follows in this block is never reached.
                     if diverged {
@@ -80,7 +83,8 @@ impl FnBuilder<'_, '_> {
                 body,
                 orelse,
             } => self.for_stmt(target, iter, body, orelse),
-            StmtKind::Raise(_) | StmtKind::Try { .. } => Err(unsupported(s.span, EXCEPTIONS)),
+            StmtKind::Raise(value) => self.raise_stmt(value, s.span),
+            StmtKind::Try { body, handlers } => self.try_stmt(body, handlers),
         }
     }
 
@@ -238,6 +242,8 @@ impl FnBuilder<'_, '_> {
         // From a nested loop's `else`, that includes its snapshot.
         let left: Vec<LocalId> = self.pools[l.pools..].concat();
         left.into_iter().for_each(|t| self.emit(Inst::Release(t)));
+        let depth = self.loops.len();
+        self.unbind_left(|u| u.loops >= depth)?;
         self.jump_away(Term::Goto(to(l)));
         Ok(())
     }

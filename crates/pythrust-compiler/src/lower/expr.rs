@@ -3,7 +3,7 @@
 use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
 use crate::diag::{Diagnostic, Result};
 use crate::infer::Type;
-use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
+use crate::ir::{CmpOp, ExcKind, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 use super::vars::runtime;
@@ -455,6 +455,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
+            Ty::Exc => Operand::Bool(true),
             Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Range => {
                 let n = self.temp(Ty::Int, Rvalue::Len(v), span);
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, n, Operand::Int(0)), span)
@@ -534,6 +535,9 @@ impl<'a> FnBuilder<'_, 'a> {
             if let (Operand::Local(l), true) = (op, self.ty(op).is_rc()) {
                 self.emit(Inst::Forget(l));
             }
+        }
+        if self.may_raise(name) {
+            self.check_raised(span)?;
         }
         if self.cx.diverges.contains(&id) {
             // Its result, of a settled type, is never there to use.
@@ -625,7 +629,10 @@ impl<'a> FnBuilder<'_, 'a> {
                 let items = vec![start, stop, step];
                 Ok(self.temp(Ty::Range, Rvalue::NewSeq(items), span))
             }
-            other => Err(unsupported(span, &format!("`{other}`"))),
+            other => match ExcKind::from_name(other) {
+                Some(kind) => self.new_exc(kind, &ops, span),
+                None => Err(unsupported(span, &format!("`{other}`"))),
+            },
         }
     }
 
@@ -653,6 +660,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 Ty::Str => *slot = Some(op),
                 Ty::None => {}
                 Ty::Opt(_) => return Err(unsupported(kw.span, "an optional `sep` or `end`")),
+                Ty::Exc => return Err(unsupported(kw.span, "an exception as `sep` or `end`")),
                 ty => {
                     let msg = format!(
                         "TypeError: {} must be None or a string, not {}",
@@ -691,14 +699,24 @@ impl<'a> FnBuilder<'_, 'a> {
             ("list", ty @ Ty::List(_)) => (ty, Rvalue::CopyList(arg)),
             ("str", _) => (Ty::Str, Rvalue::ToStr(arg)),
             ("int", Ty::Float) => (Ty::Int, Rvalue::FloatToInt(arg)),
-            ("int", Ty::Str) => (Ty::Int, Rvalue::ParseInt(arg)),
-            ("float", Ty::Str) => (Ty::Float, Rvalue::ParseFloat(arg)),
+            ("int" | "float", Ty::Str) => return self.parse(name, arg, span),
             (_, ty) => {
                 let what = format!("`{name}` of a {ty:?}");
                 return Err(unsupported(span, &what));
             }
         };
         Ok(self.temp(ty, value, span))
+    }
+
+    /// `int(s)` or `float(s)` of a string, which may raise `ValueError`.
+    fn parse(&mut self, name: &str, s: Operand, span: Span) -> Result<Operand> {
+        let (ty, value) = match name {
+            "int" => (Ty::Int, Rvalue::ParseInt(s)),
+            _ => (Ty::Float, Rvalue::ParseFloat(s)),
+        };
+        let v = self.temp(ty, value, span);
+        self.check_raised(span)?;
+        Ok(v)
     }
 }
 
@@ -714,6 +732,8 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Tuple(_) => "tuple",
         Ty::Opt(_) => "optional",
         Ty::Range => "range",
+        // Exceptions print by kind, which only the run time knows.
+        Ty::Exc => "exception",
     }
 }
 

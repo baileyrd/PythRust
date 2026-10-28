@@ -1,0 +1,107 @@
+# expect-exit: 1
+# Exceptions through loops, calls and handlers: unwinding releases what
+# each frame holds, an exception shows its argument whatever its type,
+# and a parameter a handler rebinds is unbound after it, so the last
+# line fails.
+def boom(x):
+    raise ValueError(x)
+
+
+def deep(n: int, xs: list[int], s: str) -> int:
+    if n == 0:
+        boom(s + "!")
+    for x in xs:
+        if x == n:
+            return deep(n - 1, xs, s + str(x))
+    return 0
+
+
+try:
+    deep(3, [1, 2, 3], "go")
+except ValueError as e:
+    print("deep:", e)
+
+try:
+    boom(1.5)
+except ValueError as e:
+    print([e], e)
+try:
+    boom(None)
+except ValueError as e:
+    print([e], str(e) == "None")
+try:
+    boom(("a", 1, True))
+except ValueError as e:
+    print(e, [e])
+
+inner = IndexError("inner")
+outer = ZeroDivisionError(inner)
+print(outer, [outer], (inner, 3))
+print([ValueError(), OverflowError(""), RecursionError(0)])
+maybe: Exception | None = None
+print(maybe)
+maybe = inner
+print(maybe, maybe == inner, maybe != inner)
+
+
+def first_bad(errs: list[Exception]) -> Exception | None:
+    for e in errs:
+        try:
+            raise e
+        except IndexError:
+            pass
+        except ValueError as v:
+            return v
+    return None
+
+
+errs = [IndexError("i"), ValueError("v"), ValueError("w")]
+print(first_bad(errs), first_bad([IndexError()]), first_bad(errs) == errs[1])
+
+
+def twice(x):
+    if x:
+        return x * 2
+    raise ValueError("zero: " + str(x))
+
+
+try:
+    print(twice(2), twice(1.5), twice(0))
+except ValueError as e:
+    print(e)
+
+
+def depth(n: int) -> int:
+    try:
+        if n == 0:
+            raise OverflowError("bottom")
+        return depth(n - 1) + 1
+    except ZeroDivisionError:
+        return -1
+
+
+try:
+    depth(50)
+except OverflowError as e:
+    print("from the bottom:", e)
+
+total = 0
+for s in ["1", "x", "3", "4.5"]:
+    try:
+        total += int(s)
+    except ValueError as e:
+        print(e)
+        continue
+    print("ok", s)
+print(total)
+
+
+def rebind(e: Exception) -> None:
+    try:
+        raise e
+    except ValueError as e:
+        print("caught", e)
+    print(e)
+
+
+rebind(ValueError("p"))

@@ -10,8 +10,9 @@
 //! Descriptors are a prefix code the compiler emits as read-only data:
 //! `i` int, `f` float, `b` bool, `n` `None`, `s` str, `l` and the element
 //! type for a list, `t`, a field count byte and the field types for a
-//! tuple, `r` for a range (see [`crate::range`]). Ownership follows strings: functions borrow their arguments,
-//! and slots read out are new references.
+//! tuple, `r` for a range (see [`crate::range`]), `x` for an exception
+//! (see [`crate::exc`]). Ownership follows strings: functions borrow
+//! their arguments, and slots read out are new references.
 
 #![allow(unsafe_code)] // Slots are pointers; the C ABI below.
 
@@ -44,6 +45,7 @@ enum Kind {
     Tuple,
     Range,
     Opt,
+    Exc,
 }
 
 fn kind(desc: &[u8]) -> Kind {
@@ -56,6 +58,7 @@ fn kind(desc: &[u8]) -> Kind {
         Some(b't') => Kind::Tuple,
         Some(b'r') => Kind::Range,
         Some(b'o') => Kind::Opt,
+        Some(b'x') => Kind::Exc,
         _ => Kind::Int,
     }
 }
@@ -73,11 +76,14 @@ fn span(desc: &[u8]) -> usize {
     }
 }
 
-/// The descriptor of slot `k` of a sequence described by `desc`.
+/// The descriptor of slot `k` of a sequence described by `desc`. An
+/// exception's own descriptor is `x`, its kind's code and the type of
+/// its one slot, if it has one.
 fn slot(desc: &'static [u8], k: usize) -> &'static [u8] {
     match kind(desc) {
         Kind::List => return desc.get(1..).unwrap_or_default(),
         Kind::Range => return b"i",
+        Kind::Exc => return desc.get(2..).unwrap_or_default(),
         _ => {}
     }
     let first = desc.get(2..).unwrap_or_default();
@@ -142,7 +148,9 @@ fn inc(desc: &[u8], v: u64) {
         // SAFETY: a string slot holds a live string.
         Kind::Str => unsafe { pstr::pt_str_inc(v as *const PtStr) },
         // SAFETY: a sequence slot holds a live sequence.
-        Kind::List | Kind::Tuple | Kind::Range => unsafe { pt_seq_inc(v as *const PtSeq) },
+        Kind::List | Kind::Tuple | Kind::Range | Kind::Exc => unsafe {
+            pt_seq_inc(v as *const PtSeq)
+        },
         _ => {}
     }
 }
@@ -155,7 +163,9 @@ fn dec(desc: &[u8], v: u64) {
         // SAFETY: a string slot owns a reference to a live string.
         Kind::Str => unsafe { pstr::pt_str_dec(v as *mut PtStr) },
         // SAFETY: a sequence slot owns a reference to a live sequence.
-        Kind::List | Kind::Tuple | Kind::Range => unsafe { pt_seq_dec(v as *mut PtSeq) },
+        Kind::List | Kind::Tuple | Kind::Range | Kind::Exc => unsafe {
+            pt_seq_dec(v as *mut PtSeq)
+        },
         _ => {}
     }
 }
@@ -198,8 +208,9 @@ fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple => unsafe { seq_cmp(seq(a), seq(b)) },
         Kind::Bool | Kind::None => Some(a.cmp(&b)),
-        // Python cannot order `None` or ranges; the compiler never asks.
-        Kind::Opt | Kind::Range => None,
+        // Python cannot order `None`, ranges or exceptions; the compiler
+        // never asks.
+        Kind::Opt | Kind::Range | Kind::Exc => None,
     }
 }
 
@@ -230,6 +241,60 @@ fn repr(desc: &[u8], v: u64, out: &mut String) {
         Kind::Range => out.push_str(&unsafe { range_fields(v as *const PtSeq) }.repr()),
         Kind::Opt if v == 0 => out.push_str("None"),
         Kind::Opt => repr(opt(desc).0, present(desc, v), out),
+        Kind::Exc => exc_repr(v, out),
+    }
+}
+
+/// `ValueError('bad')`, or `ValueError()` without an argument.
+fn exc_repr(e: u64, out: &mut String) {
+    // SAFETY: an exception slot holds a live exception.
+    let s = unsafe { seq(e) };
+    out.push_str(crate::exc::name(exc_kind(e)));
+    out.push('(');
+    if let Some(v) = s.items.borrow().first() {
+        repr(slot(s.desc, 0), *v, out);
+    }
+    out.push(')');
+}
+
+/// The kind code of exception `e`, a live exception.
+pub(crate) fn exc_kind(e: u64) -> u8 {
+    // SAFETY: guaranteed by the caller.
+    let desc = unsafe { seq(e) }.desc;
+    desc.get(1).map_or(u8::MAX, |c| c.wrapping_sub(b'0'))
+}
+
+/// `str(e)` of a live exception `e`: its argument as a string, or empty
+/// without one. An exception argument gives its own message, followed
+/// in a loop, as `run` does, so deep chains cannot exhaust the stack.
+pub(crate) fn exc_message(mut e: u64) -> String {
+    loop {
+        // SAFETY: guaranteed by the caller, and exception slots hold live
+        // exceptions.
+        let s = unsafe { seq(e) };
+        let desc = slot(s.desc, 0);
+        let Some(v) = s.items.borrow().first().copied() else {
+            return String::new();
+        };
+        if kind(desc) != Kind::Exc {
+            return str_of(desc, v);
+        }
+        e = v;
+    }
+}
+
+/// Python's `str` of slot `v` of type `desc`.
+fn str_of(desc: &[u8], v: u64) -> String {
+    match kind(desc) {
+        // SAFETY: a string slot holds a live string.
+        Kind::Str => unsafe { text(v) }.to_string(),
+        Kind::Exc => exc_message(v),
+        Kind::Opt if v != 0 => str_of(opt(desc).0, present(desc, v)),
+        _ => {
+            let mut out = String::new();
+            repr(desc, v, &mut out);
+            out
+        }
     }
 }
 
@@ -660,6 +725,39 @@ mod tests {
             assert_eq!(seq(inner as u64).rc.get(), 2);
             pt_seq_dec(outer);
             pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn exceptions_show_their_argument_and_compare_by_identity() {
+        let word = pstr::into_ptr(PtStr::new("bad".into()));
+        let bad = make(b"x0s", &[word as u64]);
+        let bare = make(b"x1", &[]);
+        let wrapped = make(b"x2x", &[bad as u64]);
+        let maybe = make(b"x3ob", &[0]);
+        let pair = make(
+            b"x0t\x02if",
+            &[make(b"t\x02if", &[7, 0.5f64.to_bits()]) as u64],
+        );
+        let all = make(b"lx", &[bad as u64, bare as u64, wrapped as u64]);
+        assert_eq!(
+            shown(all),
+            "[ValueError('bad'), IndexError(), ZeroDivisionError(ValueError('bad'))]"
+        );
+        let messages = [bad, bare, wrapped, maybe, pair].map(|e| exc_message(e as u64));
+        assert_eq!(messages, ["bad", "", "bad", "None", "(7, 0.5)"]);
+        assert_eq!(exc_kind(wrapped as u64), 2);
+        assert!(eq(b"x", bad as u64, bad as u64));
+        assert!(!eq(b"x", bad as u64, bare as u64));
+        // SAFETY: each is live and dropped once; the slots keep the
+        // string and the inner exception alive until their owners go.
+        unsafe {
+            let inner = seq(pair as u64).items.borrow()[0];
+            pt_seq_dec(inner as *mut PtSeq);
+            pstr::pt_str_dec(word);
+            [all, bad, bare, wrapped, maybe, pair]
+                .into_iter()
+                .for_each(|s| pt_seq_dec(s));
         }
     }
 

@@ -156,9 +156,14 @@ fn conservative(src: &str) {
 }
 
 #[test]
-fn exceptions_fall_back_until_native_lowers_them() {
-    conservative("def f(xs, n):\n    if n < 0:\n        raise ValueError(\"neg\")\n    return n\ntry:\n    print(f([1], -1))\nexcept ValueError as e:\n    print(e)\n");
-    let src = "def f(xs, n):\n    raise ValueError(\"x\")\nf([1], 2)\n";
+fn raising_and_catching_lower_precisely() {
+    let src = "def f(xs, n):\n    if n < 0:\n        raise ValueError(\"neg\")\n    xs.append(n)\n    return n\ntry:\n    print(f([1], -1))\nexcept ValueError as e:\n    print(e)\n";
+    assert_eq!(modes(src, "f"), (vec![MUT, READ], vec![false, false]));
+}
+
+#[test]
+fn an_exception_holding_a_list_falls_back() {
+    let src = "def f(xs, n):\n    raise ValueError(xs)\nf([1], 2)\n";
     conservative(src);
     assert_eq!(analyzed(src).funcs["f"].params.len(), 2);
 }

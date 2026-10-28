@@ -29,6 +29,19 @@ pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
     out
 }
 
+/// Names an `except ... as name` anywhere in `block` binds, and so
+/// unbinds when its handler ends.
+pub(crate) fn caught(block: &[Stmt]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    walk(block, &mut |s| {
+        if let StmtKind::Try { handlers, .. } = &s.kind {
+            let bindings = handlers.iter().filter_map(|h| h.binding.as_ref());
+            out.extend(bindings.map(|b| b.name.clone()));
+        }
+    });
+    out
+}
+
 /// Each annotated assignment in `block`: the name and its annotation.
 pub(super) fn annotated(block: &Block) -> Vec<(&str, &TypeExpr)> {
     let mut out = Vec::new();

@@ -1,0 +1,18 @@
+# expect-exit: 1
+# `except ... as e` unbinds `e` however the handler ends, here by
+# `break`, so a function reading the module's `e` finds it unbound.
+def show() -> None:
+    print(e)
+
+
+e = OverflowError("first")
+show()
+for i in range(3):
+    try:
+        raise ValueError("v" + str(i))
+    except ValueError as e:
+        show()
+        if i == 1:
+            break
+print("after")
+show()
