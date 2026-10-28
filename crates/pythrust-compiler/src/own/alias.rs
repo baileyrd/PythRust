@@ -227,6 +227,9 @@ struct Body<'a> {
     roots: Vec<Live>,
     /// The locals `return` assigns.
     results: BTreeSet<LocalId>,
+    /// The lists this body allocates that it may store in the module's
+    /// values, so that [`Obj::World`] may be them.
+    held: Objs,
 }
 
 impl<'a> Body<'a> {
@@ -248,8 +251,14 @@ impl<'a> Body<'a> {
             effects,
             roots: Vec::new(),
             results: results.collect(),
+            held: Objs::new(),
         };
         body.roots = body.roots();
+        let world = body.flow.reachable(&body.meeting(Obj::World));
+        body.held = world
+            .into_iter()
+            .filter(|o| matches!(o, Obj::Fresh(..)))
+            .collect();
         body
     }
 
@@ -557,26 +566,11 @@ impl<'a> Body<'a> {
             return Ok(());
         };
         for w in &self.effects.writes[f.0] {
-            let changed = self.module_lists(w.ty);
+            let changed = Locs::from([root(Obj::World, w.ty)]);
             let writer = Writer::Callee(*f, w.global);
             self.change(writer, &changed, w.how, state, live, span)?;
         }
         Ok(())
-    }
-
-    /// The lists of type `ty` a callee may reach through the module's
-    /// values: theirs, and any run of a list this body stored there.
-    fn module_lists(&self, ty: Ty) -> Locs {
-        let world = self.flow.reachable(&self.meeting(Obj::World));
-        let fresh = world.into_iter().filter(|o| matches!(o, Obj::Fresh(..)));
-        let runs = fresh.flat_map(|obj| {
-            [false, true].map(|earlier| Loc {
-                obj,
-                earlier,
-                ty: Some(ty),
-            })
-        });
-        runs.chain([root(Obj::World, ty)]).collect()
     }
 
     /// What `inst` changes in place, and how.
@@ -766,15 +760,16 @@ impl<'a> Body<'a> {
                 Change::List => Objs::new(),
                 Change::Within => self.flow.reachable(&self.meeting(c.obj)),
             };
-            seen.iter()
-                .any(|s| self.same(s, c, how) || (!meets(s.obj, c.obj) && inside.contains(&s.obj)))
+            seen.iter().any(|s| {
+                self.same(s, c, how) || (!self.meets(s.obj, c.obj) && inside.contains(&s.obj))
+            })
         })
     }
 
     /// Whether `seen` may be the list `changed` is, or for
     /// [`Change::Within`], one inside it.
     fn same(&self, seen: &Loc, changed: &Loc, how: Change) -> bool {
-        if !meets(seen.obj, changed.obj) {
+        if !self.meets(seen.obj, changed.obj) {
             return false;
         }
         let (Some(s), Some(c)) = (seen.ty, changed.ty) else {
@@ -795,6 +790,14 @@ impl<'a> Body<'a> {
             Obj::World => params.chain([Obj::World]).collect(),
             Obj::Fresh(..) => Objs::from([obj]),
         }
+    }
+
+    /// Whether abstract lists `a` and `b` may share a list: [`meets`], or
+    /// the module's values and a list this body stored there.
+    fn meets(&self, a: Obj, b: Obj) -> bool {
+        meets(a, b)
+            || (a == Obj::World && self.held.contains(&b))
+            || (b == Obj::World && self.held.contains(&a))
     }
 
     fn name(&self, l: LocalId) -> &str {

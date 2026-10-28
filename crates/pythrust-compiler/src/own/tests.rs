@@ -705,6 +705,35 @@ fn a_callee_may_change_a_list_the_body_stored_in_a_module_list() {
 }
 
 #[test]
+fn a_module_list_a_callee_returns_may_be_one_the_body_stored() {
+    let get = "shelf: list[list[int]] = []\ntemper def get() -> list[int]:\n    return shelf[0]\ntemper def via() -> list[int]:\n    return get()\n";
+    let body = "temper def f() -> int:\n    a = [1]\n    shelf.append(a)\n    b = get()\n    b.append(2)\n    return len(a)\nprint(f())\n";
+    assert_eq!(
+        alias_err(&format!("{get}{body}")),
+        Some((
+            "tempered `f` changes `b` while `a` may be the same list and is used later; copy instead of sharing it: `b = list(a)`".into(),
+            "b.append(2)".into()
+        ))
+    );
+    let reverse = body.replace(
+        "b.append(2)\n    return len(a)",
+        "a.append(2)\n    return len(b)",
+    );
+    assert_eq!(
+        alias_err(&format!("{get}{reverse}")).map(|e| e.1),
+        Some("a.append(2)".into())
+    );
+    let through = body.replace("get()", "via()");
+    assert_eq!(
+        alias_err(&format!("{get}{through}")).map(|e| e.1),
+        Some("b.append(2)".into())
+    );
+    // A list the body never stored there is not returned.
+    let unrelated = body.replace("shelf.append(a)", "shelf.append([0])");
+    assert_eq!(checked(&format!("{get}{unrelated}")), Ok(()));
+}
+
+#[test]
 fn read_parameters_and_values_without_lists_may_share() {
     let read = "temper def both(xs: list[int], ys: list[int]) -> int:\n    return len(xs) + len(ys)\na = [1]\nprint(both(a, a))\n";
     assert_eq!(checked(read), Ok(()));
