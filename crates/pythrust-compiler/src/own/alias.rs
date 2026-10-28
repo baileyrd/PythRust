@@ -8,10 +8,15 @@
 //! Non-lexical: a forward pass over the CFG gives each local, at each
 //! point, the [`Loc`]s it may be, with strong updates; a backward pass
 //! gives which locals are still used. A name only aliases what it may
-//! be *the same list* as, so `r = rows[0]` and `rows` are not two names
-//! for one list, while `b = a` and `b`, `a` are, and so are `pair[0]`
-//! and `pair[1]` of a tuple from elsewhere, which may be `(xs, xs)`.
-//! The heap is the settled, flow-insensitive [`Flow`] of the summaries.
+//! be *the same list* as. One list has one type, so inside an abstract
+//! list a [`Loc`] is told apart only by type: `r = rows[0]` and `rows`
+//! are not two names for one list, while `b = a` and `b`, `a` are, and
+//! so are `pair[0]` and `pair[1][0]` of a `tuple[list[int],
+//! list[list[int]]]` from elsewhere, which may be `(xs, [xs])`. A tuple
+//! the body built keeps its fields apart. A parameter may be, or hold,
+//! a list the module's globals hold; two parameters share none, which
+//! A5 checks at every call to a tempered function. The heap is the
+//! settled, flow-insensitive [`Flow`] of the summaries.
 //!
 //! Passing one list twice to a call is A5's check (`own::calls`), not
 //! this one.
@@ -22,21 +27,10 @@ use super::body::{self, Flow, Obj, Objs};
 use super::{holds_list, Mode, Summary};
 use crate::ast::{Mode as Temper, Module, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
-use crate::ir::{BlockId, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
+use crate::ir::{
+    BlockId, Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty,
+};
 use crate::span::Span;
-
-/// Where inside an abstract list a value is.
-///
-/// Only the depth: two slots of one list or tuple at the same depth may
-/// hold the same list (`(xs, xs)`), and lists at different depths have
-/// different types, so they never are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum At {
-    /// This many steps inside the list (0: the list itself).
-    Depth(usize),
-    /// The list or any list inside it.
-    Anywhere,
-}
 
 /// A list a local may be.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -45,7 +39,9 @@ struct Loc {
     /// For [`Obj::Fresh`]: one of the lists its earlier runs made, not
     /// the latest, so `row = []` in a loop is a new list.
     earlier: bool,
-    at: At,
+    /// The value's type, optional unwrapped: `obj` itself or any value
+    /// of this type inside it. `None`: `obj` or anything inside it.
+    ty: Option<Ty>,
 }
 
 type Locs = BTreeSet<Loc>;
@@ -182,7 +178,8 @@ impl<'a> Body<'a> {
         let mut start: State = vec![Val::default(); self.func.locals.len()];
         for (i, p) in self.func.params.iter().enumerate() {
             if self.lists(*p) {
-                start[p.0].locs.insert(root(Obj::Param(i)));
+                let ty = self.ty(*p);
+                start[p.0].locs.insert(root(Obj::Param(i), ty));
             }
         }
         let mut entries: Vec<Option<State>> = vec![None; self.func.blocks.len()];
@@ -224,10 +221,11 @@ impl<'a> Body<'a> {
 
     /// What `rv` may give `dest`.
     fn value(&self, dest: LocalId, rv: &Rvalue, state: &State) -> Val {
-        let fresh = Locs::from([root(Obj::Fresh(dest.0))]);
+        let ty = self.ty(dest);
+        let fresh = Locs::from([root(Obj::Fresh(dest.0), ty)]);
         let locs = match rv {
             Rvalue::Use(a) | Rvalue::Wrap(a) | Rvalue::Unwrap(a) => return val(state, *a),
-            Rvalue::Field(a, k) => return self.field(&val(state, *a), *k),
+            Rvalue::Field(a, k) => return self.field(&val(state, *a), *k, ty),
             Rvalue::NewSeq(items) if self.is_tuple(dest) => {
                 let fields = items.iter().map(|i| of(state, *i)).collect();
                 return Val {
@@ -235,20 +233,21 @@ impl<'a> Body<'a> {
                     fields: Some(fields),
                 };
             }
-            Rvalue::Index(a, _) => self.step(&of(state, *a)),
+            Rvalue::Index(a, _) => self.step(&of(state, *a), ty),
             Rvalue::NewSeq(_) | Rvalue::CopyList(_) => fresh,
-            Rvalue::Global(_) => Locs::from([root(Obj::World)]),
+            Rvalue::Global(_) => Locs::from([root(Obj::World, ty)]),
             Rvalue::Call(f, args) => self.call(*f, args, dest, state),
             _ => Locs::new(),
         };
         Val { locs, fields: None }
     }
 
-    /// Field `k` of `tuple`: known apart when this body built it.
-    fn field(&self, tuple: &Val, k: usize) -> Val {
+    /// Field `k`, of type `ty`, of `tuple`: known apart when this body
+    /// built it.
+    fn field(&self, tuple: &Val, k: usize, ty: Ty) -> Val {
         let locs = match tuple.fields.as_ref().and_then(|f| f.get(k)) {
             Some(locs) => locs.clone(),
-            None => self.step(&tuple.locs),
+            None => self.step(&tuple.locs, ty),
         };
         Val { locs, fields: None }
     }
@@ -257,11 +256,32 @@ impl<'a> Body<'a> {
         matches!(self.func.locals[l.0], Ty::Tuple(_))
     }
 
+    /// `l`'s type, optional unwrapped: a list is the same list either way.
+    fn ty(&self, l: LocalId) -> Ty {
+        let ty = self.func.locals[l.0];
+        match self.program.compound(ty) {
+            Some(Compound::Opt(present)) => *present,
+            _ => ty,
+        }
+    }
+
+    /// Whether a value of type `outer` is, or may hold, one of `inner`.
+    fn within(&self, outer: Ty, inner: Ty) -> bool {
+        if outer == inner {
+            return true;
+        }
+        match self.program.compound(outer) {
+            Some(Compound::List(t) | Compound::Opt(t)) => self.within(*t, inner),
+            Some(Compound::Tuple(fields)) => fields.iter().any(|t| self.within(*t, inner)),
+            None => false,
+        }
+    }
+
     /// A new list, or what the callee may return of its arguments and
     /// the module's values.
     fn call(&self, f: FuncId, args: &[Operand], dest: LocalId, state: &State) -> Locs {
         let summary = &self.summaries[f.0];
-        let mut out = Locs::from([root(Obj::Fresh(dest.0))]);
+        let mut out = Locs::from([root(Obj::Fresh(dest.0), self.ty(dest))]);
         let aliased = args
             .iter()
             .zip(&summary.params)
@@ -276,18 +296,21 @@ impl<'a> Body<'a> {
         out
     }
 
-    /// The lists one step inside `locs` may be: a step further into
-    /// each, or anything the body stored in it.
-    fn step(&self, locs: &Locs) -> Locs {
+    /// What a value of type `ty` one step inside `locs` may be: a value
+    /// of that type inside each, or anything the body stored in it.
+    fn step(&self, locs: &Locs, ty: Ty) -> Locs {
         let mut out = Locs::new();
         for l in locs {
-            let at = match l.at {
-                At::Depth(d) => At::Depth(d + 1),
-                At::Anywhere => At::Anywhere,
-            };
-            out.insert(Loc { at, ..l.clone() });
-            let stored = self.flow.stored(l.obj).into_iter().flatten();
-            out.extend(stored.map(|o| anywhere(*o)));
+            out.insert(Loc {
+                ty: l.ty.map(|_| ty),
+                ..l.clone()
+            });
+            // A parameter may be a global's list, which holds what the
+            // body stored in the module's values.
+            for o in self.meeting(l.obj) {
+                let stored = self.flow.stored(o).into_iter().flatten();
+                out.extend(stored.map(|s| anywhere(*s)));
+            }
         }
         out
     }
@@ -417,7 +440,13 @@ impl<'a> Body<'a> {
     fn aliased(&self, w: LocalId, other: LocalId) -> String {
         let f = &self.func.name;
         let a = self.name(other);
-        match self.func.names.get(&w) {
+        // A parameter is the caller's list: copy the other name instead.
+        let named = self
+            .func
+            .names
+            .get(&w)
+            .filter(|_| !self.func.params.contains(&w));
+        match named {
             Some(b) => format!(
                 "tempered `{f}` changes `{b}` while `{a}` may be the same list and is used later; copy instead of sharing it: `{b} = list({a})`"
             ),
@@ -434,19 +463,57 @@ impl<'a> Body<'a> {
         let f = &self.func.name;
         for (i, p) in self.func.params.iter().enumerate() {
             let region = self.flow.region(Obj::Param(i));
-            if !reached.iter().any(|o| region.contains(o)) {
-                continue;
-            }
             let xs = self.name(*p);
-            let message = match value.contains(&root(Obj::Param(i))) {
-                true => format!("tempered `{f}` returns its parameter `{xs}`; return a copy: `return list({xs})`"),
-                false => format!(
+            let message = if value.contains(&root(Obj::Param(i), self.ty(*p))) {
+                format!("tempered `{f}` returns its parameter `{xs}`; return a copy: `return list({xs})`")
+            } else if reached.iter().any(|o| region.contains(o)) {
+                format!(
                     "tempered `{f}` returns a value sharing a list with its parameter `{xs}`; return a copy made with `list(...)`"
-                ),
+                )
+            } else if self.lists(*p) && self.global_in(value, self.ty(*p)) {
+                format!(
+                    "tempered `{f}` returns a list a global holds, which its parameter `{xs}` may hold too; return a copy made with `list(...)`"
+                )
+            } else {
+                continue;
             };
             return Err(error(span, message));
         }
         Ok(())
+    }
+
+    /// Whether `value` may hold a global's list, or one the body stored
+    /// in a global, that a parameter of type `param` may hold too: the
+    /// caller may pass that global.
+    fn global_in(&self, value: &Locs, param: Ty) -> bool {
+        let world = self.flow.region(Obj::World);
+        value.iter().any(|l| {
+            let typed = l.ty.is_none_or(|t| self.share_a_list_type(param, t));
+            let mut inside = self.flow.reachable(&Objs::from([l.obj]));
+            inside.remove(&l.obj);
+            (world.contains(&l.obj) && typed) || inside.iter().any(|o| world.contains(o))
+        })
+    }
+
+    /// Whether values of types `a` and `b` may hold lists of one type.
+    fn share_a_list_type(&self, a: Ty, b: Ty) -> bool {
+        let mut lists = BTreeSet::new();
+        self.list_types(a, &mut lists);
+        lists.into_iter().any(|t| self.within(b, t))
+    }
+
+    /// The list types a value of type `ty` is or may hold.
+    fn list_types(&self, ty: Ty, out: &mut BTreeSet<Ty>) {
+        let inner: Vec<Ty> = match self.program.compound(ty) {
+            Some(Compound::List(t)) => {
+                out.insert(ty);
+                vec![*t]
+            }
+            Some(Compound::Opt(t)) => vec![*t],
+            Some(Compound::Tuple(fields)) => fields.clone(),
+            None => Vec::new(),
+        };
+        inner.into_iter().for_each(|t| self.list_types(t, out));
     }
 
     /// Whether a name that may be `seen` sees a change to `changed`.
@@ -454,11 +521,37 @@ impl<'a> Body<'a> {
         changed.iter().any(|c| {
             let inside = match how {
                 Change::List => Objs::new(),
-                Change::Within => self.flow.reachable(&Objs::from([c.obj])),
+                Change::Within => self.flow.reachable(&self.meeting(c.obj)),
             };
             seen.iter()
-                .any(|s| same(s, c, how) || (s.obj != c.obj && inside.contains(&s.obj)))
+                .any(|s| self.same(s, c, how) || (!meets(s.obj, c.obj) && inside.contains(&s.obj)))
         })
+    }
+
+    /// Whether `seen` may be the list `changed` is, or for
+    /// [`Change::Within`], one inside it.
+    fn same(&self, seen: &Loc, changed: &Loc, how: Change) -> bool {
+        if !meets(seen.obj, changed.obj) {
+            return false;
+        }
+        let (Some(s), Some(c)) = (seen.ty, changed.ty) else {
+            return true;
+        };
+        let typed = match how {
+            Change::List => s == c,
+            Change::Within => self.within(c, s),
+        };
+        typed && (seen.obj != changed.obj || seen.earlier == changed.earlier)
+    }
+
+    /// The abstract lists that may share a list with `obj`.
+    fn meeting(&self, obj: Obj) -> Objs {
+        let params = (0..self.func.params.len()).map(Obj::Param);
+        match obj {
+            Obj::Param(_) => Objs::from([obj, Obj::World]),
+            Obj::World => params.chain([Obj::World]).collect(),
+            Obj::Fresh(_) => Objs::from([obj]),
+        }
     }
 
     fn name(&self, l: LocalId) -> &str {
@@ -466,28 +559,22 @@ impl<'a> Body<'a> {
     }
 }
 
-/// Whether `seen` may be the list `changed` is, or for
-/// [`Change::Within`], one inside it.
-fn same(seen: &Loc, changed: &Loc, how: Change) -> bool {
-    if seen.obj != changed.obj {
-        return false;
-    }
-    let (At::Depth(s), At::Depth(c)) = (seen.at, changed.at) else {
-        return true;
-    };
-    let reaches = match how {
-        Change::List => s == c,
-        Change::Within => s >= c,
-    };
-    reaches && seen.earlier == changed.earlier
+/// Whether abstract lists `a` and `b` may share a list: the same one,
+/// or a parameter and the module's values (`f(saved)`).
+fn meets(a: Obj, b: Obj) -> bool {
+    a == b
+        || matches!(
+            (a, b),
+            (Obj::Param(_), Obj::World) | (Obj::World, Obj::Param(_))
+        )
 }
 
-/// The latest list `obj` stands for, itself.
-fn root(obj: Obj) -> Loc {
+/// The latest `obj`, itself of type `ty`.
+fn root(obj: Obj, ty: Ty) -> Loc {
     Loc {
         obj,
         earlier: false,
-        at: At::Depth(0),
+        ty: Some(ty),
     }
 }
 
@@ -495,7 +582,7 @@ fn anywhere(obj: Obj) -> Loc {
     Loc {
         obj,
         earlier: false,
-        at: At::Anywhere,
+        ty: None,
     }
 }
 
@@ -505,7 +592,7 @@ fn age(state: &mut State, dest: LocalId) {
     let latest = Obj::Fresh(dest.0);
     let age_all = |locs: &mut Locs| {
         let aged = std::mem::take(locs).into_iter().map(|l| Loc {
-            earlier: l.earlier || (l.obj == latest && l.at != At::Anywhere),
+            earlier: l.earlier || (l.obj == latest && l.ty.is_some()),
             ..l
         });
         *locs = aged.collect();

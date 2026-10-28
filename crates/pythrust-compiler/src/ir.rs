@@ -34,7 +34,7 @@ use crate::diag::Diagnostic;
 use crate::span::Span;
 
 /// A value type. Every local and operand has exactly one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Ty {
     Int,
     /// An IEEE 754 double.
@@ -74,7 +74,7 @@ impl Ty {
 }
 
 /// Index into [`Program::types`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub usize);
 
 /// What a list, tuple or optional type holds.

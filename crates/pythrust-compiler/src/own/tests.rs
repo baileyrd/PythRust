@@ -510,3 +510,56 @@ fn an_exception_holding_a_list_leaves_aliasing_checked() {
         "tempered `f` keeps `xs` after it returns; write `owned xs`"
     );
 }
+
+#[test]
+fn one_list_may_sit_at_different_depths() {
+    // A list has one type, not one depth: `(xs, [xs])`.
+    let src = "temper def f(mut pair: tuple[list[int], list[list[int]]]) -> int:\n    a = pair[0]\n    b = pair[1][0]\n    a.append(2)\n    return len(b)\nxs = [1]\nprint(f((xs, [xs])))\n";
+    assert_eq!(alias_err(src).map(|e| e.1), Some("a.append(2)".into()));
+    let globals = "xs = [1]\nrows = [xs]\ntemper def f() -> int:\n    a = xs\n    b = rows[0]\n    a.append(2)\n    return len(b)\nprint(f())\n";
+    assert_eq!(alias_err(globals).map(|e| e.1), Some("a.append(2)".into()));
+    // Lists of different types are never one list.
+    let typed = "temper def f(mut pair: tuple[list[int], list[list[str]]]) -> int:\n    a = pair[0]\n    b = pair[1][0]\n    a.append(2)\n    return len(b)\nprint(f(([1], [[\"x\"]])))\n";
+    assert_eq!(checked(typed), Ok(()));
+}
+
+#[test]
+fn a_parameter_may_be_a_global() {
+    // `f(saved)`: A5 sees one argument, so nothing else rules it out.
+    let src = "saved = [1]\ntemper def f(mut xs: list[int]) -> int:\n    other = saved\n    xs.append(2)\n    return len(other)\nprint(f(saved))\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes a list while `other` may be the same list and is used later; copy instead of sharing it: `other = list(...)`".into(),
+            "xs.append(2)".into()
+        ))
+    );
+    let typed = src
+        .replace("saved = [1]", "saved = [\"a\"]")
+        .replace("print(f(saved))", "print(f([1]))");
+    assert_eq!(checked(&typed), Ok(()));
+    let returned = "cache = [1]\ntemper def f(xs: list[int]) -> list[int]:\n    return cache\nprint(f(cache))\n";
+    assert_eq!(
+        alias_err(returned).map(|e| e.0),
+        Some("tempered `f` returns a list a global holds, which its parameter `xs` may hold too; return a copy made with `list(...)`".into())
+    );
+    let other_type = returned
+        .replace("xs: list[int]", "xs: list[str]")
+        .replace("f(cache)", "f([\"a\"])");
+    assert_eq!(checked(&other_type), Ok(()));
+}
+
+#[test]
+fn a_list_stored_in_a_global_may_be_inside_a_parameter() {
+    let changed = "shelf: list[list[int]] = []\ntemper def f(mut rows: list[list[int]]) -> int:\n    b = [1]\n    shelf.append(b)\n    rows[0].append(2)\n    return len(b)\nprint(f(shelf))\n";
+    // `rows` may be `shelf` itself, so changing `shelf` is the first error.
+    assert_eq!(
+        alias_err(changed).map(|e| e.1),
+        Some("shelf.append(b)".into())
+    );
+    let returned = "shelf: list[list[int]] = []\ntemper def f(rows: list[list[int]]) -> list[int]:\n    b = [1]\n    shelf.append(b)\n    return b\nprint(f(shelf))\n";
+    assert_eq!(
+        alias_err(returned).map(|e| e.0),
+        Some("tempered `f` returns a list a global holds, which its parameter `rows` may hold too; return a copy made with `list(...)`".into())
+    );
+}
