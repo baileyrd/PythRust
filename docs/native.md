@@ -81,7 +81,7 @@ M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.m
 
 ## Known gaps
 
-- **An exception holding a list** (`ValueError([1])`, or a tuple or optional holding one) is a backend error. Allowing it would let reference counts form a cycle (a list holding an exception holding that list) and would hide list aliasing from the `own` stage, which tracks only list-holding values.
+- **An exception holding a list** (`ValueError([1])`, or a tuple or optional holding one) is a backend error. Allowing it would let reference counts form a cycle (a list holding an exception holding that list). It lowers, so the `own` stage sees it (as keeping the list, like a global); `codegen` rejects it.
 
 M4 closed with these open; [roadmap.md](roadmap.md#phase-3-native-status-m4-done) tracks them as follow-ups. Generic functions where no `return` decides the result type, the other M4 follow-up, now build, including operations on the result of one that never returns (see the monomorphization note above).
 

@@ -154,7 +154,7 @@ impl FnBuilder<'_, '_> {
         let v = self.expr(&arg.value)?;
         let elem = self.slot_ty(ty, 0, span)?;
         let value = self.expect(v, elem, arg.span)?;
-        self.emit(Inst::Append { list, value });
+        self.emit(Inst::Append { list, value, span });
         Ok(Operand::None)
     }
 

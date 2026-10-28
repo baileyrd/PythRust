@@ -12,9 +12,10 @@
 //! lowering gap is never a new language restriction.
 //!
 //! [`check`] holds the modes a function writes (D2) to these summaries,
-//! and calls to tempered functions to their `mut` and `owned`
-//! parameters (A5).
+//! calls to tempered functions to their `mut` and `owned` parameters
+//! (A5), and a tempered body to D3 and D4 ([`alias`]).
 
+mod alias;
 mod body;
 mod calls;
 mod modes;
@@ -121,6 +122,9 @@ pub struct Analysis {
     /// By function name. A generic function's instances are joined; a
     /// generic function no code calls has none when precise.
     pub funcs: BTreeMap<String, Summary>,
+    /// By tempered function name, the first aliasing its body may not
+    /// do (D3, D4). Empty unless precise.
+    pub aliasing: BTreeMap<String, Diagnostic>,
     /// Source name per lowered function (an instance of a generic
     /// function has its own), the module's code included; empty when
     /// conservative.
@@ -144,6 +148,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
             let calls = calls.flat_map(|(i, f)| body::calls(&program, i, f, &summaries));
             Analysis {
                 funcs: by_name(&program, &summaries),
+                aliasing: alias::tempered(module, &program, &summaries),
                 names: program.funcs.iter().map(|f| f.name.clone()).collect(),
                 heaps: program
                     .funcs
@@ -156,6 +161,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
         }
         Err(gap) => Analysis {
             funcs: conservative(module),
+            aliasing: BTreeMap::new(),
             names: Vec::new(),
             heaps: Vec::new(),
             calls: Vec::new(),

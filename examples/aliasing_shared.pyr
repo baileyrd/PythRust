@@ -1,0 +1,11 @@
+# deviation: a tempered body may not change a list through one name while another name for it is still used (D4); CPython keeps aliasing.
+# expect-error: tempered `extend` changes `b` while `a` may be the same list and is used later; copy instead of sharing it: `b = list(a)`
+# expect-exit: 1
+temper def extend(n: int) -> int:
+    a = [1, 2]
+    b = a
+    b.append(n)
+    return len(a)
+
+
+print(extend(3))

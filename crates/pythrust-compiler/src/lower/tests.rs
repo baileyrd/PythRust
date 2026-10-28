@@ -833,10 +833,20 @@ fn a_handler_name_is_unbound_after_its_handler() {
 }
 
 #[test]
-fn an_exception_holding_a_list_is_a_backend_error() {
-    let (d, text) = rejected("e = ValueError([1])\n");
-    assert!(d.message.contains("an exception holding a list"), "{d}");
-    assert_eq!(text, "ValueError([1])");
+fn an_exception_holding_a_list_lowers() {
+    // The native backend rejects it (`codegen`); the analyses see it.
+    let p = lowered("e = ValueError([1])\n");
+    let insts = p.funcs[p.main.0].blocks.iter().flat_map(|b| &b.insts);
+    let held = insts.filter(|i| {
+        matches!(
+            i,
+            crate::ir::Inst::Assign {
+                value: crate::ir::Rvalue::NewExc(_, Some(_)),
+                ..
+            }
+        )
+    });
+    assert_eq!(held.count(), 1);
 }
 
 #[test]

@@ -1,0 +1,8 @@
+# deviation: a tempered function may not return a parameter (D3); CPython returns the same list.
+# expect-error: tempered `same` returns its parameter `xs`; return a copy: `return list(xs)`
+# expect-exit: 1
+temper def same(xs: list[int]) -> list[int]:
+    return xs
+
+
+print(same([1]))

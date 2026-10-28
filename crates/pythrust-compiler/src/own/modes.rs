@@ -10,14 +10,16 @@
 //! Diagnostics come only from precise summaries: a program that does
 //! not lower yet has its modes checked once it does. Returning a
 //! parameter is not a mode (it is the summary's `result_aliases`);
-//! tempered code is barred from it by D3, checked with the body (A6).
+//! tempered code is barred from it by D3, checked with the body
+//! (`alias`).
 
 use crate::ast::{FuncDef, Mode as Temper, Module, ParamMode, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
 
 use super::{Analysis, Mode, Precision, Summary};
 
-/// Checks every function's written modes against `analysis`.
+/// Checks every function's written modes against `analysis`, after a
+/// tempered body's aliasing.
 pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
     if analysis.precision != Precision::Precise {
         return Ok(());
@@ -26,6 +28,9 @@ pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
         let StmtKind::FuncDef(def) = &s.kind else {
             continue;
         };
+        if let Some(d) = analysis.aliasing.get(&def.name.name) {
+            return Err(d.clone());
+        }
         // A generic function no code calls has no summary to check.
         if let Some(summary) = analysis.funcs.get(&def.name.name) {
             func(def, summary)?;

@@ -1,0 +1,16 @@
+# An exception may hold a list (the native backend does not build it yet).
+# The exception keeps the list after the call, so a tempered function
+# holding its parameter in one writes `owned`. CPython runs this loosened.
+temper def check(owned xs: list[int]) -> int raises ValueError:
+    if len(xs) > 1:
+        raise ValueError(xs)
+    return len(xs)
+
+
+ys = [1, 2]
+try:
+    check(ys)
+except ValueError as e:
+    ys.append(3)
+    print(e)
+print(check([4]), ys)

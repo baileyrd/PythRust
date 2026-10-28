@@ -8,7 +8,7 @@
 //! mirror. A default is evaluated when its `def` runs, as in Python, and
 //! kept in a global of its own.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::ast::{FuncDef, Module, Stmt};
 use crate::diag::Result;
@@ -58,8 +58,10 @@ impl Globals {
         }
     }
 
-    pub(super) fn into_vec(self) -> Vec<Ty> {
-        self.tys
+    /// The globals' types, and the module variables they mirror.
+    pub(super) fn finish(self) -> (Vec<Ty>, BTreeMap<GlobalId, String>) {
+        let names = self.mirrors.into_iter().map(|(n, m)| (m.value, n));
+        (self.tys, names.collect())
     }
 
     fn add(&mut self, ty: Ty) -> GlobalId {

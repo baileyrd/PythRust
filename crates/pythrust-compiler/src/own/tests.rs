@@ -170,10 +170,10 @@ fn raising_and_catching_lower_precisely() {
 }
 
 #[test]
-fn an_exception_holding_a_list_falls_back() {
+fn an_exception_holding_a_list_keeps_it() {
+    // It may outlive the call and render the list later.
     let src = "def f(xs, n):\n    raise ValueError(xs)\nf([1], 2)\n";
-    conservative(src);
-    assert_eq!(analyzed(src).funcs["f"].params.len(), 2);
+    assert_eq!(modes(src, "f"), (vec![OWNED, READ], vec![false, false]));
 }
 
 #[test]
@@ -345,6 +345,172 @@ fn returning_a_parameter_is_not_a_mode() {
     assert_eq!(checked(src), Ok(()));
 }
 
+/// `check`'s error for `src`, if any: for these tests, an aliasing one.
+fn alias_err(src: &str) -> Option<(String, String)> {
+    checked(src).err()
+}
+
+#[test]
+fn a_second_name_changed_while_the_first_is_used_is_an_error() {
+    // D4, with its fix-it.
+    let src = "temper def f() -> int:\n    a = [1]\n    b = a\n    b.append(2)\n    return len(a)\nprint(f())\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes `b` while `a` may be the same list and is used later; copy instead of sharing it: `b = list(a)`".into(),
+            "b.append(2)".into()
+        ))
+    );
+    assert_eq!(checked(&src.replace("b = a", "b = list(a)")), Ok(()));
+    let item = src.replace("b.append(2)", "b[0] = 2");
+    assert_eq!(alias_err(&item).map(|e| e.1), Some("b[0]".into()));
+}
+
+#[test]
+fn aliasing_is_checked_where_names_are_still_used() {
+    // Non-lexical: `a` is never read after `b` changes.
+    let dead = "temper def f() -> int:\n    a = [1]\n    b = a\n    n = len(a)\n    b.append(2)\n    return n + len(b)\nprint(f())\n";
+    assert_eq!(checked(dead), Ok(()));
+    // Rebinding `b` ends the sharing.
+    let rebound = "temper def f() -> int:\n    a = [1]\n    b = a\n    b = [0]\n    b.append(2)\n    return len(a)\nprint(f())\n";
+    assert_eq!(checked(rebound), Ok(()));
+    // In a loop, the next iteration's read counts.
+    let looped = "temper def f(n: int) -> int:\n    a = [1]\n    b = a\n    for i in range(n):\n        b.append(i)\n        n = len(a)\n    return n\nprint(f(2))\n";
+    assert!(alias_err(looped).is_some());
+}
+
+#[test]
+fn a_list_inside_another_is_its_own_list() {
+    let src = "temper def f(mut rows: list[list[int]]) -> int:\n    r = rows[0]\n    r.append(1)\n    for s in rows:\n        s[0] = 0\n    return len(rows)\nprint(f([[1]]))\n";
+    assert_eq!(checked(src), Ok(()));
+    // Two names for one element are two names for one list.
+    let twice = "temper def f(mut rows: list[list[int]]) -> int:\n    r = rows[0]\n    s = rows[0]\n    r.append(1)\n    return len(s)\nprint(f([[1]]))\n";
+    assert!(alias_err(twice).is_some());
+    let through = "temper def f(mut rows: list[list[int]]) -> int:\n    r = rows[0]\n    rows[0].append(1)\n    return len(r)\nprint(f([[1]]))\n";
+    assert_eq!(
+        alias_err(through),
+        Some((
+            "tempered `f` changes a list while `r` may be the same list and is used later; copy instead of sharing it: `r = list(...)`".into(),
+            "rows[0].append(1)".into()
+        ))
+    );
+    // A list stored in another is reached through it, not a second name.
+    let stored = "temper def f() -> int:\n    b = [1]\n    outer: list[list[int]] = []\n    outer.append(b)\n    b.append(2)\n    x = outer[0]\n    b.append(3)\n    return len(x)\nprint(f())\n";
+    assert_eq!(alias_err(stored).map(|e| e.1), Some("b.append(3)".into()));
+}
+
+#[test]
+fn a_mut_argument_is_a_change() {
+    let src = "temper def grow(mut xs: list[int]) -> None:\n    xs.append(1)\ntemper def f() -> int:\n    a = [1]\n    b = a\n    grow(b)\n    return len(a)\nprint(f())\n";
+    assert_eq!(alias_err(src).map(|e| e.1), Some("grow(b)".into()));
+    // A `mut` argument may change the lists inside it too.
+    let inner = "temper def clear(mut rows: list[list[int]]) -> None:\n    rows[0][0] = 0\ntemper def f(mut rows: list[list[int]]) -> int:\n    r = rows[0]\n    clear(rows)\n    return len(r)\nprint(f([[1]]))\n";
+    assert_eq!(alias_err(inner).map(|e| e.1), Some("clear(rows)".into()));
+}
+
+#[test]
+fn changing_a_list_a_loop_runs_over_is_an_error() {
+    let src = "temper def f() -> int:\n    xs = [1, 2]\n    for x in xs:\n        if x < 0:\n            xs.append(x)\n    return 0\nprint(f())\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes `xs` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "xs.append(x)".into()
+        ))
+    );
+    assert_eq!(checked(&src.replace("in xs", "in list(xs)")), Ok(()));
+}
+
+#[test]
+fn each_run_of_an_allocation_is_a_new_list() {
+    let src = "temper def f(n: int) -> int:\n    prev = [0]\n    cur = [1]\n    rows: list[list[int]] = []\n    for i in range(n):\n        prev = cur\n        cur = [i]\n        cur.append(i)\n        rows.append(cur)\n    return len(prev) + len(rows)\nprint(f(3))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn a_narrowed_optional_is_the_same_name() {
+    let src = "temper def f(mut xs: list[int] | None) -> int:\n    if xs is not None:\n        xs.append(1)\n        return len(xs)\n    return 0\nprint(f([1]))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn tempered_code_returns_no_parameter() {
+    // D3, with its fix-it.
+    let src = "temper def same(xs: list[int]) -> list[int]:\n    return xs\nprint(same([1]))\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `same` returns its parameter `xs`; return a copy: `return list(xs)`".into(),
+            "return xs".into()
+        ))
+    );
+    assert_eq!(
+        checked(&src.replace("return xs", "return list(xs)")),
+        Ok(())
+    );
+    let inner = "temper def first(rows: list[list[int]]) -> list[int]:\n    return rows[0]\nprint(first([[1]]))\n";
+    assert_eq!(
+        alias_err(inner).map(|e| e.0),
+        Some("tempered `first` returns a value sharing a list with its parameter `rows`; return a copy made with `list(...)`".into())
+    );
+    let boxed = "temper def pair(xs: list[int]) -> tuple[list[int], int]:\n    return (xs, 1)\nprint(pair([1]))\n";
+    assert!(alias_err(boxed).is_some());
+    // A list it stored in a parameter is the caller's too.
+    let stored = "temper def put(mut rows: list[list[int]]) -> list[int]:\n    r = [1]\n    rows.append(r)\n    return r\nprint(put([]))\n";
+    assert!(alias_err(stored).is_some());
+}
+
+#[test]
+fn aliasing_comes_before_modes() {
+    // Fixing the alias may make the mode unnecessary.
+    let src = "temper def f(xs: list[int]) -> int:\n    ys = xs\n    ys.append(1)\n    return len(xs)\nprint(f([1]))\n";
+    assert_eq!(alias_err(src).map(|e| e.1), Some("ys.append(1)".into()));
+}
+
+#[test]
+fn loose_code_keeps_python_aliasing() {
+    let src = "def f(xs):\n    a = [1]\n    b = a\n    b.append(2)\n    for x in xs:\n        xs.append(x)\n        break\n    return xs\nprint(f([1]), len([1]))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn slots_of_a_tuple_from_elsewhere_may_be_one_list() {
+    // The caller may pass `(xs, xs)`; A5 cannot see inside one argument.
+    let src = "temper def f(mut pair: tuple[list[int], list[int]]) -> int:\n    a = pair[0]\n    b = pair[1]\n    a.append(2)\n    return len(b)\nxs = [1]\nprint(f((xs, xs)))\n";
+    assert_eq!(alias_err(src).map(|e| e.1), Some("a.append(2)".into()));
+    let made = "temper def two() -> tuple[list[int], list[int]]:\n    return ([1], [2])\ntemper def f() -> int:\n    pair = two()\n    a = pair[0]\n    b = pair[1]\n    a.append(2)\n    return len(b)\nprint(f())\n";
+    assert_eq!(alias_err(made).map(|e| e.1), Some("a.append(2)".into()));
+    let nested = "temper def f(mut g: list[list[list[int]]]) -> int:\n    a = g[0][0]\n    b = g[1][0]\n    a.append(2)\n    return len(b)\nprint(f([[[1]], [[2]]]))\n";
+    assert_eq!(alias_err(nested).map(|e| e.1), Some("a.append(2)".into()));
+}
+
+#[test]
+fn fields_of_a_tuple_the_body_built_are_known_apart() {
+    let apart = "temper def f() -> int:\n    pair = ([1], [2])\n    a = pair[0]\n    b = pair[1]\n    a.append(3)\n    return len(b)\nprint(f())\n";
+    assert_eq!(checked(apart), Ok(()));
+    let same = "temper def f() -> int:\n    x = [1]\n    pair = (x, x)\n    a = pair[0]\n    b = pair[1]\n    a.append(3)\n    return len(b)\nprint(f())\n";
+    assert_eq!(alias_err(same).map(|e| e.1), Some("a.append(3)".into()));
+}
+
+#[test]
+fn an_exception_holding_a_list_leaves_aliasing_checked() {
+    let escape = "temper def escape(owned xs: list[int]) -> list[int] raises ValueError:\n    if len(xs) == 0:\n        raise ValueError(xs)\n    return xs\nprint(escape([1]))\n";
+    assert_eq!(analyzed(escape).precision, Precision::Precise);
+    assert_eq!(
+        alias_err(escape).map(|e| e.0),
+        Some(
+            "tempered `escape` returns its parameter `xs`; return a copy: `return list(xs)`".into()
+        )
+    );
+    let shared = "temper def f(n: int) -> int raises ValueError:\n    a = [1]\n    b = a\n    b.append(n)\n    if n < 0:\n        raise ValueError(a)\n    return len(a)\nprint(f(1))\n";
+    assert_eq!(alias_err(shared).map(|e| e.1), Some("b.append(n)".into()));
+    let unwritten = "temper def f(xs: list[int]) -> int raises ValueError:\n    raise ValueError(xs)\nprint(1)\n";
+    assert_eq!(
+        mode_err(unwritten).0,
+        "tempered `f` keeps `xs` after it returns; write `owned xs`"
+    );
+}
+
 const ADD: &str = "temper def add(mut rows: list[list[int]], owned row: list[int]) -> None:\n    rows.append(row)\n";
 
 /// The source text of the call `check` rejects in `ADD` plus `rest`.
@@ -410,6 +576,164 @@ fn what_earlier_code_stores_counts() {
 }
 
 #[test]
+fn one_list_may_sit_at_different_depths() {
+    // A list has one type, not one depth: `(xs, [xs])`.
+    let src = "temper def f(mut pair: tuple[list[int], list[list[int]]]) -> int:\n    a = pair[0]\n    b = pair[1][0]\n    a.append(2)\n    return len(b)\nxs = [1]\nprint(f((xs, [xs])))\n";
+    assert_eq!(alias_err(src).map(|e| e.1), Some("a.append(2)".into()));
+    let globals = "xs = [1]\nrows = [xs]\ntemper def f() -> int:\n    a = xs\n    b = rows[0]\n    a.append(2)\n    return len(b)\nprint(f())\n";
+    assert_eq!(alias_err(globals).map(|e| e.1), Some("a.append(2)".into()));
+    // Lists of different types are never one list.
+    let typed = "temper def f(mut pair: tuple[list[int], list[list[str]]]) -> int:\n    a = pair[0]\n    b = pair[1][0]\n    a.append(2)\n    return len(b)\nprint(f(([1], [[\"x\"]])))\n";
+    assert_eq!(checked(typed), Ok(()));
+}
+
+#[test]
+fn a_parameter_may_be_a_global() {
+    // `f(saved)`: A5 sees one argument, so nothing else rules it out.
+    let src = "saved = [1]\ntemper def f(mut xs: list[int]) -> int:\n    other = saved\n    xs.append(2)\n    return len(other)\nprint(f(saved))\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes `xs` while `other` may be the same list and is used later; copy instead of sharing it: `other = list(...)`".into(),
+            "xs.append(2)".into()
+        ))
+    );
+    let typed = src
+        .replace("saved = [1]", "saved = [\"a\"]")
+        .replace("print(f(saved))", "print(f([1]))");
+    assert_eq!(checked(&typed), Ok(()));
+    let returned = "cache = [1]\ntemper def f(xs: list[int]) -> list[int]:\n    return cache\nprint(f(cache))\n";
+    assert_eq!(
+        alias_err(returned).map(|e| e.0),
+        Some("tempered `f` returns a list a global holds, which its parameter `xs` may hold too; return a copy made with `list(...)`".into())
+    );
+    let other_type = returned
+        .replace("xs: list[int]", "xs: list[str]")
+        .replace("f(cache)", "f([\"a\"])");
+    assert_eq!(checked(&other_type), Ok(()));
+}
+
+#[test]
+fn a_list_stored_in_a_global_may_be_inside_a_parameter() {
+    let changed = "shelf: list[list[int]] = []\ntemper def f(mut rows: list[list[int]]) -> int:\n    b = [1]\n    shelf.append(b)\n    rows[0].append(2)\n    return len(b)\nprint(f(shelf))\n";
+    // `rows` may be `shelf` itself, so changing `shelf` is the first error.
+    assert_eq!(
+        alias_err(changed).map(|e| e.1),
+        Some("shelf.append(b)".into())
+    );
+    let returned = "shelf: list[list[int]] = []\ntemper def f(rows: list[list[int]]) -> list[int]:\n    b = [1]\n    shelf.append(b)\n    return b\nprint(f(shelf))\n";
+    assert_eq!(
+        alias_err(returned).map(|e| e.0),
+        Some("tempered `f` returns a list a global holds, which its parameter `rows` may hold too; return a copy made with `list(...)`".into())
+    );
+}
+
+#[test]
+fn a_module_variable_read_after_a_change_is_used_later() {
+    // Parameter changed, global read later: `f(saved)`.
+    let src = "saved = [1]\ntemper def f(mut xs: list[int]) -> int:\n    xs.append(2)\n    return len(saved)\nprint(f(saved))\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes `xs` while module variable `saved` may be the same list and is used later; pass a copy instead, such as `list(saved)`".into(),
+            "xs.append(2)".into()
+        ))
+    );
+    // Through a callee that reads it.
+    let callee = "saved = [1]\ntemper def peek() -> int:\n    return len(saved)\ntemper def f(mut xs: list[int]) -> int:\n    xs.append(2)\n    return peek()\nprint(f(saved))\n";
+    assert_eq!(alias_err(callee).map(|e| e.1), Some("xs.append(2)".into()));
+    // Global changed, another global of the type read later.
+    let globals = "xs = [1]\nys = xs\ntemper def f() -> int:\n    xs.append(2)\n    return len(ys)\nprint(f())\n";
+    assert_eq!(alias_err(globals).map(|e| e.1), Some("xs.append(2)".into()));
+    // Changing a global and reading it again is one name.
+    let same =
+        "xs = [1]\ntemper def f() -> int:\n    xs.append(2)\n    return len(xs)\nprint(f())\n";
+    assert_eq!(checked(same), Ok(()));
+    // A read before the change, or of another type, is not used later.
+    let before = "saved = [1]\ntemper def f(mut xs: list[int]) -> int:\n    n = len(saved)\n    xs.append(2)\n    return n\nprint(f(saved))\n";
+    assert_eq!(checked(before), Ok(()));
+    let typed = "saved = [\"a\"]\ntemper def f(mut xs: list[int]) -> int:\n    xs.append(2)\n    return len(saved)\nprint(f([1]))\n";
+    assert_eq!(checked(typed), Ok(()));
+}
+
+#[test]
+fn a_callee_changing_a_module_list_is_a_change() {
+    // Zero arguments: the change is the callee's own, to `saved`.
+    let looped = "saved = [1]\ntemper def touch() -> None:\n    saved.append(2)\ntemper def f() -> int:\n    for x in saved:\n        if x < 2:\n            touch()\n    return len(saved)\nprint(f())\n";
+    assert_eq!(
+        alias_err(looped),
+        Some((
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "touch()".into()
+        ))
+    );
+    // Indirectly, and against a second name.
+    let named = "saved = [1]\ntemper def touch() -> None:\n    saved.append(2)\ntemper def via() -> None:\n    touch()\ntemper def f() -> int:\n    a = saved\n    via()\n    return len(a)\nprint(f())\n";
+    assert_eq!(alias_err(named).map(|e| e.1), Some("via()".into()));
+    // A parameter may be `saved`.
+    let param = "saved = [1]\ntemper def touch() -> None:\n    saved.append(2)\ntemper def f(xs: list[int]) -> int:\n    touch()\n    return len(xs)\nprint(f(saved))\n";
+    assert_eq!(alias_err(param).map(|e| e.1), Some("touch()".into()));
+    // Reading the changed module variable again is one name.
+    let same = "saved = [1]\ntemper def touch() -> None:\n    saved.append(2)\ntemper def f() -> int:\n    touch()\n    return len(saved)\nprint(f())\n";
+    assert_eq!(checked(same), Ok(()));
+    // Helpers that only read, and lists of another type, are no change.
+    let reads = "saved = [1]\ntemper def peek() -> int:\n    return len(saved)\ntemper def f() -> int:\n    t = 0\n    for x in saved:\n        t += peek()\n    return t\nprint(f())\n";
+    assert_eq!(checked(reads), Ok(()));
+    let typed = "saved = [\"a\"]\ntemper def touch() -> None:\n    saved.append(\"b\")\ntemper def f(xs: list[int]) -> int:\n    touch()\n    return len(xs)\nprint(f([1]))\n";
+    assert_eq!(checked(typed), Ok(()));
+}
+
+#[test]
+fn a_callee_may_change_a_list_the_body_stored_in_a_module_list() {
+    let touch = "shelf: list[list[int]] = []\ntemper def touch() -> None:\n    shelf[0].append(2)\ntemper def via() -> None:\n    touch()\n";
+    let looped = format!("{touch}temper def f() -> int:\n    a = [1]\n    shelf.append(a)\n    for x in a:\n        if x < 2:\n            touch()\n    return 0\nprint(f())\n");
+    assert_eq!(
+        alias_err(&looped),
+        Some((
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "touch()".into()
+        ))
+    );
+    let named = format!("{touch}temper def f() -> int:\n    a = [1]\n    shelf.append(a)\n    via()\n    return len(a)\nprint(f())\n");
+    assert_eq!(alias_err(&named).map(|e| e.1), Some("via()".into()));
+    // Nested one deeper, the stored list still holds one `shelf[0]` may be.
+    let deeper = format!("{touch}temper def f() -> int:\n    a = [1]\n    rows = [a]\n    shelf.append(rows[0])\n    touch()\n    return len(a)\nprint(f())\n");
+    assert_eq!(alias_err(&deeper).map(|e| e.1), Some("touch()".into()));
+    // A list the body never stored there is not reached.
+    let kept = format!("{touch}temper def f() -> int:\n    a = [1]\n    shelf.append([0])\n    touch()\n    return len(a)\nprint(f())\n");
+    assert_eq!(checked(&kept), Ok(()));
+}
+
+#[test]
+fn a_module_list_a_callee_returns_may_be_one_the_body_stored() {
+    let get = "shelf: list[list[int]] = []\ntemper def get() -> list[int]:\n    return shelf[0]\ntemper def via() -> list[int]:\n    return get()\n";
+    let body = "temper def f() -> int:\n    a = [1]\n    shelf.append(a)\n    b = get()\n    b.append(2)\n    return len(a)\nprint(f())\n";
+    assert_eq!(
+        alias_err(&format!("{get}{body}")),
+        Some((
+            "tempered `f` changes `b` while `a` may be the same list and is used later; copy instead of sharing it: `b = list(a)`".into(),
+            "b.append(2)".into()
+        ))
+    );
+    let reverse = body.replace(
+        "b.append(2)\n    return len(a)",
+        "a.append(2)\n    return len(b)",
+    );
+    assert_eq!(
+        alias_err(&format!("{get}{reverse}")).map(|e| e.1),
+        Some("a.append(2)".into())
+    );
+    let through = body.replace("get()", "via()");
+    assert_eq!(
+        alias_err(&format!("{get}{through}")).map(|e| e.1),
+        Some("b.append(2)".into())
+    );
+    // A list the body never stored there is not returned.
+    let unrelated = body.replace("shelf.append(a)", "shelf.append([0])");
+    assert_eq!(checked(&format!("{get}{unrelated}")), Ok(()));
+}
+
+#[test]
 fn read_parameters_and_values_without_lists_may_share() {
     let read = "temper def both(xs: list[int], ys: list[int]) -> int:\n    return len(xs) + len(ys)\na = [1]\nprint(both(a, a))\n";
     assert_eq!(checked(read), Ok(()));
@@ -428,8 +752,18 @@ fn loose_callees_keep_python_aliasing() {
 
 #[test]
 fn calls_from_any_caller_are_checked() {
-    let tempered = "temper def twice(mut rows: list[list[int]], owned row: list[int]) -> None:\n    add(rows, row)\n    add(rows, row)\ntwice([], [1])\n";
-    assert_eq!(shared_call(tempered), "add(rows, row)");
+    let tempered = "temper def first(owned rows: list[list[int]]) -> None:\n    add(rows, rows[0])\nfirst([[1]])\n";
+    assert_eq!(shared_call(tempered), "add(rows, rows[0])");
+    // A tempered caller's own aliasing (D4) is reported first: the first
+    // call may change `row` through `rows`, and `row` is used again.
+    let twice = "temper def twice(mut rows: list[list[int]], owned row: list[int]) -> None:\n    add(rows, row)\n    add(rows, row)\ntwice([], [1])\n";
+    assert_eq!(
+        mode_err(&format!("{ADD}{twice}")),
+        (
+            "tempered `twice` changes a list while `row` may be the same list and is used later; copy instead of sharing it: `row = list(...)`".into(),
+            "add(rows, row)".into()
+        )
+    );
     // Two module variables a function reads count as one list: the
     // module's code may have stored one in the other.
     let globals = "rows: list[list[int]] = []\nrow = [1]\ndef g():\n    add(rows, row)\ng()\n";

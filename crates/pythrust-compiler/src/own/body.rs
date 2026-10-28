@@ -21,7 +21,7 @@ use crate::ir::{Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue,
 
 /// An abstract list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Obj {
+pub(super) enum Obj {
     /// Parameter `i`, and every list inside it.
     Param(usize),
     /// What the module's globals hold, and every list inside it.
@@ -34,12 +34,12 @@ enum Obj {
 
 /// Which allocations into a local a [`Obj::Fresh`] stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Age {
+pub(super) enum Age {
     Latest,
     Earlier,
 }
 
-type Objs = BTreeSet<Obj>;
+pub(super) type Objs = BTreeSet<Obj>;
 
 /// What a [`Flow`] knows at one point of the body.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,7 +48,7 @@ struct State {
     stored: BTreeMap<Obj, Objs>,
 }
 
-struct Flow<'a> {
+pub(super) struct Flow<'a> {
     program: &'a Program,
     func: &'a Func,
     summaries: &'a [Summary],
@@ -64,9 +64,18 @@ struct Flow<'a> {
 
 /// `func`'s summary, with callees summarized as `summaries` say.
 pub(super) fn summarize(program: &Program, func: &Func, summaries: &[Summary]) -> Summary {
+    settle(program, func, summaries).summary()
+}
+
+/// `func`'s points-to sets, settled flow-insensitively.
+pub(super) fn settle<'a>(
+    program: &'a Program,
+    func: &'a Func,
+    summaries: &'a [Summary],
+) -> Flow<'a> {
     let mut flow = Flow::new(program, func, summaries, false);
     while flow.propagate() {}
-    flow.summary()
+    flow
 }
 
 /// Which of `func`'s parameters can hold a list, and which of them and
@@ -74,8 +83,7 @@ pub(super) fn summarize(program: &Program, func: &Func, summaries: &[Summary]) -
 /// and whether it may get hold of a module value's list at all.
 /// Flow-insensitive, as [`summarize`] is.
 pub(super) fn heap(program: &Program, func: &Func, summaries: &[Summary]) -> Heap {
-    let mut flow = Flow::new(program, func, summaries, false);
-    while flow.propagate() {}
+    let flow = settle(program, func, summaries);
     let grown: Objs = flow
         .stored
         .iter()
@@ -267,7 +275,7 @@ impl<'a> Flow<'a> {
     fn flow(&mut self, inst: &Inst) -> bool {
         match inst {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
-            Inst::Append { list, value } | Inst::SetItem { list, value, .. } => {
+            Inst::Append { list, value, .. } | Inst::SetItem { list, value, .. } => {
                 let value = self.of(*value);
                 let lists = self.of(*list);
                 self.store_all(&lists, &value)
@@ -283,6 +291,12 @@ impl<'a> Flow<'a> {
     fn assign(&mut self, dest: LocalId, value: &Rvalue) -> bool {
         let mut changed = match value {
             Rvalue::Call(f, args) => self.call_stores(*f, args),
+            // An exception may outlive the call, raised or stored, and
+            // render the list later: as good as keeping it in a global.
+            Rvalue::NewExc(_, Some(a)) => {
+                let held = self.of(*a);
+                self.store(Obj::World, &held)
+            }
             _ => false,
         };
         if !holds_list(self.program, self.func.locals[dest.0]) {
@@ -424,7 +438,7 @@ impl<'a> Flow<'a> {
 
     /// `root` and what is stored in it, transitively, short of another
     /// parameter or the module's values.
-    fn region(&self, root: Obj) -> Objs {
+    pub(super) fn region(&self, root: Obj) -> Objs {
         let mut out = Objs::from([root]);
         let mut todo = vec![root];
         while let Some(o) = todo.pop() {
@@ -492,8 +506,18 @@ impl<'a> Flow<'a> {
         out
     }
 
+    /// The lists `op` may be, or hold, anywhere in the body.
+    pub(super) fn points_to(&self, op: Operand) -> Objs {
+        self.of(op)
+    }
+
+    /// What the body may store in `list`.
+    pub(super) fn stored(&self, list: Obj) -> Option<&Objs> {
+        self.stored.get(&list)
+    }
+
     /// `lists` and everything inside them.
-    fn reachable(&self, lists: &Objs) -> Objs {
+    pub(super) fn reachable(&self, lists: &Objs) -> Objs {
         let mut out = lists.clone();
         let mut todo: Vec<Obj> = lists.iter().copied().collect();
         while let Some(o) = todo.pop() {

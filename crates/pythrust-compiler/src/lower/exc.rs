@@ -10,7 +10,7 @@ use crate::diag::Result;
 use crate::ir::{ExcKind, Inst, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
-use super::{internal, unsupported, FnBuilder, Try, Unbind};
+use super::{internal, FnBuilder, Try, Unbind};
 
 impl FnBuilder<'_, '_> {
     /// `raise value`; `raise ValueError` raises a new one without an
@@ -175,9 +175,6 @@ impl FnBuilder<'_, '_> {
     ) -> Result<Operand> {
         let arg = match args {
             [] => None,
-            [arg] if self.holds(self.ty(*arg), |t| matches!(t, Ty::List(_))) => {
-                return Err(unsupported(span, "an exception holding a list"))
-            }
             [arg] => Some(*arg),
             _ => return Err(internal(span, "an exception of several arguments")),
         };

@@ -28,11 +28,13 @@
 //! with [`Rvalue::PendingIs`] and takes the exception with
 //! [`Rvalue::Catch`]. Faults (D7) stay [`Term::Fail`]s.
 
+use std::collections::BTreeMap;
+
 use crate::diag::Diagnostic;
 use crate::span::Span;
 
 /// A value type. Every local and operand has exactly one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Ty {
     Int,
     /// An IEEE 754 double.
@@ -56,7 +58,8 @@ pub enum Ty {
     /// reads them), whose elements are the ints they produce.
     Range,
     /// An immutable, reference-counted exception: its [`ExcKind`] and
-    /// at most one argument, which never holds a list.
+    /// at most one argument. The native backend rejects one holding a
+    /// list (`codegen`); the analyses see it.
     Exc,
 }
 
@@ -71,7 +74,7 @@ impl Ty {
 }
 
 /// Index into [`Program::types`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub usize);
 
 /// What a list, tuple or optional type holds.
@@ -129,11 +132,11 @@ impl ExcKind {
 pub struct FuncId(pub usize);
 
 /// Index into [`Program::globals`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GlobalId(pub usize);
 
 /// Index into [`Func::locals`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalId(pub usize);
 
 /// Index into [`Func::blocks`].
@@ -150,6 +153,9 @@ pub struct Program {
     /// Module-level storage functions can read: zeroed at start, like
     /// locals.
     pub globals: Vec<Ty>,
+    /// The globals that hold module variables, by the variable's name;
+    /// for diagnostics.
+    pub global_names: BTreeMap<GlobalId, String>,
 }
 
 /// One monomorphic function. `blocks[0]` is the entry; `params` are the
@@ -162,6 +168,9 @@ pub struct Func {
     pub params: Vec<LocalId>,
     pub ret: Ty,
     pub locals: Vec<Ty>,
+    /// The locals that are source variables, parameters included, by
+    /// name; the rest are temporaries. For diagnostics about the body.
+    pub names: BTreeMap<LocalId, String>,
     pub blocks: Vec<Block>,
 }
 
@@ -192,8 +201,12 @@ pub enum Inst {
     Release(LocalId),
     /// Nulls the local without dropping: its reference was moved.
     Forget(LocalId),
-    /// `list.append(value)`: the list adds its own reference.
-    Append { list: Operand, value: Operand },
+    /// `list.append(value)` at `span`: the list adds its own reference.
+    Append {
+        list: Operand,
+        value: Operand,
+        span: Span,
+    },
     /// Stores a new reference to `value` in the global, dropping the
     /// one it held (null: nothing).
     SetGlobal { global: GlobalId, value: Operand },
