@@ -557,11 +557,26 @@ impl<'a> Body<'a> {
             return Ok(());
         };
         for w in &self.effects.writes[f.0] {
-            let changed = Locs::from([root(Obj::World, w.ty)]);
+            let changed = self.module_lists(w.ty);
             let writer = Writer::Callee(*f, w.global);
             self.change(writer, &changed, w.how, state, live, span)?;
         }
         Ok(())
+    }
+
+    /// The lists of type `ty` a callee may reach through the module's
+    /// values: theirs, and any run of a list this body stored there.
+    fn module_lists(&self, ty: Ty) -> Locs {
+        let world = self.flow.reachable(&self.meeting(Obj::World));
+        let fresh = world.into_iter().filter(|o| matches!(o, Obj::Fresh(..)));
+        let runs = fresh.flat_map(|obj| {
+            [false, true].map(|earlier| Loc {
+                obj,
+                earlier,
+                ty: Some(ty),
+            })
+        });
+        runs.chain([root(Obj::World, ty)]).collect()
     }
 
     /// What `inst` changes in place, and how.

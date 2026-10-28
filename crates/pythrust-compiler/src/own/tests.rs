@@ -684,6 +684,27 @@ fn a_callee_changing_a_module_list_is_a_change() {
 }
 
 #[test]
+fn a_callee_may_change_a_list_the_body_stored_in_a_module_list() {
+    let touch = "shelf: list[list[int]] = []\ntemper def touch() -> None:\n    shelf[0].append(2)\ntemper def via() -> None:\n    touch()\n";
+    let looped = format!("{touch}temper def f() -> int:\n    a = [1]\n    shelf.append(a)\n    for x in a:\n        if x < 2:\n            touch()\n    return 0\nprint(f())\n");
+    assert_eq!(
+        alias_err(&looped),
+        Some((
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "touch()".into()
+        ))
+    );
+    let named = format!("{touch}temper def f() -> int:\n    a = [1]\n    shelf.append(a)\n    via()\n    return len(a)\nprint(f())\n");
+    assert_eq!(alias_err(&named).map(|e| e.1), Some("via()".into()));
+    // Nested one deeper, the stored list still holds one `shelf[0]` may be.
+    let deeper = format!("{touch}temper def f() -> int:\n    a = [1]\n    rows = [a]\n    shelf.append(rows[0])\n    touch()\n    return len(a)\nprint(f())\n");
+    assert_eq!(alias_err(&deeper).map(|e| e.1), Some("touch()".into()));
+    // A list the body never stored there is not reached.
+    let kept = format!("{touch}temper def f() -> int:\n    a = [1]\n    shelf.append([0])\n    touch()\n    return len(a)\nprint(f())\n");
+    assert_eq!(checked(&kept), Ok(()));
+}
+
+#[test]
 fn read_parameters_and_values_without_lists_may_share() {
     let read = "temper def both(xs: list[int], ys: list[int]) -> int:\n    return len(xs) + len(ys)\na = [1]\nprint(both(a, a))\n";
     assert_eq!(checked(read), Ok(()));
