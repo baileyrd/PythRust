@@ -10,8 +10,11 @@
 //! [`analyze`] is the coverage gate: a program lowering cannot express
 //! gets [`Precision::Conservative`] summaries, never an error, so a
 //! lowering gap is never a new language restriction.
+//!
+//! [`check`] holds the modes a function writes (D2) to these summaries.
 
 mod body;
+mod modes;
 
 #[cfg(test)]
 mod tests;
@@ -23,6 +26,8 @@ use crate::diag::Diagnostic;
 use crate::infer::Types;
 use crate::ir::{Compound, Program, Ty};
 use crate::lower;
+
+pub use modes::check;
 
 /// How a function uses a parameter, weakest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -74,15 +79,16 @@ pub enum Precision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Analysis {
     /// By function name. A generic function's instances are joined; a
-    /// function no code calls has none when precise.
+    /// generic function no code calls has none when precise.
     pub funcs: BTreeMap<String, Summary>,
     pub precision: Precision,
 }
 
-/// Summarizes `module`, typed by `types`. Never fails: see
+/// Summarizes `module`, typed by `types`, including functions no code
+/// calls when their signature is concrete. Never fails: see
 /// [`Precision::Conservative`].
 pub fn analyze(module: &Module, types: &Types) -> Analysis {
-    match lower::lower(module, types) {
+    match lower::lower_every(module, types) {
         Ok(program) => Analysis {
             funcs: by_name(&program, &infer(&program)),
             precision: Precision::Precise,

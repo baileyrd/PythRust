@@ -1,0 +1,12 @@
+# deviation: a written mode must cover what the body does (D2); CPython has no modes.
+# expect-error: `keep` keeps `xs` after it returns; write `owned xs`
+# expect-exit: 1
+kept: list[list[int]] = []
+
+
+def keep(mut xs):
+    kept.append(xs)
+
+
+keep([1])
+print(kept)

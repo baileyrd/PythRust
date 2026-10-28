@@ -153,9 +153,7 @@ fn execute(
     let tokens = lexer::lex(src)?;
     let module = parser::parse(&tokens)?;
     let types = infer::infer(&module)?;
-    // Analysis only, and it never fails: nothing depends on it until
-    // mode checks (roadmap A4), but every checked program runs it.
-    own::analyze(&module, &types);
+    own::check(&module, &own::analyze(&module, &types))?;
     match command {
         Command::Check | Command::Build => Ok(()),
         Command::Run => interp::run(&module, out),
@@ -191,6 +189,9 @@ fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
     let tokens = lexer::lex(src)?;
     let module = parser::parse(&tokens)?;
     let types = infer::infer(&module)?;
+    // The same checks as `check`, over every function, before lowering
+    // only what runs.
+    own::check(&module, &own::analyze(&module, &types))?;
     let program = lower::lower(&module, &types)?;
     codegen::emit(&program, &|diag| render(path, src, diag))
 }

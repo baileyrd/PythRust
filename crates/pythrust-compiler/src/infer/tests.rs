@@ -231,6 +231,7 @@ impl B {
     }
     fn param(&self, name: &str, annotation: Option<TypeExpr>, default: Option<Expr>) -> Param {
         Param {
+            mode: ParamMode::Read,
             name: self.id(name),
             annotation,
             default,

@@ -124,13 +124,24 @@ pub enum Mode {
     Tempered,
 }
 
-/// `NAME [':' type] ['=' expr]`
+/// `[mode] NAME [':' type] ['=' expr]`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
+    pub mode: ParamMode,
     pub name: Ident,
     pub annotation: Option<TypeExpr>,
     pub default: Option<Expr>,
     pub span: Span,
+}
+
+/// A parameter's written ownership mode (D2): `mode = 'mut' | 'owned'`,
+/// contextual words. `read` is the default and is never written, so
+/// [`ParamMode::Read`] means none was; checked against the body by `own`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ParamMode {
+    Read,
+    Mut,
+    Owned,
 }
 
 /// `type = type_atom ['|' 'None']`, with

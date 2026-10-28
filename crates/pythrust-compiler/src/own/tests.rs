@@ -1,4 +1,4 @@
-use super::{analyze, Analysis, Mode, Param, Precision};
+use super::{analyze, check, Analysis, Mode, Param, Precision};
 use crate::diag::DiagKind;
 use crate::{infer, lexer, parser};
 
@@ -125,8 +125,16 @@ fn generic_instances_are_joined() {
 }
 
 #[test]
-fn the_module_and_uncalled_functions_have_no_summary() {
-    let a = analyzed("def unused(xs):\n    xs.append(1)\nprint(1)\n");
+fn an_uncalled_concrete_function_is_summarized() {
+    // So modes are checked whether or not anything calls it.
+    let src = "def unused(xs):\n    xs.append(1)\ntemper def spare(xs: list[int]) -> None:\n    xs[0] = 2\nprint(1)\n";
+    assert_eq!(modes(src, "unused"), (vec![MUT], vec![false]));
+    assert_eq!(modes(src, "spare"), (vec![MUT], vec![false]));
+}
+
+#[test]
+fn the_module_and_uncalled_generic_functions_have_no_summary() {
+    let a = analyzed("def unused(xs):\n    return xs\nprint(1)\n");
     assert_eq!(a.precision, Precision::Precise);
     assert!(a.funcs.is_empty(), "{:?}", a.funcs);
 }
@@ -237,4 +245,102 @@ fn recursion_building_nested_results_aliases_its_parameter() {
     // Coarse: a result that may hold `xs` may also be it, so
     // `r.append` may change `xs`.
     assert_eq!(modes(src, "deep"), (vec![MUT, READ], vec![true, false]));
+}
+
+/// `check`'s verdict on `src`: `Ok`, or the message and the source text
+/// its span covers.
+fn checked(src: &str) -> Result<(), (String, String)> {
+    let module = match lexer::lex(src).and_then(|t| parser::parse(&t)) {
+        Ok(m) => m,
+        Err(d) => panic!("parse failed: {d}"),
+    };
+    let types = match infer::infer(&module) {
+        Ok(t) => t,
+        Err(d) => panic!("check failed: {d}"),
+    };
+    check(&module, &analyze(&module, &types))
+        .map_err(|d| (d.message, src[d.span.start..d.span.end].to_string()))
+}
+
+fn mode_err(src: &str) -> (String, String) {
+    match checked(src) {
+        Ok(()) => panic!("expected a mode error for:\n{src}"),
+        Err(e) => e,
+    }
+}
+
+#[test]
+fn tempered_functions_write_the_modes_their_bodies_need() {
+    let grow = "temper def grow(xs: list[int]) -> None:\n    xs.append(1)\ngrow([0])\n";
+    assert_eq!(
+        mode_err(grow),
+        (
+            "tempered `grow` changes `xs` in place; write `mut xs`".into(),
+            "xs".into()
+        )
+    );
+    let ok = "temper def grow(mut xs: list[int]) -> None:\n    xs.append(1)\ngrow([0])\n";
+    assert_eq!(checked(ok), Ok(()));
+    let keep = "kept: list[list[int]] = []\ntemper def keep(n: int, mut xs: list[int]) -> None:\n    kept.append(xs)\nkeep(1, [0])\n";
+    assert_eq!(
+        mode_err(keep).0,
+        "tempered `keep` keeps `xs` after it returns; write `owned xs`"
+    );
+    assert_eq!(checked(&keep.replace("mut xs", "owned xs")), Ok(()));
+}
+
+#[test]
+fn loose_functions_check_only_the_modes_they_write() {
+    let unwritten = "kept: list[list[int]] = []\ndef keep(xs):\n    kept.append(xs)\ndef grow(xs):\n    xs.append(1)\nkeep([0])\ngrow([0])\n";
+    assert_eq!(checked(unwritten), Ok(()));
+    let weak = unwritten.replace("keep(xs)", "keep(mut xs)");
+    assert_eq!(
+        mode_err(&weak),
+        (
+            "`keep` keeps `xs` after it returns; write `owned xs`".into(),
+            "xs".into()
+        )
+    );
+}
+
+#[test]
+fn writing_more_than_the_body_needs_is_allowed() {
+    // As over-declaring `raises` is: it reserves the right to change.
+    let src = "temper def total(mut xs: list[int], owned ys: list[int], mut n: int) -> int:\n    return len(xs) + len(ys) + n\ndef peek(owned xs):\n    return xs[0]\nprint(total([1], [2], 3), peek([4]))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn uncalled_functions_are_checked_too() {
+    let src = "temper def grow(xs: list[int]) -> None:\n    xs.append(1)\nprint(1)\n";
+    assert_eq!(
+        mode_err(src).0,
+        "tempered `grow` changes `xs` in place; write `mut xs`"
+    );
+}
+
+#[test]
+fn a_body_with_try_and_raise_is_checked() {
+    // B3 lowers `try`/`raise`, so they no longer fall back.
+    let src = "temper def f(xs: list[int], n: int) -> int raises ValueError:\n    try:\n        if n < 0:\n            raise ValueError(\"neg\")\n        xs.append(n)\n    except ValueError:\n        xs.append(0)\n    return n\nprint(f([1], -1))\n";
+    assert_eq!(analyzed(src).precision, Precision::Precise);
+    assert_eq!(
+        mode_err(src).0,
+        "tempered `f` changes `xs` in place; write `mut xs`"
+    );
+}
+
+#[test]
+fn a_conservative_analysis_diagnoses_nothing() {
+    // A lowering gap elsewhere leaves `grow` unchecked until it lowers.
+    let src = "temper def grow(xs: list[int]) -> None:\n    xs.append(1)\nx = print(7)\ndef print(n):\n    return 1\n";
+    conservative(src);
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn returning_a_parameter_is_not_a_mode() {
+    // D3 bars it from tempered code with the body checks (A6), not here.
+    let src = "def same(owned xs: list[int]) -> list[int]:\n    return xs\ndef also(xs: list[int]) -> list[int]:\n    return xs\nprint(same([1]), also([2]))\n";
+    assert_eq!(checked(src), Ok(()));
 }

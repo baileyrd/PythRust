@@ -242,9 +242,10 @@ fn universal_newlines(stdout: String) -> String {
     }
 }
 
-/// `src` as Python: each `temper ` prefix and `raises` clause removed,
-/// or `None` if it has neither. `def` is top-level only, so the prefix
-/// always starts a line, and a clause ends its `def` line.
+/// `src` as Python: each `temper ` prefix, `mut`/`owned` parameter mode
+/// and `raises` clause removed, or `None` if it has none. `def` is
+/// top-level only, so the prefix always starts a line, a mode follows
+/// `(` or `, ` on its `def` line, and a clause ends that line.
 fn loosen(src: &str) -> Option<String> {
     let lines: Vec<String> = src.lines().map(loosen_line).collect();
     let changed = lines.iter().zip(src.lines()).any(|(a, b)| a != b);
@@ -256,6 +257,7 @@ fn loosen_line(line: &str) -> String {
     if !line.starts_with("def ") {
         return line.to_string();
     }
+    let line = &strip_modes(line);
     let Some((head, names)) = line
         .strip_suffix(':')
         .and_then(|l| l.rsplit_once(" raises "))
@@ -271,6 +273,14 @@ fn loosen_line(line: &str) -> String {
     } else {
         line.to_string()
     }
+}
+
+/// `line` without the `mut `/`owned ` before each parameter name.
+fn strip_modes(line: &str) -> String {
+    ["mut ", "owned "].iter().fold(line.to_string(), |l, mode| {
+        l.replace(&format!("({mode}"), "(")
+            .replace(&format!(", {mode}"), ", ")
+    })
 }
 
 fn pythrust_bin() -> Res<PathBuf> {
@@ -334,6 +344,7 @@ const NATIVE: &[&str] = &[
     "int_pow_negative",
     "keyword_args",
     "list_copy",
+    "modes",
     "list_ownership",
     "list_semantics",
     "list_set_error",
@@ -534,7 +545,8 @@ fn cpython_failures(dir: &Path, blessing: bool) -> Res<Vec<String>> {
 fn check_source(src: &str) -> std::result::Result<(), String> {
     let tokens = lexer::lex(src).map_err(|d| d.message)?;
     let module = parser::parse(&tokens).map_err(|d| d.message)?;
-    infer::infer(&module).map(|_| ()).map_err(|d| d.message)
+    let types = infer::infer(&module).map_err(|d| d.message)?;
+    own::check(&module, &own::analyze(&module, &types)).map_err(|d| d.message)
 }
 
 /// Compares `check` against the case's `expect-error`; `None` means it agrees.
@@ -661,6 +673,15 @@ fn loosen_strips_only_the_prefix() {
 }
 
 #[test]
+fn loosen_strips_parameter_modes() {
+    let src = "temper def f(mut xs: list[int], n: int, owned ys: list[int]) -> None:\n    pass\n";
+    let want = "def f(xs: list[int], n: int, ys: list[int]) -> None:\n    pass\n";
+    assert_eq!(loosen(src).as_deref(), Some(want));
+    assert_eq!(loosen("def f(mut, owned):\n    pass\n"), None);
+    assert_eq!(loosen("print(\"(mut x\")\n"), None);
+}
+
+#[test]
 fn loosen_strips_raises_clauses() {
     let src = "temper def f(s: str) -> int raises ValueError, IndexError:\n    pass\n";
     let want = "def f(s: str) -> int:\n    pass\n";
@@ -768,6 +789,34 @@ fn leftover_build_dirs(dir: &Path) -> Res<Vec<String>> {
         }
     }
     Ok(left)
+}
+
+/// `build` rejects what `check` rejects, with the same diagnostic, so
+/// no program a compile-time rule forbids builds natively.
+#[test]
+fn corpus_errors_fail_build() -> Res<()> {
+    let dir = scratch("errors")?;
+    let mut failures = Vec::new();
+    for case in load_corpus(&corpus_dir()?)? {
+        let Some(want) = case.expect.check_error.as_deref() else {
+            continue;
+        };
+        let name = case.source.file_name().ok_or("source has no file name")?;
+        let copy = dir.join(name);
+        fs::copy(&case.source, &copy).map_err(|e| format!("{}: {e}", case.source.display()))?;
+        let out = Command::new(pythrust_bin()?)
+            .arg("build")
+            .arg(&copy)
+            .output()
+            .map_err(|e| format!("cannot run pythrust build: {e}"))?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if out.status.success() || !stderr.contains(want) {
+            failures.push(format!("{}: build gave:\n{stderr}", case.source.display()));
+        }
+    }
+    cleanup(&dir)?;
+    report(failures);
+    Ok(())
 }
 
 #[test]
