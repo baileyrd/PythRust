@@ -28,7 +28,7 @@ use super::{holds_list, Mode, Summary};
 use crate::ast::{Mode as Temper, Module, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::ir::{
-    BlockId, Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty,
+    BlockId, Compound, Func, FuncId, GlobalId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty,
 };
 use crate::span::Span;
 
@@ -58,6 +58,16 @@ struct Val {
 /// Per local, what it may be.
 type State = Vec<Val>;
 
+/// Something the body may use later: a local, or a module variable
+/// it, or a function it calls, reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Key {
+    Local(LocalId),
+    Global(GlobalId),
+}
+
+type Live = BTreeSet<Key>;
+
 /// How a change reaches lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Change {
@@ -81,21 +91,56 @@ pub(super) fn tempered(
             _ => None,
         })
         .collect();
+    let reads = reads(program);
     let mut out = BTreeMap::new();
     for func in &program.funcs {
         if !names.contains(func.name.as_str()) || out.contains_key(&func.name) {
             continue;
         }
-        if let Err(d) = check(program, func, summaries) {
+        if let Err(d) = check(program, func, summaries, &reads) {
             out.insert(func.name.clone(), d);
         }
     }
     out
 }
 
+/// Per function, the globals it or a function it calls may read.
+fn reads(program: &Program) -> Vec<BTreeSet<GlobalId>> {
+    let mut reads = vec![BTreeSet::new(); program.funcs.len()];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (i, func) in program.funcs.iter().enumerate() {
+            let mut found = BTreeSet::new();
+            for inst in func.blocks.iter().flat_map(|b| &b.insts) {
+                let Inst::Assign { value, .. } = inst else {
+                    continue;
+                };
+                match value {
+                    Rvalue::Global(g) => {
+                        found.insert(*g);
+                    }
+                    Rvalue::Call(f, _) => found.extend(reads[f.0].iter().copied()),
+                    _ => {}
+                }
+            }
+            if found.len() > reads[i].len() {
+                reads[i] = found;
+                changed = true;
+            }
+        }
+    }
+    reads
+}
+
 /// Checks tempered `func`'s body.
-fn check(program: &Program, func: &Func, summaries: &[Summary]) -> Result<()> {
-    let body = Body::new(program, func, summaries);
+fn check(
+    program: &Program,
+    func: &Func,
+    summaries: &[Summary],
+    reads: &[BTreeSet<GlobalId>],
+) -> Result<()> {
+    let body = Body::new(program, func, summaries, reads);
     let entries = body.entries();
     let live = body.live_out();
     for (b, entry) in entries.iter().enumerate() {
@@ -110,15 +155,23 @@ struct Body<'a> {
     func: &'a Func,
     summaries: &'a [Summary],
     flow: Flow<'a>,
-    /// Per local, the source variables it was read from: itself for a
-    /// variable, for a temporary the variables its value comes from.
-    roots: Vec<BTreeSet<LocalId>>,
+    /// Per function, the globals it may read.
+    reads: &'a [BTreeSet<GlobalId>],
+    /// Per local, the variables it was read from: itself for a variable,
+    /// for a temporary the variables or module variables its value
+    /// comes from.
+    roots: Vec<Live>,
     /// The locals `return` assigns.
     results: BTreeSet<LocalId>,
 }
 
 impl<'a> Body<'a> {
-    fn new(program: &'a Program, func: &'a Func, summaries: &'a [Summary]) -> Body<'a> {
+    fn new(
+        program: &'a Program,
+        func: &'a Func,
+        summaries: &'a [Summary],
+        reads: &'a [BTreeSet<GlobalId>],
+    ) -> Body<'a> {
         let results = func.blocks.iter().filter_map(|b| match b.term {
             Term::Return(Operand::Local(l)) => Some(l),
             _ => None,
@@ -128,6 +181,7 @@ impl<'a> Body<'a> {
             func,
             summaries,
             flow: body::settle(program, func, summaries),
+            reads,
             roots: Vec::new(),
             results: results.collect(),
         };
@@ -143,11 +197,11 @@ impl<'a> Body<'a> {
         self.func.names.contains_key(&l)
     }
 
-    fn roots(&self) -> Vec<BTreeSet<LocalId>> {
-        let mut roots: Vec<BTreeSet<LocalId>> = (0..self.func.locals.len())
+    fn roots(&self) -> Vec<Live> {
+        let mut roots: Vec<Live> = (0..self.func.locals.len())
             .map(|i| match self.named(LocalId(i)) {
-                true => BTreeSet::from([LocalId(i)]),
-                false => BTreeSet::new(),
+                true => Live::from([Key::Local(LocalId(i))]),
+                false => Live::new(),
             })
             .collect();
         let mut changed = true;
@@ -157,13 +211,14 @@ impl<'a> Body<'a> {
                 let Inst::Assign { dest, value, .. } = inst else {
                     continue;
                 };
-                let Some(Operand::Local(src)) = projected(value) else {
-                    continue;
-                };
                 if self.named(*dest) {
                     continue;
                 }
-                let from = roots[src.0].clone();
+                let from = match (value, projected(value)) {
+                    (Rvalue::Global(g), _) => Live::from([Key::Global(*g)]),
+                    (_, Some(Operand::Local(src))) => roots[src.0].clone(),
+                    _ => continue,
+                };
                 let to = &mut roots[dest.0];
                 let before = to.len();
                 to.extend(from);
@@ -315,15 +370,15 @@ impl<'a> Body<'a> {
         out
     }
 
-    /// Each block's locals still used after it ends.
-    fn live_out(&self) -> Vec<BTreeSet<LocalId>> {
+    /// What each block's successors may still use.
+    fn live_out(&self) -> Vec<Live> {
         let blocks = &self.func.blocks;
-        let mut out = vec![BTreeSet::new(); blocks.len()];
+        let mut out = vec![Live::new(); blocks.len()];
         let mut changed = true;
         while changed {
             changed = false;
             for (b, block) in blocks.iter().enumerate().rev() {
-                let mut live = BTreeSet::new();
+                let mut live = Live::new();
                 for s in successors(&block.term) {
                     live.extend(self.live_in(s, &out[s.0]));
                 }
@@ -336,8 +391,8 @@ impl<'a> Body<'a> {
         out
     }
 
-    /// The locals used at the start of block `b`, given those after it.
-    fn live_in(&self, b: BlockId, after: &BTreeSet<LocalId>) -> BTreeSet<LocalId> {
+    /// What is used from the start of block `b`, given what is after it.
+    fn live_in(&self, b: BlockId, after: &Live) -> Live {
         let block = &self.func.blocks[b.0];
         let mut live = after.clone();
         self.used(term_operands(&block.term), &mut live);
@@ -348,28 +403,57 @@ impl<'a> Body<'a> {
     }
 
     /// `live` before `inst`, given it after.
-    fn step_back(&self, inst: &Inst, live: &mut BTreeSet<LocalId>) {
+    fn step_back(&self, inst: &Inst, live: &mut Live) {
         match inst {
             Inst::Assign { dest, .. } | Inst::Release(dest) | Inst::Forget(dest) => {
-                live.remove(dest);
+                live.remove(&Key::Local(*dest));
             }
             _ => {}
         }
         self.used(inst_operands(inst), live);
+        let Inst::Assign { value, .. } = inst else {
+            return;
+        };
+        let globals = match value {
+            Rvalue::Global(g) => BTreeSet::from([*g]),
+            Rvalue::Call(f, _) => self.reads[f.0].clone(),
+            _ => BTreeSet::new(),
+        };
+        let lists = globals.into_iter().filter(|g| self.global_lists(*g));
+        live.extend(lists.map(Key::Global));
     }
 
-    fn used(&self, ops: Vec<Operand>, live: &mut BTreeSet<LocalId>) {
+    fn used(&self, ops: Vec<Operand>, live: &mut Live) {
         for op in ops {
             if let Operand::Local(l) = op {
                 if self.lists(l) {
-                    live.insert(l);
+                    live.insert(Key::Local(l));
                 }
             }
         }
     }
 
+    fn global_lists(&self, g: GlobalId) -> bool {
+        holds_list(self.program, self.program.globals[g.0])
+    }
+
+    /// The lists `key` may be.
+    fn locs(&self, key: Key, state: &State) -> Locs {
+        match key {
+            Key::Local(l) => state[l.0].locs.clone(),
+            Key::Global(g) => {
+                let ty = self.program.globals[g.0];
+                let ty = match self.program.compound(ty) {
+                    Some(Compound::Opt(present)) => *present,
+                    _ => ty,
+                };
+                Locs::from([root(Obj::World, ty)])
+            }
+        }
+    }
+
     /// Checks `insts` from `state`, `live` being used after them.
-    fn replay(&self, insts: &[Inst], mut state: State, live: &BTreeSet<LocalId>) -> Result<()> {
+    fn replay(&self, insts: &[Inst], mut state: State, live: &Live) -> Result<()> {
         let mut after = vec![live.clone(); insts.len()];
         let mut cur = live.clone();
         for (i, inst) in insts.iter().enumerate().rev() {
@@ -383,7 +467,7 @@ impl<'a> Body<'a> {
         Ok(())
     }
 
-    fn inst(&self, inst: &Inst, state: &State, live: &BTreeSet<LocalId>) -> Result<()> {
+    fn inst(&self, inst: &Inst, state: &State, live: &Live) -> Result<()> {
         match inst {
             Inst::Append { list, span, .. } | Inst::SetItem { list, span, .. } => {
                 self.change(*list, Change::List, state, live, *span)
@@ -415,17 +499,21 @@ impl<'a> Body<'a> {
         op: Operand,
         how: Change,
         state: &State,
-        live: &BTreeSet<LocalId>,
+        live: &Live,
         span: Span,
     ) -> Result<()> {
         let Operand::Local(w) = op else {
             return Ok(());
         };
         let changed = &state[w.0].locs;
-        let clash = |a: &&LocalId| **a != w && self.overlaps(&state[a.0].locs, changed, how);
-        let (named, loops): (Vec<&LocalId>, Vec<&LocalId>) =
-            live.iter().filter(clash).partition(|a| self.named(**a));
-        let other = named.into_iter().find(|a| !self.roots[w.0].contains(a));
+        let clash =
+            |k: &&Key| **k != Key::Local(w) && self.overlaps(&self.locs(**k, state), changed, how);
+        let (named, loops): (Vec<&Key>, Vec<&Key>) =
+            live.iter().filter(clash).partition(|k| match k {
+                Key::Local(l) => self.named(*l),
+                Key::Global(_) => true,
+            });
+        let other = named.into_iter().find(|k| !self.roots[w.0].contains(k));
         let message = match (other, loops.first()) {
             (Some(a), _) => self.aliased(w, *a),
             (None, Some(_)) => format!(
@@ -437,9 +525,26 @@ impl<'a> Body<'a> {
         Err(error(span, message))
     }
 
-    fn aliased(&self, w: LocalId, other: LocalId) -> String {
+    fn aliased(&self, w: LocalId, other: Key) -> String {
         let f = &self.func.name;
-        let a = self.name(other);
+        let a = match other {
+            Key::Local(l) => self.name(l),
+            Key::Global(g) => {
+                let g = self
+                    .program
+                    .global_names
+                    .get(&g)
+                    .map_or("?", String::as_str);
+                let what = self
+                    .func
+                    .names
+                    .get(&w)
+                    .map_or("a list".into(), |b| format!("`{b}`"));
+                return format!(
+                    "tempered `{f}` changes {what} while module variable `{g}` may be the same list and is used later; pass a copy instead, such as `list({g})`"
+                );
+            }
+        };
         // A parameter is the caller's list: copy the other name instead.
         let named = self
             .func

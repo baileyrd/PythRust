@@ -132,7 +132,7 @@ impl ExcKind {
 pub struct FuncId(pub usize);
 
 /// Index into [`Program::globals`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GlobalId(pub usize);
 
 /// Index into [`Func::locals`].
@@ -153,6 +153,9 @@ pub struct Program {
     /// Module-level storage functions can read: zeroed at start, like
     /// locals.
     pub globals: Vec<Ty>,
+    /// The globals that hold module variables, by the variable's name;
+    /// for diagnostics.
+    pub global_names: BTreeMap<GlobalId, String>,
 }
 
 /// One monomorphic function. `blocks[0]` is the entry; `params` are the

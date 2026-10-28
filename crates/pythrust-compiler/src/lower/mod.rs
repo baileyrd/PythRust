@@ -176,11 +176,13 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
     // The module's exit, which ends the program, drops what globals own.
     let exit = &mut funcs[main.0].blocks[1].insts;
     exit.extend(cx.globals.owning().into_iter().map(Inst::DropGlobal));
+    let (globals, global_names) = cx.globals.finish();
     Ok(Program {
         funcs,
         main,
         types: cx.seqs.into_vec(),
-        globals: cx.globals.into_vec(),
+        globals,
+        global_names,
     })
 }
 

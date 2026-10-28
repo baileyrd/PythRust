@@ -563,3 +563,31 @@ fn a_list_stored_in_a_global_may_be_inside_a_parameter() {
         Some("tempered `f` returns a list a global holds, which its parameter `rows` may hold too; return a copy made with `list(...)`".into())
     );
 }
+
+#[test]
+fn a_module_variable_read_after_a_change_is_used_later() {
+    // Parameter changed, global read later: `f(saved)`.
+    let src = "saved = [1]\ntemper def f(mut xs: list[int]) -> int:\n    xs.append(2)\n    return len(saved)\nprint(f(saved))\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes `xs` while module variable `saved` may be the same list and is used later; pass a copy instead, such as `list(saved)`".into(),
+            "xs.append(2)".into()
+        ))
+    );
+    // Through a callee that reads it.
+    let callee = "saved = [1]\ntemper def peek() -> int:\n    return len(saved)\ntemper def f(mut xs: list[int]) -> int:\n    xs.append(2)\n    return peek()\nprint(f(saved))\n";
+    assert_eq!(alias_err(callee).map(|e| e.1), Some("xs.append(2)".into()));
+    // Global changed, another global of the type read later.
+    let globals = "xs = [1]\nys = xs\ntemper def f() -> int:\n    xs.append(2)\n    return len(ys)\nprint(f())\n";
+    assert_eq!(alias_err(globals).map(|e| e.1), Some("xs.append(2)".into()));
+    // Changing a global and reading it again is one name.
+    let same =
+        "xs = [1]\ntemper def f() -> int:\n    xs.append(2)\n    return len(xs)\nprint(f())\n";
+    assert_eq!(checked(same), Ok(()));
+    // A read before the change, or of another type, is not used later.
+    let before = "saved = [1]\ntemper def f(mut xs: list[int]) -> int:\n    n = len(saved)\n    xs.append(2)\n    return n\nprint(f(saved))\n";
+    assert_eq!(checked(before), Ok(()));
+    let typed = "saved = [\"a\"]\ntemper def f(mut xs: list[int]) -> int:\n    xs.append(2)\n    return len(saved)\nprint(f([1]))\n";
+    assert_eq!(checked(typed), Ok(()));
+}
