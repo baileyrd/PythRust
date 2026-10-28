@@ -11,23 +11,25 @@
 //! gets [`Precision::Conservative`] summaries, never an error, so a
 //! lowering gap is never a new language restriction.
 //!
-//! [`check`] holds the modes a function writes (D2) to these summaries.
+//! [`check`] holds the modes a function writes (D2) to these summaries,
+//! and calls to tempered functions to their `mut` and `owned`
+//! parameters (A5).
 
 mod body;
+mod calls;
 mod modes;
 
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{Module, StmtKind};
-use crate::diag::Diagnostic;
+use crate::diag::{Diagnostic, Result};
 use crate::infer::Types;
 use crate::ir::{Compound, Program, Ty};
 use crate::lower;
-
-pub use modes::check;
+use crate::span::Span;
 
 /// How a function uses a parameter, weakest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -63,6 +65,44 @@ pub struct Summary {
     pub result_global: bool,
 }
 
+/// What an argument may reach, seen from its caller: a list of one of
+/// the caller's parameters, or of the module's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Peer {
+    Param(usize),
+    World,
+}
+
+/// One call, with what its arguments may share at that point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallSite {
+    /// Indexes into [`Analysis::names`].
+    pub caller: usize,
+    pub callee: usize,
+    /// Argument pairs, first lower, that may pass one list, or lists
+    /// inside it.
+    pub shared: Vec<(usize, usize)>,
+    /// Per argument, the caller's parameters and module values it may
+    /// reach.
+    pub peers: Vec<BTreeSet<Peer>>,
+    pub span: Span,
+}
+
+/// What a lowered function's heap effects look like to [`CallSite`]
+/// checks: its parameters are analyzed as holding unrelated lists, which
+/// holds only if no store through one shows through another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heap {
+    /// The parameters that can hold a list.
+    pub lists: Vec<usize>,
+    /// Of those and the module's values, the ones the body may store a
+    /// list into, anywhere inside.
+    pub stored: BTreeSet<Peer>,
+    /// Whether the body may get hold of a list the module's values hold:
+    /// if not, a parameter that is one cannot show it anything.
+    pub sees_world: bool,
+}
+
 /// How far [`Analysis::funcs`] can be trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Precision {
@@ -81,6 +121,15 @@ pub struct Analysis {
     /// By function name. A generic function's instances are joined; a
     /// generic function no code calls has none when precise.
     pub funcs: BTreeMap<String, Summary>,
+    /// Source name per lowered function (an instance of a generic
+    /// function has its own), the module's code included; empty when
+    /// conservative.
+    pub names: Vec<String>,
+    /// Per lowered function, as [`Analysis::names`]; empty when
+    /// conservative.
+    pub heaps: Vec<Heap>,
+    /// Every call of the program; empty when conservative.
+    pub calls: Vec<CallSite>,
     pub precision: Precision,
 }
 
@@ -89,15 +138,37 @@ pub struct Analysis {
 /// [`Precision::Conservative`].
 pub fn analyze(module: &Module, types: &Types) -> Analysis {
     match lower::lower_every(module, types) {
-        Ok(program) => Analysis {
-            funcs: by_name(&program, &infer(&program)),
-            precision: Precision::Precise,
-        },
+        Ok(program) => {
+            let summaries = infer(&program);
+            let calls = program.funcs.iter().enumerate();
+            let calls = calls.flat_map(|(i, f)| body::calls(&program, i, f, &summaries));
+            Analysis {
+                funcs: by_name(&program, &summaries),
+                names: program.funcs.iter().map(|f| f.name.clone()).collect(),
+                heaps: program
+                    .funcs
+                    .iter()
+                    .map(|f| body::heap(&program, f, &summaries))
+                    .collect(),
+                calls: calls.collect(),
+                precision: Precision::Precise,
+            }
+        }
         Err(gap) => Analysis {
             funcs: conservative(module),
+            names: Vec::new(),
+            heaps: Vec::new(),
+            calls: Vec::new(),
             precision: Precision::Conservative(gap),
         },
     }
+}
+
+/// Holds `module` to `analysis`: written modes (D2), then calls to
+/// tempered functions (A5). Only precise analyses are checked.
+pub fn check(module: &Module, analysis: &Analysis) -> Result<()> {
+    modes::check(module, analysis)?;
+    calls::check(module, analysis)
 }
 
 /// One summary per function of `program`, indexed by `FuncId`: the

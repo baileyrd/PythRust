@@ -1,0 +1,14 @@
+# deviation: a call may not pass one list to two parameters of a tempered function when one is `mut` or `owned` (A5); CPython has no modes.
+# expect-error: tempered `add` keeps `row` after it returns, and this call may also pass that list as `rows`; pass a copy (`list(...)`)
+# expect-exit: 1
+temper def add(mut rows: list[list[int]], owned row: list[int]) -> None:
+    rows.append(row)
+
+
+rows: list[list[int]] = []
+row = [1]
+add(rows, row)
+row = [2]
+add(rows, row)
+add(rows, row)
+print(rows)

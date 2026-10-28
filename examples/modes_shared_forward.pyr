@@ -1,0 +1,15 @@
+# deviation: a loose function that passes its parameters on to a tempered `mut` parameter and another may not receive one list as both (A5); CPython has no modes.
+# expect-error: this call may pass one list as `xs` and `ys` of `forward`, and from there tempered `push` changes `xs` in place; pass a copy (`list(...)`)
+# expect-exit: 1
+temper def push(mut xs: list[int], ys: list[int]) -> None:
+    xs.append(len(ys))
+
+
+def forward(xs: list[int], ys: list[int]) -> None:
+    push(xs, ys)
+
+
+a = [1]
+forward(a, [2])
+forward(a, a)
+print(a)
