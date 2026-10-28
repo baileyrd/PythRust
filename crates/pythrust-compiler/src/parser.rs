@@ -12,7 +12,7 @@
 
 use crate::ast::{
     Arg, BinOp, Block, Branch, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp, Mode,
-    Module, Param, Stmt, StmtKind, Target, TargetKind, TypeExpr, UnaryOp,
+    Module, Param, ParamMode, Stmt, StmtKind, Target, TargetKind, TypeExpr, UnaryOp,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
@@ -371,6 +371,8 @@ impl<'a> Parser<'a> {
     }
 
     fn param(&mut self) -> Result<Param> {
+        let start = self.tok(0).span;
+        let mode = self.param_mode()?;
         let name = self.expect_name("a parameter name")?;
         let annotation = if self.eat(&TokenKind::Colon) {
             Some(self.type_expr()?)
@@ -383,11 +385,32 @@ impl<'a> Parser<'a> {
             None
         };
         Ok(Param {
-            span: self.span_from(name.span),
+            span: self.span_from(start),
+            mode,
             name,
             annotation,
             default,
         })
+    }
+
+    /// `['mut' | 'owned']` before a parameter name (D2). The words are
+    /// contextual, a mode only when another name follows, so a parameter
+    /// may still be called `mut`. `read` is the default and never written.
+    fn param_mode(&mut self) -> Result<ParamMode> {
+        let (TokenKind::Name(word), TokenKind::Name(_)) = (self.peek(), &self.tok(1).kind) else {
+            return Ok(ParamMode::Read);
+        };
+        let mode = match word.as_str() {
+            "mut" => ParamMode::Mut,
+            "owned" => ParamMode::Owned,
+            "read" => {
+                let msg = "parameters are read unless marked; drop `read`";
+                return Err(error(self.tok(0).span, msg));
+            }
+            _ => return Ok(ParamMode::Read),
+        };
+        self.bump();
+        Ok(mode)
     }
 
     fn if_stmt(&mut self) -> Result<Stmt> {

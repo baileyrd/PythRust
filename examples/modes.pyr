@@ -1,0 +1,36 @@
+# Parameter modes (grammar.md D2): `mut` changes a list in place, `owned`
+# keeps it after returning, and `read` is the unwritten default. CPython
+# runs this with the modes removed; they never change meaning.
+temper def total(xs: list[int]) -> int:
+    t = 0
+    for x in xs:
+        t += x
+    return t
+
+
+temper def push(mut xs: list[int], x: int) -> None:
+    xs.append(x)
+
+
+temper def reset(mut rows: list[list[int]]) -> None:
+    for r in rows:
+        r[0] = 0
+
+
+temper def adopt(mut shelf: list[list[int]], owned xs: list[int]) -> None:
+    shelf.append(xs)
+
+
+def tally(mut counts, owned spare, n):
+    counts.append(n)
+    return len(spare)
+
+
+mut = [5]
+push(mut, 6)
+shelf: list[list[int]] = []
+adopt(shelf, mut)
+mut.append(7)
+reset(shelf)
+print(total(mut), shelf, mut)
+print(tally(mut, [1, 2], 8), mut)

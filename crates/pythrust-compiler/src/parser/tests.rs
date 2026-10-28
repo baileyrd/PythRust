@@ -247,12 +247,17 @@ fn sx_def(f: &FuncDef) -> String {
 }
 
 fn sx_param(p: &Param) -> String {
+    let mode = match p.mode {
+        ParamMode::Read => "",
+        ParamMode::Mut => "mut ",
+        ParamMode::Owned => "owned ",
+    };
     let ann = p.annotation.as_ref().map(|t| format!(": {}", sx_type(t)));
     let default = p.default.as_ref().map(|e| format!(" = {}", sx(e)));
-    match (ann, default) {
-        (None, None) => p.name.name.clone(),
-        (a, d) => format!(
-            "[{}{}{}]",
+    match (mode, ann, default) {
+        ("", None, None) => p.name.name.clone(),
+        (m, a, d) => format!(
+            "[{m}{}{}{}]",
             p.name.name,
             a.unwrap_or_default(),
             d.unwrap_or_default()
@@ -674,6 +679,36 @@ fn raises_clauses() {
         err("def f ( ) -> int raises ValueError IndexError : NL"),
         "expected `:`, found name `IndexError`"
     );
+}
+
+#[test]
+fn parameter_modes() {
+    assert_eq!(
+        ok("def f ( mut xs , owned ys : list [ int ] , zs ) : NL INDENT pass NL DEDENT"),
+        "(def f ([mut xs] [owned ys: list[int]] zs) (pass))"
+    );
+    assert_eq!(
+        ok("temper def f ( mut xs : list [ int ] = [ ] ) -> None : NL INDENT pass NL DEDENT"),
+        "(temper-def f ([mut xs: list[int] = (list)]) -> None (pass))"
+    );
+    // Contextual: a mode only before another name.
+    assert_eq!(
+        ok("def f ( mut , owned : int , read = 1 ) : NL INDENT mut = owned NL DEDENT"),
+        "(def f (mut [owned: int] [read = 1]) ((= mut owned)))"
+    );
+    assert_eq!(
+        err("def f ( read xs ) : NL"),
+        "parameters are read unless marked; drop `read`"
+    );
+    assert_eq!(
+        err("def f ( mut owned xs ) : NL"),
+        "expected `)`, found name `xs`"
+    );
+    let src = "def f ( mut xs ) : NL INDENT pass NL DEDENT";
+    let StmtKind::FuncDef(f) = &parse_src(src).body[0].kind else {
+        panic!("not a def");
+    };
+    assert_eq!(text(src, f.params[0].span), "mut xs");
 }
 
 #[test]

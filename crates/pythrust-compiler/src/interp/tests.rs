@@ -232,6 +232,7 @@ fn def(n: &str, params: Vec<(&str, Option<Expr>)>, body: Vec<Stmt>) -> Stmt {
     let params = params
         .into_iter()
         .map(|(p, default)| Param {
+            mode: ParamMode::Read,
             name: ident(p),
             annotation: None,
             default,

@@ -102,8 +102,31 @@ enum Found {
     Unknown(bool),
 }
 
-/// Lowers `module`, typed by `types`, to IR.
+/// Which functions [`lower_reaching`] lowers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// Only what the module's code may call: what `build` compiles.
+    Called,
+    /// Also every function no code calls whose signature is concrete,
+    /// so analysis sees each tempered body.
+    Every,
+}
+
+/// Lowers `module`, typed by `types`, to IR: the module and every
+/// instance its code may call.
 pub fn lower(module: &Module, types: &Types) -> Result<Program> {
+    lower_reaching(module, types, Reach::Called)
+}
+
+/// As [`lower`], but also lowers each function no code calls when its
+/// signature names no type variable: every tempered function and every
+/// non-generic loose one. For analysis, which must see bodies the
+/// program never runs.
+pub fn lower_every(module: &Module, types: &Types) -> Result<Program> {
+    lower_reaching(module, types, Reach::Every)
+}
+
+fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Program> {
     let mut defs = HashMap::new();
     for s in &module.body {
         if let StmtKind::FuncDef(f) = &s.kind {
@@ -138,6 +161,9 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         Ok(Attempt::Done(b.finish("<module>", Vec::new())))
     })?;
     cx.funcs[main.0] = Some(func);
+    if reach == Reach::Every {
+        cx.root_concrete(module)?;
+    }
     while let Some(job) = cx.queue.pop() {
         let Body::Lowered(func, _) = cx.instance_body(&job)? else {
             return Err(internal(module.span, "a queued instance undecided"));
@@ -196,6 +222,33 @@ impl<'a> Cx<'a> {
     fn reserve(&mut self) -> FuncId {
         self.funcs.push(None);
         FuncId(self.funcs.len() - 1)
+    }
+
+    /// Queues the one instance of each function in `module` whose
+    /// signature is concrete. One the code calls is already queued with
+    /// these types, so only the uncalled are new.
+    fn root_concrete(&mut self, module: &'a Module) -> Result<()> {
+        let closed = Subst::new();
+        for s in &module.body {
+            let StmtKind::FuncDef(def) = &s.kind else {
+                continue;
+            };
+            let Some(sig) = self.types.func(&def.name.name) else {
+                continue;
+            };
+            let types = sig.params.iter().map(|p| &p.ty).chain([&sig.ret]);
+            if !types.clone().all(|t| is_closed(t, &closed)) {
+                continue;
+            }
+            let mut tys = types
+                .map(|t| concrete(t, &closed, &mut self.seqs, def.span))
+                .collect::<Result<Vec<Ty>>>()?;
+            let ret = tys
+                .pop()
+                .ok_or_else(|| internal(def.span, "no result type"))?;
+            self.instance(def, tys, ret, def.span)?;
+        }
+        Ok(())
     }
 
     /// The instance of `def` for `args` and `ret`, queued if new.
