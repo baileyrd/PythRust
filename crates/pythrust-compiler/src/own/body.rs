@@ -307,6 +307,11 @@ impl<'a> Flow<'a> {
         out
     }
 
+    /// The lists `op` may be, or hold, anywhere in the body.
+    pub(super) fn points_to(&self, op: Operand) -> Objs {
+        self.of(op)
+    }
+
     /// What the body may store in `list`.
     pub(super) fn stored(&self, list: Obj) -> Option<&Objs> {
         self.stored.get(&list)

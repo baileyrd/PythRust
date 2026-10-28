@@ -68,8 +68,34 @@ enum Key {
 
 type Live = BTreeSet<Key>;
 
+/// Who changes a list.
+#[derive(Debug, Clone, Copy)]
+enum Writer {
+    /// The body, through a local.
+    Local(LocalId),
+    /// A callee, in a module variable's list: through that variable,
+    /// if one.
+    Callee(FuncId, Option<GlobalId>),
+}
+
+/// A change a function makes, itself or through a callee, to a list of
+/// type `ty` the module's values hold: through module variable
+/// `global`, if one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Write {
+    global: Option<GlobalId>,
+    ty: Ty,
+    how: Change,
+}
+
+/// Per function, by `FuncId`, the module's lists it may read and change.
+struct Effects {
+    reads: Vec<BTreeSet<GlobalId>>,
+    writes: Vec<BTreeSet<Write>>,
+}
+
 /// How a change reaches lists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Change {
     /// Only the list itself: `append`, item assignment.
     List,
@@ -91,17 +117,61 @@ pub(super) fn tempered(
             _ => None,
         })
         .collect();
-    let reads = reads(program);
+    let effects = effects(program, summaries);
     let mut out = BTreeMap::new();
     for func in &program.funcs {
         if !names.contains(func.name.as_str()) || out.contains_key(&func.name) {
             continue;
         }
-        if let Err(d) = check(program, func, summaries, &reads) {
+        if let Err(d) = check(program, func, summaries, &effects) {
             out.insert(func.name.clone(), d);
         }
     }
     out
+}
+
+/// What every function may do to the module's lists, itself or
+/// through its callees.
+fn effects(program: &Program, summaries: &[Summary]) -> Effects {
+    let mut effects = Effects {
+        reads: reads(program),
+        writes: Vec::new(),
+    };
+    let own: Vec<BTreeSet<Write>> = program
+        .funcs
+        .iter()
+        .map(|f| Body::new(program, f, summaries, &effects).writes())
+        .collect();
+    let mut writes = own.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (i, func) in program.funcs.iter().enumerate() {
+            let mut found = own[i].clone();
+            for f in callees(func) {
+                found.extend(writes[f.0].iter().copied());
+            }
+            if found.len() > writes[i].len() {
+                writes[i] = found;
+                changed = true;
+            }
+        }
+    }
+    effects.writes = writes;
+    effects
+}
+
+fn callees(func: &Func) -> impl Iterator<Item = FuncId> + '_ {
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter_map(|i| match i {
+            Inst::Assign {
+                value: Rvalue::Call(f, _),
+                ..
+            } => Some(*f),
+            _ => None,
+        })
 }
 
 /// Per function, the globals it or a function it calls may read.
@@ -134,13 +204,8 @@ fn reads(program: &Program) -> Vec<BTreeSet<GlobalId>> {
 }
 
 /// Checks tempered `func`'s body.
-fn check(
-    program: &Program,
-    func: &Func,
-    summaries: &[Summary],
-    reads: &[BTreeSet<GlobalId>],
-) -> Result<()> {
-    let body = Body::new(program, func, summaries, reads);
+fn check(program: &Program, func: &Func, summaries: &[Summary], effects: &Effects) -> Result<()> {
+    let body = Body::new(program, func, summaries, effects);
     let entries = body.entries();
     let live = body.live_out();
     for (b, entry) in entries.iter().enumerate() {
@@ -155,8 +220,7 @@ struct Body<'a> {
     func: &'a Func,
     summaries: &'a [Summary],
     flow: Flow<'a>,
-    /// Per function, the globals it may read.
-    reads: &'a [BTreeSet<GlobalId>],
+    effects: &'a Effects,
     /// Per local, the variables it was read from: itself for a variable,
     /// for a temporary the variables or module variables its value
     /// comes from.
@@ -170,7 +234,7 @@ impl<'a> Body<'a> {
         program: &'a Program,
         func: &'a Func,
         summaries: &'a [Summary],
-        reads: &'a [BTreeSet<GlobalId>],
+        effects: &'a Effects,
     ) -> Body<'a> {
         let results = func.blocks.iter().filter_map(|b| match b.term {
             Term::Return(Operand::Local(l)) => Some(l),
@@ -181,7 +245,7 @@ impl<'a> Body<'a> {
             func,
             summaries,
             flow: body::settle(program, func, summaries),
-            reads,
+            effects,
             roots: Vec::new(),
             results: results.collect(),
         };
@@ -416,7 +480,7 @@ impl<'a> Body<'a> {
         };
         let globals = match value {
             Rvalue::Global(g) => BTreeSet::from([*g]),
-            Rvalue::Call(f, _) => self.reads[f.0].clone(),
+            Rvalue::Call(f, _) => self.effects.reads[f.0].clone(),
             _ => BTreeSet::new(),
         };
         let lists = globals.into_iter().filter(|g| self.global_lists(*g));
@@ -468,65 +532,130 @@ impl<'a> Body<'a> {
     }
 
     fn inst(&self, inst: &Inst, state: &State, live: &Live) -> Result<()> {
-        match inst {
-            Inst::Append { list, span, .. } | Inst::SetItem { list, span, .. } => {
-                self.change(*list, Change::List, state, live, *span)
+        if let Inst::Assign {
+            dest, value, span, ..
+        } = inst
+        {
+            if self.results.contains(dest) {
+                self.returned(&self.value(*dest, value, state).locs, *span)?;
             }
+        }
+        let Some(span) = inst_span(inst) else {
+            return Ok(());
+        };
+        for (op, how) in self.changes(inst) {
+            let Operand::Local(w) = op else {
+                continue;
+            };
+            self.change(Writer::Local(w), &state[w.0].locs, how, state, live, span)?;
+        }
+        let Inst::Assign {
+            value: Rvalue::Call(f, _),
+            ..
+        } = inst
+        else {
+            return Ok(());
+        };
+        for w in &self.effects.writes[f.0] {
+            let changed = Locs::from([root(Obj::World, w.ty)]);
+            let writer = Writer::Callee(*f, w.global);
+            self.change(writer, &changed, w.how, state, live, span)?;
+        }
+        Ok(())
+    }
+
+    /// What `inst` changes in place, and how.
+    fn changes(&self, inst: &Inst) -> Vec<(Operand, Change)> {
+        match inst {
+            Inst::Append { list, .. } | Inst::SetItem { list, .. } => vec![(*list, Change::List)],
             Inst::Assign {
-                dest, value, span, ..
+                value: Rvalue::Call(f, args),
+                ..
             } => {
-                if self.results.contains(dest) {
-                    self.returned(&self.value(*dest, value, state).locs, *span)?;
-                }
-                let Rvalue::Call(f, args) = value else {
-                    return Ok(());
-                };
                 let params = &self.summaries[f.0].params;
                 let changed = args.iter().zip(params).filter(|(_, p)| p.mode >= Mode::Mut);
-                for (a, _) in changed {
-                    self.change(*a, Change::Within, state, live, *span)?;
-                }
-                Ok(())
+                changed.map(|(a, _)| (*a, Change::Within)).collect()
             }
-            _ => Ok(()),
+            _ => Vec::new(),
         }
     }
 
-    /// D4: changing what `op` is, at `span`, while another name for it
-    /// is used later.
+    /// The module's lists this body changes itself, not through a callee.
+    fn writes(&self) -> BTreeSet<Write> {
+        let mut out = BTreeSet::new();
+        for inst in self.func.blocks.iter().flat_map(|b| &b.insts) {
+            for (op, how) in self.changes(inst) {
+                let Operand::Local(l) = op else {
+                    continue;
+                };
+                if !self.flow.points_to(op).contains(&Obj::World) {
+                    continue;
+                }
+                let mut roots = self.roots[l.0].iter();
+                let global = match (roots.next(), roots.next()) {
+                    (Some(Key::Global(g)), None) => Some(*g),
+                    _ => None,
+                };
+                out.insert(Write {
+                    global,
+                    ty: self.ty(l),
+                    how,
+                });
+            }
+        }
+        out
+    }
+
+    /// D4: `writer` changing `changed`, at `span`, while another name
+    /// for it is used later.
     fn change(
         &self,
-        op: Operand,
+        writer: Writer,
+        changed: &Locs,
         how: Change,
         state: &State,
         live: &Live,
         span: Span,
     ) -> Result<()> {
-        let Operand::Local(w) = op else {
-            return Ok(());
+        let (itself, roots) = match writer {
+            Writer::Local(w) => (Some(Key::Local(w)), self.roots[w.0].clone()),
+            Writer::Callee(_, g) => (None, g.map(Key::Global).into_iter().collect()),
         };
-        let changed = &state[w.0].locs;
         let clash =
-            |k: &&Key| **k != Key::Local(w) && self.overlaps(&self.locs(**k, state), changed, how);
+            |k: &&Key| Some(**k) != itself && self.overlaps(&self.locs(**k, state), changed, how);
         let (named, loops): (Vec<&Key>, Vec<&Key>) =
             live.iter().filter(clash).partition(|k| match k {
                 Key::Local(l) => self.named(*l),
                 Key::Global(_) => true,
             });
-        let other = named.into_iter().find(|k| !self.roots[w.0].contains(k));
+        let other = named.into_iter().find(|k| !roots.contains(k));
         let message = match (other, loops.first()) {
-            (Some(a), _) => self.aliased(w, *a),
+            (Some(a), _) => self.aliased(writer, *a),
             (None, Some(_)) => format!(
-                "tempered `{}` changes a list while a `for` loop over it is running; loop over a copy: `for ... in list(...)`",
-                self.func.name
+                "tempered `{}` changes {} while a `for` loop over it is running; loop over a copy: `for ... in list(...)`",
+                self.func.name,
+                self.subject(writer)
             ),
             (None, None) => return Ok(()),
         };
         Err(error(span, message))
     }
 
-    fn aliased(&self, w: LocalId, other: Key) -> String {
+    /// What `writer` changes, for a message: `` `b` ``, or a list.
+    fn subject(&self, writer: Writer) -> String {
+        match writer {
+            Writer::Local(w) => self
+                .func
+                .names
+                .get(&w)
+                .map_or("a list".into(), |b| format!("`{b}`")),
+            Writer::Callee(f, _) => format!("a list through `{}`", self.program.funcs[f.0].name),
+        }
+    }
+
+    fn aliased(&self, writer: Writer, other: Key) -> String {
         let f = &self.func.name;
+        let what = self.subject(writer);
         let a = match other {
             Key::Local(l) => self.name(l),
             Key::Global(g) => {
@@ -535,28 +664,22 @@ impl<'a> Body<'a> {
                     .global_names
                     .get(&g)
                     .map_or("?", String::as_str);
-                let what = self
-                    .func
-                    .names
-                    .get(&w)
-                    .map_or("a list".into(), |b| format!("`{b}`"));
                 return format!(
                     "tempered `{f}` changes {what} while module variable `{g}` may be the same list and is used later; pass a copy instead, such as `list({g})`"
                 );
             }
         };
         // A parameter is the caller's list: copy the other name instead.
-        let named = self
-            .func
-            .names
-            .get(&w)
-            .filter(|_| !self.func.params.contains(&w));
-        match named {
+        let copied = match writer {
+            Writer::Local(w) if !self.func.params.contains(&w) => self.func.names.get(&w),
+            _ => None,
+        };
+        match copied {
             Some(b) => format!(
-                "tempered `{f}` changes `{b}` while `{a}` may be the same list and is used later; copy instead of sharing it: `{b} = list({a})`"
+                "tempered `{f}` changes {what} while `{a}` may be the same list and is used later; copy instead of sharing it: `{b} = list({a})`"
             ),
             None => format!(
-                "tempered `{f}` changes a list while `{a}` may be the same list and is used later; copy instead of sharing it: `{a} = list(...)`"
+                "tempered `{f}` changes {what} while `{a}` may be the same list and is used later; copy instead of sharing it: `{a} = list(...)`"
             ),
         }
     }
@@ -834,5 +957,15 @@ fn error(span: Span, message: String) -> Diagnostic {
         span,
         message,
         kind: DiagKind::Type,
+    }
+}
+
+/// Where a change `inst` makes is reported.
+fn inst_span(inst: &Inst) -> Option<Span> {
+    match inst {
+        Inst::Append { span, .. } | Inst::SetItem { span, .. } | Inst::Assign { span, .. } => {
+            Some(*span)
+        }
+        _ => None,
     }
 }

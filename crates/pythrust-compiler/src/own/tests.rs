@@ -414,7 +414,7 @@ fn changing_a_list_a_loop_runs_over_is_an_error() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes a list while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "tempered `f` changes `xs` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
             "xs.append(x)".into()
         ))
     );
@@ -530,7 +530,7 @@ fn a_parameter_may_be_a_global() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes a list while `other` may be the same list and is used later; copy instead of sharing it: `other = list(...)`".into(),
+            "tempered `f` changes `xs` while `other` may be the same list and is used later; copy instead of sharing it: `other = list(...)`".into(),
             "xs.append(2)".into()
         ))
     );
@@ -589,5 +589,32 @@ fn a_module_variable_read_after_a_change_is_used_later() {
     let before = "saved = [1]\ntemper def f(mut xs: list[int]) -> int:\n    n = len(saved)\n    xs.append(2)\n    return n\nprint(f(saved))\n";
     assert_eq!(checked(before), Ok(()));
     let typed = "saved = [\"a\"]\ntemper def f(mut xs: list[int]) -> int:\n    xs.append(2)\n    return len(saved)\nprint(f([1]))\n";
+    assert_eq!(checked(typed), Ok(()));
+}
+
+#[test]
+fn a_callee_changing_a_module_list_is_a_change() {
+    // Zero arguments: the change is the callee's own, to `saved`.
+    let looped = "saved = [1]\ntemper def touch() -> None:\n    saved.append(2)\ntemper def f() -> int:\n    for x in saved:\n        if x < 2:\n            touch()\n    return len(saved)\nprint(f())\n";
+    assert_eq!(
+        alias_err(looped),
+        Some((
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "touch()".into()
+        ))
+    );
+    // Indirectly, and against a second name.
+    let named = "saved = [1]\ntemper def touch() -> None:\n    saved.append(2)\ntemper def via() -> None:\n    touch()\ntemper def f() -> int:\n    a = saved\n    via()\n    return len(a)\nprint(f())\n";
+    assert_eq!(alias_err(named).map(|e| e.1), Some("via()".into()));
+    // A parameter may be `saved`.
+    let param = "saved = [1]\ntemper def touch() -> None:\n    saved.append(2)\ntemper def f(xs: list[int]) -> int:\n    touch()\n    return len(xs)\nprint(f(saved))\n";
+    assert_eq!(alias_err(param).map(|e| e.1), Some("touch()".into()));
+    // Reading the changed module variable again is one name.
+    let same = "saved = [1]\ntemper def touch() -> None:\n    saved.append(2)\ntemper def f() -> int:\n    touch()\n    return len(saved)\nprint(f())\n";
+    assert_eq!(checked(same), Ok(()));
+    // Helpers that only read, and lists of another type, are no change.
+    let reads = "saved = [1]\ntemper def peek() -> int:\n    return len(saved)\ntemper def f() -> int:\n    t = 0\n    for x in saved:\n        t += peek()\n    return t\nprint(f())\n";
+    assert_eq!(checked(reads), Ok(()));
+    let typed = "saved = [\"a\"]\ntemper def touch() -> None:\n    saved.append(\"b\")\ntemper def f(xs: list[int]) -> int:\n    touch()\n    return len(xs)\nprint(f([1]))\n";
     assert_eq!(checked(typed), Ok(()));
 }
