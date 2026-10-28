@@ -12,8 +12,10 @@
 //! flow up the call graph to a fixpoint, so `forward(a, a)` fails when
 //! `forward(xs, ys)` calls `push(xs, ys)`. A body is analyzed as if its
 //! parameters held unrelated lists; where it stores through one, a
-//! function with needs also needs that one unshared ([`entry`]), so a
-//! caller cannot make the store show through another unseen.
+//! function whose body is checked for a contract (it has a need, or
+//! calls a function that does) also needs that one unshared
+//! ([`entry`]), so a caller cannot make the store show through another
+//! unseen.
 //!
 //! "May share" is [`super::CallSite`], flow-sensitive, and errs toward
 //! the error: it cannot tell two elements of one list apart, so
@@ -88,8 +90,9 @@ fn settle(analysis: &Analysis, defs: &HashMap<&str, &FuncDef>) -> Vec<Needs> {
         .collect();
     loop {
         let mut changed = false;
-        for (needs, heap) in needs.iter_mut().zip(&analysis.heaps) {
-            changed |= entry(needs, heap);
+        let roots = relied_on(analysis, &needs);
+        for ((needs, heap), root) in needs.iter_mut().zip(&analysis.heaps).zip(roots) {
+            changed |= root.is_some_and(|root| entry(needs, heap, &root));
         }
         for site in &analysis.calls {
             for (key, need) in passed_on(site, &needs[site.callee]) {
@@ -105,17 +108,28 @@ fn settle(analysis: &Analysis, defs: &HashMap<&str, &FuncDef>) -> Vec<Needs> {
     }
 }
 
-/// A function with any need assumes its parameters hold unrelated
-/// lists, which a caller breaks by passing one list as two when the
-/// body stores through one of them: what it stores shows through the
-/// other, unseen. So such a function also needs, for each parameter or
-/// the module's values it stores into, that list unshared with every
-/// other; the module's values count only if the body can see them.
-/// Whether any key was added.
-fn entry(needs: &mut Needs, heap: &Heap) -> bool {
-    let Some(root) = needs.values().next().map(|n| n.root.clone()) else {
-        return false;
-    };
+/// Per function, a contract its body's analysis is relied on for, if
+/// any: one of its own needs, or one of a callee it calls.
+fn relied_on(analysis: &Analysis, needs: &[Needs]) -> Vec<Option<String>> {
+    let first = |n: &Needs| n.values().next().map(|n| n.root.clone());
+    let mut roots: Vec<Option<String>> = needs.iter().map(first).collect();
+    for site in &analysis.calls {
+        if roots[site.caller].is_none() {
+            roots[site.caller] = first(&needs[site.callee]);
+        }
+    }
+    roots
+}
+
+/// A body checked for a contract (`root`) is analyzed as if its
+/// parameters held unrelated lists, which a caller breaks by passing one
+/// list as two when the body stores through one of them: what it stores,
+/// a parameter's list or one it made, shows through the other unseen.
+/// So it also needs each parameter it stores into, and the module's
+/// values if it stores there, unshared with every other; the module's
+/// values count only if the body can see them. Whether any key was
+/// added.
+fn entry(needs: &mut Needs, heap: &Heap, root: &str) -> bool {
     let peers = heap.lists.iter().map(|i| Peer::Param(*i));
     let world = heap.sees_world.then_some(Peer::World);
     let peers: Vec<Peer> = peers.chain(world).collect();
@@ -128,7 +142,7 @@ fn entry(needs: &mut Needs, heap: &Heap) -> bool {
             };
             if let Entry::Vacant(slot) = needs.entry(key) {
                 slot.insert(Need {
-                    root: root.clone(),
+                    root: root.to_string(),
                     other: None,
                 });
                 changed = true;

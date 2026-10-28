@@ -514,6 +514,18 @@ fn a_store_through_one_parameter_may_show_through_another() {
             "forward(shelf, shelf, row)".into()
         )
     );
+    // Also when what is stored is a list the body made, and only that
+    // fresh list reaches the contract.
+    let local = format!("{PUSH}def forward(rows: list[list[int]], other: list[list[int]]) -> None:\n    row = [1]\n    rows.append(row)\n    push(other[0], row)\n");
+    let shelf = "shelf: list[list[int]] = []\n";
+    assert_eq!(
+        checked(&format!("{local}{shelf}forward(shelf, [[2]])\n")),
+        Ok(())
+    );
+    assert_eq!(
+        mode_err(&format!("{local}{shelf}forward(shelf, shelf)\n")).1,
+        "forward(shelf, shelf)"
+    );
     // The same through a module variable the body reads.
     let global = format!("{PUSH}g: list[list[int]] = [[0]]\ndef f(rows: list[list[int]], row: list[int]) -> None:\n    rows.append(row)\n    push(g[len(g) - 1], row)\nf([[1]], [5])\n");
     assert_eq!(checked(&global), Ok(()));
