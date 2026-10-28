@@ -58,7 +58,8 @@ pub enum Ty {
     /// reads them), whose elements are the ints they produce.
     Range,
     /// An immutable, reference-counted exception: its [`ExcKind`] and
-    /// at most one argument, which never holds a list.
+    /// at most one argument. The native backend rejects one holding a
+    /// list (`codegen`); the analyses see it.
     Exc,
 }
 

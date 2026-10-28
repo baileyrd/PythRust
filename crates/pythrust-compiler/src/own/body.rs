@@ -105,6 +105,12 @@ impl<'a> Flow<'a> {
     fn assign(&mut self, dest: LocalId, value: &Rvalue) -> bool {
         let mut changed = match value {
             Rvalue::Call(f, args) => self.call_stores(*f, args),
+            // An exception may outlive the call, raised or stored, and
+            // render the list later: as good as keeping it in a global.
+            Rvalue::NewExc(_, Some(a)) => {
+                let held = self.of(*a);
+                self.store(Obj::World, &held)
+            }
             _ => false,
         };
         if !holds_list(self.program, self.func.locals[dest.0]) {

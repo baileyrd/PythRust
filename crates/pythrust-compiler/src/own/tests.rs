@@ -170,10 +170,10 @@ fn raising_and_catching_lower_precisely() {
 }
 
 #[test]
-fn an_exception_holding_a_list_falls_back() {
+fn an_exception_holding_a_list_keeps_it() {
+    // It may outlive the call and render the list later.
     let src = "def f(xs, n):\n    raise ValueError(xs)\nf([1], 2)\n";
-    conservative(src);
-    assert_eq!(analyzed(src).funcs["f"].params.len(), 2);
+    assert_eq!(modes(src, "f"), (vec![OWNED, READ], vec![false, false]));
 }
 
 #[test]
@@ -471,4 +471,42 @@ fn aliasing_comes_before_modes() {
 fn loose_code_keeps_python_aliasing() {
     let src = "def f(xs):\n    a = [1]\n    b = a\n    b.append(2)\n    for x in xs:\n        xs.append(x)\n        break\n    return xs\nprint(f([1]), len([1]))\n";
     assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn slots_of_a_tuple_from_elsewhere_may_be_one_list() {
+    // The caller may pass `(xs, xs)`; A5 cannot see inside one argument.
+    let src = "temper def f(mut pair: tuple[list[int], list[int]]) -> int:\n    a = pair[0]\n    b = pair[1]\n    a.append(2)\n    return len(b)\nxs = [1]\nprint(f((xs, xs)))\n";
+    assert_eq!(alias_err(src).map(|e| e.1), Some("a.append(2)".into()));
+    let made = "temper def two() -> tuple[list[int], list[int]]:\n    return ([1], [2])\ntemper def f() -> int:\n    pair = two()\n    a = pair[0]\n    b = pair[1]\n    a.append(2)\n    return len(b)\nprint(f())\n";
+    assert_eq!(alias_err(made).map(|e| e.1), Some("a.append(2)".into()));
+    let nested = "temper def f(mut g: list[list[list[int]]]) -> int:\n    a = g[0][0]\n    b = g[1][0]\n    a.append(2)\n    return len(b)\nprint(f([[[1]], [[2]]]))\n";
+    assert_eq!(alias_err(nested).map(|e| e.1), Some("a.append(2)".into()));
+}
+
+#[test]
+fn fields_of_a_tuple_the_body_built_are_known_apart() {
+    let apart = "temper def f() -> int:\n    pair = ([1], [2])\n    a = pair[0]\n    b = pair[1]\n    a.append(3)\n    return len(b)\nprint(f())\n";
+    assert_eq!(checked(apart), Ok(()));
+    let same = "temper def f() -> int:\n    x = [1]\n    pair = (x, x)\n    a = pair[0]\n    b = pair[1]\n    a.append(3)\n    return len(b)\nprint(f())\n";
+    assert_eq!(alias_err(same).map(|e| e.1), Some("a.append(3)".into()));
+}
+
+#[test]
+fn an_exception_holding_a_list_leaves_aliasing_checked() {
+    let escape = "temper def escape(owned xs: list[int]) -> list[int] raises ValueError:\n    if len(xs) == 0:\n        raise ValueError(xs)\n    return xs\nprint(escape([1]))\n";
+    assert_eq!(analyzed(escape).precision, Precision::Precise);
+    assert_eq!(
+        alias_err(escape).map(|e| e.0),
+        Some(
+            "tempered `escape` returns its parameter `xs`; return a copy: `return list(xs)`".into()
+        )
+    );
+    let shared = "temper def f(n: int) -> int raises ValueError:\n    a = [1]\n    b = a\n    b.append(n)\n    if n < 0:\n        raise ValueError(a)\n    return len(a)\nprint(f(1))\n";
+    assert_eq!(alias_err(shared).map(|e| e.1), Some("b.append(n)".into()));
+    let unwritten = "temper def f(xs: list[int]) -> int raises ValueError:\n    raise ValueError(xs)\nprint(1)\n";
+    assert_eq!(
+        mode_err(unwritten).0,
+        "tempered `f` keeps `xs` after it returns; write `owned xs`"
+    );
 }

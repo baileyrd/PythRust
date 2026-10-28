@@ -45,6 +45,7 @@ pub const ENTRY: &str = "pythrust_main";
 /// Compiles `program` for the host. `render` turns a runtime error into
 /// the exact text the program prints to stderr when it happens.
 pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result<Vec<u8>> {
+    refuse_gaps(program)?;
     let mut cg = Codegen::new(render)?;
     cg.declare_globals(&program.globals)?;
     let ids = cg.declare(program)?;
@@ -1009,6 +1010,32 @@ fn runtime(span: Span, message: &str) -> Diagnostic {
         message: message.to_string(),
         kind: DiagKind::Runtime,
     }
+}
+
+/// Rejects what lowering expresses but this backend does not: an
+/// exception holding a list, whose reference counts could form a cycle.
+fn refuse_gaps(program: &Program) -> Result<()> {
+    for func in &program.funcs {
+        for inst in func.blocks.iter().flat_map(|b| &b.insts) {
+            let Inst::Assign {
+                value: Rvalue::NewExc(_, Some(arg)),
+                span,
+                ..
+            } = inst
+            else {
+                continue;
+            };
+            if ir::holds(&program.types, func.ty(*arg), |t| matches!(t, Ty::List(_))) {
+                return Err(Diagnostic {
+                    span: *span,
+                    message: "the native backend does not support an exception holding a list yet"
+                        .into(),
+                    kind: DiagKind::Backend,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn backend(message: String) -> Diagnostic {

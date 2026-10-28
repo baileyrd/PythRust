@@ -9,8 +9,9 @@
 //! point, the [`Loc`]s it may be, with strong updates; a backward pass
 //! gives which locals are still used. A name only aliases what it may
 //! be *the same list* as, so `r = rows[0]` and `rows` are not two names
-//! for one list, while `b = a` and `b`, `a` are. The heap is the
-//! settled, flow-insensitive [`Flow`] of the summaries.
+//! for one list, while `b = a` and `b`, `a` are, and so are `pair[0]`
+//! and `pair[1]` of a tuple from elsewhere, which may be `(xs, xs)`.
+//! The heap is the settled, flow-insensitive [`Flow`] of the summaries.
 //!
 //! Passing one list twice to a call is A5's check (`own::calls`), not
 //! this one.
@@ -21,21 +22,18 @@ use super::body::{self, Flow, Obj, Objs};
 use super::{holds_list, Mode, Summary};
 use crate::ast::{Mode as Temper, Module, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
-use crate::ir::{BlockId, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term};
+use crate::ir::{BlockId, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
 use crate::span::Span;
 
-/// One step from a value to a list inside it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Step {
-    Elem,
-    Field(usize),
-}
-
 /// Where inside an abstract list a value is.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// Only the depth: two slots of one list or tuple at the same depth may
+/// hold the same list (`(xs, xs)`), and lists at different depths have
+/// different types, so they never are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum At {
-    /// Reached by these steps from the list itself.
-    Path(Vec<Step>),
+    /// This many steps inside the list (0: the list itself).
+    Depth(usize),
     /// The list or any list inside it.
     Anywhere,
 }
@@ -52,8 +50,17 @@ struct Loc {
 
 type Locs = BTreeSet<Loc>;
 
-/// Per local, the lists it may be.
-type State = Vec<Locs>;
+/// What a local may be.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Val {
+    locs: Locs,
+    /// For a tuple this body built, what each field may be: unlike a
+    /// tuple from elsewhere, its fields are known apart.
+    fields: Option<Vec<Locs>>,
+}
+
+/// Per local, what it may be.
+type State = Vec<Val>;
 
 /// How a change reaches lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,10 +179,10 @@ impl<'a> Body<'a> {
 
     /// Each block's entry state, `None` if unreachable.
     fn entries(&self) -> Vec<Option<State>> {
-        let mut start: State = vec![Locs::new(); self.func.locals.len()];
+        let mut start: State = vec![Val::default(); self.func.locals.len()];
         for (i, p) in self.func.params.iter().enumerate() {
             if self.lists(*p) {
-                start[p.0].insert(root(Obj::Param(i)));
+                start[p.0].locs.insert(root(Obj::Param(i)));
             }
         }
         let mut entries: Vec<Option<State>> = vec![None; self.func.blocks.len()];
@@ -210,22 +217,44 @@ impl<'a> Body<'a> {
                 }
                 state[dest.0] = self.value(*dest, value, state);
             }
-            Inst::Release(l) | Inst::Forget(l) => state[l.0].clear(),
+            Inst::Release(l) | Inst::Forget(l) => state[l.0] = Val::default(),
             _ => {}
         }
     }
 
-    /// The lists `rv` may give `dest`.
-    fn value(&self, dest: LocalId, rv: &Rvalue, state: &State) -> Locs {
-        match rv {
-            Rvalue::Use(a) | Rvalue::Wrap(a) | Rvalue::Unwrap(a) => of(state, *a),
-            Rvalue::Index(a, _) => self.step(&of(state, *a), Step::Elem),
-            Rvalue::Field(a, k) => self.step(&of(state, *a), Step::Field(*k)),
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) => Locs::from([root(Obj::Fresh(dest.0))]),
+    /// What `rv` may give `dest`.
+    fn value(&self, dest: LocalId, rv: &Rvalue, state: &State) -> Val {
+        let fresh = Locs::from([root(Obj::Fresh(dest.0))]);
+        let locs = match rv {
+            Rvalue::Use(a) | Rvalue::Wrap(a) | Rvalue::Unwrap(a) => return val(state, *a),
+            Rvalue::Field(a, k) => return self.field(&val(state, *a), *k),
+            Rvalue::NewSeq(items) if self.is_tuple(dest) => {
+                let fields = items.iter().map(|i| of(state, *i)).collect();
+                return Val {
+                    locs: fresh,
+                    fields: Some(fields),
+                };
+            }
+            Rvalue::Index(a, _) => self.step(&of(state, *a)),
+            Rvalue::NewSeq(_) | Rvalue::CopyList(_) => fresh,
             Rvalue::Global(_) => Locs::from([root(Obj::World)]),
             Rvalue::Call(f, args) => self.call(*f, args, dest, state),
             _ => Locs::new(),
-        }
+        };
+        Val { locs, fields: None }
+    }
+
+    /// Field `k` of `tuple`: known apart when this body built it.
+    fn field(&self, tuple: &Val, k: usize) -> Val {
+        let locs = match tuple.fields.as_ref().and_then(|f| f.get(k)) {
+            Some(locs) => locs.clone(),
+            None => self.step(&tuple.locs),
+        };
+        Val { locs, fields: None }
+    }
+
+    fn is_tuple(&self, l: LocalId) -> bool {
+        matches!(self.func.locals[l.0], Ty::Tuple(_))
     }
 
     /// A new list, or what the callee may return of its arguments and
@@ -247,13 +276,13 @@ impl<'a> Body<'a> {
         out
     }
 
-    /// The lists one `step` inside `locs` may be: a step further into
+    /// The lists one step inside `locs` may be: a step further into
     /// each, or anything the body stored in it.
-    fn step(&self, locs: &Locs, step: Step) -> Locs {
+    fn step(&self, locs: &Locs) -> Locs {
         let mut out = Locs::new();
         for l in locs {
-            let at = match &l.at {
-                At::Path(p) => At::Path(p.iter().copied().chain([step]).collect()),
+            let at = match l.at {
+                At::Depth(d) => At::Depth(d + 1),
                 At::Anywhere => At::Anywhere,
             };
             out.insert(Loc { at, ..l.clone() });
@@ -340,7 +369,7 @@ impl<'a> Body<'a> {
                 dest, value, span, ..
             } => {
                 if self.results.contains(dest) {
-                    self.returned(&self.value(*dest, value, state), *span)?;
+                    self.returned(&self.value(*dest, value, state).locs, *span)?;
                 }
                 let Rvalue::Call(f, args) = value else {
                     return Ok(());
@@ -369,8 +398,8 @@ impl<'a> Body<'a> {
         let Operand::Local(w) = op else {
             return Ok(());
         };
-        let changed = &state[w.0];
-        let clash = |a: &&LocalId| **a != w && self.overlaps(&state[a.0], changed, how);
+        let changed = &state[w.0].locs;
+        let clash = |a: &&LocalId| **a != w && self.overlaps(&state[a.0].locs, changed, how);
         let (named, loops): (Vec<&LocalId>, Vec<&LocalId>) =
             live.iter().filter(clash).partition(|a| self.named(**a));
         let other = named.into_iter().find(|a| !self.roots[w.0].contains(a));
@@ -443,12 +472,12 @@ fn same(seen: &Loc, changed: &Loc, how: Change) -> bool {
     if seen.obj != changed.obj {
         return false;
     }
-    let (At::Path(s), At::Path(c)) = (&seen.at, &changed.at) else {
+    let (At::Depth(s), At::Depth(c)) = (seen.at, changed.at) else {
         return true;
     };
     let reaches = match how {
         Change::List => s == c,
-        Change::Within => s.starts_with(c),
+        Change::Within => s >= c,
     };
     reaches && seen.earlier == changed.earlier
 }
@@ -458,7 +487,7 @@ fn root(obj: Obj) -> Loc {
     Loc {
         obj,
         earlier: false,
-        at: At::Path(Vec::new()),
+        at: At::Depth(0),
     }
 }
 
@@ -474,15 +503,16 @@ fn anywhere(obj: Obj) -> Loc {
 /// is about to get a new one.
 fn age(state: &mut State, dest: LocalId) {
     let latest = Obj::Fresh(dest.0);
-    for locs in state.iter_mut() {
-        let aged: Locs = std::mem::take(locs)
-            .into_iter()
-            .map(|l| Loc {
-                earlier: l.earlier || (l.obj == latest && l.at != At::Anywhere),
-                ..l
-            })
-            .collect();
-        *locs = aged;
+    let age_all = |locs: &mut Locs| {
+        let aged = std::mem::take(locs).into_iter().map(|l| Loc {
+            earlier: l.earlier || (l.obj == latest && l.at != At::Anywhere),
+            ..l
+        });
+        *locs = aged.collect();
+    };
+    for v in state.iter_mut() {
+        age_all(&mut v.locs);
+        v.fields.iter_mut().flatten().for_each(age_all);
     }
 }
 
@@ -494,18 +524,42 @@ fn join(into: &mut Option<State>, state: &State) -> bool {
     };
     let mut grew = false;
     for (a, b) in into.iter_mut().zip(state) {
-        let before = a.len();
-        a.extend(b.iter().cloned());
-        grew |= a.len() > before;
+        let joined = join_val(a, b);
+        grew |= joined != *a;
+        *a = joined;
     }
     grew
 }
 
-fn of(state: &State, op: Operand) -> Locs {
+/// What may be `a` or `b`: fields stay apart only if both keep them.
+fn join_val(a: &Val, b: &Val) -> Val {
+    if *b == Val::default() {
+        return a.clone();
+    }
+    if *a == Val::default() {
+        return b.clone();
+    }
+    let fields = match (&a.fields, &b.fields) {
+        (Some(f), Some(g)) if f.len() == g.len() => {
+            Some(f.iter().zip(g).map(|(x, y)| x | y).collect())
+        }
+        _ => None,
+    };
+    Val {
+        locs: &a.locs | &b.locs,
+        fields,
+    }
+}
+
+fn val(state: &State, op: Operand) -> Val {
     match op {
         Operand::Local(l) => state[l.0].clone(),
-        _ => Locs::new(),
+        _ => Val::default(),
     }
+}
+
+fn of(state: &State, op: Operand) -> Locs {
+    val(state, op).locs
 }
 
 /// The operand a value is the same list as, or a list inside of.
