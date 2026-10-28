@@ -8,6 +8,7 @@ use super::seq::descriptor;
 use super::{backend, rc_fns, FnGen, Rt};
 use crate::diag::Result;
 use crate::ir::{Compound, LocalId, Operand, Ty};
+use crate::span::Span;
 
 impl FnGen<'_, '_, '_> {
     /// The present type of optional `ty`.
@@ -98,15 +99,12 @@ impl FnGen<'_, '_, '_> {
                 g.call_rt(Rt::WriteNone, &[]);
                 Ok(())
             },
-            |g, ty, v| {
-                g.write_value(ty, v);
-                Ok(())
-            },
+            |g, ty, v| g.write_value(ty, v),
         )
     }
 
     /// `str(op)` of optional `op`, into `dest`.
-    pub(super) fn opt_to_str(&mut self, op: Operand, dest: LocalId) -> Result<Value> {
+    pub(super) fn opt_to_str(&mut self, op: Operand, dest: LocalId, span: Span) -> Result<Value> {
         let var = self.vars[dest.0];
         self.branch_opt(
             op,
@@ -116,7 +114,7 @@ impl FnGen<'_, '_, '_> {
                 Ok(())
             },
             |g, ty, v| {
-                let s = g.str_of_value(ty, v)?;
+                let s = g.str_of_value(ty, v, span)?;
                 g.b.def_var(var, s);
                 Ok(())
             },

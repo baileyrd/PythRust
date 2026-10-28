@@ -146,6 +146,14 @@ pub unsafe extern "C" fn pt_fail_mid(
     std::process::exit(1)
 }
 
+/// Ends the program on a runtime bug: something generated code
+/// guarantees did not hold.
+fn internal(what: &str) -> ! {
+    flush();
+    let _ = writeln!(io::stderr(), "pythrust-rt: internal error: {what}");
+    std::process::exit(1)
+}
+
 /// Process entry. Not built for unit tests, whose harness has its own.
 #[cfg(not(test))]
 mod entry {

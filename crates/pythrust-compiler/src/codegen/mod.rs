@@ -582,29 +582,38 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         self.b.def_var(self.vars[l.0], null);
     }
 
-    /// Writes `op` as `print` does.
+    /// Writes `op` as `print` does. Lowering renders a value that may
+    /// hold an exception with `str` first, which can fail.
     fn write(&mut self, op: Operand) -> Result<()> {
         let ty = self.func.ty(op);
+        if ir::holds(self.types, ty, ir::is_exc) {
+            return Err(backend(
+                "printing an exception not rendered first".to_string(),
+            ));
+        }
         if let Ty::Opt(_) = ty {
             return self.write_opt(op);
         }
         let v = self.operand(op);
-        self.write_value(ty, v);
-        Ok(())
+        self.write_value(ty, v)
     }
 
     /// Writes `v`, a value of `ty` but not an optional.
-    fn write_value(&mut self, ty: Ty, v: Value) {
+    fn write_value(&mut self, ty: Ty, v: Value) -> Result<()> {
         let rt = match ty {
             Ty::Int => Rt::WriteInt,
             Ty::Bool => Rt::WriteBool,
-            Ty::None => return self.write_none(),
+            Ty::None => {
+                self.write_none();
+                return Ok(());
+            }
+            Ty::Exc => return Err(backend("printing an unrendered exception".to_string())),
             Ty::Str => Rt::WriteStr,
             Ty::Float => Rt::WriteFloat,
             Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => Rt::WriteSeq,
-            Ty::Exc => return self.write_exc(v),
         };
         self.call_rt(rt, &[v]);
+        Ok(())
     }
 
     fn write_none(&mut self) {
@@ -616,7 +625,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         match text {
             Some(s) => {
                 let v = self.operand(s);
-                self.write_value(Ty::Str, v);
+                self.call_rt(Rt::WriteStr, &[v]);
             }
             None => self.write_byte(default),
         }
@@ -720,11 +729,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             }
             Rvalue::Contains { hay, needle } => self.rt_on(Rt::StrContains, &[*hay, *needle]),
             Rvalue::ToStr(op) => match self.func.ty(*op) {
-                Ty::Opt(_) => self.opt_to_str(*op, dest),
+                Ty::Opt(_) => self.opt_to_str(*op, dest, span),
                 Ty::Str => Err(backend("`str` of a string".to_string())),
                 ty => {
                     let v = self.operand(*op);
-                    self.str_of_value(ty, v)
+                    self.str_of_value(ty, v, span)
                 }
             },
             Rvalue::Wrap(op) => self.wrap(*op, self.func.locals[dest.0]),
@@ -768,8 +777,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     }
 
     /// `str(v)`, a new string, for `v` of `ty`; a string gains a
-    /// reference.
-    fn str_of_value(&mut self, ty: Ty, v: Value) -> Result<Value> {
+    /// reference. Rendering an exception fails at `span` when it nests
+    /// deeper than `run` allows.
+    fn str_of_value(&mut self, ty: Ty, v: Value, span: Span) -> Result<Value> {
         let rt = match ty {
             Ty::Int => Rt::StrFromInt,
             Ty::Bool => Rt::StrFromBool,
@@ -782,7 +792,12 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 return Ok(v);
             }
         };
-        self.call_rt_value(rt, &[v])
+        let s = self.call_rt_value(rt, &[v])?;
+        if ir::holds(self.types, ty, ir::is_exc) {
+            let null = self.b.ins().icmp_imm_s(IntCC::Equal, s, 0);
+            self.fail_if(null, span, TOO_DEEP)?;
+        }
+        Ok(s)
     }
 
     /// A new string holding `text`, copied from read-only data.
@@ -953,6 +968,8 @@ const MAX_DEPTH: i64 = crate::interp::MAX_DEPTH as i64;
 const ZERO_DIV: &str = "ZeroDivisionError: integer division or modulo by zero";
 const TOO_LARGE: &str = "MemoryError: repeated sequence is too large";
 const STR_INDEX: &str = "IndexError: string index out of range";
+const TOO_DEEP: &str =
+    "RecursionError: maximum recursion depth exceeded while getting the repr of an object";
 
 /// Whether `ty` is a list or tuple.
 fn is_seq(ty: Ty) -> bool {

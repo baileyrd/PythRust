@@ -175,7 +175,7 @@ impl FnBuilder<'_, '_> {
     ) -> Result<Operand> {
         let arg = match args {
             [] => None,
-            [arg] if self.holds_list(self.ty(*arg)) => {
+            [arg] if self.holds(self.ty(*arg), |t| matches!(t, Ty::List(_))) => {
                 return Err(unsupported(span, "an exception holding a list"))
             }
             [arg] => Some(*arg),
@@ -190,16 +190,9 @@ impl FnBuilder<'_, '_> {
         self.cx.types.raises(name).is_none_or(|r| !r.is_empty())
     }
 
-    /// Whether a value of type `ty` is, or may hold, a list.
-    fn holds_list(&self, ty: Ty) -> bool {
-        let seqs = &self.cx.seqs;
-        match ty {
-            Ty::List(_) => true,
-            Ty::Tuple(_) => seqs
-                .fields(ty)
-                .is_some_and(|f| f.iter().any(|t| self.holds_list(*t))),
-            Ty::Opt(_) => seqs.present(ty).is_some_and(|p| self.holds_list(p)),
-            _ => false,
-        }
+    /// Whether a value of type `ty` is, or may hold, one of a type
+    /// `leaf` picks.
+    pub(super) fn holds(&self, ty: Ty, leaf: fn(Ty) -> bool) -> bool {
+        crate::ir::holds(self.cx.seqs.all(), ty, leaf)
     }
 }

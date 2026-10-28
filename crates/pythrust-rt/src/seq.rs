@@ -157,16 +157,44 @@ fn inc(desc: &[u8], v: u64) {
 
 /// Drops the reference slot `v` of type `desc` owns, if any.
 fn dec(desc: &[u8], v: u64) {
+    let mut freed = Vec::new();
+    dec_into(desc, v, &mut freed);
+    free_all(freed);
+}
+
+/// Drops the reference slot `v` of type `desc` owns, if any: a string's
+/// now, a sequence's by pushing it on `todo` for [`free_all`].
+fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
     match kind(desc) {
         Kind::Opt if v == 0 => {}
-        Kind::Opt => dec(opt_owner(desc), v),
+        Kind::Opt => dec_into(opt_owner(desc), v, todo),
         // SAFETY: a string slot owns a reference to a live string.
         Kind::Str => unsafe { pstr::pt_str_dec(v as *mut PtStr) },
-        // SAFETY: a sequence slot owns a reference to a live sequence.
-        Kind::List | Kind::Tuple | Kind::Range | Kind::Exc => unsafe {
-            pt_seq_dec(v as *mut PtSeq)
-        },
+        Kind::List | Kind::Tuple | Kind::Range | Kind::Exc => todo.push(v),
         _ => {}
+    }
+}
+
+/// Drops one reference to each sequence in `todo`, freeing those at
+/// zero and dropping what their slots own, in a loop: an exception
+/// chain (`e = ValueError(e)`) can be any length, so freeing must not
+/// recurse.
+fn free_all(mut todo: Vec<u64>) {
+    while let Some(p) = todo.pop() {
+        // SAFETY: each entry is a live sequence whose reference is given up.
+        let s = unsafe { seq(p) };
+        let count = s.rc.get() - 1;
+        if count > 0 {
+            s.rc.set(count);
+            continue;
+        }
+        // SAFETY: the last reference: `p` came from `Box::into_raw` and no
+        // other reference remains.
+        let owned = unsafe { Box::from_raw(p as *mut PtSeq) };
+        LIVE.fetch_sub(1, Relaxed);
+        for (k, v) in owned.items.into_inner().into_iter().enumerate() {
+            dec_into(slot(owned.desc, k), v, &mut todo);
+        }
     }
 }
 
@@ -226,8 +254,54 @@ fn seq_cmp(a: &PtSeq, b: &PtSeq) -> Option<Ordering> {
     Some(x.len().cmp(&y.len()))
 }
 
-/// Appends Python's `repr` of slot `v` of type `desc` to `out`.
-fn repr(desc: &[u8], v: u64, out: &mut String) {
+/// How deep lists, tuples and exceptions may nest inside a `repr`
+/// before it is a `RecursionError`, as `run` counts them.
+const MAX_NESTING: usize = 10_000;
+
+/// A `repr` nested deeper than [`MAX_NESTING`].
+#[derive(Debug, PartialEq)]
+pub(crate) struct TooDeep;
+
+/// What is left of a `repr` in progress.
+enum Step {
+    Show(&'static [u8], u64),
+    Text(&'static str),
+    /// The end of a list, tuple or exception.
+    Leave,
+}
+
+/// Appends Python's `repr` of slot `v` of type `desc` to `out`. A loop
+/// with its own stack, since exceptions nest to any depth.
+fn repr(desc: &'static [u8], v: u64, out: &mut String) -> Result<(), TooDeep> {
+    let mut todo = vec![Step::Show(desc, v)];
+    let mut depth = 0;
+    while let Some(step) = todo.pop() {
+        let (desc, v) = match step {
+            Step::Show(desc, v) => (desc, v),
+            Step::Text(t) => {
+                out.push_str(t);
+                continue;
+            }
+            Step::Leave => {
+                depth -= 1;
+                continue;
+            }
+        };
+        if matches!(kind(desc), Kind::List | Kind::Tuple | Kind::Exc) {
+            if depth >= MAX_NESTING {
+                return Err(TooDeep);
+            }
+            depth += 1;
+            todo.push(Step::Leave);
+        }
+        show(desc, v, out, &mut todo);
+    }
+    Ok(())
+}
+
+/// Writes what of slot `v` of type `desc` comes first, and pushes the
+/// rest on `todo`, last first.
+fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>) {
     match kind(desc) {
         Kind::Int => out.push_str(&(v as i64).to_string()),
         Kind::Float => out.push_str(&crate::num::repr(f64::from_bits(v))),
@@ -236,25 +310,42 @@ fn repr(desc: &[u8], v: u64, out: &mut String) {
         // SAFETY: a string slot holds a live string.
         Kind::Str => out.push_str(&pstr::repr(unsafe { text(v) })),
         // SAFETY: a sequence slot holds a live sequence.
-        Kind::List | Kind::Tuple => seq_repr(unsafe { seq(v) }, out),
+        Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo),
         // SAFETY: a range slot holds a live range.
         Kind::Range => out.push_str(&unsafe { range_fields(v as *const PtSeq) }.repr()),
         Kind::Opt if v == 0 => out.push_str("None"),
-        Kind::Opt => repr(opt(desc).0, present(desc, v), out),
-        Kind::Exc => exc_repr(v, out),
+        Kind::Opt => todo.push(Step::Show(opt(desc).0, present(desc, v))),
+        // SAFETY: an exception slot holds a live exception.
+        Kind::Exc => show_exc(unsafe { seq(v) }, out, todo),
+    }
+}
+
+/// `[1, 2]` or `(1,)`.
+fn show_seq(s: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+    let items = s.items.borrow();
+    let tuple = kind(s.desc) == Kind::Tuple;
+    out.push(if tuple { '(' } else { '[' });
+    todo.push(Step::Text(match (tuple, items.len()) {
+        (true, 1) => ",)",
+        (true, _) => ")",
+        (false, _) => "]",
+    }));
+    for (k, v) in items.iter().enumerate().rev() {
+        todo.push(Step::Show(slot(s.desc, k), *v));
+        if k > 0 {
+            todo.push(Step::Text(", "));
+        }
     }
 }
 
 /// `ValueError('bad')`, or `ValueError()` without an argument.
-fn exc_repr(e: u64, out: &mut String) {
-    // SAFETY: an exception slot holds a live exception.
-    let s = unsafe { seq(e) };
-    out.push_str(crate::exc::name(exc_kind(e)));
+fn show_exc(e: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+    out.push_str(crate::exc::name(exc_kind(e as *const PtSeq as u64)));
     out.push('(');
-    if let Some(v) = s.items.borrow().first() {
-        repr(slot(s.desc, 0), *v, out);
+    todo.push(Step::Text(")"));
+    if let Some(v) = e.items.borrow().first() {
+        todo.push(Step::Show(slot(e.desc, 0), *v));
     }
-    out.push(')');
 }
 
 /// The kind code of exception `e`, a live exception.
@@ -265,55 +356,32 @@ pub(crate) fn exc_kind(e: u64) -> u8 {
 }
 
 /// `str(e)` of a live exception `e`: its argument as a string, or empty
-/// without one. An exception argument gives its own message, followed
-/// in a loop, as `run` does, so deep chains cannot exhaust the stack.
-pub(crate) fn exc_message(mut e: u64) -> String {
+/// without one. An exception argument, optional or not, gives its own
+/// message, followed in a loop, as `run` does, so chains of any length
+/// cannot exhaust the stack.
+pub(crate) fn exc_message(mut e: u64) -> Result<String, TooDeep> {
     loop {
         // SAFETY: guaranteed by the caller, and exception slots hold live
         // exceptions.
         let s = unsafe { seq(e) };
-        let desc = slot(s.desc, 0);
-        let Some(v) = s.items.borrow().first().copied() else {
-            return String::new();
+        let Some(mut v) = s.items.borrow().first().copied() else {
+            return Ok(String::new());
         };
-        if kind(desc) != Kind::Exc {
-            return str_of(desc, v);
+        let mut desc = slot(s.desc, 0);
+        if kind(desc) == Kind::Opt && v != 0 {
+            (desc, v) = (opt(desc).0, present(desc, v));
         }
-        e = v;
-    }
-}
-
-/// Python's `str` of slot `v` of type `desc`.
-fn str_of(desc: &[u8], v: u64) -> String {
-    match kind(desc) {
-        // SAFETY: a string slot holds a live string.
-        Kind::Str => unsafe { text(v) }.to_string(),
-        Kind::Exc => exc_message(v),
-        Kind::Opt if v != 0 => str_of(opt(desc).0, present(desc, v)),
-        _ => {
-            let mut out = String::new();
-            repr(desc, v, &mut out);
-            out
+        match kind(desc) {
+            Kind::Exc => e = v,
+            // SAFETY: a string slot holds a live string.
+            Kind::Str => return Ok(unsafe { text(v) }.to_string()),
+            _ => {
+                let mut out = String::new();
+                repr(desc, v, &mut out)?;
+                return Ok(out);
+            }
         }
     }
-}
-
-fn seq_repr(s: &PtSeq, out: &mut String) {
-    let items = s.items.borrow();
-    let tuple = kind(s.desc) == Kind::Tuple;
-    out.push(if tuple { '(' } else { '[' });
-    for (k, v) in items.iter().enumerate() {
-        if k > 0 {
-            out.push_str(", ");
-        }
-        repr(slot(s.desc, k), *v, out);
-    }
-    let close = match (tuple, items.len()) {
-        (true, 1) => ",)",
-        (true, _) => ")",
-        (false, _) => "]",
-    };
-    out.push_str(close);
 }
 
 /// Resolves a Python index (negative counts from the end) into `0..len`.
@@ -477,20 +545,7 @@ pub unsafe extern "C" fn pt_seq_dec(s: *mut PtSeq) {
     if s.is_null() {
         return;
     }
-    // SAFETY: non-null, so live by the caller's guarantee.
-    let count = unsafe { seq(s as u64) }.rc.get() - 1;
-    if count > 0 {
-        // SAFETY: as above.
-        unsafe { seq(s as u64) }.rc.set(count);
-        return;
-    }
-    // SAFETY: the last reference: `s` came from `Box::into_raw` and no
-    // other reference remains.
-    let owned = unsafe { Box::from_raw(s) };
-    LIVE.fetch_sub(1, Relaxed);
-    for (k, v) in owned.items.into_inner().into_iter().enumerate() {
-        dec(slot(owned.desc, k), v);
-    }
+    free_all(vec![s as u64]);
 }
 
 /// `a == b`.
@@ -539,11 +594,11 @@ pub unsafe extern "C" fn pt_list_contains(s: *const PtSeq, v: u64) -> u8 {
 /// # Safety
 ///
 /// `s` is a live sequence.
-unsafe fn shown(s: *const PtSeq) -> String {
+unsafe fn shown(s: *const PtSeq) -> Result<String, TooDeep> {
     let mut out = String::new();
     // SAFETY: guaranteed by the caller.
-    repr(unsafe { seq(s as u64) }.desc, s as u64, &mut out);
-    out
+    repr(unsafe { seq(s as u64) }.desc, s as u64, &mut out)?;
+    Ok(out)
 }
 
 /// The bounds of range `r`.
@@ -562,18 +617,23 @@ pub(crate) unsafe fn range_fields(r: *const PtSeq) -> Range {
     }
 }
 
-/// Writes Python's `repr` of `s`, as `print` does.
+/// Writes Python's `repr` of `s`, as `print` does. The compiler renders
+/// a value that may hold an exception with [`pt_str_from_seq`] first,
+/// so `s` never nests too deep.
 ///
 /// # Safety
 ///
-/// `s` is a live sequence.
+/// `s` is a live sequence holding no exception.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_write_seq(s: *const PtSeq) {
     // SAFETY: guaranteed by the caller.
-    crate::write(unsafe { shown(s) }.as_bytes());
+    match unsafe { shown(s) } {
+        Ok(text) => crate::write(text.as_bytes()),
+        Err(TooDeep) => crate::internal("an exception printed without being rendered first"),
+    }
 }
 
-/// `str(s)`, a new string.
+/// `str(s)`, a new string; null when it nests deeper than `run` allows.
 ///
 /// # Safety
 ///
@@ -581,7 +641,10 @@ pub unsafe extern "C" fn pt_write_seq(s: *const PtSeq) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_str_from_seq(s: *const PtSeq) -> *mut PtStr {
     // SAFETY: guaranteed by the caller.
-    pstr::into_ptr(PtStr::new(unsafe { shown(s) }.into()))
+    match unsafe { shown(s) } {
+        Ok(text) => pstr::into_ptr(PtStr::new(text.into())),
+        Err(TooDeep) => std::ptr::null_mut(),
+    }
 }
 
 #[cfg(test)]
@@ -599,10 +662,8 @@ mod tests {
     }
 
     fn shown(s: *const PtSeq) -> String {
-        let mut out = String::new();
         // SAFETY: `s` is live in every test.
-        seq_repr(unsafe { seq(s as u64) }, &mut out);
-        out
+        unsafe { super::shown(s) }.expect("shallow")
     }
 
     #[test]
@@ -744,7 +805,8 @@ mod tests {
             shown(all),
             "[ValueError('bad'), IndexError(), ZeroDivisionError(ValueError('bad'))]"
         );
-        let messages = [bad, bare, wrapped, maybe, pair].map(|e| exc_message(e as u64));
+        let messages =
+            [bad, bare, wrapped, maybe, pair].map(|e| exc_message(e as u64).expect("shallow"));
         assert_eq!(messages, ["bad", "", "bad", "None", "(7, 0.5)"]);
         assert_eq!(exc_kind(wrapped as u64), 2);
         assert!(eq(b"x", bad as u64, bad as u64));
@@ -759,6 +821,37 @@ mod tests {
                 .into_iter()
                 .for_each(|s| pt_seq_dec(s));
         }
+    }
+
+    #[test]
+    fn deep_exception_chains_render_to_the_limit_and_free_in_a_loop() {
+        // `e = ValueError(e)` repeatedly, as a list element: the list
+        // counts toward the nesting too, as in `run`.
+        let chain = |n: usize| {
+            let mut e = make(b"x0", &[]);
+            for _ in 1..n {
+                let next = make(b"x0x", &[e as u64]);
+                // SAFETY: `next` holds its own reference to `e`.
+                unsafe { pt_seq_dec(e) };
+                e = next;
+            }
+            e
+        };
+        for (n, fits) in [(MAX_NESTING - 1, true), (MAX_NESTING, false)] {
+            let e = chain(n);
+            let xs = make(b"lx", &[e as u64]);
+            // SAFETY: both live until dropped here.
+            unsafe {
+                assert_eq!(super::shown(xs).is_ok(), fits, "{n}");
+                assert_eq!(exc_message(e as u64), Ok(String::new()));
+                pt_seq_dec(e);
+                pt_seq_dec(xs);
+            }
+        }
+        // A chain far deeper than any native stack frees without recursing.
+        let long = chain(1_000_000);
+        // SAFETY: the last reference.
+        unsafe { pt_seq_dec(long) };
     }
 
     #[test]

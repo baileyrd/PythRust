@@ -615,7 +615,7 @@ impl<'a> FnBuilder<'_, 'a> {
         span: Span,
     ) -> Result<Operand> {
         if name == "print" {
-            return self.print(args, ops);
+            return self.print(args, ops, span);
         }
         if args.iter().any(|a| a.name.is_some()) {
             return Err(unsupported(span, "keyword arguments"));
@@ -639,7 +639,10 @@ impl<'a> FnBuilder<'_, 'a> {
     /// `print`, its `sep` and `end` keywords split from the values.
     /// Inference may have typed the call against a later `def print`, so
     /// the builtin's own keywords are checked here, failing as `run` does.
-    fn print(&mut self, args: &[Arg], ops: Vec<Operand>) -> Result<Operand> {
+    /// A value that may hold an exception is rendered first, with
+    /// `str`, which fails at `span` before anything is printed if it
+    /// nests too deep, as in `run`.
+    fn print(&mut self, args: &[Arg], ops: Vec<Operand>, span: Span) -> Result<Operand> {
         let (mut values, mut sep, mut end) = (Vec::new(), None, None);
         for (a, op) in args.iter().zip(ops) {
             let Some(kw) = &a.name else {
@@ -672,8 +675,15 @@ impl<'a> FnBuilder<'_, 'a> {
                 }
             }
         }
+        let mut rendered = Vec::new();
+        for v in values {
+            rendered.push(match self.holds(self.ty(v), crate::ir::is_exc) {
+                true => self.temp(Ty::Str, Rvalue::ToStr(v), span),
+                false => v,
+            });
+        }
         self.emit(Inst::Print {
-            args: values,
+            args: rendered,
             sep,
             end,
         });

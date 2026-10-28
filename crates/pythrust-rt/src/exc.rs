@@ -49,13 +49,19 @@ pub(crate) fn name(code: u8) -> &'static str {
     NAMES.get(usize::from(code)).copied().unwrap_or("Exception")
 }
 
+/// The message of a `repr` nested deeper than `run` allows.
+const TOO_DEEP: &str =
+    "RecursionError: maximum recursion depth exceeded while getting the repr of an object";
+
 /// The last line Python prints for an uncaught exception: `ValueError:
-/// bad`, or only the name when the message is empty.
+/// bad`, or only the name when the message is empty. A message too deep
+/// to render is `run`'s `RecursionError` instead, at the same place.
 fn uncaught_line(e: u64) -> String {
     let name = name(seq::exc_kind(e));
     match seq::exc_message(e) {
-        m if m.is_empty() => name.to_string(),
-        m => format!("{name}: {m}"),
+        Ok(m) if m.is_empty() => name.to_string(),
+        Ok(m) => format!("{name}: {m}"),
+        Err(seq::TooDeep) => TOO_DEEP.to_string(),
     }
 }
 
@@ -180,14 +186,17 @@ pub extern "C" fn pt_uncaught() -> ! {
     std::process::exit(1)
 }
 
-/// `str(e)`, a new string.
+/// `str(e)`, a new string; null when it nests deeper than `run` allows.
 ///
 /// # Safety
 ///
 /// `e` is a live exception.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_exc_str(e: *const PtSeq) -> *mut PtStr {
-    pstr::into_ptr(PtStr::new(seq::exc_message(e as u64).into()))
+    match seq::exc_message(e as u64) {
+        Ok(m) => pstr::into_ptr(PtStr::new(m.into())),
+        Err(seq::TooDeep) => std::ptr::null_mut(),
+    }
 }
 
 #[cfg(test)]

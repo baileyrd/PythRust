@@ -813,6 +813,62 @@ fn corpus_matches_native() -> Res<()> {
     Ok(())
 }
 
+/// Exceptions nest to any depth (`e = ValueError(e)`), so a native
+/// `repr` of one must stop where `run`'s does, with the same error at the
+/// same place and nothing printed by the failing `print`, and freeing a
+/// long chain must not exhaust the stack. Not a corpus program: CPython's
+/// limit differs.
+#[test]
+fn native_matches_run_at_the_repr_limit() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("repr-limit")?;
+    let uses = [
+        "print(\"before\")\nprint(\"x\", [e])\n",
+        "s = str((e, 1))\nprint(len(s))\n",
+        "print(ValueError((e,)))\n",
+        "raise IndexError((e,))\n",
+    ];
+    let mut failures = Vec::new();
+    // A list or tuple around a chain of `n + 1` exceptions: 10_000 nest.
+    for (k, (n, fits)) in [(9998, true), (9999, false)].into_iter().enumerate() {
+        for (u, tail) in uses.iter().enumerate() {
+            let src =
+                format!("e = ValueError()\nfor i in range({n}):\n    e = ValueError(e)\n{tail}");
+            let exe = native_case(&dir, &format!("p{k}_{u}"), &src)?;
+            let got = run(&mut Command::new(&exe), TIMEOUT)?;
+            let want = run_pythrust(&exe.with_extension("pyr"))?;
+            if got != want {
+                failures.push(format!("{src}\n  run {want:?}\n  native {got:?}"));
+            }
+            failures.extend(stderr_mismatch(&exe)?);
+            let raises = u == 3;
+            if (got.status == 0) != (fits && !raises) {
+                failures.push(format!("{src}\n  exit {} at depth {n}", got.status));
+            }
+        }
+    }
+    let long =
+        "e = ValueError()\nfor i in range(200000):\n    e = ValueError(e)\nprint(str(e) == \"\")\n";
+    let exe = native_case(&dir, "long", long)?;
+    let got = run(&mut Command::new(&exe), TIMEOUT)?;
+    if (got.status, got.stdout.as_str()) != (0, "True\n") {
+        failures.push(format!("{long}\n  native {got:?}"));
+    }
+    cleanup(&dir)?;
+    report(failures);
+    Ok(())
+}
+
+/// Writes `src` as `<name>.pyr` under `dir/src` (building copies it
+/// into `dir`) and builds it natively.
+fn native_case(dir: &Path, name: &str, src: &str) -> Res<PathBuf> {
+    let sources = dir.join("src");
+    fs::create_dir_all(&sources).map_err(|e| e.to_string())?;
+    let source = sources.join(format!("{name}.pyr"));
+    write(&source, src)?;
+    build_native(&source, dir)?.ok_or_else(|| format!("{name}: outside the native subset"))
+}
+
 /// A relative source under a directory named like a linker option (`-`)
 /// or a response file (`@`, as in `@scope`) still builds and runs.
 #[test]

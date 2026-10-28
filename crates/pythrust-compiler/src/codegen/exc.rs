@@ -62,15 +62,6 @@ impl FnGen<'_, '_, '_> {
         Ok(())
     }
 
-    /// Writes `str(e)` of exception `e`, as `print` does.
-    pub(super) fn write_exc(&mut self, e: Value) {
-        let Some(s) = self.call_rt(Rt::ExcStr, &[e]) else {
-            return;
-        };
-        self.call_rt(Rt::WriteStr, &[s]);
-        self.call_rt(Rt::StrDec, &[s]);
-    }
-
     /// The diagnostic of an exception raised at `span` and never caught,
     /// rendered before and after its line: address and length of each.
     fn site(&mut self, span: Span) -> Result<[Value; 4]> {

@@ -350,6 +350,29 @@ pub enum Term {
     Unreachable,
 }
 
+/// Whether a value of type `ty` is, or may hold, a value of a type
+/// `leaf` picks; `types` are [`Program::types`].
+pub fn holds(types: &[Compound], ty: Ty, leaf: fn(Ty) -> bool) -> bool {
+    if leaf(ty) {
+        return true;
+    }
+    let inner = match ty {
+        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => types.get(id.0),
+        _ => None,
+    };
+    match inner {
+        Some(Compound::List(t) | Compound::Opt(t)) => holds(types, *t, leaf),
+        Some(Compound::Tuple(fields)) => fields.iter().any(|t| holds(types, *t, leaf)),
+        None => false,
+    }
+}
+
+/// Whether `ty` is an exception: with [`holds`], whether rendering a
+/// value can nest without bound.
+pub fn is_exc(ty: Ty) -> bool {
+    ty == Ty::Exc
+}
+
 impl Func {
     /// The type of `op` in this function.
     pub fn ty(&self, op: Operand) -> Ty {
