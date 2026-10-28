@@ -1,0 +1,42 @@
+# Aliasing in tempered bodies (grammar.md D3, D4): two names for one list
+# may not see a change through either while the other is still used, and
+# a tempered function returns no parameter. Each name here has its own
+# list, or the other name is never used again. CPython runs this loosened.
+temper def grow(mut xs: list[int], n: int) -> None:
+    for i in range(n):
+        xs.append(i)
+
+
+temper def doubled(xs: list[int]) -> list[int]:
+    out = list(xs)
+    for x in xs:
+        out.append(x)
+    return out
+
+
+temper def zero_rows(mut rows: list[list[int]]) -> int:
+    first = rows[0]
+    first.append(9)
+    for r in rows:
+        r[0] = 0
+    return len(rows)
+
+
+temper def chain(n: int) -> int:
+    prev = [0]
+    cur = [1]
+    for i in range(n):
+        prev = cur
+        cur = [i, i]
+        cur.append(i)
+    a = [5]
+    b = a
+    seen = len(a)
+    b.append(6)
+    return len(prev) + len(cur) + seen + len(b)
+
+
+ys = [1, 2]
+grow(ys, 2)
+rows = [[1, 2], [3]]
+print(ys, doubled(ys), zero_rows(rows), rows, chain(3))

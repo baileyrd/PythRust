@@ -707,6 +707,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             params,
             ret,
             locals: self.locals,
+            names: self.names.into_iter().map(|(n, v)| (v.local, n)).collect(),
             blocks: blocks.collect(),
         }
     }

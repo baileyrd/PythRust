@@ -344,3 +344,131 @@ fn returning_a_parameter_is_not_a_mode() {
     let src = "def same(owned xs: list[int]) -> list[int]:\n    return xs\ndef also(xs: list[int]) -> list[int]:\n    return xs\nprint(same([1]), also([2]))\n";
     assert_eq!(checked(src), Ok(()));
 }
+
+/// `check`'s error for `src`, if any: for these tests, an aliasing one.
+fn alias_err(src: &str) -> Option<(String, String)> {
+    checked(src).err()
+}
+
+#[test]
+fn a_second_name_changed_while_the_first_is_used_is_an_error() {
+    // D4, with its fix-it.
+    let src = "temper def f() -> int:\n    a = [1]\n    b = a\n    b.append(2)\n    return len(a)\nprint(f())\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes `b` while `a` may be the same list and is used later; copy instead of sharing it: `b = list(a)`".into(),
+            "b.append(2)".into()
+        ))
+    );
+    assert_eq!(checked(&src.replace("b = a", "b = list(a)")), Ok(()));
+    let item = src.replace("b.append(2)", "b[0] = 2");
+    assert_eq!(alias_err(&item).map(|e| e.1), Some("b[0]".into()));
+}
+
+#[test]
+fn aliasing_is_checked_where_names_are_still_used() {
+    // Non-lexical: `a` is never read after `b` changes.
+    let dead = "temper def f() -> int:\n    a = [1]\n    b = a\n    n = len(a)\n    b.append(2)\n    return n + len(b)\nprint(f())\n";
+    assert_eq!(checked(dead), Ok(()));
+    // Rebinding `b` ends the sharing.
+    let rebound = "temper def f() -> int:\n    a = [1]\n    b = a\n    b = [0]\n    b.append(2)\n    return len(a)\nprint(f())\n";
+    assert_eq!(checked(rebound), Ok(()));
+    // In a loop, the next iteration's read counts.
+    let looped = "temper def f(n: int) -> int:\n    a = [1]\n    b = a\n    for i in range(n):\n        b.append(i)\n        n = len(a)\n    return n\nprint(f(2))\n";
+    assert!(alias_err(looped).is_some());
+}
+
+#[test]
+fn a_list_inside_another_is_its_own_list() {
+    let src = "temper def f(mut rows: list[list[int]]) -> int:\n    r = rows[0]\n    r.append(1)\n    for s in rows:\n        s[0] = 0\n    return len(rows)\nprint(f([[1]]))\n";
+    assert_eq!(checked(src), Ok(()));
+    // Two names for one element are two names for one list.
+    let twice = "temper def f(mut rows: list[list[int]]) -> int:\n    r = rows[0]\n    s = rows[0]\n    r.append(1)\n    return len(s)\nprint(f([[1]]))\n";
+    assert!(alias_err(twice).is_some());
+    let through = "temper def f(mut rows: list[list[int]]) -> int:\n    r = rows[0]\n    rows[0].append(1)\n    return len(r)\nprint(f([[1]]))\n";
+    assert_eq!(
+        alias_err(through),
+        Some((
+            "tempered `f` changes a list while `r` may be the same list and is used later; copy instead of sharing it: `r = list(...)`".into(),
+            "rows[0].append(1)".into()
+        ))
+    );
+    // A list stored in another is reached through it, not a second name.
+    let stored = "temper def f() -> int:\n    b = [1]\n    outer: list[list[int]] = []\n    outer.append(b)\n    b.append(2)\n    x = outer[0]\n    b.append(3)\n    return len(x)\nprint(f())\n";
+    assert_eq!(alias_err(stored).map(|e| e.1), Some("b.append(3)".into()));
+}
+
+#[test]
+fn a_mut_argument_is_a_change() {
+    let src = "temper def grow(mut xs: list[int]) -> None:\n    xs.append(1)\ntemper def f() -> int:\n    a = [1]\n    b = a\n    grow(b)\n    return len(a)\nprint(f())\n";
+    assert_eq!(alias_err(src).map(|e| e.1), Some("grow(b)".into()));
+    // A `mut` argument may change the lists inside it too.
+    let inner = "temper def clear(mut rows: list[list[int]]) -> None:\n    rows[0][0] = 0\ntemper def f(mut rows: list[list[int]]) -> int:\n    r = rows[0]\n    clear(rows)\n    return len(r)\nprint(f([[1]]))\n";
+    assert_eq!(alias_err(inner).map(|e| e.1), Some("clear(rows)".into()));
+}
+
+#[test]
+fn changing_a_list_a_loop_runs_over_is_an_error() {
+    let src = "temper def f() -> int:\n    xs = [1, 2]\n    for x in xs:\n        if x < 0:\n            xs.append(x)\n    return 0\nprint(f())\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes a list while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "xs.append(x)".into()
+        ))
+    );
+    assert_eq!(checked(&src.replace("in xs", "in list(xs)")), Ok(()));
+}
+
+#[test]
+fn each_run_of_an_allocation_is_a_new_list() {
+    let src = "temper def f(n: int) -> int:\n    prev = [0]\n    cur = [1]\n    rows: list[list[int]] = []\n    for i in range(n):\n        prev = cur\n        cur = [i]\n        cur.append(i)\n        rows.append(cur)\n    return len(prev) + len(rows)\nprint(f(3))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn a_narrowed_optional_is_the_same_name() {
+    let src = "temper def f(mut xs: list[int] | None) -> int:\n    if xs is not None:\n        xs.append(1)\n        return len(xs)\n    return 0\nprint(f([1]))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn tempered_code_returns_no_parameter() {
+    // D3, with its fix-it.
+    let src = "temper def same(xs: list[int]) -> list[int]:\n    return xs\nprint(same([1]))\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `same` returns its parameter `xs`; return a copy: `return list(xs)`".into(),
+            "return xs".into()
+        ))
+    );
+    assert_eq!(
+        checked(&src.replace("return xs", "return list(xs)")),
+        Ok(())
+    );
+    let inner = "temper def first(rows: list[list[int]]) -> list[int]:\n    return rows[0]\nprint(first([[1]]))\n";
+    assert_eq!(
+        alias_err(inner).map(|e| e.0),
+        Some("tempered `first` returns a value sharing a list with its parameter `rows`; return a copy made with `list(...)`".into())
+    );
+    let boxed = "temper def pair(xs: list[int]) -> tuple[list[int], int]:\n    return (xs, 1)\nprint(pair([1]))\n";
+    assert!(alias_err(boxed).is_some());
+    // A list it stored in a parameter is the caller's too.
+    let stored = "temper def put(mut rows: list[list[int]]) -> list[int]:\n    r = [1]\n    rows.append(r)\n    return r\nprint(put([]))\n";
+    assert!(alias_err(stored).is_some());
+}
+
+#[test]
+fn aliasing_comes_before_modes() {
+    // Fixing the alias may make the mode unnecessary.
+    let src = "temper def f(xs: list[int]) -> int:\n    ys = xs\n    ys.append(1)\n    return len(xs)\nprint(f([1]))\n";
+    assert_eq!(alias_err(src).map(|e| e.1), Some("ys.append(1)".into()));
+}
+
+#[test]
+fn loose_code_keeps_python_aliasing() {
+    let src = "def f(xs):\n    a = [1]\n    b = a\n    b.append(2)\n    for x in xs:\n        xs.append(x)\n        break\n    return xs\nprint(f([1]), len([1]))\n";
+    assert_eq!(checked(src), Ok(()));
+}

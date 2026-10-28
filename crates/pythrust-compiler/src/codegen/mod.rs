@@ -526,7 +526,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 self.forget(*l);
             }
             Inst::Forget(l) => self.forget(*l),
-            Inst::Append { list, value } => {
+            Inst::Append { list, value, .. } => {
                 let (s, v) = (self.operand(*list), self.slot(*value));
                 self.call_rt(Rt::SeqPush, &[s, v]);
             }

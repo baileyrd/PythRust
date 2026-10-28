@@ -11,8 +11,10 @@
 //! gets [`Precision::Conservative`] summaries, never an error, so a
 //! lowering gap is never a new language restriction.
 //!
-//! [`check`] holds the modes a function writes (D2) to these summaries.
+//! [`check`] holds the modes a function writes (D2) to these summaries,
+//! and a tempered body to D3 and D4 ([`alias`]).
 
+mod alias;
 mod body;
 mod modes;
 
@@ -81,6 +83,9 @@ pub struct Analysis {
     /// By function name. A generic function's instances are joined; a
     /// generic function no code calls has none when precise.
     pub funcs: BTreeMap<String, Summary>,
+    /// By tempered function name, the first aliasing its body may not
+    /// do (D3, D4). Empty unless precise.
+    pub aliasing: BTreeMap<String, Diagnostic>,
     pub precision: Precision,
 }
 
@@ -89,12 +94,17 @@ pub struct Analysis {
 /// [`Precision::Conservative`].
 pub fn analyze(module: &Module, types: &Types) -> Analysis {
     match lower::lower_every(module, types) {
-        Ok(program) => Analysis {
-            funcs: by_name(&program, &infer(&program)),
-            precision: Precision::Precise,
-        },
+        Ok(program) => {
+            let summaries = infer(&program);
+            Analysis {
+                funcs: by_name(&program, &summaries),
+                aliasing: alias::tempered(module, &program, &summaries),
+                precision: Precision::Precise,
+            }
+        }
         Err(gap) => Analysis {
             funcs: conservative(module),
+            aliasing: BTreeMap::new(),
             precision: Precision::Conservative(gap),
         },
     }

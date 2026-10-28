@@ -21,7 +21,7 @@ use crate::ir::{Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue,
 
 /// An abstract list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Obj {
+pub(super) enum Obj {
     /// Parameter `i`, and every list inside it.
     Param(usize),
     /// What the module's globals hold, and every list inside it.
@@ -30,9 +30,9 @@ enum Obj {
     Fresh(usize),
 }
 
-type Objs = BTreeSet<Obj>;
+pub(super) type Objs = BTreeSet<Obj>;
 
-struct Flow<'a> {
+pub(super) struct Flow<'a> {
     program: &'a Program,
     func: &'a Func,
     summaries: &'a [Summary],
@@ -45,9 +45,18 @@ struct Flow<'a> {
 
 /// `func`'s summary, with callees summarized as `summaries` say.
 pub(super) fn summarize(program: &Program, func: &Func, summaries: &[Summary]) -> Summary {
+    settle(program, func, summaries).summary()
+}
+
+/// `func`'s points-to sets, settled.
+pub(super) fn settle<'a>(
+    program: &'a Program,
+    func: &'a Func,
+    summaries: &'a [Summary],
+) -> Flow<'a> {
     let mut flow = Flow::new(program, func, summaries);
     while flow.propagate() {}
-    flow.summary()
+    flow
 }
 
 impl<'a> Flow<'a> {
@@ -80,7 +89,7 @@ impl<'a> Flow<'a> {
     fn flow(&mut self, inst: &Inst) -> bool {
         match inst {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
-            Inst::Append { list, value } | Inst::SetItem { list, value, .. } => {
+            Inst::Append { list, value, .. } | Inst::SetItem { list, value, .. } => {
                 let value = self.of(*value);
                 let lists = self.of(*list);
                 self.store_all(&lists, &value)
@@ -224,7 +233,7 @@ impl<'a> Flow<'a> {
 
     /// `root` and what is stored in it, transitively, short of another
     /// parameter or the module's values.
-    fn region(&self, root: Obj) -> Objs {
+    pub(super) fn region(&self, root: Obj) -> Objs {
         let mut out = Objs::from([root]);
         let mut todo = vec![root];
         while let Some(o) = todo.pop() {
@@ -292,8 +301,13 @@ impl<'a> Flow<'a> {
         out
     }
 
+    /// What the body may store in `list`.
+    pub(super) fn stored(&self, list: Obj) -> Option<&Objs> {
+        self.stored.get(&list)
+    }
+
     /// `lists` and everything inside them.
-    fn reachable(&self, lists: &Objs) -> Objs {
+    pub(super) fn reachable(&self, lists: &Objs) -> Objs {
         let mut out = lists.clone();
         let mut todo: Vec<Obj> = lists.iter().copied().collect();
         while let Some(o) = todo.pop() {

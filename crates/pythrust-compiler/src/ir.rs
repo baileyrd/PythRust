@@ -28,6 +28,8 @@
 //! with [`Rvalue::PendingIs`] and takes the exception with
 //! [`Rvalue::Catch`]. Faults (D7) stay [`Term::Fail`]s.
 
+use std::collections::BTreeMap;
+
 use crate::diag::Diagnostic;
 use crate::span::Span;
 
@@ -133,7 +135,7 @@ pub struct FuncId(pub usize);
 pub struct GlobalId(pub usize);
 
 /// Index into [`Func::locals`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalId(pub usize);
 
 /// Index into [`Func::blocks`].
@@ -162,6 +164,9 @@ pub struct Func {
     pub params: Vec<LocalId>,
     pub ret: Ty,
     pub locals: Vec<Ty>,
+    /// The locals that are source variables, parameters included, by
+    /// name; the rest are temporaries. For diagnostics about the body.
+    pub names: BTreeMap<LocalId, String>,
     pub blocks: Vec<Block>,
 }
 
@@ -192,8 +197,12 @@ pub enum Inst {
     Release(LocalId),
     /// Nulls the local without dropping: its reference was moved.
     Forget(LocalId),
-    /// `list.append(value)`: the list adds its own reference.
-    Append { list: Operand, value: Operand },
+    /// `list.append(value)` at `span`: the list adds its own reference.
+    Append {
+        list: Operand,
+        value: Operand,
+        span: Span,
+    },
     /// Stores a new reference to `value` in the global, dropping the
     /// one it held (null: nothing).
     SetGlobal { global: GlobalId, value: Operand },
