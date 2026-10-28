@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{holds_list, Mode, Param, Summary};
+use super::{holds_list, Mode, Param, SharedArgs, Summary};
 use crate::ir::{Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term};
 
 /// An abstract list.
@@ -26,11 +26,27 @@ enum Obj {
     Param(usize),
     /// What the module's globals hold, and every list inside it.
     World,
-    /// Every list the allocations into local `i` give.
-    Fresh(usize),
+    /// Every list the allocations into local `i` give: the latest one,
+    /// or the ones before it. Only a flow-sensitive [`Flow`] tells them
+    /// apart; otherwise every allocation is [`Age::Latest`].
+    Fresh(usize, Age),
+}
+
+/// Which allocations into a local a [`Obj::Fresh`] stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Age {
+    Latest,
+    Earlier,
 }
 
 type Objs = BTreeSet<Obj>;
+
+/// What a [`Flow`] knows at one point of the body.
+#[derive(Debug, Clone, PartialEq)]
+struct State {
+    pts: Vec<Objs>,
+    stored: BTreeMap<Obj, Objs>,
+}
 
 struct Flow<'a> {
     program: &'a Program,
@@ -41,17 +57,64 @@ struct Flow<'a> {
     pts: Vec<Objs>,
     /// Per list, what the body may store in it.
     stored: BTreeMap<Obj, Objs>,
+    /// Whether points-to sets hold at one point of the body, so an
+    /// assignment replaces its local's, rather than anywhere in it.
+    sensitive: bool,
 }
 
 /// `func`'s summary, with callees summarized as `summaries` say.
 pub(super) fn summarize(program: &Program, func: &Func, summaries: &[Summary]) -> Summary {
-    let mut flow = Flow::new(program, func, summaries);
+    let mut flow = Flow::new(program, func, summaries, false);
     while flow.propagate() {}
     flow.summary()
 }
 
+/// Each call in `func` that may pass one list to two parameters: at
+/// the call, the lists reachable from both arguments meet. Unlike
+/// [`summarize`], flow-sensitive, so what the call or later code stores
+/// does not count, nor what a local held before it was reassigned.
+pub(super) fn shared_args(
+    program: &Program,
+    func: &Func,
+    summaries: &[Summary],
+) -> Vec<SharedArgs> {
+    let mut flow = Flow::new(program, func, summaries, true);
+    let entries = flow.entries();
+    let mut out = Vec::new();
+    for (block, entry) in func.blocks.iter().zip(entries) {
+        let Some(entry) = entry else {
+            continue;
+        };
+        flow.load(entry);
+        for inst in &block.insts {
+            out.extend(flow.shared(inst));
+            flow.flow(inst);
+        }
+    }
+    out
+}
+
+/// The blocks `term` may go to.
+fn successors(term: &Term) -> Vec<usize> {
+    match term {
+        Term::Goto(b) => vec![b.0],
+        Term::Branch { then, orelse, .. } => vec![then.0, orelse.0],
+        Term::Return(_) | Term::Fail(_) | Term::Uncaught | Term::Unreachable => Vec::new(),
+    }
+}
+
+/// Every `(i, j)` with `i < j < n`.
+fn pairs(n: usize) -> impl Iterator<Item = (usize, usize)> {
+    (0..n).flat_map(move |i| (i + 1..n).map(move |j| (i, j)))
+}
+
 impl<'a> Flow<'a> {
-    fn new(program: &'a Program, func: &'a Func, summaries: &'a [Summary]) -> Flow<'a> {
+    fn new(
+        program: &'a Program,
+        func: &'a Func,
+        summaries: &'a [Summary],
+        sensitive: bool,
+    ) -> Flow<'a> {
         let mut pts = vec![Objs::new(); func.locals.len()];
         for (i, p) in func.params.iter().enumerate() {
             if holds_list(program, func.locals[p.0]) {
@@ -64,6 +127,83 @@ impl<'a> Flow<'a> {
             summaries,
             pts,
             stored: BTreeMap::new(),
+            sensitive,
+        }
+    }
+
+    /// What holds on entry to each block reached, to a fixpoint over the
+    /// CFG; starts from the state [`Flow::new`] gives.
+    fn entries(&mut self) -> Vec<Option<State>> {
+        let func = self.func;
+        let mut entries: Vec<Option<State>> = vec![None; func.blocks.len()];
+        entries[0] = Some(self.state());
+        let mut todo = vec![0];
+        while let Some(b) = todo.pop() {
+            let Some(entry) = entries[b].clone() else {
+                continue;
+            };
+            self.load(entry);
+            for inst in &func.blocks[b].insts {
+                self.flow(inst);
+            }
+            let exit = self.state();
+            for s in successors(&func.blocks[b].term) {
+                if join(&mut entries[s], &exit) {
+                    todo.push(s);
+                }
+            }
+        }
+        entries
+    }
+
+    fn state(&self) -> State {
+        State {
+            pts: self.pts.clone(),
+            stored: self.stored.clone(),
+        }
+    }
+
+    fn load(&mut self, state: State) {
+        self.pts = state.pts;
+        self.stored = state.stored;
+    }
+
+    /// If `inst` is a call, each pair of its arguments that may share a
+    /// list.
+    fn shared(&self, inst: &Inst) -> Vec<SharedArgs> {
+        let Inst::Assign {
+            value: Rvalue::Call(f, args),
+            span,
+            ..
+        } = inst
+        else {
+            return Vec::new();
+        };
+        let reach: Vec<Objs> = args.iter().map(|a| self.reachable(&self.of(*a))).collect();
+        let pairs = pairs(reach.len()).filter(|(i, j)| meets(&reach[*i], &reach[*j]));
+        pairs
+            .map(|params| SharedArgs {
+                callee: self.program.funcs[f.0].name.clone(),
+                params,
+                span: *span,
+            })
+            .collect()
+    }
+
+    /// Turns the latest allocation into `local` into an earlier one,
+    /// wherever it is: a new one is about to replace it.
+    fn age(&mut self, local: usize) {
+        let latest = Obj::Fresh(local, Age::Latest);
+        let earlier = Obj::Fresh(local, Age::Earlier);
+        let rename = |objs: &mut Objs| {
+            if objs.remove(&latest) {
+                objs.insert(earlier);
+            }
+        };
+        self.pts.iter_mut().for_each(rename);
+        self.stored.values_mut().for_each(rename);
+        if let Some(inner) = self.stored.remove(&latest) {
+            self.stored.entry(earlier).or_default().extend(inner);
         }
     }
 
@@ -101,7 +241,14 @@ impl<'a> Flow<'a> {
         if !holds_list(self.program, self.func.locals[dest.0]) {
             return changed;
         }
-        let fresh = Obj::Fresh(dest.0);
+        let allocates = matches!(
+            value,
+            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::Call(..)
+        );
+        if self.sensitive && allocates {
+            self.age(dest.0);
+        }
+        let fresh = Obj::Fresh(dest.0, Age::Latest);
         match value {
             Rvalue::NewSeq(items) => {
                 let items = self.union(items);
@@ -116,6 +263,10 @@ impl<'a> Flow<'a> {
         }
         let gains = self.value(dest, value);
         let pts = &mut self.pts[dest.0];
+        if self.sensitive {
+            *pts = gains;
+            return changed;
+        }
         let before = pts.len();
         pts.extend(gains);
         changed | (pts.len() > before)
@@ -126,7 +277,9 @@ impl<'a> Flow<'a> {
         match rv {
             Rvalue::Use(a) | Rvalue::Wrap(a) | Rvalue::Unwrap(a) => self.of(*a),
             Rvalue::Index(a, _) | Rvalue::Field(a, _) => self.contents(&self.of(*a)),
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) => Objs::from([Obj::Fresh(dest.0)]),
+            Rvalue::NewSeq(_) | Rvalue::CopyList(_) => {
+                Objs::from([Obj::Fresh(dest.0, Age::Latest)])
+            }
             Rvalue::Global(_) => Objs::from([Obj::World]),
             Rvalue::Call(f, args) => self.call_result(*f, args, dest),
             _ => Objs::new(),
@@ -143,7 +296,7 @@ impl<'a> Flow<'a> {
             .map(|(a, _)| *a)
             .collect();
         let mut out = self.reachable(&self.union(&aliased));
-        out.insert(Obj::Fresh(dest.0));
+        out.insert(Obj::Fresh(dest.0, Age::Latest));
         if summary.result_global {
             out.insert(Obj::World);
         }
@@ -231,7 +384,7 @@ impl<'a> Flow<'a> {
             let Some(inner) = self.stored.get(&o) else {
                 continue;
             };
-            for i in inner.iter().filter(|i| matches!(i, Obj::Fresh(_))) {
+            for i in inner.iter().filter(|i| matches!(i, Obj::Fresh(..))) {
                 if out.insert(*i) {
                     todo.push(*i);
                 }
@@ -332,4 +485,25 @@ impl<'a> Flow<'a> {
 /// Whether `a` and `b` share a list.
 fn meets(a: &Objs, b: &Objs) -> bool {
     a.iter().any(|o| b.contains(o))
+}
+
+/// Joins `state` into `into`; whether `into` grew.
+fn join(into: &mut Option<State>, state: &State) -> bool {
+    let Some(into) = into else {
+        *into = Some(state.clone());
+        return true;
+    };
+    let mut grew = false;
+    for (mine, theirs) in into.pts.iter_mut().zip(&state.pts) {
+        let before = mine.len();
+        mine.extend(theirs.iter().copied());
+        grew |= mine.len() > before;
+    }
+    for (list, theirs) in &state.stored {
+        let mine = into.stored.entry(*list).or_default();
+        let before = mine.len();
+        mine.extend(theirs.iter().copied());
+        grew |= mine.len() > before;
+    }
+    grew
 }

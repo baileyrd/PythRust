@@ -11,9 +11,12 @@
 //! gets [`Precision::Conservative`] summaries, never an error, so a
 //! lowering gap is never a new language restriction.
 //!
-//! [`check`] holds the modes a function writes (D2) to these summaries.
+//! [`check`] holds the modes a function writes (D2) to these summaries,
+//! and calls to tempered functions to their `mut` and `owned`
+//! parameters (A5).
 
 mod body;
+mod calls;
 mod modes;
 
 #[cfg(test)]
@@ -22,12 +25,11 @@ mod tests;
 use std::collections::BTreeMap;
 
 use crate::ast::{Module, StmtKind};
-use crate::diag::Diagnostic;
+use crate::diag::{Diagnostic, Result};
 use crate::infer::Types;
 use crate::ir::{Compound, Program, Ty};
 use crate::lower;
-
-pub use modes::check;
+use crate::span::Span;
 
 /// How a function uses a parameter, weakest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -63,6 +65,17 @@ pub struct Summary {
     pub result_global: bool,
 }
 
+/// A call that may pass one list, or lists inside it, to two parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedArgs {
+    /// The callee's source name.
+    pub callee: String,
+    /// The two parameters' indexes, first lower.
+    pub params: (usize, usize),
+    /// The call.
+    pub span: Span,
+}
+
 /// How far [`Analysis::funcs`] can be trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Precision {
@@ -81,6 +94,9 @@ pub struct Analysis {
     /// By function name. A generic function's instances are joined; a
     /// generic function no code calls has none when precise.
     pub funcs: BTreeMap<String, Summary>,
+    /// Every call of the program that may share arguments, in no
+    /// particular order; empty when conservative.
+    pub shared: Vec<SharedArgs>,
     pub precision: Precision,
 }
 
@@ -89,15 +105,29 @@ pub struct Analysis {
 /// [`Precision::Conservative`].
 pub fn analyze(module: &Module, types: &Types) -> Analysis {
     match lower::lower_every(module, types) {
-        Ok(program) => Analysis {
-            funcs: by_name(&program, &infer(&program)),
-            precision: Precision::Precise,
-        },
+        Ok(program) => {
+            let summaries = infer(&program);
+            let shared = program.funcs.iter();
+            let shared = shared.flat_map(|f| body::shared_args(&program, f, &summaries));
+            Analysis {
+                funcs: by_name(&program, &summaries),
+                shared: shared.collect(),
+                precision: Precision::Precise,
+            }
+        }
         Err(gap) => Analysis {
             funcs: conservative(module),
+            shared: Vec::new(),
             precision: Precision::Conservative(gap),
         },
     }
+}
+
+/// Holds `module` to `analysis`: written modes (D2), then calls to
+/// tempered functions (A5). Only precise analyses are checked.
+pub fn check(module: &Module, analysis: &Analysis) -> Result<()> {
+    modes::check(module, analysis)?;
+    calls::check(module, analysis)
 }
 
 /// One summary per function of `program`, indexed by `FuncId`: the
