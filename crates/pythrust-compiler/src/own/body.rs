@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{holds_list, Mode, Param, SharedArgs, Summary};
+use super::{holds_list, CallSite, Mode, Param, Peer, Summary};
 use crate::ir::{Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term};
 
 /// An abstract list.
@@ -69,15 +69,17 @@ pub(super) fn summarize(program: &Program, func: &Func, summaries: &[Summary]) -
     flow.summary()
 }
 
-/// Each call in `func` that may pass one list to two parameters: at
-/// the call, the lists reachable from both arguments meet. Unlike
-/// [`summarize`], flow-sensitive, so what the call or later code stores
-/// does not count, nor what a local held before it was reassigned.
-pub(super) fn shared_args(
+/// Every call in `func`, the `index`th function: which arguments may
+/// share a list at the call, and which of `func`'s parameters and module
+/// values each may reach. Unlike [`summarize`], flow-sensitive, so what
+/// the call or later code stores does not count, nor what a local held
+/// before it was reassigned.
+pub(super) fn calls(
     program: &Program,
+    index: usize,
     func: &Func,
     summaries: &[Summary],
-) -> Vec<SharedArgs> {
+) -> Vec<CallSite> {
     let mut flow = Flow::new(program, func, summaries, true);
     let entries = flow.entries();
     let mut out = Vec::new();
@@ -87,7 +89,7 @@ pub(super) fn shared_args(
         };
         flow.load(entry);
         for inst in &block.insts {
-            out.extend(flow.shared(inst));
+            out.extend(flow.call_site(index, inst));
             flow.flow(inst);
         }
     }
@@ -168,26 +170,34 @@ impl<'a> Flow<'a> {
         self.stored = state.stored;
     }
 
-    /// If `inst` is a call, each pair of its arguments that may share a
-    /// list.
-    fn shared(&self, inst: &Inst) -> Vec<SharedArgs> {
+    /// If `inst` is a call, what its arguments may share as it runs.
+    fn call_site(&self, caller: usize, inst: &Inst) -> Option<CallSite> {
         let Inst::Assign {
             value: Rvalue::Call(f, args),
             span,
             ..
         } = inst
         else {
-            return Vec::new();
+            return None;
         };
         let reach: Vec<Objs> = args.iter().map(|a| self.reachable(&self.of(*a))).collect();
-        let pairs = pairs(reach.len()).filter(|(i, j)| meets(&reach[*i], &reach[*j]));
-        pairs
-            .map(|params| SharedArgs {
-                callee: self.program.funcs[f.0].name.clone(),
-                params,
-                span: *span,
-            })
-            .collect()
+        let shared = pairs(reach.len()).filter(|(i, j)| meets(&reach[*i], &reach[*j]));
+        let world = self.reachable(&Objs::from([Obj::World]));
+        let peers = reach.iter().map(|r| {
+            let params = r.iter().filter_map(|o| match o {
+                Obj::Param(i) => Some(Peer::Param(*i)),
+                _ => None,
+            });
+            let world = meets(r, &world).then_some(Peer::World);
+            params.chain(world).collect()
+        });
+        Some(CallSite {
+            caller,
+            callee: f.0,
+            shared: shared.collect(),
+            peers: peers.collect(),
+            span: *span,
+        })
     }
 
     /// Turns the latest allocation into `local` into an earlier one,

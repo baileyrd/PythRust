@@ -22,7 +22,7 @@ mod modes;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{Module, StmtKind};
 use crate::diag::{Diagnostic, Result};
@@ -65,14 +65,26 @@ pub struct Summary {
     pub result_global: bool,
 }
 
-/// A call that may pass one list, or lists inside it, to two parameters.
+/// What an argument may reach, seen from its caller: a list of one of
+/// the caller's parameters, or of the module's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Peer {
+    Param(usize),
+    World,
+}
+
+/// One call, with what its arguments may share at that point.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SharedArgs {
-    /// The callee's source name.
-    pub callee: String,
-    /// The two parameters' indexes, first lower.
-    pub params: (usize, usize),
-    /// The call.
+pub struct CallSite {
+    /// Indexes into [`Analysis::names`].
+    pub caller: usize,
+    pub callee: usize,
+    /// Argument pairs, first lower, that may pass one list, or lists
+    /// inside it.
+    pub shared: Vec<(usize, usize)>,
+    /// Per argument, the caller's parameters and module values it may
+    /// reach.
+    pub peers: Vec<BTreeSet<Peer>>,
     pub span: Span,
 }
 
@@ -94,9 +106,12 @@ pub struct Analysis {
     /// By function name. A generic function's instances are joined; a
     /// generic function no code calls has none when precise.
     pub funcs: BTreeMap<String, Summary>,
-    /// Every call of the program that may share arguments, in no
-    /// particular order; empty when conservative.
-    pub shared: Vec<SharedArgs>,
+    /// Source name per lowered function (an instance of a generic
+    /// function has its own), the module's code included; empty when
+    /// conservative.
+    pub names: Vec<String>,
+    /// Every call of the program; empty when conservative.
+    pub calls: Vec<CallSite>,
     pub precision: Precision,
 }
 
@@ -107,17 +122,19 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
     match lower::lower_every(module, types) {
         Ok(program) => {
             let summaries = infer(&program);
-            let shared = program.funcs.iter();
-            let shared = shared.flat_map(|f| body::shared_args(&program, f, &summaries));
+            let calls = program.funcs.iter().enumerate();
+            let calls = calls.flat_map(|(i, f)| body::calls(&program, i, f, &summaries));
             Analysis {
                 funcs: by_name(&program, &summaries),
-                shared: shared.collect(),
+                names: program.funcs.iter().map(|f| f.name.clone()).collect(),
+                calls: calls.collect(),
                 precision: Precision::Precise,
             }
         }
         Err(gap) => Analysis {
             funcs: conservative(module),
-            shared: Vec::new(),
+            names: Vec::new(),
+            calls: Vec::new(),
             precision: Precision::Conservative(gap),
         },
     }

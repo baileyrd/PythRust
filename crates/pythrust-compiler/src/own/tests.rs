@@ -444,3 +444,57 @@ fn a_conservative_analysis_rejects_no_call() {
     conservative(src);
     assert_eq!(checked(src), Ok(()));
 }
+
+const PUSH: &str =
+    "temper def push(mut xs: list[int], ys: list[int]) -> None:\n    xs.append(len(ys))\n";
+
+#[test]
+fn a_loose_function_passing_its_parameters_on_takes_the_contract() {
+    let forward =
+        format!("{PUSH}def forward(xs: list[int], ys: list[int]) -> None:\n    push(xs, ys)\n");
+    assert_eq!(
+        mode_err(&format!("{forward}a = [1]\nforward(a, a)\n")),
+        (
+            "this call may pass one list as `xs` and `ys` of `forward`, and from there tempered `push` changes `xs` in place; pass a copy (`list(...)`)".into(),
+            "forward(a, a)".into()
+        )
+    );
+    let distinct = format!("{forward}a = [1]\nb = [2]\nforward(a, b)\nforward(a, list(a))\n");
+    assert_eq!(checked(&distinct), Ok(()));
+    // Through two loose functions, with the parameters swapped.
+    let twice =
+        format!("{forward}def swap(p, q):\n    forward(q, p)\na = [1]\nswap(a, [2])\nswap(a, a)\n");
+    assert_eq!(mode_err(&twice).1, "swap(a, a)");
+    // A list inside one argument, reaching the other parameter.
+    let nested = format!("{PUSH}def nest(rows: list[list[int]], ys: list[int]) -> None:\n    push(rows[0], ys)\nr = [1]\nnest([[2]], r)\nnest([r], r)\n");
+    assert_eq!(mode_err(&nested).1, "nest([r], r)");
+}
+
+#[test]
+fn a_parameter_passed_on_beside_a_module_variable_must_not_be_it() {
+    let useg =
+        format!("{PUSH}g: list[int] = [7]\ndef useg(xs: list[int]) -> None:\n    push(xs, g)\n");
+    assert_eq!(
+        checked(&format!("{useg}useg([1])\na = [2]\nuseg(a)\n")),
+        Ok(())
+    );
+    assert_eq!(
+        mode_err(&format!("{useg}useg(g)\n")),
+        (
+            "this call may pass a list a module variable holds as `xs` of `useg`, and from there tempered `push` changes `xs` in place; pass a copy (`list(...)`)".into(),
+            "useg(g)".into()
+        )
+    );
+    // From a function too, where the module variable is one it reads.
+    let inner = format!("{useg}def outer():\n    useg(g)\nouter()\n");
+    assert_eq!(mode_err(&inner).1, "useg(g)");
+    // A tempered caller takes the need as a loose one does.
+    let tempered = format!("{PUSH}g: list[int] = [7]\ntemper def useg(mut xs: list[int]) -> None:\n    push(xs, g)\nuseg([1])\nuseg(g)\n");
+    assert_eq!(mode_err(&tempered).1, "useg(g)");
+}
+
+#[test]
+fn recursion_settles_needs() {
+    let src = format!("{PUSH}def down(xs: list[int], ys: list[int], n: int) -> None:\n    if n == 0:\n        push(xs, ys)\n    else:\n        down(ys, xs, n - 1)\na = [1]\ndown(a, [2], 3)\ndown(a, a, 3)\n");
+    assert_eq!(mode_err(&src).1, "down(a, a, 3)");
+}
