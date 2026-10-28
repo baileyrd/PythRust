@@ -1,5 +1,5 @@
 use crate::diag::{DiagKind, Diagnostic};
-use crate::ir::{Compound, Func, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
+use crate::ir::{Compound, ExcKind, Func, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
 use crate::{infer, lexer, parser};
 
 fn lower_src(src: &str) -> crate::diag::Result<Program> {
@@ -783,16 +783,68 @@ fn open_display_items_decide_the_display_type() {
     assert_eq!(elem, Some(Some(&crate::ir::Compound::List(Ty::Int))));
 }
 
+/// How many of the module's assignments compute rvalues `pick` takes.
+fn assigns(p: &Program, pick: impl Fn(&Rvalue) -> bool) -> usize {
+    count(
+        &p.funcs[p.main.0],
+        |i| matches!(i, Inst::Assign { value, .. } if pick(value)),
+    )
+}
+
 #[test]
-fn exceptions_are_backend_errors_until_b3() {
-    let cases = [
-        ("try:\n    pass\nexcept ValueError:\n    pass\n", "try:"),
-        ("raise ValueError(\"x\")\n", "raise ValueError(\"x\")"),
-        ("e = ValueError(\"x\")\n", "ValueError(\"x\")"),
-    ];
-    for (src, at) in cases {
-        let (d, text) = rejected(src);
-        assert!(d.message.contains("does not support"), "{d}");
-        assert!(text.starts_with(at), "{text}");
-    }
+fn only_what_may_raise_is_tested_after() {
+    let src = "def f(n):\n    if n < 0:\n        raise ValueError\n    return n\ndef g(n):\n    return n\nprint(f(1), g(2), int(\"3\"))\n";
+    let p = lowered(src);
+    let raised = |r: &Rvalue| matches!(r, Rvalue::Raised);
+    // `f(1)` and `int("3")`, not `g(2)`.
+    assert_eq!(assigns(&p, raised), 2);
+    let uncaught = |f: &Func| f.blocks.iter().any(|b| b.term == Term::Uncaught);
+    assert!(uncaught(&p.funcs[p.main.0]));
+    // A function unwinds to its caller through its exit block.
+    assert!(!p
+        .funcs
+        .iter()
+        .filter(|f| f.name != "<module>")
+        .any(uncaught));
+}
+
+#[test]
+fn handlers_test_their_kinds_in_order() {
+    let src = "try:\n    raise IndexError\nexcept ValueError:\n    pass\nexcept IndexError as e:\n    print(e)\n";
+    let p = lowered(src);
+    let tests = |kind| move |r: &Rvalue| *r == Rvalue::PendingIs(kind);
+    assert_eq!(assigns(&p, tests(ExcKind::Value)), 1);
+    assert_eq!(assigns(&p, tests(ExcKind::Index)), 1);
+    assert_eq!(assigns(&p, |r| matches!(r, Rvalue::Catch)), 2);
+    let new = |r: &Rvalue| matches!(r, Rvalue::NewExc(ExcKind::Index, None));
+    assert_eq!(assigns(&p, new), 1);
+}
+
+#[test]
+fn a_handler_name_is_unbound_after_its_handler() {
+    // Bound in the entry block first, so only the unbinding makes the
+    // later read check its flag.
+    let src = "e = ValueError()\ntry:\n    raise e\nexcept ValueError as e:\n    pass\nprint(e)\n";
+    let p = lowered(src);
+    let name_errors = p.funcs[p.main.0].blocks.iter().filter(
+        |b| matches!(&b.term, Term::Fail(d) if d.message.starts_with("NameError: name 'e'")),
+    );
+    assert_eq!(name_errors.count(), 1);
+}
+
+#[test]
+fn an_exception_holding_a_list_is_a_backend_error() {
+    let (d, text) = rejected("e = ValueError([1])\n");
+    assert!(d.message.contains("an exception holding a list"), "{d}");
+    assert_eq!(text, "ValueError([1])");
+}
+
+#[test]
+fn a_parameter_a_handler_rebinds_is_checked_after_it() {
+    let src = "def f(e: Exception) -> None:\n    try:\n        raise e\n    except ValueError as e:\n        pass\n    print(e)\nf(ValueError())\n";
+    let p = lowered(src);
+    let unbound = |b: &crate::ir::Block| matches!(&b.term, Term::Fail(d) if d.message.starts_with("UnboundLocalError"));
+    let f = p.funcs.iter().find(|f| f.name == "f").map(|f| &f.blocks);
+    // Both reads: a name a handler unbinds is never assumed bound.
+    assert_eq!(f.into_iter().flatten().filter(|b| unbound(b)).count(), 2);
 }

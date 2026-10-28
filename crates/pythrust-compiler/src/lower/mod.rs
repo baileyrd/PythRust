@@ -7,6 +7,7 @@
 //! compiled. Anything outside the subset the IR covers is a
 //! `DiagKind::Backend` error naming the construct, never a guess.
 
+mod exc;
 mod expr;
 mod globals;
 mod opt;
@@ -128,6 +129,7 @@ pub fn lower(module: &Module, types: &Types) -> Result<Program> {
         let mut b = FnBuilder::new(&mut cx, Subst::new(), scope, Ty::None);
         b.defined = Some(HashSet::new());
         b.hints = hints.clone();
+        b.caught = scope::caught(&module.body);
         let lowered = b.block(&module.body);
         if let Some(more) = b.pending_hints(lowered.is_ok()) {
             return Ok(Attempt::Retype(more));
@@ -299,7 +301,6 @@ impl<'a> Cx<'a> {
                     self.diverges.insert(id);
                 }
                 settle(&sig.ret, &job.subst, &bound, &mut self.seqs)
-                    .ok_or_else(|| unsupported(span, EXCEPTIONS))?
             }
         };
         // Decided before lowering again, so recursive calls find it.
@@ -364,6 +365,7 @@ impl<'a> Cx<'a> {
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
         let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret.unwrap_or(Ty::None));
         b.hints = hints.clone();
+        b.caught = scope::caught(&f.body);
         if job.ret.is_none() {
             let sig = b.cx.types.func(&f.name.name);
             b.open_ret = Some(sig.map_or(Type::None, |sig| sig.ret.clone()));
@@ -371,13 +373,10 @@ impl<'a> Cx<'a> {
         let mut params = Vec::new();
         for (p, ty) in f.params.iter().zip(&job.args) {
             let id = b.new_local(*ty);
-            b.names.insert(
-                p.name.name.clone(),
-                vars::Var {
-                    local: id,
-                    flag: None,
-                },
-            );
+            let name = &p.name.name;
+            // Bound on entry, but a handler may unbind it.
+            let flag = b.caught.contains(name).then(|| b.flag(true, p.span));
+            b.names.insert(name.clone(), vars::Var { local: id, flag });
             params.push(id);
         }
         let lowered = b.block(&f.body);
@@ -409,22 +408,20 @@ fn is_closed(t: &Type, subst: &Subst) -> bool {
 /// The IR type of a result type no `return` decided: a variable `subst`
 /// leaves open takes what the body bound it to, else `None`. The instance
 /// never returns a value of that type (only `None`, or nothing), so
-/// any type is sound; this one matches what the body built. `None` if
-/// `t` holds a type the backend lacks.
-fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) -> Option<Ty> {
-    Some(match t {
+/// any type is sound; this one matches what the body built.
+fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) -> Ty {
+    match t {
         Type::Var(v) => subst.get(v).or(bound.get(v)).copied().unwrap_or(Ty::None),
         Type::List(t) => {
-            let elem = settle(t, subst, bound, seqs)?;
+            let elem = settle(t, subst, bound, seqs);
             seqs.list(elem)
         }
         Type::Optional(t) => {
-            let present = settle(t, subst, bound, seqs)?;
+            let present = settle(t, subst, bound, seqs);
             seqs.optional(present)
         }
         Type::Tuple(ts) => {
-            let fields = ts.iter().map(|t| settle(t, subst, bound, seqs));
-            let fields = fields.collect::<Option<Vec<Ty>>>()?;
+            let fields = ts.iter().map(|t| settle(t, subst, bound, seqs)).collect();
             seqs.tuple(fields)
         }
         Type::Int => Ty::Int,
@@ -433,8 +430,8 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::None => Ty::None,
         Type::Str => Ty::Str,
         Type::Range => Ty::Range,
-        Type::Exception => return None,
-    })
+        Type::Exception => Ty::Exc,
+    }
 }
 
 /// Every top-level function `name` may call, directly or not, and itself.
@@ -474,7 +471,8 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         | (Type::Bool, Ty::Bool)
         | (Type::None, Ty::None)
         | (Type::Str, Ty::Str)
-        | (Type::Range, Ty::Range) => true,
+        | (Type::Range, Ty::Range)
+        | (Type::Exception, Ty::Exc) => true,
         _ => false,
     }
 }
@@ -493,6 +491,27 @@ struct Loop {
     /// How many statement pools were open outside the body: a jump out
     /// of the body releases the ones above.
     pools: usize,
+}
+
+/// The handlers of the innermost `try` whose body is being lowered.
+#[derive(Clone, Copy)]
+struct Try {
+    /// Tests the pending exception against each handler in turn.
+    dispatch: BlockId,
+    /// How many statement pools were open outside the body: raising in
+    /// it releases the ones above.
+    pools: usize,
+}
+
+/// An `except ... as name` whose body is being lowered: leaving it any
+/// way unbinds `name`, as Python does.
+#[derive(Clone)]
+struct Unbind {
+    name: String,
+    span: Span,
+    /// How many loops and `try` bodies enclosed the handler.
+    loops: usize,
+    tries: usize,
 }
 
 /// Builds one function's IR.
@@ -545,6 +564,16 @@ struct FnBuilder<'c, 'a> {
     /// Per statement (innermost last), the `Str` temporaries it owns,
     /// released when it ends.
     pools: Vec<Vec<LocalId>>,
+    /// Enclosing `try` bodies, innermost last.
+    tries: Vec<Try>,
+    /// Enclosing handlers that bind a name, innermost last.
+    unbinds: Vec<Unbind>,
+    /// Names some handler of this body binds, and so unbinds: never
+    /// known to be bound everywhere.
+    caught: BTreeSet<String>,
+    /// Where an exception no `try` here catches goes, created on first
+    /// use: the exit block, or in the module's code [`Term::Uncaught`].
+    unwind: Option<BlockId>,
 }
 
 impl<'c, 'a> FnBuilder<'c, 'a> {
@@ -573,6 +602,10 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             ret_slot: None,
             exit: BlockId(1),
             pools: vec![Vec::new()],
+            tries: Vec::new(),
+            unbinds: Vec::new(),
+            caught: BTreeSet::new(),
+            unwind: None,
         };
         b.cur = b.new_block();
         b.exit = b.new_block();
@@ -603,8 +636,14 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
         };
         let strs = (0..self.locals.len()).map(LocalId);
         let owned = strs.filter(|l| self.locals[l.0].is_rc() && Some(*l) != self.ret_slot);
+        let releases: Vec<Inst> = owned.map(Inst::Release).collect();
+        // The module's code ends on an uncaught exception releasing what
+        // it owns too, so nothing it held is lost.
+        if let (Some(unwind), Some(_)) = (self.unwind, &self.defined) {
+            self.blocks[unwind.0].insts = releases.clone();
+        }
         let exit = &mut self.blocks[self.exit.0];
-        exit.insts = owned.map(Inst::Release).collect();
+        exit.insts = releases;
         exit.term = Some(Term::Return(value));
         let blocks = self.blocks.into_iter().map(|p| Block {
             insts: p.insts,
@@ -824,16 +863,13 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::None => Ok(Ty::None),
         Type::Str => Ok(Ty::Str),
         Type::Range => Ok(Ty::Range),
-        Type::Exception => Err(unsupported(span, EXCEPTIONS)),
+        Type::Exception => Ok(Ty::Exc),
         Type::Var(v) => subst
             .get(v)
             .copied()
             .ok_or_else(|| unsupported(span, "a value whose type depends on generic code")),
     }
 }
-
-/// What the backend lacks until phase 4's B3.
-pub(super) const EXCEPTIONS: &str = "exceptions (`try`, `raise`, `ValueError`)";
 
 pub(super) fn unsupported(span: Span, what: &str) -> Diagnostic {
     Diagnostic {

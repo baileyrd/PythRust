@@ -8,6 +8,9 @@
 //! stored as read-only data. `None` has no machine representation: a
 //! function returning it returns nothing.
 //!
+//! A raised exception is the runtime's pending one (`exc.rs`); the IR
+//! spells out every test of it.
+//!
 //! Calls are counted in a module-private depth counter so recursion past
 //! the interpreter's limit is a `RecursionError`, as in `run`, rather
 //! than a native stack overflow.
@@ -25,6 +28,7 @@ use cranelift_module::{
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+mod exc;
 mod num;
 mod opt;
 mod seq;
@@ -102,10 +106,17 @@ enum Rt {
     RangeGet,
     RangeContains,
     RangeContainsFloat,
+    ExcStr,
+    Raise,
+    RaiseValue,
+    Raised,
+    PendingIs,
+    Catch,
+    Uncaught,
 }
 
 impl Rt {
-    const ALL: [Rt; 46] = [
+    const ALL: [Rt; 53] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -152,6 +163,13 @@ impl Rt {
         Rt::RangeGet,
         Rt::RangeContains,
         Rt::RangeContainsFloat,
+        Rt::ExcStr,
+        Rt::Raise,
+        Rt::RaiseValue,
+        Rt::Raised,
+        Rt::PendingIs,
+        Rt::Catch,
+        Rt::Uncaught,
     ];
 
     fn symbol(self) -> &'static str {
@@ -202,6 +220,13 @@ impl Rt {
             Rt::RangeGet => "pt_range_get",
             Rt::RangeContains => "pt_range_contains",
             Rt::RangeContainsFloat => "pt_range_contains_float",
+            Rt::ExcStr => "pt_exc_str",
+            Rt::Raise => "pt_raise",
+            Rt::RaiseValue => "pt_raise_value",
+            Rt::Raised => "pt_raised",
+            Rt::PendingIs => "pt_pending_is",
+            Rt::Catch => "pt_catch",
+            Rt::Uncaught => "pt_uncaught",
         }
     }
 
@@ -246,6 +271,13 @@ impl Rt {
             Rt::RangeGet => (vec![ptr, I64, ptr], Some(I64)),
             Rt::RangeContains => (vec![ptr, I64], Some(I8)),
             Rt::RangeContainsFloat => (vec![ptr, F64], Some(I8)),
+            Rt::ExcStr => (vec![ptr], Some(ptr)),
+            Rt::Raise => (vec![ptr; 5], None),
+            Rt::RaiseValue => (vec![ptr; 7], None),
+            Rt::Raised => (vec![], Some(I8)),
+            Rt::PendingIs => (vec![I8], Some(I8)),
+            Rt::Catch => (vec![], Some(ptr)),
+            Rt::Uncaught => (vec![], None),
         }
     }
 }
@@ -355,7 +387,7 @@ impl<'r> Codegen<'r> {
             Ty::Int => types::I64,
             Ty::Float => types::F64,
             Ty::Bool | Ty::None => types::I8,
-            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => self.ptr,
+            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range | Ty::Exc => self.ptr,
         }
     }
 
@@ -512,6 +544,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let null = self.b.ins().iconst(self.cg.ptr, 0);
                 self.set_global(*global, null)?;
             }
+            Inst::Raise { exc, span } => self.raise(*exc, *span)?,
         }
         Ok(())
     }
@@ -549,28 +582,38 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         self.b.def_var(self.vars[l.0], null);
     }
 
-    /// Writes `op` as `print` does.
+    /// Writes `op` as `print` does. Lowering renders a value that may
+    /// hold an exception with `str` first, which can fail.
     fn write(&mut self, op: Operand) -> Result<()> {
         let ty = self.func.ty(op);
+        if ir::holds(self.types, ty, ir::is_exc) {
+            return Err(backend(
+                "printing an exception not rendered first".to_string(),
+            ));
+        }
         if let Ty::Opt(_) = ty {
             return self.write_opt(op);
         }
         let v = self.operand(op);
-        self.write_value(ty, v);
-        Ok(())
+        self.write_value(ty, v)
     }
 
     /// Writes `v`, a value of `ty` but not an optional.
-    fn write_value(&mut self, ty: Ty, v: Value) {
+    fn write_value(&mut self, ty: Ty, v: Value) -> Result<()> {
         let rt = match ty {
             Ty::Int => Rt::WriteInt,
             Ty::Bool => Rt::WriteBool,
-            Ty::None => return self.write_none(),
+            Ty::None => {
+                self.write_none();
+                return Ok(());
+            }
+            Ty::Exc => return Err(backend("printing an unrendered exception".to_string())),
             Ty::Str => Rt::WriteStr,
             Ty::Float => Rt::WriteFloat,
             Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => Rt::WriteSeq,
         };
         self.call_rt(rt, &[v]);
+        Ok(())
     }
 
     fn write_none(&mut self) {
@@ -582,7 +625,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         match text {
             Some(s) => {
                 let v = self.operand(s);
-                self.write_value(Ty::Str, v);
+                self.call_rt(Rt::WriteStr, &[v]);
             }
             None => self.write_byte(default),
         }
@@ -686,11 +729,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             }
             Rvalue::Contains { hay, needle } => self.rt_on(Rt::StrContains, &[*hay, *needle]),
             Rvalue::ToStr(op) => match self.func.ty(*op) {
-                Ty::Opt(_) => self.opt_to_str(*op, dest),
+                Ty::Opt(_) => self.opt_to_str(*op, dest, span),
                 Ty::Str => Err(backend("`str` of a string".to_string())),
                 ty => {
                     let v = self.operand(*op);
-                    self.str_of_value(ty, v)
+                    self.str_of_value(ty, v, span)
                 }
             },
             Rvalue::Wrap(op) => self.wrap(*op, self.func.locals[dest.0]),
@@ -723,24 +766,38 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::FloatToInt(a) => self.float_to_int(*a, span),
             Rvalue::ParseFloat(s) => self.parse_float(*s, span),
             Rvalue::ParseInt(s) => self.parse_int(*s, span),
+            Rvalue::NewExc(kind, arg) => self.new_exc(*kind, *arg),
+            Rvalue::Raised => self.call_rt_value(Rt::Raised, &[]),
+            Rvalue::PendingIs(kind) => {
+                let code = self.b.ins().iconst(types::I8, i64::from(kind.code()));
+                self.call_rt_value(Rt::PendingIs, &[code])
+            }
+            Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
         }
     }
 
     /// `str(v)`, a new string, for `v` of `ty`; a string gains a
-    /// reference.
-    fn str_of_value(&mut self, ty: Ty, v: Value) -> Result<Value> {
+    /// reference. Rendering an exception fails at `span` when it nests
+    /// deeper than `run` allows.
+    fn str_of_value(&mut self, ty: Ty, v: Value, span: Span) -> Result<Value> {
         let rt = match ty {
             Ty::Int => Rt::StrFromInt,
             Ty::Bool => Rt::StrFromBool,
             Ty::None => return self.call_rt_value(Rt::StrNone, &[]),
             Ty::Float => Rt::StrFromFloat,
             Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => Rt::StrFromSeq,
+            Ty::Exc => Rt::ExcStr,
             Ty::Str => {
                 self.call_rt(Rt::StrInc, &[v]);
                 return Ok(v);
             }
         };
-        self.call_rt_value(rt, &[v])
+        let s = self.call_rt_value(rt, &[v])?;
+        if ir::holds(self.types, ty, ir::is_exc) {
+            let null = self.b.ins().icmp_imm_s(IntCC::Equal, s, 0);
+            self.fail_if(null, span, TOO_DEEP)?;
+        }
+        Ok(s)
     }
 
     /// A new string holding `text`, copied from read-only data.
@@ -888,6 +945,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 self.b.ins().return_(&vals);
             }
             Term::Fail(diag) => self.fail(diag)?,
+            Term::Uncaught => {
+                self.call_rt(Rt::Uncaught, &[]);
+                self.b.ins().trap(TrapCode::unwrap_user(1));
+            }
             Term::Unreachable => {
                 self.b.ins().trap(TrapCode::unwrap_user(2));
             }
@@ -907,6 +968,8 @@ const MAX_DEPTH: i64 = crate::interp::MAX_DEPTH as i64;
 const ZERO_DIV: &str = "ZeroDivisionError: integer division or modulo by zero";
 const TOO_LARGE: &str = "MemoryError: repeated sequence is too large";
 const STR_INDEX: &str = "IndexError: string index out of range";
+const TOO_DEEP: &str =
+    "RecursionError: maximum recursion depth exceeded while getting the repr of an object";
 
 /// Whether `ty` is a list or tuple.
 fn is_seq(ty: Ty) -> bool {

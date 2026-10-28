@@ -1,0 +1,17 @@
+deep: go321!
+[ValueError(1.5)] 1.5
+[ValueError(None)] True
+('a', 1, True) [ValueError(('a', 1, True))]
+inner [ZeroDivisionError(IndexError('inner'))] (IndexError('inner'), 3)
+[ValueError(), OverflowError(''), RecursionError(0)]
+None
+inner True False
+v None True
+zero: 0
+from the bottom: bottom
+ok 1
+invalid literal for int() with base 10: 'x'
+ok 3
+invalid literal for int() with base 10: '4.5'
+4
+caught p

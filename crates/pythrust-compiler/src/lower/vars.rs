@@ -12,7 +12,8 @@ use crate::span::Span;
 
 use super::{unsupported, FnBuilder, Hint, Hints};
 
-/// A named local. `flag` is `None` for parameters, which are always bound.
+/// A named local. `flag` is `None` for parameters no handler unbinds,
+/// which are always bound.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Var {
     pub(super) local: LocalId,
@@ -61,7 +62,8 @@ impl FnBuilder<'_, '_> {
         if let Some(flag) = var.flag {
             self.assign(flag, Rvalue::Use(Operand::Bool(true)), span);
         }
-        if self.cur.0 == 0 {
+        // A handler's name is unbound again when it ends.
+        if self.cur.0 == 0 && !self.caught.contains(name) {
             self.always_bound.insert(var.local);
         }
         self.block_bound.insert(var.local);
@@ -168,19 +170,25 @@ impl FnBuilder<'_, '_> {
     /// A new variable, its flag cleared in the entry block.
     fn new_var(&mut self, name: &str, ty: Ty, span: Span) -> Var {
         let local = self.new_local(ty);
-        let flag = self.new_local(Ty::Bool);
-        let clear = Inst::Assign {
-            dest: flag,
-            value: Rvalue::Use(Operand::Bool(false)),
-            span,
-        };
-        self.blocks[0].insts.insert(0, clear);
         let var = Var {
             local,
-            flag: Some(flag),
+            flag: Some(self.flag(false, span)),
         };
         self.names.insert(name.to_string(), var);
         var
+    }
+
+    /// A new boundness flag, set to `bound` first thing in the entry
+    /// block.
+    pub(super) fn flag(&mut self, bound: bool, span: Span) -> LocalId {
+        let flag = self.new_local(Ty::Bool);
+        let set = Inst::Assign {
+            dest: flag,
+            value: Rvalue::Use(Operand::Bool(bound)),
+            span,
+        };
+        self.blocks[0].insts.insert(0, set);
+        flag
     }
 
     /// Fails with `message` at `span` when the `Bool` `test` holds.

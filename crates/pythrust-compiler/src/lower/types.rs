@@ -70,6 +70,11 @@ impl SeqTypes {
         }
     }
 
+    /// Every type so far, by [`TypeId`].
+    pub(super) fn all(&self) -> &[Compound] {
+        &self.all
+    }
+
     pub(super) fn into_vec(self) -> Vec<Compound> {
         self.all
     }

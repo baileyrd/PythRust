@@ -12,7 +12,7 @@ use crate::ir::{CmpOp, FloatOp, Operand, Ty};
 use crate::span::Span;
 
 /// Marks where a message's run-time part goes.
-const MID: char = '\0';
+pub(super) const MID: char = '\0';
 /// `2**63`, the first float above the `i64` range.
 const I64_END: f64 = 9_223_372_036_854_775_808.0;
 
@@ -102,10 +102,7 @@ impl FnGen<'_, '_, '_> {
         let text = self.operand(s);
         let (r, status) = self.with_status(Rt::FloatParse, &[text])?;
         let bad = self.b.ins().icmp_imm_s(IntCC::Equal, status, 1);
-        let message = "ValueError: could not convert string to float: \0";
-        self.fail_mid_if(bad, span, message, |g| {
-            g.call_rt_value(Rt::StrRepr, &[text])
-        })?;
+        self.raise_value_if(bad, text, "could not convert string to float: ", span)?;
         Ok(r)
     }
 
@@ -113,10 +110,8 @@ impl FnGen<'_, '_, '_> {
         let text = self.operand(s);
         let (r, status) = self.with_status(Rt::IntParse, &[text])?;
         let bad = self.b.ins().icmp_imm_s(IntCC::Equal, status, 1);
-        let message = "ValueError: invalid literal for int() with base 10: \0";
-        self.fail_mid_if(bad, span, message, |g| {
-            g.call_rt_value(Rt::StrRepr, &[text])
-        })?;
+        let prefix = "invalid literal for int() with base 10: ";
+        self.raise_value_if(bad, text, prefix, span)?;
         self.fail_on(status, 2, span, "OverflowError: int too large for i64")?;
         Ok(r)
     }

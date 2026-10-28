@@ -5,8 +5,8 @@
 //! can fail at run time are explicit: a failing `Rvalue` carries the span
 //! of its `Inst`, and a `Term::Fail` ends the program with a diagnostic.
 //!
-//! Covers ints, floats, bools, `None`, strings, lists, tuples and
-//! optionals (`T | None`). List, tuple and optional types are interned
+//! Covers ints, floats, bools, `None`, strings, lists, tuples,
+//! optionals (`T | None`) and exceptions. List, tuple and optional types are interned
 //! in [`Program::types`], so [`Ty`] stays `Copy`.
 //!
 //! Locals other than parameters start zeroed. A local of a
@@ -16,6 +16,17 @@
 //! `Release` and `Forget`, so the backend never decides it. Such
 //! operands are borrowed; calls take them owned and return an owned
 //! result, and rvalues giving one give a new reference.
+//!
+//! Exceptions (D6, D8) are a tag plus a value without a second return
+//! register: [`Inst::Raise`] makes an exception the runtime's one
+//! *pending* exception, and the code after anything that can raise (a
+//! call to a function whose `raises` set is not empty, `int(s)`,
+//! `float(s)`) tests [`Rvalue::Raised`] and branches to a handler or
+//! unwinds. A function unwinds by releasing its references and
+//! returning, its result ignored, with the exception still pending; the
+//! module's code ends with [`Term::Uncaught`]. A handler tests the kind
+//! with [`Rvalue::PendingIs`] and takes the exception with
+//! [`Rvalue::Catch`]. Faults (D7) stay [`Term::Fail`]s.
 
 use crate::diag::Diagnostic;
 use crate::span::Span;
@@ -44,6 +55,9 @@ pub enum Ty {
     /// three ints, `start`, `stop` and a nonzero `step` ([`Rvalue::Field`]
     /// reads them), whose elements are the ints they produce.
     Range,
+    /// An immutable, reference-counted exception: its [`ExcKind`] and
+    /// at most one argument, which never holds a list.
+    Exc,
 }
 
 impl Ty {
@@ -51,7 +65,7 @@ impl Ty {
     pub fn is_rc(self) -> bool {
         matches!(
             self,
-            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range
+            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range | Ty::Exc
         )
     }
 }
@@ -67,6 +81,47 @@ pub enum Compound {
     Tuple(Vec<Ty>),
     /// The present type: never `None` or itself optional.
     Opt(Ty),
+}
+
+/// A builtin exception (D6). The runtime knows each by its index in
+/// [`ExcKind::ALL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExcKind {
+    Value,
+    Index,
+    ZeroDivision,
+    Overflow,
+    Recursion,
+}
+
+impl ExcKind {
+    pub const ALL: [ExcKind; 5] = [
+        ExcKind::Value,
+        ExcKind::Index,
+        ExcKind::ZeroDivision,
+        ExcKind::Overflow,
+        ExcKind::Recursion,
+    ];
+
+    /// The builtin exception named `name`.
+    pub fn from_name(name: &str) -> Option<ExcKind> {
+        ExcKind::ALL.into_iter().find(|k| k.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ExcKind::Value => "ValueError",
+            ExcKind::Index => "IndexError",
+            ExcKind::ZeroDivision => "ZeroDivisionError",
+            ExcKind::Overflow => "OverflowError",
+            ExcKind::Recursion => "RecursionError",
+        }
+    }
+
+    /// The runtime's code for this kind.
+    pub fn code(self) -> u8 {
+        self as u8
+    }
 }
 
 /// Index into [`Program::funcs`].
@@ -152,6 +207,9 @@ pub enum Inst {
         value: Operand,
         span: Span,
     },
+    /// `raise exc`: makes the `Exc` pending, with its own reference, as
+    /// raised at `span`. Nothing may be pending.
+    Raise { exc: Operand, span: Span },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -223,10 +281,22 @@ pub enum Rvalue {
     BoolToInt(Operand),
     /// `int(f)`, truncating. Fails on NaN and out of range.
     FloatToInt(Operand),
-    /// `float(s)`. Fails unless `s` is a float literal.
+    /// `float(s)`. Unless `s` is a float literal, raises `ValueError`
+    /// (pending, at the `Inst`'s span) and gives 0.
     ParseFloat(Operand),
-    /// `int(s)` in base 10. Fails unless `s` is an int literal in range.
+    /// `int(s)` in base 10. Unless `s` is an int literal, raises
+    /// `ValueError` as [`Rvalue::ParseFloat`] does; fails out of range.
     ParseInt(Operand),
+    /// A new exception of this kind holding the operand, if any, which
+    /// gains a reference.
+    NewExc(ExcKind, Option<Operand>),
+    /// Whether an exception is pending: a `Bool`.
+    Raised,
+    /// Whether the pending exception, which there is, is of this kind.
+    PendingIs(ExcKind),
+    /// The pending exception, which there is, with its reference; none
+    /// is pending after.
+    Catch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -272,9 +342,35 @@ pub enum Term {
     Return(Operand),
     /// A runtime error: print it and exit 1.
     Fail(Diagnostic),
+    /// The pending exception escaped the module: print it as a runtime
+    /// error at the span it was raised at (`ValueError: bad`) and exit 1.
+    Uncaught,
     /// Proven unreachable, such as the end of a function that always
     /// returns.
     Unreachable,
+}
+
+/// Whether a value of type `ty` is, or may hold, a value of a type
+/// `leaf` picks; `types` are [`Program::types`].
+pub fn holds(types: &[Compound], ty: Ty, leaf: fn(Ty) -> bool) -> bool {
+    if leaf(ty) {
+        return true;
+    }
+    let inner = match ty {
+        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => types.get(id.0),
+        _ => None,
+    };
+    match inner {
+        Some(Compound::List(t) | Compound::Opt(t)) => holds(types, *t, leaf),
+        Some(Compound::Tuple(fields)) => fields.iter().any(|t| holds(types, *t, leaf)),
+        None => false,
+    }
+}
+
+/// Whether `ty` is an exception: with [`holds`], whether rendering a
+/// value can nest without bound.
+pub fn is_exc(ty: Ty) -> bool {
+    ty == Ty::Exc
 }
 
 impl Func {

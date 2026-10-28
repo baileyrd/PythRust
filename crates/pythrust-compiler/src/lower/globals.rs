@@ -121,6 +121,21 @@ impl FnBuilder<'_, '_> {
         Ok(())
     }
 
+    /// After module code unbinds `name` (an `except ... as name` ends):
+    /// functions reading its mirror find it unbound.
+    pub(super) fn mirror_unbind(&mut self, name: &str) {
+        if self.defined.is_none() {
+            return;
+        }
+        let Some(m) = self.cx.globals.mirrors.get(name).copied() else {
+            return;
+        };
+        self.emit(Inst::SetGlobal {
+            global: m.bound,
+            value: Operand::Bool(false),
+        });
+    }
+
     /// In module code, notes the shared variables `dead` would have
     /// assigned: the statements from one cut short by a call that never
     /// returns to the end of its block, never lowered, at any depth and
