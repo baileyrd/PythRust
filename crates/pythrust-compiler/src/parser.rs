@@ -486,7 +486,7 @@ impl<'a> Parser<'a> {
         let start = self.expect(&TokenKind::Except)?.span;
         if self.at(&TokenKind::Colon) {
             let msg = "bare `except:` is not supported yet; name the exception, \
-                       as in `except ValueError:`";
+                       or write `except Exception:` to catch any";
             return Err(error(self.tok(0).span, msg));
         }
         let exception = self.expect_name("an exception name, such as `ValueError`")?;

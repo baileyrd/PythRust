@@ -9,7 +9,8 @@ use super::num::MID;
 use super::seq::descriptor;
 use super::{backend, runtime, FnGen, Rt};
 use crate::diag::Result;
-use crate::ir::{ExcKind, Operand};
+use crate::exc::ExcKind;
+use crate::ir::Operand;
 use crate::span::Span;
 
 impl FnGen<'_, '_, '_> {
@@ -28,6 +29,18 @@ impl FnGen<'_, '_, '_> {
             self.call_rt(Rt::SeqPush, &[e, v]);
         }
         Ok(e)
+    }
+
+    /// Whether the pending exception is one of `class`. The runtime
+    /// knows no hierarchy: it gets the set of the codes of `class` and
+    /// every class derived from it, a bit per code.
+    pub(super) fn pending_is(&mut self, class: ExcKind) -> Result<Value> {
+        let codes = ExcKind::ALL
+            .into_iter()
+            .filter(|k| k.is_a(class))
+            .fold(0u32, |set, k| set | 1 << k.code());
+        let codes = self.b.ins().iconst(types::I32, i64::from(codes));
+        self.call_rt_value(Rt::PendingIs, &[codes])
     }
 
     /// `raise exc` at `span`.

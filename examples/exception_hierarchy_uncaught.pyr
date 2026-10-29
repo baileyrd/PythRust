@@ -1,0 +1,7 @@
+# expect-exit: 1
+# An exception no handler's class covers ends the program, named by its
+# own class.
+try:
+    raise LookupError("missing key")
+except ArithmeticError:
+    print("never")

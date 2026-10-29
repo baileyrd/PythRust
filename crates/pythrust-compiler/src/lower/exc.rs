@@ -7,7 +7,8 @@
 
 use crate::ast::{Block, Expr, ExprKind, Handler};
 use crate::diag::Result;
-use crate::ir::{ExcKind, Inst, LocalId, Operand, Rvalue, Term, Ty};
+use crate::exc::ExcKind;
+use crate::ir::{Inst, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 use super::{internal, FnBuilder, Try, Unbind};

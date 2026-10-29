@@ -115,7 +115,7 @@ impl Checker {
     }
 
     /// `except Name [as e]:` and its block. `Name` must be a builtin
-    /// exception that nothing shadows; `e` is an `Exception`.
+    /// exception class that nothing shadows; `e` is an `Exception`.
     fn handler(&mut self, h: &Handler) -> Result<()> {
         let name = &h.exception.name;
         if !self.is_exception_name(name) {
@@ -319,15 +319,11 @@ impl Checker {
     }
 }
 
-/// Why `except name` names no builtin exception: shadowed, the base
-/// class, or unknown.
+/// Why `except name` names no builtin exception: shadowed, or unknown.
 fn not_an_exception(name: &str) -> String {
-    let names = builtins::EXCEPTIONS.join(", ");
     if builtins::is_exception(name) {
         return format!("`{name}` is redefined here, so it no longer names the builtin exception");
     }
-    if name == "Exception" {
-        return format!("catching every exception is not supported yet; name one of {names}");
-    }
+    let names = builtins::exception_names();
     format!("`{name}` is not an exception; the builtin exceptions are {names}")
 }

@@ -233,7 +233,7 @@ impl Rt {
 
     /// Parameter and result types; `ptr` is a pointer, such as a string.
     fn sig(self, ptr: types::Type) -> (Vec<types::Type>, Option<types::Type>) {
-        use types::{F64, I64, I8};
+        use types::{F64, I32, I64, I8};
         match self {
             Rt::WriteInt => (vec![I64], None),
             Rt::WriteBool | Rt::WriteByte => (vec![I8], None),
@@ -276,7 +276,7 @@ impl Rt {
             Rt::Raise => (vec![ptr; 5], None),
             Rt::RaiseValue => (vec![ptr; 7], None),
             Rt::Raised => (vec![], Some(I8)),
-            Rt::PendingIs => (vec![I8], Some(I8)),
+            Rt::PendingIs => (vec![I32], Some(I8)),
             Rt::Catch => (vec![], Some(ptr)),
             Rt::Uncaught => (vec![], None),
         }
@@ -769,10 +769,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::ParseInt(s) => self.parse_int(*s, span),
             Rvalue::NewExc(kind, arg) => self.new_exc(*kind, *arg),
             Rvalue::Raised => self.call_rt_value(Rt::Raised, &[]),
-            Rvalue::PendingIs(kind) => {
-                let code = self.b.ins().iconst(types::I8, i64::from(kind.code()));
-                self.call_rt_value(Rt::PendingIs, &[code])
-            }
+            Rvalue::PendingIs(class) => self.pending_is(*class),
             Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
         }
     }

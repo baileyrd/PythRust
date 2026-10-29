@@ -10,6 +10,7 @@ use super::builtins::Builtin;
 use super::rt_err;
 use crate::ast::{CmpOp, FuncDef};
 use crate::diag::Result;
+use crate::exc::ExcKind;
 use crate::span::Span;
 
 /// A shared, mutable list. Python lists alias, so lists are reference counted.
@@ -32,39 +33,6 @@ pub(super) enum Value<'m> {
     /// `xs.append`, bound to its list.
     Append(ListRef<'m>),
     Exc(Rc<Exc<'m>>),
-}
-
-/// A builtin exception name (`docs/grammar.md`, D6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ExcKind {
-    Value,
-    Index,
-    ZeroDivision,
-    Overflow,
-    Recursion,
-}
-
-impl ExcKind {
-    pub fn lookup(name: &str) -> Option<ExcKind> {
-        Some(match name {
-            "ValueError" => ExcKind::Value,
-            "IndexError" => ExcKind::Index,
-            "ZeroDivisionError" => ExcKind::ZeroDivision,
-            "OverflowError" => ExcKind::Overflow,
-            "RecursionError" => ExcKind::Recursion,
-            _ => return None,
-        })
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            ExcKind::Value => "ValueError",
-            ExcKind::Index => "IndexError",
-            ExcKind::ZeroDivision => "ZeroDivisionError",
-            ExcKind::Overflow => "OverflowError",
-            ExcKind::Recursion => "RecursionError",
-        }
-    }
 }
 
 /// An exception value: its kind and the argument it was built with.

@@ -1820,11 +1820,17 @@ fn except_names_a_builtin_exception() {
         "ZeroDivisionError",
         "OverflowError",
         "RecursionError",
+        "ArithmeticError",
+        "LookupError",
+        "RuntimeError",
+        "Exception",
     ] {
         assert!(infer_src(&handler(name)).is_ok(), "{name}");
     }
     assert!(src_err(&handler("KeyError")).starts_with("`KeyError` is not an exception"));
-    assert!(src_err(&handler("Exception")).starts_with("catching every exception"));
+    assert!(src_err(&handler("BaseException")).starts_with("`BaseException` is not an"));
+    let shadowed = format!("Exception = 1\n{}", handler("Exception"));
+    assert!(src_err(&shadowed).contains("no longer names the builtin exception"));
     let shadowed = format!("def ValueError():\n    pass\n{}", handler("ValueError"));
     assert!(src_err(&shadowed).contains("no longer names the builtin exception"));
 }

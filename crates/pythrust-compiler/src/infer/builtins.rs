@@ -1,22 +1,22 @@
 //! The closed builtin functions: `print len list range str int float bool`,
-//! and the builtin exceptions (D6), which build an `Exception` when called.
+//! and the builtin exception classes (D6, B4), which build an `Exception`
+//! when called.
 
 use crate::ast::Arg;
 use crate::diag::Result;
+use crate::exc::ExcKind;
 use crate::span::Span;
 
 use super::solve::Need;
 use super::ty::Type;
 use super::{error, Checker};
 
-/// The builtin exceptions (`docs/grammar.md`, D6).
-pub(super) const EXCEPTIONS: [&str; 5] = [
-    "ValueError",
-    "IndexError",
-    "ZeroDivisionError",
-    "OverflowError",
-    "RecursionError",
-];
+/// The builtin exception classes, sorted, for messages that list them.
+pub(super) fn exception_names() -> String {
+    let mut names: Vec<&str> = ExcKind::ALL.into_iter().map(ExcKind::name).collect();
+    names.sort_unstable();
+    names.join(", ")
+}
 
 pub(super) fn is_builtin(name: &str) -> bool {
     let function = matches!(
@@ -27,7 +27,7 @@ pub(super) fn is_builtin(name: &str) -> bool {
 }
 
 pub(super) fn is_exception(name: &str) -> bool {
-    EXCEPTIONS.contains(&name)
+    ExcKind::from_name(name).is_some()
 }
 
 impl Checker {

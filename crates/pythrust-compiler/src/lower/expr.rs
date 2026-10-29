@@ -2,8 +2,9 @@
 
 use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
 use crate::diag::{Diagnostic, Result};
+use crate::exc::ExcKind;
 use crate::infer::Type;
-use crate::ir::{CmpOp, ExcKind, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
+use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 use super::vars::runtime;
