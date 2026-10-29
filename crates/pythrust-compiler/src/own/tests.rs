@@ -1,4 +1,4 @@
-use super::{analyze, check, Analysis, Mode, Param, Precision};
+use super::{analyze, check, Analysis, Mode, Param, Precision, Strs};
 use crate::diag::DiagKind;
 use crate::{infer, lexer, parser};
 
@@ -31,6 +31,19 @@ fn modes(src: &str, name: &str) -> (Vec<Mode>, Vec<bool>) {
         ps.iter().map(|p| p.result_aliases).collect(),
     )
 }
+
+/// `name`'s [`Strs`], as (kept, returned) per parameter.
+fn strs(src: &str, name: &str) -> Vec<(bool, bool)> {
+    let ps = params(src, name);
+    ps.iter().map(|p| (p.strs.kept, p.strs.returned)).collect()
+}
+
+const KEPT_RETURNED: Strs = Strs {
+    kept: true,
+    returned: true,
+    elements_kept: true,
+    elements_returned: true,
+};
 
 const READ: Mode = Mode::Read;
 const MUT: Mode = Mode::Mut;
@@ -157,6 +170,7 @@ fn conservative(src: &str) {
         mode: OWNED,
         result_aliases: true,
         holds_global: true,
+        strs: KEPT_RETURNED,
     };
     for (name, s) in &a.funcs {
         assert!(s.params.iter().all(|p| *p == owned), "{name}: {s:?}");
@@ -306,7 +320,7 @@ fn loose_functions_check_only_the_modes_they_write() {
 #[test]
 fn writing_more_than_the_body_needs_is_allowed() {
     // As over-declaring `raises` is: it reserves the right to change.
-    let src = "temper def total(mut xs: list[int], owned ys: list[int], mut n: int) -> int:\n    return len(xs) + len(ys) + n\ndef peek(owned xs):\n    return xs[0]\nprint(total([1], [2], 3), peek([4]))\n";
+    let src = "temper def total(mut xs: list[int], owned ys: list[int], owned s: str) -> int:\n    return len(xs) + len(ys) + len(s)\ndef peek(owned xs):\n    return xs[0]\nprint(total([1], [2], \"a\"), peek([4]))\n";
     assert_eq!(checked(src), Ok(()));
 }
 
@@ -872,4 +886,351 @@ fn a_store_through_one_parameter_may_show_through_another() {
     // Storing an int creates no sharing.
     let ints = format!("{PUSH}def bump(a: list[int], b: list[int], c: list[int]) -> None:\n    a.append(1)\n    push(c, b)\nx = [1]\nbump(x, x, [2])\n");
     assert_eq!(checked(&ints), Ok(()));
+}
+
+#[test]
+fn reading_a_string_keeps_none_of_it() {
+    let src = "def shout(s: str, n: int) -> str:\n    t = s + \"!\"\n    c = s[0]\n    print(len(s), c, n)\n    return t\nprint(shout(\"hi\", 1))\n";
+    assert_eq!(strs(src, "shout"), vec![(false, false), (false, false)]);
+    let tempered = src.replace("def shout", "temper def shout");
+    assert_eq!(checked(&tempered), Ok(()));
+}
+
+#[test]
+fn returning_a_string_or_a_value_holding_it_is_returned() {
+    let src = "def same(s: str) -> str:\n    return s\ndef pair(s: str) -> tuple[str, int]:\n    return (s, 1)\ndef some(s: str) -> str | None:\n    if len(s) > 0:\n        return s\n    return None\ndef first(t: tuple[str, int]) -> str:\n    return t[0]\ndef boxed(s: str) -> list[str]:\n    xs = [\"a\"]\n    ys = xs\n    ys.append(s)\n    return xs\ndef via(s: str) -> str:\n    return same(s)\nprint(same(\"a\"), pair(\"b\"), some(\"c\"), first((\"d\", 2)), boxed(\"e\"), via(\"f\"))\n";
+    for name in ["same", "pair", "some", "first", "boxed", "via"] {
+        assert_eq!(strs(src, name), vec![(false, true)], "{name}");
+        assert_eq!(modes(src, name).0, vec![READ], "{name}");
+    }
+}
+
+#[test]
+fn storing_a_string_where_it_outlives_the_call_is_kept() {
+    let src = "names: list[str] = []\ndef log(s: str):\n    names.append(s)\ndef put(dst: list[str], s: str):\n    dst.append(s)\ndef fail(s: str):\n    raise ValueError(s)\ndef via(s: str):\n    log(s)\ndef local(s: str):\n    names.append(s + \"\")\n    row = [s]\n    rows: list[list[str]] = [row]\n    print(len(rows))\nlog(\"a\")\nput(names, \"b\")\nvia(\"d\")\nlocal(\"e\")\ntry:\n    fail(\"f\")\nexcept ValueError as e:\n    print(e)\nprint(names)\n";
+    for name in ["log", "fail", "via"] {
+        assert_eq!(strs(src, name), vec![(true, false)], "{name}");
+    }
+    assert_eq!(strs(src, "put"), vec![(false, false), (true, false)]);
+    assert_eq!(modes(src, "put").0, vec![MUT, READ]);
+    // A new string, and a list only the body can see, keep nothing.
+    assert_eq!(strs(src, "local"), vec![(false, false)]);
+}
+
+#[test]
+fn a_lists_elements_are_not_its_strings() {
+    let src = "names: list[str] = []\ndef first(xs: list[str]) -> str:\n    names.append(xs[1])\n    return xs[0]\ndef field(t: tuple[list[int], str]) -> list[int]:\n    names.append(t[1])\n    t[0].append(1)\n    return [0]\nprint(first([\"a\", \"b\"]), field(([1], \"x\")))\n";
+    assert_eq!(strs(src, "first"), vec![(false, false)]);
+    assert_eq!(strs(src, "field"), vec![(true, false)]);
+}
+
+#[test]
+fn ints_and_scalar_tuples_hold_no_strings() {
+    let src = "total: list[tuple[int, int]] = []\ndef add(n: int, p: tuple[int, int]) -> int:\n    total.append(p)\n    return n\nprint(add(1, (2, 3)))\n";
+    assert_eq!(strs(src, "add"), vec![(false, false), (false, false)]);
+}
+
+#[test]
+fn tempered_functions_write_owned_on_a_string_they_keep() {
+    let src = "names: list[str] = []\ntemper def same(s: str) -> str:\n    return s\ntemper def log(s: str) -> None:\n    names.append(s)\ntemper def fail(s: str) -> None raises ValueError:\n    raise ValueError(s)\ntemper def pair(t: tuple[str, int]) -> None:\n    names.append(t[0])\nprint(same(\"a\"))\nlog(\"b\")\npair((\"c\", 1))\ntry:\n    fail(\"d\")\nexcept ValueError as e:\n    print(e)\n";
+    let returns = mode_err(src);
+    assert_eq!(
+        returns,
+        (
+            "tempered `same` returns `s`; write `owned s`".into(),
+            "s".into()
+        )
+    );
+    let src = src.replace("same(s: str)", "same(owned s: str)");
+    assert_eq!(
+        mode_err(&src).0,
+        "tempered `log` keeps `s` after it returns; write `owned s`"
+    );
+    let src = src.replace("log(s: str)", "log(owned s: str)");
+    assert_eq!(
+        mode_err(&src).0,
+        "tempered `fail` keeps `s` after it returns; write `owned s`"
+    );
+    let src = src.replace("fail(s: str)", "fail(owned s: str)");
+    assert_eq!(
+        mode_err(&src).0,
+        "tempered `pair` keeps `t` after it returns; write `owned t`"
+    );
+    let src = src.replace("pair(t:", "pair(owned t:");
+    assert_eq!(checked(&src), Ok(()));
+}
+
+#[test]
+fn a_tempered_function_keeping_a_global_string_writes_owned() {
+    let src = "last = [\"x\"]\ntemper def keep(s: str) -> None:\n    last[0] = s\nkeep(\"a\")\nprint(last)\n";
+    assert_eq!(
+        mode_err(src).0,
+        "tempered `keep` keeps `s` after it returns; write `owned s`"
+    );
+    assert_eq!(checked(&src.replace("keep(s:", "keep(owned s:")), Ok(()));
+}
+
+#[test]
+fn a_kept_scalar_tuple_needs_no_mode() {
+    let src = "kept: list[tuple[int, int]] = []\ntemper def keep(p: tuple[int, int]) -> tuple[int, int]:\n    kept.append(p)\n    return p\nprint(keep((1, 2)))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn owned_on_a_value_type_is_an_error() {
+    let int = "temper def f(owned n: int) -> int:\n    return n\nprint(f(1))\n";
+    assert_eq!(
+        mode_err(int),
+        (
+            "`f`: ints are copied; remove `owned` from `n`".into(),
+            "n".into()
+        )
+    );
+    let pair = "def f(owned p: tuple[int, float]):\n    print(p)\nf((1, 2.0))\n";
+    assert_eq!(
+        mode_err(pair).0,
+        "`f`: `tuple[int, float]` values are copied; remove `owned` from `p`"
+    );
+    let opt = "def f(owned n: int | None):\n    print(n)\nf(None)\n";
+    assert_eq!(
+        mode_err(opt).0,
+        "`f`: `int | None` values are copied; remove `owned` from `n`"
+    );
+}
+
+#[test]
+fn mut_only_where_the_types_operations_reach_a_list() {
+    let s = "def f(mut s: str):\n    print(s)\nf(\"a\")\n";
+    assert_eq!(
+        mode_err(s),
+        (
+            "`f`: strings cannot change in place; remove `mut` from `s`".into(),
+            "s".into()
+        )
+    );
+    let t = "temper def f(mut t: tuple[str, int]) -> None:\n    print(t)\nf((\"a\", 1))\n";
+    assert_eq!(
+        mode_err(t).0,
+        "`f`: `tuple[str, int]` values cannot change in place; remove `mut` from `t`"
+    );
+    let t = "temper def f(mut t: tuple[int, str]) -> None:\n    print(t)\nf((1, \"a\"))\n";
+    assert_eq!(
+        mode_err(t).0,
+        "`f`: `tuple[int, str]` values cannot change in place; remove `mut` from `t`"
+    );
+    let n = "def f(mut n: int):\n    print(n)\nf(1)\n";
+    assert_eq!(mode_err(n).0, "`f`: ints are copied; remove `mut` from `n`");
+    // No operation reaches an exception's argument, even a list (A6 rule 4).
+    let e = "def f(mut e: Exception):\n    print(e)\nf(ValueError([1]))\n";
+    assert_eq!(
+        mode_err(e).0,
+        "`f`: exceptions cannot change in place; remove `mut` from `e`"
+    );
+    // A list inside a tuple or optional can still change in place.
+    let inner = "temper def f(mut t: tuple[list[int], str], mut o: list[int] | None) -> None:\n    t[0].append(1)\n    if o is not None:\n        o.append(2)\nf(([0], \"a\"), None)\n";
+    assert_eq!(checked(inner), Ok(()));
+    // Rebinding a tuple element stays an error under `mut`.
+    let rebind =
+        "temper def f(mut t: tuple[list[int], int]) -> None:\n    t[0] = [1]\nf(([0], 1))\n";
+    let rebind = lexer::lex(rebind).and_then(|t| parser::parse(&t));
+    let rebind = rebind.and_then(|m| infer::infer(&m).map(|_| ()));
+    let Err(d) = rebind else {
+        panic!("rebinding a tuple element checked");
+    };
+    assert_eq!(d.message, "tuple does not support item assignment");
+    let owned = "def f(owned s: str, owned xs: list[int]):\n    print(s, xs)\nf(\"a\", [1])\n";
+    assert_eq!(checked(owned), Ok(()));
+}
+
+#[test]
+fn loose_functions_with_a_wrong_mode() {
+    let src = "names: list[str] = []\ndef log(s):\n    names.append(s)\ndef same(s):\n    return s\nlog(\"a\")\nprint(same(\"b\"))\n";
+    assert_eq!(checked(src), Ok(()));
+    assert_eq!(
+        mode_err(&src.replace("log(s)", "log(mut s)")).0,
+        "`log`: strings cannot change in place; remove `mut` from `s`"
+    );
+    let n = "def f(owned n: int):\n    print(n + 1)\nf(1)\n";
+    assert_eq!(
+        mode_err(n).0,
+        "`f`: ints are copied; remove `owned` from `n`"
+    );
+    // A generic parameter may have any mode.
+    let generic = "def f(owned x):\n    return x\nprint(f(1), f(\"a\"))\n";
+    assert_eq!(checked(generic), Ok(()));
+}
+
+#[test]
+fn strings_stay_outside_the_alias_checks() {
+    let src = "temper def f(owned s: str) -> str:\n    b = s\n    print(b)\n    return s\nprint(f(\"a\"))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn a_tempered_function_keeping_an_exception_writes_owned() {
+    let src = "kept: list[Exception] = []\ntemper def keep(e: Exception) -> None:\n    kept.append(e)\ntemper def again(e: Exception) -> None raises Exception:\n    raise e\ntemper def show(e: Exception) -> None:\n    print(e)\ntry:\n    raise ValueError(\"a\")\nexcept ValueError as e:\n    keep(e)\n    show(e)\n    again(e)\n";
+    assert_eq!(
+        mode_err(src),
+        (
+            "tempered `keep` keeps `e` after it returns; write `owned e`".into(),
+            "e".into()
+        )
+    );
+    let src = src.replace("keep(e: Exception)", "keep(owned e: Exception)");
+    assert_eq!(
+        mode_err(&src).0,
+        "tempered `again` keeps `e` after it returns; write `owned e`"
+    );
+    let src = src.replace("again(e: Exception)", "again(owned e: Exception)");
+    assert_eq!(checked(&src), Ok(()));
+}
+
+#[test]
+fn a_string_returned_through_a_callees_list_element_is_returned() {
+    let helper = "temper def first(xs: list[str]) -> str:\n    return xs[0]\ntemper def relay(s: str) -> str:\n    return first([s])\nprint(relay(\"x\"))\n";
+    assert_eq!(
+        mode_err(helper),
+        (
+            "tempered `relay` returns `s`; write `owned s`".into(),
+            "s".into()
+        )
+    );
+    let direct =
+        "temper def relay(s: str) -> str:\n    xs = [s]\n    return xs[0]\nprint(relay(\"x\"))\n";
+    assert_eq!(
+        mode_err(direct).0,
+        "tempered `relay` returns `s`; write `owned s`"
+    );
+    // The list's elements are not `first`'s own strings.
+    assert_eq!(
+        checked(&helper.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+    // A helper that only reads its list's elements returns none of them.
+    let read = "temper def count(xs: list[str]) -> int:\n    print(xs[0])\n    return len(xs)\ntemper def relay(s: str) -> int:\n    return count([s])\nprint(relay(\"x\"))\n";
+    assert_eq!(checked(read), Ok(()));
+}
+
+#[test]
+fn a_string_kept_through_a_callees_list_element_is_kept() {
+    let helper = "names: list[str] = []\ntemper def keep_first(xs: list[str]) -> None:\n    names.append(xs[0])\ntemper def relay(s: str) -> None:\n    keep_first([s])\nrelay(\"x\")\nprint(names)\n";
+    assert_eq!(
+        mode_err(helper).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    let direct = "names: list[str] = []\ntemper def relay(s: str) -> None:\n    xs = [s]\n    names.append(xs[0])\nrelay(\"x\")\nprint(names)\n";
+    assert_eq!(
+        mode_err(direct).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    assert_eq!(
+        checked(&helper.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+    // `keep_first` keeps an element, not its list: no mode on `xs`.
+    let strs = strs(
+        &helper.replace("relay(s: str)", "relay(owned s: str)"),
+        "keep_first",
+    );
+    assert_eq!(strs, vec![(false, false)]);
+}
+
+#[test]
+fn a_list_a_callee_returns_keeps_the_strings_in_it() {
+    let base = "names: list[list[str]] = []\ntemper def box(owned s: str) -> list[str]:\n    return [s]\ntemper def relay(s: str) -> list[str]:\n    return box(s)\nprint(relay(\"x\"))\n";
+    let want = "tempered `relay` returns `s`; write `owned s`";
+    assert_eq!(mode_err(base).0, want);
+    let bound = base.replace(
+        "    return box(s)\n",
+        "    b = box(s)\n    c = b\n    return c\n",
+    );
+    assert_eq!(mode_err(&bound).0, want);
+    let nested = base.replace(
+        "temper def relay(s: str) -> list[str]:\n    return box(s)\n",
+        "temper def relay(s: str) -> tuple[list[str], int] | None:\n    return (box(s), 1)\n",
+    );
+    assert_eq!(mode_err(&nested).0, want);
+    let stored = base.replace(
+        "temper def relay(s: str) -> list[str]:\n    return box(s)\n",
+        "temper def relay(s: str) -> list[str]:\n    b = box(s)\n    names.append(b)\n    return [\"y\"]\n",
+    );
+    assert_eq!(
+        mode_err(&stored).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    assert_eq!(
+        checked(&base.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+}
+
+#[test]
+fn an_exception_in_a_list_a_callee_returns_is_returned() {
+    let src = "temper def box(owned e: Exception) -> list[Exception]:\n    return [e]\ntemper def relay(e: Exception) -> list[Exception]:\n    b = box(e)\n    return b\ntry:\n    raise ValueError(\"a\")\nexcept ValueError as e:\n    print(len(relay(e)))\n";
+    assert_eq!(
+        mode_err(src),
+        (
+            "tempered `relay` returns `e`; write `owned e`".into(),
+            "e".into()
+        )
+    );
+    let first = "temper def first(xs: list[Exception]) -> Exception:\n    return xs[0]\ntemper def relay(e: Exception) -> Exception:\n    return first([e])\nprint(relay(ValueError(\"a\")))\n";
+    assert_eq!(
+        mode_err(first).0,
+        "tempered `relay` returns `e`; write `owned e`"
+    );
+}
+
+#[test]
+fn a_list_extracted_from_a_returned_container_keeps_its_strings() {
+    let field = "names: list[list[str]] = []\ntemper def box(owned s: str) -> tuple[list[str], int]:\n    return ([s], 1)\ntemper def relay(s: str) -> list[str]:\n    pair = box(s)\n    return pair[0]\nprint(relay(\"x\"))\n";
+    let want = "tempered `relay` returns `s`; write `owned s`";
+    assert_eq!(mode_err(field).0, want);
+    assert_eq!(
+        checked(&field.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+    let opt = "names: list[list[str]] = []\ntemper def maybe(owned s: str) -> list[str] | None:\n    return [s]\ntemper def relay(s: str) -> list[str]:\n    m = maybe(s)\n    if m is None:\n        return [\"y\"]\n    return m\nprint(relay(\"x\"))\n";
+    assert_eq!(mode_err(opt).0, want);
+    assert_eq!(
+        checked(&opt.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+    let stored = field.replace(
+        "    return pair[0]\n",
+        "    names.append(pair[0])\n    return [\"y\"]\n",
+    );
+    assert_eq!(
+        mode_err(&stored).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    let stored = opt.replace(
+        "    return m\n",
+        "    names.append(m)\n    return [\"y\"]\n",
+    );
+    assert_eq!(
+        mode_err(&stored).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    // A container whose list holds none of `s` keeps nothing of it.
+    let unrelated = field
+        .replace("return ([s], 1)", "print(s)\n    return ([\"z\"], 1)")
+        .replace("box(owned s", "box(s");
+    assert_eq!(checked(&unrelated), Ok(()));
+}
+
+#[test]
+fn an_exception_in_a_returned_container_is_returned() {
+    let src = "temper def box(owned e: Exception) -> tuple[list[Exception], int]:\n    return ([e], 1)\ntemper def relay(e: Exception) -> list[Exception]:\n    pair = box(e)\n    return pair[0]\nprint(len(relay(ValueError(\"a\"))))\n";
+    assert_eq!(
+        mode_err(src),
+        (
+            "tempered `relay` returns `e`; write `owned e`".into(),
+            "e".into()
+        )
+    );
+    assert_eq!(
+        checked(&src.replace("relay(e: Exception)", "relay(owned e: Exception)")),
+        Ok(())
+    );
 }

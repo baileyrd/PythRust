@@ -25,9 +25,11 @@
 //! Nothing here reads the ownership summaries of [`own`](crate::own)
 //! (Nano, 2026-10-29): those track list aliasing (a string parameter is
 //! always `read`), while what decides a refcount is whether the callee
-//! keeps the reference itself, which the IR states exactly. Phase 4
-//! checks this fact against the summaries once they cover every
-//! reference-counted type (`docs/roadmap.md`, A8).
+//! keeps the reference itself, which the IR states exactly. The corpus
+//! test `corpus_unkept_parameters_are_borrowed` checks this fact against
+//! the summaries (A8): a parameter whose lists and strings they say are
+//! neither kept nor returned, and which is never reassigned, is
+//! borrowed.
 
 #[cfg(test)]
 mod tests;

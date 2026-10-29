@@ -45,6 +45,47 @@ pub struct FuncType {
 }
 
 impl Type {
+    /// Whether values of this type are heap values (D2): a `str`, list
+    /// or exception, or a tuple or optional holding one. The rest are
+    /// copied. Defined on the language-level type, so no backend's
+    /// representation changes which modes a program may write. `None`
+    /// while it depends on a generic type.
+    pub fn holds_heap(&self) -> Option<bool> {
+        match self {
+            Type::Str | Type::List(_) | Type::Exception => Some(true),
+            _ => self.any_part(Type::holds_heap),
+        }
+    }
+
+    /// Whether the type's own operations reach a mutable heap value, so
+    /// a value of it can change in place (D2 `mut`): a list, or a tuple
+    /// or optional holding one. Not an exception: no operation reaches
+    /// its argument. `None` while it depends on a generic type.
+    pub fn reaches_mutable(&self) -> Option<bool> {
+        match self {
+            Type::List(_) => Some(true),
+            _ => self.any_part(Type::reaches_mutable),
+        }
+    }
+
+    /// Whether `pred` holds of a tuple field or an optional's value;
+    /// false for any other type.
+    fn any_part(&self, pred: fn(&Type) -> Option<bool>) -> Option<bool> {
+        let parts: Vec<Option<bool>> = match self {
+            Type::Tuple(fields) => fields.iter().map(pred).collect(),
+            Type::Optional(present) => vec![pred(present)],
+            Type::Var(_) => vec![None],
+            _ => Vec::new(),
+        };
+        if parts.contains(&Some(true)) {
+            return Some(true);
+        }
+        match parts.contains(&None) {
+            true => None,
+            false => Some(false),
+        }
+    }
+
     /// `int`, `float` and `bool` mix in arithmetic and comparison.
     pub(super) fn is_numeric(&self) -> bool {
         matches!(self, Type::Int | Type::Float | Type::Bool)

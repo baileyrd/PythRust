@@ -2,9 +2,12 @@
 //!
 //! Per function, a [`Mode`] for each parameter and whether the result
 //! may alias it (`docs/research/ownership.md`); that document's `owned`
-//! is [`Mode::Owned`] or an aliased result. Only values that can hold
-//! a list are tracked: aliasing anything else (ints, strings, tuples of
-//! them) is unobservable, so such a parameter is always [`Mode::Read`].
+//! is [`Mode::Owned`] or an aliased result. Modes and aliasing track
+//! only values that can hold a list: aliasing anything else (strings,
+//! tuples of them) is unobservable, so such a parameter is always
+//! [`Mode::Read`] there. What the call does with a parameter's strings
+//! is [`Param::strs`] ([`strs`]): D2 asks tempered code to write `owned`
+//! on a string it keeps or returns.
 //!
 //! The analysis runs on the IR, so it sees only what lowering covers.
 //! [`analyze`] is the coverage gate: a program lowering cannot express
@@ -19,6 +22,7 @@ mod alias;
 mod body;
 mod calls;
 mod modes;
+mod strs;
 
 #[cfg(test)]
 mod tests;
@@ -27,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{Module, StmtKind};
 use crate::diag::{Diagnostic, Result};
-use crate::infer::Types;
+use crate::infer::{Type, Types};
 use crate::ir::{Compound, Program, Ty};
 use crate::lower;
 use crate::span::Span;
@@ -55,6 +59,28 @@ pub struct Param {
     pub result_aliases: bool,
     /// Whether the call may leave a list a global holds inside it.
     pub holds_global: bool,
+    /// What the call does with its strings.
+    pub strs: Strs,
+}
+
+/// What a call may do with a parameter's strings: the parameter if it is
+/// a `str`, and the strings its tuple fields and optional's value hold,
+/// but not past a list. A parameter whose language-level type holds no
+/// string outside a list (an int, a list, a tuple of ints) has neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Strs {
+    /// Whether one may outlive the call other than in the result: in a
+    /// list the caller or the module can see, a global, an exception, or
+    /// a callee that keeps it.
+    pub kept: bool,
+    /// Whether the result may hold one.
+    pub returned: bool,
+    /// As `kept`, for the elements, at any depth, of the lists it holds
+    /// as the caller passed them: no mode, since they are values of
+    /// their own, but a caller follows its strings through them.
+    pub elements_kept: bool,
+    /// As `returned`, for those elements.
+    pub elements_returned: bool,
 }
 
 /// A function's summary.
@@ -134,6 +160,9 @@ pub struct Analysis {
     pub heaps: Vec<Heap>,
     /// Every call of the program; empty when conservative.
     pub calls: Vec<CallSite>,
+    /// By function name, each parameter's type, from inference, so
+    /// present even when conservative.
+    pub params: BTreeMap<String, Vec<Type>>,
     pub precision: Precision,
 }
 
@@ -156,6 +185,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
                     .map(|f| body::heap(&program, f, &summaries))
                     .collect(),
                 calls: calls.collect(),
+                params: param_types(module, types),
                 precision: Precision::Precise,
             }
         }
@@ -165,6 +195,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
             names: Vec::new(),
             heaps: Vec::new(),
             calls: Vec::new(),
+            params: param_types(module, types),
             precision: Precision::Conservative(gap),
         },
     }
@@ -209,6 +240,7 @@ impl Summary {
             mode: Mode::Read,
             result_aliases: false,
             holds_global: false,
+            strs: Strs::default(),
         };
         Summary {
             params: vec![param; arity],
@@ -222,6 +254,12 @@ impl Summary {
             mode: Mode::Owned,
             result_aliases: true,
             holds_global: true,
+            strs: Strs {
+                kept: true,
+                returned: true,
+                elements_kept: true,
+                elements_returned: true,
+            },
         };
         Summary {
             params: vec![param; arity],
@@ -230,12 +268,16 @@ impl Summary {
     }
 
     /// The weakest summary covering both: per parameter, the stronger
-    /// mode, aliased if either is.
+    /// mode, aliased, kept or returned if either is.
     fn join(&mut self, other: &Summary) {
         for (p, q) in self.params.iter_mut().zip(&other.params) {
             p.mode = p.mode.max(q.mode);
             p.result_aliases |= q.result_aliases;
             p.holds_global |= q.holds_global;
+            p.strs.kept |= q.strs.kept;
+            p.strs.returned |= q.strs.returned;
+            p.strs.elements_kept |= q.strs.elements_kept;
+            p.strs.elements_returned |= q.strs.elements_returned;
         }
         self.result_global |= other.result_global;
     }
@@ -256,6 +298,21 @@ fn by_name(program: &Program, summaries: &[Summary]) -> BTreeMap<String, Summary
     funcs
 }
 
+/// The parameter types of each function `module` defines.
+fn param_types(module: &Module, types: &Types) -> BTreeMap<String, Vec<Type>> {
+    let defs = module.body.iter().filter_map(|s| match &s.kind {
+        StmtKind::FuncDef(f) => types.func(&f.name.name).map(|t| (&f.name.name, t)),
+        _ => None,
+    });
+    defs.map(|(name, t)| {
+        (
+            name.clone(),
+            t.params.iter().map(|p| p.ty.clone()).collect(),
+        )
+    })
+    .collect()
+}
+
 /// The conservative summary of every function `module` defines.
 fn conservative(module: &Module) -> BTreeMap<String, Summary> {
     let defs = module.body.iter().filter_map(|s| match &s.kind {
@@ -273,5 +330,26 @@ fn holds_list(program: &Program, ty: Ty) -> bool {
         Some(Compound::Tuple(fields)) => fields.iter().any(|f| holds_list(program, *f)),
         Some(Compound::Opt(present)) => holds_list(program, *present),
         None => false,
+    }
+}
+
+/// The language-level type an IR type lowers.
+fn source(program: &Program, ty: Ty) -> Type {
+    match ty {
+        Ty::Int => Type::Int,
+        Ty::Float => Type::Float,
+        Ty::Bool => Type::Bool,
+        Ty::None => Type::None,
+        Ty::Str => Type::Str,
+        Ty::Range => Type::Range,
+        Ty::Exc => Type::Exception,
+        Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) => match program.compound(ty) {
+            Some(Compound::List(elem)) => Type::List(Box::new(source(program, *elem))),
+            Some(Compound::Tuple(fields)) => {
+                Type::Tuple(fields.iter().map(|f| source(program, *f)).collect())
+            }
+            Some(Compound::Opt(present)) => Type::Optional(Box::new(source(program, *present))),
+            None => Type::None,
+        },
     }
 }
