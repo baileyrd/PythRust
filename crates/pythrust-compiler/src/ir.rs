@@ -18,6 +18,14 @@
 //! [`Func::borrowed`], and return an owned result, and rvalues giving
 //! one give a new reference.
 //!
+//! After `rc::elide` two kinds of local hold a pointer without owning
+//! it. A borrowed parameter points at its caller's reference, which
+//! outlives the call; the function never releases, moves or reassigns
+//! it. A copy `a = x` whose `Retain` was cancelled borrows `x`'s
+//! reference until the `Forget(a)` that replaced its `Release`, within
+//! one block, while nothing ends `x`. Either is never released, and the
+//! copy is null again after its `Forget`.
+//!
 //! Exceptions (D6, D8) are a tag plus a value without a second return
 //! register: [`Inst::Raise`] makes an exception the runtime's one
 //! *pending* exception, and the code after anything that can raise (a
