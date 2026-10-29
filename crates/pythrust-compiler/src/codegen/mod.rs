@@ -1012,6 +1012,12 @@ fn runtime(span: Span, message: &str) -> Diagnostic {
     }
 }
 
+/// The native limitation an exception that may close a reference cycle
+/// meets: refcounting has no cycle collector.
+const CYCLE_GAP: &str = "the native backend does not support an exception holding a list \
+                         that may hold exceptions yet: it could form a reference cycle, and \
+                         native code has no cycle collector";
+
 /// Rejects what lowering expresses but this backend does not: an
 /// exception whose argument holds a list that may hold an exception,
 /// whose reference counts could form a cycle (a list holding an
@@ -1030,9 +1036,7 @@ fn refuse_gaps(program: &Program) -> Result<()> {
             if may_cycle(&program.types, func.ty(*arg)) {
                 return Err(Diagnostic {
                     span: *span,
-                    message: "the native backend does not support an exception holding a list \
-                              of exceptions yet"
-                        .into(),
+                    message: CYCLE_GAP.into(),
                     kind: DiagKind::Backend,
                 });
             }
@@ -1047,6 +1051,8 @@ fn refuse_gaps(program: &Program) -> Result<()> {
 /// from values that exist, so a cycle needs a list changed afterwards
 /// to reach back, and only an exception hides its argument's type. The
 /// last exception before that list on the cycle holds it by its type.
+/// "An exception" is any `Ty::Exc`, whatever its kind, so a future
+/// `list[Exception]` counts; a future `dyn` must count as one too.
 fn may_cycle(types: &[Compound], ty: Ty) -> bool {
     let (Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id)) = ty else {
         return false;
@@ -1102,7 +1108,7 @@ mod tests {
         match emit(&program, &render) {
             Ok(_) => false,
             Err(d) => {
-                assert!(d.message.contains("list of exceptions"), "{}", d.message);
+                assert_eq!(d.message, CYCLE_GAP);
                 true
             }
         }
