@@ -25,8 +25,8 @@
 //! always `read`), while what decides a refcount is whether the callee
 //! keeps the reference itself, which the IR states exactly. The corpus
 //! test `corpus_unkept_parameters_are_borrowed` checks this fact against
-//! the summaries' [`Refs`](crate::own::Refs) (A8): a parameter they say
-//! is neither kept nor returned, and which is never reassigned, is
+//! the summaries (A8): a parameter whose lists and strings they say are
+//! neither kept nor returned, and which is never reassigned, is
 //! borrowed.
 
 #[cfg(test)]

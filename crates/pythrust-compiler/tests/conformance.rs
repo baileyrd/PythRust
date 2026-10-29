@@ -608,7 +608,8 @@ fn corpus_ownership_coverage() -> Res<()> {
 
 /// A7's IR fact against the summaries (A8): in every program the native
 /// backend builds, a reference-counted parameter whose summary neither
-/// keeps nor returns a reference, and which its body never reassigns, is
+/// keeps nor returns its lists or strings, and which its body never
+/// reassigns, is
 /// borrowed after `rc::elide`. The summaries check the fact but do not
 /// feed it; each is per instance here, as `build` lowers.
 #[test]
@@ -641,7 +642,7 @@ fn unkept_unborrowed(program: &Program) -> Vec<String> {
             .params
             .iter()
             .zip(&summary.params)
-            .filter(|(p, s)| !s.refs.kept && !s.refs.returned && func.locals[p.0].is_rc())
+            .filter(|(p, s)| unkept(s) && func.locals[p.0].is_rc())
             .map(|(p, _)| *p)
             .filter(|p| !reassigns(func, *p))
             .collect();
@@ -656,6 +657,12 @@ fn unkept_unborrowed(program: &Program) -> Vec<String> {
         })
     });
     params.collect()
+}
+
+/// Whether the summary says the call keeps no reference of the
+/// parameter's: its lists are neither kept nor returned, nor its strings.
+fn unkept(p: &own::Param) -> bool {
+    p.mode != own::Mode::Owned && !p.result_aliases && !p.strs.kept && !p.strs.returned
 }
 
 /// `src` lowered as `build` lowers it, before elision.

@@ -1,0 +1,12 @@
+# deviation: a tempered function writes `owned` on a string it keeps (D2); CPython has no modes.
+# expect-error: tempered `remember` keeps `name` after it returns; write `owned name`
+# expect-exit: 1
+names: list[str] = []
+
+
+temper def remember(name: str) -> None:
+    names.append(name)
+
+
+remember("ada")
+print(names)

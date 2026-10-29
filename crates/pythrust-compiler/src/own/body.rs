@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{holds_list, refs, CallSite, Heap, Mode, Param, Peer, Refs, Summary};
+use super::{holds_list, strs, CallSite, Heap, Mode, Param, Peer, Strs, Summary};
 use crate::ir::{Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term};
 
 /// An abstract list.
@@ -63,13 +63,13 @@ pub(super) struct Flow<'a> {
 }
 
 /// `func`'s summary, with callees summarized as `summaries` say.
-/// Its [`Param::refs`] are [`refs::params`]'.
+/// Its [`Param::strs`] are [`strs::params`]'.
 pub(super) fn summarize(program: &Program, func: &Func, summaries: &[Summary]) -> Summary {
     let flow = settle(program, func, summaries);
     let mut summary = flow.summary();
-    let refs = refs::params(func, summaries, &flow);
-    for (p, r) in summary.params.iter_mut().zip(refs) {
-        p.refs = r;
+    let strs = strs::params(program, func, summaries, &flow);
+    for (p, s) in summary.params.iter_mut().zip(strs) {
+        p.strs = s;
     }
     summary
 }
@@ -435,7 +435,7 @@ impl<'a> Flow<'a> {
                 mode,
                 result_aliases: meets(&returned, region),
                 holds_global: meets(&inside, &world),
-                refs: Refs::default(),
+                strs: Strs::default(),
             }
         });
         Summary {

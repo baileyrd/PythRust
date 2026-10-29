@@ -1,0 +1,8 @@
+# deviation: `owned` on a value type is an error (D2); CPython has no modes.
+# expect-error: `double`: ints are copied; remove `owned` from `n`
+# expect-exit: 1
+def double(owned n: int) -> int:
+    return n * 2
+
+
+print(double(2))

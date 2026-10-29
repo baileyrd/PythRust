@@ -44,7 +44,35 @@ pub struct FuncType {
     pub ret: Type,
 }
 
+/// How a type's values are held (D2), weakest first. Defined on the
+/// language-level type, so no backend's representation changes which
+/// modes a program may write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Holding {
+    /// Copied: a scalar or `range`, or a tuple or optional of them.
+    Value,
+    /// On the heap, unchangeable: a `str` or an exception, or a tuple or
+    /// optional holding one and no list.
+    Immutable,
+    /// On the heap, holding a list, which can change in place.
+    Mutable,
+}
+
 impl Type {
+    /// How values of this type are held; `None` while it is generic.
+    pub fn holding(&self) -> Option<Holding> {
+        match self {
+            Type::Int | Type::Float | Type::Bool | Type::None | Type::Range => Some(Holding::Value),
+            Type::Str | Type::Exception => Some(Holding::Immutable),
+            Type::List(_) => Some(Holding::Mutable),
+            Type::Tuple(fields) => fields
+                .iter()
+                .try_fold(Holding::Value, |h, f| Some(h.max(f.holding()?))),
+            Type::Optional(present) => present.holding(),
+            Type::Var(_) => None,
+        }
+    }
+
     /// `int`, `float` and `bool` mix in arithmetic and comparison.
     pub(super) fn is_numeric(&self) -> bool {
         matches!(self, Type::Int | Type::Float | Type::Bool)
