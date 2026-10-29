@@ -1120,6 +1120,7 @@ mod tests {
             "e = ValueError([1])\nprint(e)\n",
             "e = IndexError([['a'], []])\nprint(e)\n",
             "e = ValueError(([1], ValueError(2)))\nprint(e)\n",
+            "e = ValueError((ValueError(0), IndexError(1)))\nprint(e)\n",
             "xs: list[int] | None = [1]\ne = ValueError(xs)\nprint(e)\n",
             "es = [ValueError(1)]\nprint(ValueError((1, 2)), es)\n",
         ] {
@@ -1131,6 +1132,7 @@ mod tests {
     fn an_exception_holding_a_list_that_may_hold_one_is_refused() {
         for src in [
             "e = ValueError([ValueError(0)])\n",
+            "e = ValueError([[IndexError(0)]])\n",
             "e = ValueError((1, [[ValueError(0)]]))\n",
             "e = ValueError([(1, ValueError(0))])\n",
             "x: Exception | None = None\ne = ValueError([x])\n",
