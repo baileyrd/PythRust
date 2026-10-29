@@ -769,7 +769,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::ParseInt(s) => self.parse_int(*s, span),
             Rvalue::NewExc(kind, arg) => self.new_exc(*kind, *arg),
             Rvalue::Raised => self.call_rt_value(Rt::Raised, &[]),
-            Rvalue::PendingIs(class) => self.pending_is(*class),
+            Rvalue::PendingIs(classes) => self.pending_is(classes),
             Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
         }
     }

@@ -314,6 +314,8 @@ const NATIVE: &[&str] = &[
     "exception_list",
     "exception_list_shapes",
     "exception_list_uncaught",
+    "exception_tuple",
+    "exception_tuple_uncaught",
     "exception_unbound",
     "exception_uncaught",
     "exceptions",

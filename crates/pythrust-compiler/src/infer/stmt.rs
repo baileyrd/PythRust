@@ -114,12 +114,12 @@ impl Checker {
         self.expect(value.span, &Type::Exception, &t, what)
     }
 
-    /// `except Name [as e]:` and its block. `Name` must be a builtin
-    /// exception class that nothing shadows; `e` is an `Exception`.
+    /// `except Name [as e]:` or `except (A, B) [as e]:` and its block.
+    /// Each name must be a builtin exception class that nothing shadows;
+    /// `e` is an `Exception`.
     fn handler(&mut self, h: &Handler) -> Result<()> {
-        let name = &h.exception.name;
-        if !self.is_exception_name(name) {
-            return Err(error(h.exception.span, not_an_exception(name)));
+        if let Some(c) = h.classes.iter().find(|c| !self.is_exception_name(&c.name)) {
+            return Err(error(c.span, not_an_exception(&c.name)));
         }
         if let Some(b) = &h.binding {
             self.bind_name(&b.name, b.span, &Type::Exception)?;

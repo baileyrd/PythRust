@@ -41,11 +41,16 @@ impl FnBuilder<'_, '_> {
         self.terminate(Term::Goto(end));
         self.switch_to(dispatch);
         for h in handlers {
-            let name = &h.exception;
-            let kind = ExcKind::from_name(&name.name)
-                .ok_or_else(|| internal(name.span, "a handler of no builtin exception"))?;
+            let classes = h
+                .classes
+                .iter()
+                .map(|c| {
+                    ExcKind::from_name(&c.name)
+                        .ok_or_else(|| internal(c.span, "a handler of no builtin exception"))
+                })
+                .collect::<Result<Vec<_>>>()?;
             let (catch, next) = (self.new_block(), self.new_block());
-            let cond = self.temp(Ty::Bool, Rvalue::PendingIs(kind), name.span);
+            let cond = self.temp(Ty::Bool, Rvalue::PendingIs(classes), h.span);
             self.terminate(Term::Branch {
                 cond,
                 then: catch,
@@ -65,7 +70,7 @@ impl FnBuilder<'_, '_> {
     /// Takes the pending exception and runs `h`, its `as` name bound to
     /// it, then unbinds the name, as Python does.
     fn handler(&mut self, h: &Handler) -> Result<()> {
-        let e = self.temp(Ty::Exc, Rvalue::Catch, h.exception.span);
+        let e = self.temp(Ty::Exc, Rvalue::Catch, h.span);
         let Some(binding) = &h.binding else {
             if let Operand::Local(l) = e {
                 self.emit(Inst::Release(l));

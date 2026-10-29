@@ -1836,6 +1836,17 @@ fn except_names_a_builtin_exception() {
 }
 
 #[test]
+fn every_class_of_a_tuple_handler_is_a_builtin_exception() {
+    let handler =
+        |classes: &str| format!("try:\n    pass\nexcept ({classes}) as e:\n    print(e)\n");
+    assert!(infer_src(&handler("ValueError, IndexError")).is_ok());
+    assert!(infer_src(&handler("ValueError, ValueError")).is_ok());
+    assert!(src_err(&handler("ValueError, KeyError")).starts_with("`KeyError` is not an exception"));
+    let shadowed = format!("IndexError = 1\n{}", handler("ValueError, IndexError"));
+    assert!(src_err(&shadowed).contains("`IndexError` is redefined here"));
+}
+
+#[test]
 fn handler_name_has_one_fixed_type() {
     let src = "e = 1\ntry:\n    pass\nexcept ValueError as e:\n    pass\n";
     assert!(src_err(src).starts_with("cannot change the type of `e`"));

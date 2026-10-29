@@ -264,18 +264,22 @@ impl<'m> Interp<'m, '_> {
         Err(Unwind::Raise(exc, span))
     }
 
-    /// Whether `h` names `kind` or a class it derives from. The name is
-    /// looked up only now, as Python evaluates it.
+    /// Whether one of `h`'s classes is `kind` or a class it derives from.
+    /// Every name is looked up now, as Python evaluates the tuple whole.
     fn catches(&self, h: &Handler, kind: ExcKind) -> Result<bool> {
-        let name = &h.exception;
-        match self.lookup(&name.name, name.span)? {
-            Value::Builtin(Builtin::Exception(class)) => Ok(kind.is_a(class)),
-            _ => Err(rt_err(
-                name.span,
-                "TypeError: catching classes that do not inherit from BaseException is not allowed"
-                    .to_string(),
-            )),
+        let mut caught = false;
+        for name in &h.classes {
+            let Value::Builtin(Builtin::Exception(class)) = self.lookup(&name.name, name.span)?
+            else {
+                return Err(rt_err(
+                    name.span,
+                    "TypeError: catching classes that do not inherit from BaseException is not allowed"
+                        .to_string(),
+                ));
+            };
+            caught |= kind.is_a(class);
         }
+        Ok(caught)
     }
 
     /// Runs `h` with its `as` name bound to `exc`, then unbinds the name,

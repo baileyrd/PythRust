@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-error: multiple exception types must be parenthesized
+# Python before 3.14 rejects this too.
+try:
+    print(int("x"))
+except ValueError, IndexError:
+    print("caught")

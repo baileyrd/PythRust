@@ -1,0 +1,61 @@
+# Tuple handlers: `except (A, B):` catches an instance of any class in
+# the tuple or derived from one, as in Python.
+temper def parse(s: str, xs: list[int]) -> int raises ValueError, IndexError:
+    if s == "":
+        raise IndexError("empty")
+    return xs[0] + int(s)
+
+
+temper def safe(s: str) -> int:
+    try:
+        return parse(s, [10])
+    except (ValueError, IndexError) as e:
+        print("bad input:", e)
+        return -1
+
+
+def kind(n: int) -> None:
+    if n == 0:
+        raise ZeroDivisionError("zero")
+    if n == 1:
+        raise IndexError("index")
+    if n == 2:
+        raise RecursionError("recursion")
+    raise ValueError("value")
+
+
+print(safe("5"), safe("x"), safe(""))
+
+for n in range(4):
+    try:
+        try:
+            kind(n)
+        except (ArithmeticError, LookupError) as e:
+            print(n, "first handler:", e)
+        except (RuntimeError,) as e:
+            print(n, "second handler:", e)
+    except Exception as e:
+        print(n, "outer handler:", e)
+
+# A parenthesized name, a trailing comma and a repeated class are legal.
+try:
+    raise ValueError("one")
+except (ValueError) as e:
+    print("parenthesized:", e)
+
+try:
+    raise OverflowError("two")
+except (ValueError, OverflowError, ValueError,):
+    print("trailing comma")
+
+# Re-raising keeps the class, whichever of the tuple it was.
+for n in range(2):
+    try:
+        try:
+            kind(n)
+        except (ZeroDivisionError, IndexError) as e:
+            raise e
+    except ZeroDivisionError as e:
+        print("still a ZeroDivisionError:", e)
+    except IndexError as e:
+        print("still an IndexError:", e)

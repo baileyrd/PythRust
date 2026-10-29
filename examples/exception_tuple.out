@@ -1,0 +1,11 @@
+bad input: invalid literal for int() with base 10: 'x'
+bad input: empty
+15 -1 -1
+0 first handler: zero
+1 first handler: index
+2 second handler: recursion
+3 outer handler: value
+parenthesized: one
+trailing comma
+still a ZeroDivisionError: zero
+still an IndexError: index

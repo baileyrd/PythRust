@@ -85,11 +85,13 @@ pub enum StmtKind {
     },
 }
 
-/// `'except' NAME ['as' NAME] ':' block`. `exception` names a builtin
-/// exception (checked by inference); `binding` is the `as` name.
+/// `'except' classes ['as' NAME] ':' block`, where `classes` is a name
+/// or a parenthesized tuple of them. Each names a builtin exception
+/// (checked by inference); `classes` is never empty. `binding` is the
+/// `as` name.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
-    pub exception: Ident,
+    pub classes: Vec<Ident>,
     pub binding: Option<Ident>,
     pub body: Block,
     pub span: Span,

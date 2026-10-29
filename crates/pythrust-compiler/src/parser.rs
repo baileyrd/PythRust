@@ -481,7 +481,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `'except' NAME ['as' NAME] ':' block`
+    /// `'except' classes ['as' NAME] ':' block`
     fn handler(&mut self) -> Result<Handler> {
         let start = self.expect(&TokenKind::Except)?.span;
         if self.at(&TokenKind::Colon) {
@@ -489,7 +489,7 @@ impl<'a> Parser<'a> {
                        or write `except Exception:` to catch any";
             return Err(error(self.tok(0).span, msg));
         }
-        let exception = self.expect_name("an exception name, such as `ValueError`")?;
+        let classes = self.handler_classes()?;
         let binding = if self.eat(&TokenKind::As) {
             Some(self.expect_name("a name to bind the exception to")?)
         } else {
@@ -498,11 +498,32 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Colon)?;
         let body = self.block()?;
         Ok(Handler {
-            exception,
+            classes,
             binding,
             body,
             span: self.span_from(start),
         })
+    }
+
+    /// `NAME | '(' NAME (',' NAME)* [','] ')'`. Unparenthesized
+    /// `A, B` is an error, as in Python before 3.14.
+    fn handler_classes(&mut self) -> Result<Vec<Ident>> {
+        let what = "an exception name, such as `ValueError`";
+        if !self.eat(&TokenKind::LParen) {
+            let class = self.expect_name(what)?;
+            if self.at(&TokenKind::Comma) {
+                let msg = "multiple exception types must be parenthesized, \
+                           as in `except (ValueError, IndexError):`";
+                return Err(error(self.tok(0).span, msg));
+            }
+            return Ok(vec![class]);
+        }
+        let mut classes = vec![self.expect_name(what)?];
+        while self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RParen) {
+            classes.push(self.expect_name(what)?);
+        }
+        self.expect(&TokenKind::RParen)?;
+        Ok(classes)
     }
 
     /// `target_list` before `in`. Parsed at `postfix` level so the `in`
