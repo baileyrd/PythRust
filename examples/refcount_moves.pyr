@@ -1,0 +1,70 @@
+# Refcount elision (A7 follow-ups): a `for` over a variable borrows it,
+# and a copy at a variable's last use takes its reference. Each case
+# below changes or drops the source at an awkward point.
+def first_big(xs: list[int], limit: int) -> int:
+    for v in xs:
+        if v > limit:
+            return v
+    return -1
+
+
+def rebinds_while_looping(xs: list[int]) -> int:
+    total = 0
+    for v in xs:
+        xs = [100]
+        total += v
+    return total + xs[0]
+
+
+def swap(a: str, b: str) -> str:
+    t = a
+    a = b
+    b = t
+    return a + b
+
+
+def last_use(s: str) -> list[str]:
+    word = s + "!"
+    kept = word
+    word = "other"
+    return [kept, word]
+
+
+def nested(rows: list[list[int]]) -> int:
+    total = 0
+    for row in rows:
+        for v in row:
+            if v < 0:
+                break
+            total += v
+        else:
+            continue
+        total += 1000
+    return total
+
+
+def guarded(xs: list[str]) -> str:
+    out = ""
+    for s in xs:
+        try:
+            out = out + str(int(s))
+        except ValueError:
+            out = out + "?"
+    return out
+
+
+nums = [1, 5, 9]
+print(first_big(nums, 4), first_big(nums, 10))
+print(rebinds_while_looping(nums), nums)
+print(swap("x", "y"))
+print(last_use("w"))
+print(nested([[1, 2], [3, -1, 4], [5]]))
+print(guarded(["1", "a", "2"]))
+names = ["p", "q"]
+for n in names:
+    names.append(n + n)
+    if len(names) > 5:
+        break
+alias = names
+names = ["r"]
+print(alias, names)
