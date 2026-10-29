@@ -107,51 +107,146 @@ fn a_call_that_keeps_its_argument_needs_the_parameter_owned() {
 }
 
 #[test]
-fn a_copy_kept_past_its_statement_keeps_its_reference() {
+fn a_copy_kept_past_its_statement_keeps_its_reference_until_its_last_use() {
     let p = elided("def f(s: str) -> str:\n    t = s\n    print(t)\n    return t\nprint(f('a'))\n");
-    // `t = s` and returning `t` each own a reference.
-    assert_eq!(retains(func(&p, "f")), 2);
+    // `t = s` owns a reference; returning `t`, its last use, takes it.
+    assert_eq!(retains(func(&p, "f")), 1);
+}
+
+/// A function of string locals whose blocks are `blocks`, after
+/// [`copies`].
+fn after_copies(blocks: Vec<Block>) -> Func {
+    let mut f = Func {
+        name: "f".to_string(),
+        params: Vec::new(),
+        ret: Ty::None,
+        locals: vec![Ty::Str; 4],
+        names: Default::default(),
+        borrowed: BTreeSet::new(),
+        blocks,
+    };
+    copies(&mut f, &[BTreeSet::new()]);
+    f
+}
+
+fn print(l: usize) -> Inst {
+    Inst::Print {
+        args: vec![Operand::Local(LocalId(l))],
+        sep: None,
+        end: None,
+    }
 }
 
 #[test]
 fn a_copy_released_while_its_source_lives_borrows_it() {
-    let mut b = block(vec![
+    let f = after_copies(vec![block(vec![
         copy(1, 0),
         Inst::Retain(LocalId(1)),
-        Inst::Print {
-            args: vec![Operand::Local(LocalId(1))],
-            sep: None,
-            end: None,
-        },
+        print(1),
         Inst::Release(LocalId(1)),
-    ]);
-    cancel(&mut b);
-    assert_eq!(b.insts[0], copy(1, 0));
-    assert_eq!(b.insts.len(), 3);
-    assert_eq!(b.insts[2], Inst::Forget(LocalId(1)));
+        print(0),
+    ])]);
+    let want = vec![copy(1, 0), print(1), Inst::Forget(LocalId(1)), print(0)];
+    assert_eq!(f.blocks[0].insts, want);
 }
 
 #[test]
-fn a_copy_outliving_its_source_or_moved_on_stays() {
-    let outlives = vec![
-        copy(1, 0),
-        Inst::Retain(LocalId(1)),
-        Inst::Release(LocalId(0)),
-        Inst::Release(LocalId(1)),
-    ];
-    let moved = vec![
+fn a_copy_borrows_across_blocks_as_a_for_snapshot_does() {
+    // b0 copies, b1 tests, b2 reads and loops, b3 releases: the shape of
+    // `for v in xs` over a variable.
+    let goto = |t| Term::Goto(crate::ir::BlockId(t));
+    let f = after_copies(vec![
+        Block {
+            insts: vec![copy(1, 0), Inst::Retain(LocalId(1))],
+            term: goto(1),
+        },
+        Block {
+            insts: Vec::new(),
+            term: Term::Branch {
+                cond: Operand::Bool(true),
+                then: crate::ir::BlockId(2),
+                orelse: crate::ir::BlockId(3),
+            },
+        },
+        Block {
+            insts: vec![print(1)],
+            term: goto(1),
+        },
+        Block {
+            insts: vec![Inst::Release(LocalId(1)), print(0)],
+            term: Term::Unreachable,
+        },
+    ]);
+    assert_eq!(f.blocks[0].insts, vec![copy(1, 0)]);
+    assert_eq!(f.blocks[3].insts[0], Inst::Forget(LocalId(1)));
+}
+
+#[test]
+fn a_copy_of_a_source_never_read_again_takes_its_reference() {
+    let f = after_copies(vec![block(vec![
         copy(1, 0),
         Inst::Retain(LocalId(1)),
         copy(2, 1),
         Inst::Forget(LocalId(1)),
+        Inst::Release(LocalId(0)),
+    ])]);
+    assert_eq!(f.blocks[0].insts[1], Inst::Forget(LocalId(0)));
+    // Read after its source is dropped, a copy takes the reference too.
+    let f = after_copies(vec![block(vec![
+        copy(1, 0),
+        Inst::Retain(LocalId(1)),
+        Inst::Release(LocalId(0)),
+        print(1),
+        Inst::Release(LocalId(1)),
+    ])]);
+    assert_eq!(f.blocks[0].insts[1], Inst::Forget(LocalId(0)));
+}
+
+#[test]
+fn a_copy_whose_source_is_read_again_and_that_moves_on_stays() {
+    let moved_and_read = vec![
+        copy(1, 0),
+        Inst::Retain(LocalId(1)),
+        copy(2, 1),
+        Inst::Forget(LocalId(1)),
+        print(0),
+    ];
+    // Copied on, `a` could be read through the copy after `x` ends.
+    let copied_then_source_ends = vec![
+        copy(1, 0),
+        Inst::Retain(LocalId(1)),
+        copy(2, 1),
+        Inst::Retain(LocalId(2)),
+        // A call taking `x` ends it, and reads it.
+        Inst::Assign {
+            dest: LocalId(3),
+            value: Rvalue::Call(FuncId(0), vec![Operand::Local(LocalId(0))]),
+            span: Span { start: 0, end: 0 },
+        },
+        print(2),
+        Inst::Release(LocalId(2)),
         Inst::Release(LocalId(1)),
     ];
     let not_a_copy = vec![Inst::Retain(LocalId(1)), Inst::Release(LocalId(1))];
-    for insts in [outlives, moved, not_a_copy] {
-        let mut b = block(insts.clone());
-        cancel(&mut b);
-        assert_eq!(b.insts, insts);
+    for insts in [moved_and_read, not_a_copy] {
+        assert_eq!(
+            after_copies(vec![block(insts.clone())]).blocks[0].insts,
+            insts
+        );
     }
+    // The call reads `x`, so nothing may take its reference, and `a` is
+    // copied, so `a` cannot borrow past `x`.
+    let f = after_copies(vec![block(copied_then_source_ends)]);
+    assert!(f.blocks[0].insts.contains(&Inst::Retain(LocalId(1))));
+}
+
+#[test]
+fn a_returning_path_that_never_releases_the_copy_keeps_it() {
+    let f = after_copies(vec![Block {
+        insts: vec![copy(1, 0), Inst::Retain(LocalId(1)), print(0)],
+        term: Term::Return(Operand::None),
+    }]);
+    assert!(f.blocks[0].insts.contains(&Inst::Retain(LocalId(1))));
 }
 
 #[test]

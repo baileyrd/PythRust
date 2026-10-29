@@ -372,6 +372,7 @@ const NATIVE: &[&str] = &[
     "raises",
     "recursion_limit",
     "refcount_keeps",
+    "refcount_moves",
     "shadow_builtin_late",
     "short_circuit",
     "sorting",

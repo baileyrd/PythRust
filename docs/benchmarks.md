@@ -32,14 +32,14 @@ Where values stay in registers, native code is an order of magnitude faster; whe
 
 ## Refcount elision (A7)
 
-Before and after `rc::elide`, same machine (4-core Xeon, shared container), CPython 3.13, release build, 5 runs each, median seconds:
+Before `rc::elide`, after it (#50), and after its follow-ups (cross-block copies, last-use moves, `pt_seq_dec` without an allocation), same machine (4-core Xeon, shared container), release build, 5 runs each, median seconds:
 
-| Benchmark | Before | After |
-|---|---:|---:|
-| `numeric` | 0.483 | 0.487 |
-| `sorting` | 0.085 | 0.081 |
-| `strings` | 0.243 | 0.240 |
-| `tuples` | 0.410 | 0.407 |
-| `tuples_baseline` | 0.081 | 0.081 |
+| Benchmark | Before | #50 | Follow-ups |
+|---|---:|---:|---:|
+| `numeric` | 0.483 | 0.487 | 0.484 |
+| `sorting` | 0.085 | 0.081 | 0.080 |
+| `strings` | 0.243 | 0.240 | 0.244 |
+| `tuples` | 0.410 | 0.407 | 0.355 |
+| `tuples_baseline` | 0.081 | 0.081 | 0.081 |
 
-Only `sorting` moves beyond noise (about 5%): `quicksort` now borrows its list, so its recursive calls touch no count. The rest is allocation (every `+`, `str()` and tuple is a runtime object) and runtime calls, which elision does not reach. One such cost is in the runtime itself: `pt_seq_dec` allocates a work list on every call, even when the count stays above zero.
+`sorting` gains about 5% from #50: `quicksort` borrows its list, so its recursive calls touch no count. `tuples` gains about 13% from the follow-ups, nearly all of it the runtime change: `pt_seq_dec` used to allocate a work list on every call, even when the count stayed above zero, and now allocates only when a freed sequence holds another. The rest is allocation (every `+`, `str()` and tuple is a runtime object) and runtime calls, which elision does not reach.
