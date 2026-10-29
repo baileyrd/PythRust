@@ -70,7 +70,7 @@ pub enum Ty {
     Range,
     /// An immutable, reference-counted exception: its [`ExcKind`] and
     /// at most one argument. The native backend rejects one holding a
-    /// list (`codegen`); the analyses see it.
+    /// list that may hold an exception (`codegen`); the analyses see it.
     Exc,
 }
 

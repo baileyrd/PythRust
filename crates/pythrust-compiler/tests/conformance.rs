@@ -309,6 +309,9 @@ const NATIVE: &[&str] = &[
     "default_eval_error",
     "fibonacci",
     "empty_tuple_loop",
+    "exception_list",
+    "exception_list_shapes",
+    "exception_list_uncaught",
     "exception_unbound",
     "exception_uncaught",
     "exceptions",
@@ -936,6 +939,29 @@ fn corpus_matches_native() -> Res<()> {
         }
     }
     report(failures);
+    Ok(())
+}
+
+/// An exception holding a list that may hold exceptions could close a
+/// reference cycle, so `build` refuses it at the construct, as a native
+/// limitation, while `run` accepts it (`exception_list_cycle`).
+#[test]
+fn build_refuses_an_exception_that_may_close_a_cycle() -> Res<()> {
+    let source = corpus_dir()?.join("exception_list_cycle.pyr");
+    let out = Command::new(pythrust_bin()?)
+        .arg("build")
+        .arg(&source)
+        .output()
+        .map_err(|e| format!("cannot run pythrust build: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("exception_list_cycle.pyr:5:5: backend error"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(NATIVE_UNSUPPORTED), "{stderr}");
+    assert!(stderr.contains("no cycle collector"), "{stderr}");
+    assert_eq!(run_pythrust(&source)?.status, 0);
     Ok(())
 }
 

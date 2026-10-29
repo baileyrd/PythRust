@@ -1,0 +1,5 @@
+# expect-exit: 1
+# An uncaught exception holding a list prints the list's repr.
+names = ["a", "b"]
+names.append("c")
+raise ValueError(names)

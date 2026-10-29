@@ -1,0 +1,8 @@
+# A list holding an exception that holds the list: a reference cycle.
+# The native backend refuses an exception holding a list of exceptions,
+# since its reference counts could form one.
+xs = [ValueError(0)]
+e = ValueError(xs)
+xs.append(e)
+print(e)
+print(xs)
