@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use pythrust_compiler::{
-    codegen, infer, interp, lexer, lower, own, parser, DiagKind, Diagnostic, Span,
+    codegen, infer, interp, lexer, lower, own, parser, rc, DiagKind, Diagnostic, Span,
 };
 
 const USAGE: &str = "usage: pythrust <run|check|build> <file>";
@@ -192,7 +192,7 @@ fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
     // The same checks as `check`, over every function, before lowering
     // only what runs.
     own::check(&module, &own::analyze(&module, &types))?;
-    let program = lower::lower(&module, &types)?;
+    let program = rc::elide(lower::lower(&module, &types)?);
     codegen::emit(&program, &|diag| render(path, src, diag))
 }
 

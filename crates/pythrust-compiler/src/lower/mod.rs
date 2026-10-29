@@ -710,6 +710,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             ret,
             locals: self.locals,
             names: self.names.into_iter().map(|(n, v)| (v.local, n)).collect(),
+            borrowed: BTreeSet::new(),
             blocks: blocks.collect(),
         }
     }
