@@ -1,0 +1,87 @@
+# The builtin exception hierarchy (B4): `except C` catches C and every
+# class derived from it, as in Python; `raises C` admits them too.
+temper def divide(a: int, b: int) -> int raises ArithmeticError:
+    if b == 0:
+        raise ZeroDivisionError("b is zero")
+    if a > 1000:
+        raise OverflowError("a is too big")
+    return a // b
+
+
+temper def lookup(xs: list[int], i: int) -> int raises LookupError:
+    if i >= len(xs):
+        raise IndexError("no element " + str(i))
+    return xs[i]
+
+
+temper def safe(a: int, b: int) -> int:
+    try:
+        return divide(a, b)
+    except ArithmeticError as e:
+        print("arithmetic:", e)
+        return 0
+
+
+temper def any_error(s: str) -> str:
+    try:
+        return str(int(s))
+    except Exception as e:
+        return "failed: " + str(e)
+
+
+def kind(n: int) -> None:
+    if n == 0:
+        raise ValueError("value")
+    if n == 1:
+        raise IndexError("index")
+    if n == 2:
+        raise RecursionError("recursion")
+    if n == 3:
+        raise LookupError("lookup")
+    if n == 4:
+        raise RuntimeError("runtime")
+    raise Exception("plain")
+
+
+print(safe(7, 2), safe(7, 0), safe(2000, 1))
+print(any_error("12"), any_error("x"))
+
+for n in range(6):
+    try:
+        try:
+            kind(n)
+        except LookupError as e:
+            print(n, "lookup handler:", e)
+        except RuntimeError as e:
+            print(n, "runtime handler:", e)
+    except Exception as e:
+        print(n, "outer handler:", e, [e])
+
+# The first matching handler runs, even when a later one names the
+# exact class.
+try:
+    lookup([1, 2], 5)
+except Exception:
+    print("Exception first")
+except IndexError:
+    print("never")
+
+# A handler of a derived class does not catch its base.
+try:
+    try:
+        raise ArithmeticError("base")
+    except ZeroDivisionError:
+        print("never")
+except ArithmeticError as e:
+    print("base passed through:", e)
+
+# Re-raising keeps the class.
+try:
+    try:
+        divide(1, 0)
+    except ArithmeticError as e:
+        raise e
+except ZeroDivisionError as e:
+    print("still a ZeroDivisionError:", e)
+
+print(lookup([1, 2], 1))

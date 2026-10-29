@@ -1,5 +1,6 @@
 use crate::diag::{DiagKind, Diagnostic};
-use crate::ir::{Compound, ExcKind, Func, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
+use crate::exc::ExcKind;
+use crate::ir::{Compound, Func, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
 use crate::{infer, lexer, parser};
 
 fn lower_src(src: &str) -> crate::diag::Result<Program> {

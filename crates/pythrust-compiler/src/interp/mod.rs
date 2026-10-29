@@ -23,9 +23,10 @@ use crate::ast::{
     StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
+use crate::exc::ExcKind;
 use crate::span::Span;
 use builtins::{Args, Builtin};
-use value::{Exc, ExcKind, Func, Value};
+use value::{Exc, Func, Value};
 
 /// Python's default recursion limit.
 pub(crate) const MAX_DEPTH: usize = 1000;
@@ -263,12 +264,12 @@ impl<'m> Interp<'m, '_> {
         Err(Unwind::Raise(exc, span))
     }
 
-    /// Whether `h` names `kind`. The name is looked up only now, as Python
-    /// evaluates it.
+    /// Whether `h` names `kind` or a class it derives from. The name is
+    /// looked up only now, as Python evaluates it.
     fn catches(&self, h: &Handler, kind: ExcKind) -> Result<bool> {
         let name = &h.exception;
         match self.lookup(&name.name, name.span)? {
-            Value::Builtin(Builtin::Exception(k)) => Ok(k == kind),
+            Value::Builtin(Builtin::Exception(class)) => Ok(kind.is_a(class)),
             _ => Err(rt_err(
                 name.span,
                 "TypeError: catching classes that do not inherit from BaseException is not allowed"

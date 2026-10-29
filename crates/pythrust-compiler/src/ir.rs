@@ -35,13 +35,14 @@
 //! `float(s)`) tests [`Rvalue::Raised`] and branches to a handler or
 //! unwinds. A function unwinds by releasing its references and
 //! returning, its result ignored, with the exception still pending; the
-//! module's code ends with [`Term::Uncaught`]. A handler tests the kind
+//! module's code ends with [`Term::Uncaught`]. A handler tests the class
 //! with [`Rvalue::PendingIs`] and takes the exception with
 //! [`Rvalue::Catch`]. Faults (D7) stay [`Term::Fail`]s.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diag::Diagnostic;
+use crate::exc::ExcKind;
 use crate::span::Span;
 
 /// A value type. Every local and operand has exactly one.
@@ -95,47 +96,6 @@ pub enum Compound {
     Tuple(Vec<Ty>),
     /// The present type: never `None` or itself optional.
     Opt(Ty),
-}
-
-/// A builtin exception (D6). The runtime knows each by its index in
-/// [`ExcKind::ALL`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ExcKind {
-    Value,
-    Index,
-    ZeroDivision,
-    Overflow,
-    Recursion,
-}
-
-impl ExcKind {
-    pub const ALL: [ExcKind; 5] = [
-        ExcKind::Value,
-        ExcKind::Index,
-        ExcKind::ZeroDivision,
-        ExcKind::Overflow,
-        ExcKind::Recursion,
-    ];
-
-    /// The builtin exception named `name`.
-    pub fn from_name(name: &str) -> Option<ExcKind> {
-        ExcKind::ALL.into_iter().find(|k| k.name() == name)
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            ExcKind::Value => "ValueError",
-            ExcKind::Index => "IndexError",
-            ExcKind::ZeroDivision => "ZeroDivisionError",
-            ExcKind::Overflow => "OverflowError",
-            ExcKind::Recursion => "RecursionError",
-        }
-    }
-
-    /// The runtime's code for this kind.
-    pub fn code(self) -> u8 {
-        self as u8
-    }
 }
 
 /// Index into [`Program::funcs`].
@@ -320,7 +280,8 @@ pub enum Rvalue {
     NewExc(ExcKind, Option<Operand>),
     /// Whether an exception is pending: a `Bool`.
     Raised,
-    /// Whether the pending exception, which there is, is of this kind.
+    /// Whether the pending exception, which there is, is one of this
+    /// class: of it or of a class derived from it, as `except` tests.
     PendingIs(ExcKind),
     /// The pending exception, which there is, with its reference; none
     /// is pending after.

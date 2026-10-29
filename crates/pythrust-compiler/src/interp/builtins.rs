@@ -4,10 +4,11 @@
 use std::io::Write;
 use std::rc::Rc;
 
-use super::value::{str_repr, Exc, ExcKind, Num, Range, Value};
+use super::value::{str_repr, Exc, Num, Range, Value};
 use super::{rt_err, value_error, Exec};
 use crate::ast::Ident;
 use crate::diag::Result;
+use crate::exc::ExcKind;
 use crate::span::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +42,7 @@ impl Builtin {
             "int" => Builtin::Int,
             "float" => Builtin::Float,
             "bool" => Builtin::Bool,
-            _ => return ExcKind::lookup(name).map(Builtin::Exception),
+            _ => return ExcKind::from_name(name).map(Builtin::Exception),
         })
     }
 

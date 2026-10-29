@@ -1,0 +1,14 @@
+arithmetic: b is zero
+arithmetic: a is too big
+3 0 0
+12 failed: invalid literal for int() with base 10: 'x'
+0 outer handler: value [ValueError('value')]
+1 lookup handler: index
+2 runtime handler: recursion
+3 lookup handler: lookup
+4 runtime handler: runtime
+5 outer handler: plain [Exception('plain')]
+Exception first
+base passed through: base
+still a ZeroDivisionError: b is zero
+2

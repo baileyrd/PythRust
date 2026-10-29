@@ -33,7 +33,7 @@ use crate::ast::{Block, FuncDef, Module, StmtKind, TypeExpr};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 
-pub use raises::{Escape, Raises};
+pub use raises::Raises;
 use solve::{Constraint, Need};
 use subst::Subst;
 pub use ty::{FuncType, ParamType, Type, TypeVar};

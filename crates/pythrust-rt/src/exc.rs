@@ -21,13 +21,18 @@ use std::sync::{Mutex, PoisonError};
 use crate::seq::{self, PtSeq};
 use crate::str::{self as pstr, PtStr};
 
-/// The builtin exceptions, by kind code.
-const NAMES: [&str; 5] = [
+/// The builtin exception classes, by kind code (the compiler's
+/// `ExcKind::ALL`).
+const NAMES: [&str; 9] = [
     "ValueError",
     "IndexError",
     "ZeroDivisionError",
     "OverflowError",
     "RecursionError",
+    "ArithmeticError",
+    "LookupError",
+    "RuntimeError",
+    "Exception",
 ];
 
 /// The descriptor of a `ValueError` holding a string.
@@ -153,12 +158,14 @@ pub extern "C" fn pt_raised() -> u8 {
     u8::from(pending().is_some())
 }
 
-/// Whether the pending exception is of kind `code`: 1 or 0.
+/// Whether the pending exception's kind is in `codes`, a bit per kind
+/// code (the compiler sets a class's bit and those of the classes derived
+/// from it): 1 or 0.
 #[unsafe(no_mangle)]
-pub extern "C" fn pt_pending_is(code: u8) -> u8 {
+pub extern "C" fn pt_pending_is(codes: u32) -> u8 {
     let guard = pending();
     let found = guard.as_ref().map(|p| seq::exc_kind(p.exc as u64));
-    u8::from(found == Some(code))
+    u8::from(found.is_some_and(|code| codes.checked_shr(u32::from(code)).unwrap_or(0) & 1 == 1))
 }
 
 /// Takes the pending exception and its reference, leaving none pending;
@@ -217,7 +224,13 @@ mod tests {
             assert_eq!(pt_raised(), 0);
             pt_raise(e, head.as_ptr(), 4, tail.as_ptr(), 1);
             seq::pt_seq_dec(e);
-            assert_eq!((pt_raised(), pt_pending_is(4), pt_pending_is(0)), (1, 1, 0));
+            let (recursion, runtime, value) = (1 << 4, 1 << 4 | 1 << 7, 1);
+            let tests = (
+                pt_pending_is(recursion),
+                pt_pending_is(runtime),
+                pt_pending_is(value),
+            );
+            assert_eq!((pt_raised(), tests), (1, (1, 1, 0)));
             assert_eq!(uncaught_line(e as u64), "RecursionError");
             let caught = pt_catch();
             assert_eq!((caught, pt_raised()), (e, 0));
@@ -237,7 +250,7 @@ mod tests {
             let n = none.as_ptr();
             pt_raise_value(prefix.as_ptr(), prefix.len(), s, n, 0, n, 0);
             pstr::pt_str_dec(s);
-            assert_eq!(pt_pending_is(0), 1);
+            assert_eq!(pt_pending_is(1), 1); // ValueError's bit
             let e = pt_catch();
             let line = uncaught_line(e as u64);
             assert_eq!(
