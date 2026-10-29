@@ -14,8 +14,9 @@
 //! pointer and, at every instruction boundary, either null or the owner
 //! of one reference: lowering makes ownership explicit with `Retain`,
 //! `Release` and `Forget`, so the backend never decides it. Such
-//! operands are borrowed; calls take them owned and return an owned
-//! result, and rvalues giving one give a new reference.
+//! operands are borrowed; calls take them owned, but for a parameter in
+//! [`Func::borrowed`], and return an owned result, and rvalues giving
+//! one give a new reference.
 //!
 //! Exceptions (D6, D8) are a tag plus a value without a second return
 //! register: [`Inst::Raise`] makes an exception the runtime's one
@@ -28,7 +29,7 @@
 //! with [`Rvalue::PendingIs`] and takes the exception with
 //! [`Rvalue::Catch`]. Faults (D7) stay [`Term::Fail`]s.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diag::Diagnostic;
 use crate::span::Span;
@@ -171,6 +172,10 @@ pub struct Func {
     /// The locals that are source variables, parameters included, by
     /// name; the rest are temporaries. For diagnostics about the body.
     pub names: BTreeMap<LocalId, String>,
+    /// The parameters the caller keeps its reference to for the call:
+    /// the function never drops them. Lowering borrows none;
+    /// `rc::elide` decides.
+    pub borrowed: BTreeSet<LocalId>,
     pub blocks: Vec<Block>,
 }
 

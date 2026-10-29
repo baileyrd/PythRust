@@ -29,3 +29,17 @@ Linux x86-64, 4-core Intel Xeon at 2.80 GHz in a shared cloud container, CPython
 - **Tuples are where native code loses most of its edge.** `tuples_baseline` does the same digit scan as `tuples`, with the same parameter divisor and a call per digit, but no tuple: `div_mod` becomes two calls (`quot`, `rem`), and `digits` packs its count and total into one int that the caller splits. The tuple version takes about 6.8x as long (0.617 s against 0.091 s). Most of that gap is plausibly the boxed tuple (allocate, push two slots, read two fields through the runtime, drop), but the programs still differ: the control makes one more call per digit, which favours the tuple version, and packs and unpacks an int per number, which favours neither much. So the gap is about 76 ns per tuple amortized over the whole program, not an isolated cost of the layout. A micro-benchmark of tuple construction alone would pin it down.
 
 Where values stay in registers, native code is an order of magnitude faster; where it allocates, each allocation is an opaque runtime call and most of the advantage goes. Those runtime calls, and the boxed tuple layout, are what to look at when performance becomes the goal.
+
+## Refcount elision (A7)
+
+Before and after `rc::elide`, same machine (4-core Xeon, shared container), CPython 3.13, release build, 5 runs each, median seconds:
+
+| Benchmark | Before | After |
+|---|---:|---:|
+| `numeric` | 0.483 | 0.487 |
+| `sorting` | 0.085 | 0.081 |
+| `strings` | 0.243 | 0.240 |
+| `tuples` | 0.410 | 0.407 |
+| `tuples_baseline` | 0.081 | 0.081 |
+
+Only `sorting` moves beyond noise (about 5%): `quicksort` now borrows its list, so its recursive calls touch no count. The rest is allocation (every `+`, `str()` and tuple is a runtime object) and runtime calls, which elision does not reach. One such cost is in the runtime itself: `pt_seq_dec` allocates a work list on every call, even when the count stays above zero.
