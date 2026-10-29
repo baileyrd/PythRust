@@ -854,8 +854,15 @@ fn try_except_errors() {
     );
     assert_eq!(
         err(&format!("{body} except ( ) : NL INDENT y NL DEDENT")),
-        "expected an exception name, such as `ValueError`, found `)`"
+        "`except ()` catches nothing and is not supported; name at least one exception class"
     );
+    for nested in ["( ( A , B ) , C )", "( A , ( B , ) )"] {
+        assert!(
+            err(&format!("{body} except {nested} : NL INDENT y NL DEDENT"))
+                .starts_with("nested tuples of exception classes are not supported"),
+            "{nested}"
+        );
+    }
     assert_eq!(
         err(&format!(
             "{body} except ( ValueError , , ) : NL INDENT y NL DEDENT"

@@ -220,6 +220,33 @@ fn python() -> String {
     std::env::var("PYTHON").unwrap_or_else(|_| default.to_string())
 }
 
+/// The CPython version the corpus's goldens and deviations are written
+/// against (Nano, 2026-10-29): 3.14 accepts `except A, B:` (PEP 758),
+/// which flips `except_tuple_unparenthesized`.
+const ORACLE: &str = "3.13";
+
+/// Fails unless the oracle is CPython [`ORACLE`].
+fn check_oracle() -> Res<()> {
+    let mut cmd = Command::new(python());
+    cmd.args([
+        "-I",
+        "-c",
+        "import sys; print('%d.%d' % sys.version_info[:2])",
+    ]);
+    let got = run(&mut cmd, TIMEOUT)?;
+    oracle_mismatch(&python(), got.stdout.trim()).map_or(Ok(()), Err)
+}
+
+/// The error for an oracle reporting `version`, or `None` if it is [`ORACLE`].
+fn oracle_mismatch(python: &str, version: &str) -> Option<String> {
+    (version != ORACLE).then(|| {
+        format!(
+            "the oracle `{python}` is Python {version}, but the corpus is written against \
+             {ORACLE}; set PYTHON to a CPython {ORACLE} interpreter"
+        )
+    })
+}
+
 fn run_cpython(source: &Path) -> Res<Run> {
     let mut cmd = Command::new(python());
     // -I: isolated mode, so nothing from the environment or cwd leaks in.
@@ -707,7 +734,20 @@ fn check_mismatch_cases() {
 }
 
 #[test]
+fn oracle_must_be_the_corpus_version() {
+    assert_eq!(oracle_mismatch("python3", ORACLE), None);
+    for version in ["3.12", "3.14", ""] {
+        let err = oracle_mismatch("python3", version).unwrap_or_default();
+        assert!(
+            err.contains("set PYTHON to a CPython 3.13"),
+            "{version}: {err}"
+        );
+    }
+}
+
+#[test]
 fn corpus_matches_cpython() -> Res<()> {
+    check_oracle()?;
     let blessing = std::env::var("PYTHRUST_BLESS").is_ok_and(|v| v == "1");
     report(cpython_failures(&corpus_dir()?, blessing)?);
     Ok(())

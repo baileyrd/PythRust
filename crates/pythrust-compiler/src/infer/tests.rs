@@ -1847,6 +1847,19 @@ fn every_class_of_a_tuple_handler_is_a_builtin_exception() {
 }
 
 #[test]
+fn exception_classes_are_not_held_in_variables() {
+    let held = "errs = (ValueError, IndexError)\n";
+    assert!(src_err(held).starts_with("exception classes can't be held in variables"));
+    assert!(src_err("e = ValueError\n").starts_with("exception classes can't be held"));
+    let caught = "errs = 1\ntry:\n    pass\nexcept errs:\n    pass\n";
+    assert!(src_err(caught).starts_with("`errs` is a variable: exception classes can't be held"));
+    let in_tuple = "errs = 1\ntry:\n    pass\nexcept (ValueError, errs):\n    pass\n";
+    assert!(src_err(in_tuple).starts_with("`errs` is a variable"));
+    let unknown = "try:\n    pass\nexcept errs:\n    pass\n";
+    assert!(src_err(unknown).starts_with("`errs` is not an exception"));
+}
+
+#[test]
 fn handler_name_has_one_fixed_type() {
     let src = "e = 1\ntry:\n    pass\nexcept ValueError as e:\n    pass\n";
     assert!(src_err(src).starts_with("cannot change the type of `e`"));

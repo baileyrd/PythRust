@@ -506,11 +506,11 @@ impl<'a> Parser<'a> {
     }
 
     /// `NAME | '(' NAME (',' NAME)* [','] ')'`. Unparenthesized
-    /// `A, B` is an error, as in Python before 3.14.
+    /// `A, B` is an error, as in Python before 3.14; so are `()` and a
+    /// nested tuple, which Python accepts.
     fn handler_classes(&mut self) -> Result<Vec<Ident>> {
-        let what = "an exception name, such as `ValueError`";
         if !self.eat(&TokenKind::LParen) {
-            let class = self.expect_name(what)?;
+            let class = self.handler_class()?;
             if self.at(&TokenKind::Comma) {
                 let msg = "multiple exception types must be parenthesized, \
                            as in `except (ValueError, IndexError):`";
@@ -518,12 +518,27 @@ impl<'a> Parser<'a> {
             }
             return Ok(vec![class]);
         }
-        let mut classes = vec![self.expect_name(what)?];
+        if self.at(&TokenKind::RParen) {
+            let msg = "`except ()` catches nothing and is not supported; \
+                       name at least one exception class";
+            return Err(error(self.tok(0).span, msg));
+        }
+        let mut classes = vec![self.handler_class()?];
         while self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RParen) {
-            classes.push(self.expect_name(what)?);
+            classes.push(self.handler_class()?);
         }
         self.expect(&TokenKind::RParen)?;
         Ok(classes)
+    }
+
+    /// One class of a handler: a name, not a nested tuple.
+    fn handler_class(&mut self) -> Result<Ident> {
+        if self.at(&TokenKind::LParen) {
+            let msg = "nested tuples of exception classes are not supported; \
+                       list every class in one tuple, as in `except (A, B, C):`";
+            return Err(error(self.tok(0).span, msg));
+        }
+        self.expect_name("an exception name, such as `ValueError`")
     }
 
     /// `target_list` before `in`. Parsed at `postfix` level so the `in`

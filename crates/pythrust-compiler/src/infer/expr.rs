@@ -9,6 +9,10 @@ use super::solve::{Access, Binary, Need};
 use super::ty::{FuncType, Type};
 use super::{builtins, error, Checker, Func, TruthUse};
 
+/// Why `errs = (ValueError, IndexError)` and `except errs:` are errors.
+pub(super) const CLASS_NOT_A_VALUE: &str = "exception classes can't be held in variables; \
+     name them where they are used, as in `except (ValueError, IndexError):`";
+
 impl Checker {
     /// Infers `e` and records its type at its span.
     pub(super) fn expr(&mut self, e: &Expr) -> Result<Type> {
@@ -108,11 +112,15 @@ impl Checker {
             .cloned()
     }
 
-    /// The type of variable `name`, recorded at `span`.
+    /// The type of variable `name`, recorded at `span`. A builtin
+    /// exception class is not a value: it is called, raised or caught.
     pub(super) fn variable(&mut self, name: &str, span: Span) -> Result<Type> {
         if let Some(t) = self.lookup(name) {
             self.nodes.insert(span, t.clone());
             return Ok(t);
+        }
+        if self.is_exception_name(name) {
+            return Err(error(span, CLASS_NOT_A_VALUE.to_string()));
         }
         if self.funcs.contains_key(name) || builtins::is_builtin(name) {
             let msg = format!("`{name}` is a function; functions are not values yet");
