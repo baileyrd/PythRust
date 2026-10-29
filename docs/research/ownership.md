@@ -17,7 +17,7 @@ print(a)   # [1, 2]
 
 "Tempering never changes meaning" and the CPython differential tests (thread E) both require this output. So lists cannot be Rust-style values that move or copy on assignment. Mutable value semantics (Hylo, Swift arrays) is rejected for this reason: it would change output on ordinary Python code.
 
-Immutable values (`int`, `float`, `bool`, `None`, `str`, tuples) can be copied or shared freely, because aliasing is unobservable without `is` (reserved, not in the subset). Modes still apply to strings (decided 2026-10-29, A8): a *heap type* (`str`, `list`, later dict, set and objects, or a tuple or optional holding one) may be `owned`, and must be when a tempered body keeps it; only a type holding a list may be `mut`; a *value type* (scalars, and tuples or optionals of them) takes no mode. This is about what a signature tells its callers (who may keep the reference), not about aliasing, so D3 and D4 stay list-only.
+Immutable values (`int`, `float`, `bool`, `None`, `str`, tuples) can be copied or shared freely, because aliasing is unobservable without `is` (reserved, not in the subset). Modes still apply to strings (decided 2026-10-29, A8): a *heap type* (`str`, `list`, later dict, set and objects, or a tuple or optional holding one) may be `owned`, and must be when a tempered body keeps it; only a type whose own operations reach a list (a list, or a tuple or optional holding one) may be `mut`, so never a `str` or an exception, even one carrying a list; a *value type* (scalars, and tuples or optionals of them) takes no mode. This is about what a signature tells its callers (who may keep the reference), not about aliasing, so D3 and D4 stay list-only.
 
 ## Model
 

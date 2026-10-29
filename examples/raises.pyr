@@ -20,7 +20,7 @@ temper def safe(s: str) -> int:
         return 0
 
 
-temper def relay(e: Exception) -> None raises Exception:
+temper def relay(owned e: Exception) -> None raises Exception:
     raise e
 
 

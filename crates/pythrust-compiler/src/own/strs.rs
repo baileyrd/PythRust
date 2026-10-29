@@ -7,21 +7,21 @@
 //! fields and its optional's value, recursively, but not past a list (a
 //! list's elements are values of their own, A6). An exception counts as
 //! a string. Which parameters have strings is a property of the
-//! language-level type ([`Type::holding`]), so a tuple or optional of
+//! language-level type ([`Type::holds_heap`], [`Type::reaches_mutable`]), so a tuple or optional of
 //! scalars never has any.
 //!
 //! It tracks, per local, which parameters' strings it may hold, and per
 //! abstract list of the settled points-to sets, which ones the body
 //! stores in it. A parameter's strings are [`Strs::kept`] when one may
 //! reach a list the caller or the module can see, a global, an
-//! exception, or a callee that keeps it; [`Strs::returned`] when the
+//! exception (or is one raised), or a callee that keeps it; [`Strs::returned`] when the
 //! result may hold one. Flow-insensitive, like the summary it extends.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::body::{Flow, Obj, Objs};
 use super::{source, Strs, Summary};
-use crate::infer::{Holding, Type};
+use crate::infer::Type;
 use crate::ir::{Compound, Func, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
 
 /// Parameter positions.
@@ -46,14 +46,14 @@ pub(super) fn params(
         .collect()
 }
 
-/// Whether a value of type `ty` is, or holds outside any list, an
-/// immutable heap value ([`Holding::Immutable`]): a `str` or an exception.
+/// Whether a value of type `ty` is, or holds outside any list, a heap
+/// value that cannot change in place: a `str` or an exception.
 fn holds_str(ty: &Type) -> bool {
     match ty {
         Type::Tuple(fields) => fields.iter().any(holds_str),
         Type::Optional(present) => holds_str(present),
         Type::List(_) => false,
-        _ => ty.holding() == Some(Holding::Immutable),
+        _ => ty.holds_heap() == Some(true) && ty.reaches_mutable() == Some(false),
     }
 }
 
@@ -115,7 +115,7 @@ impl<'a> Held<'a> {
                 let lists = self.flow.points_to(*list);
                 self.store(&lists, &value)
             }
-            Inst::SetGlobal { value, .. } => {
+            Inst::SetGlobal { value, .. } | Inst::Raise { exc: value, .. } => {
                 let value = self.holdings(*value);
                 grow(&mut self.escaped, &value)
             }

@@ -997,7 +997,7 @@ fn owned_on_a_value_type_is_an_error() {
 }
 
 #[test]
-fn mut_only_on_a_type_holding_a_list() {
+fn mut_only_where_the_types_operations_reach_a_list() {
     let s = "def f(mut s: str):\n    print(s)\nf(\"a\")\n";
     assert_eq!(
         mode_err(s),
@@ -1011,11 +1011,31 @@ fn mut_only_on_a_type_holding_a_list() {
         mode_err(t).0,
         "`f`: `tuple[str, int]` values cannot change in place; remove `mut` from `t`"
     );
+    let t = "temper def f(mut t: tuple[int, str]) -> None:\n    print(t)\nf((1, \"a\"))\n";
+    assert_eq!(
+        mode_err(t).0,
+        "`f`: `tuple[int, str]` values cannot change in place; remove `mut` from `t`"
+    );
     let n = "def f(mut n: int):\n    print(n)\nf(1)\n";
     assert_eq!(mode_err(n).0, "`f`: ints are copied; remove `mut` from `n`");
+    // No operation reaches an exception's argument, even a list (A6 rule 4).
+    let e = "def f(mut e: Exception):\n    print(e)\nf(ValueError([1]))\n";
+    assert_eq!(
+        mode_err(e).0,
+        "`f`: exceptions cannot change in place; remove `mut` from `e`"
+    );
     // A list inside a tuple or optional can still change in place.
     let inner = "temper def f(mut t: tuple[list[int], str], mut o: list[int] | None) -> None:\n    t[0].append(1)\n    if o is not None:\n        o.append(2)\nf(([0], \"a\"), None)\n";
     assert_eq!(checked(inner), Ok(()));
+    // Rebinding a tuple element stays an error under `mut`.
+    let rebind =
+        "temper def f(mut t: tuple[list[int], int]) -> None:\n    t[0] = [1]\nf(([0], 1))\n";
+    let rebind = lexer::lex(rebind).and_then(|t| parser::parse(&t));
+    let rebind = rebind.and_then(|m| infer::infer(&m).map(|_| ()));
+    let Err(d) = rebind else {
+        panic!("rebinding a tuple element checked");
+    };
+    assert_eq!(d.message, "tuple does not support item assignment");
     let owned = "def f(owned s: str, owned xs: list[int]):\n    print(s, xs)\nf(\"a\", [1])\n";
     assert_eq!(checked(owned), Ok(()));
 }
@@ -1042,4 +1062,23 @@ fn loose_functions_with_a_wrong_mode() {
 fn strings_stay_outside_the_alias_checks() {
     let src = "temper def f(owned s: str) -> str:\n    b = s\n    print(b)\n    return s\nprint(f(\"a\"))\n";
     assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn a_tempered_function_keeping_an_exception_writes_owned() {
+    let src = "kept: list[Exception] = []\ntemper def keep(e: Exception) -> None:\n    kept.append(e)\ntemper def again(e: Exception) -> None raises Exception:\n    raise e\ntemper def show(e: Exception) -> None:\n    print(e)\ntry:\n    raise ValueError(\"a\")\nexcept ValueError as e:\n    keep(e)\n    show(e)\n    again(e)\n";
+    assert_eq!(
+        mode_err(src),
+        (
+            "tempered `keep` keeps `e` after it returns; write `owned e`".into(),
+            "e".into()
+        )
+    );
+    let src = src.replace("keep(e: Exception)", "keep(owned e: Exception)");
+    assert_eq!(
+        mode_err(&src).0,
+        "tempered `again` keeps `e` after it returns; write `owned e`"
+    );
+    let src = src.replace("again(e: Exception)", "again(owned e: Exception)");
+    assert_eq!(checked(&src), Ok(()));
 }

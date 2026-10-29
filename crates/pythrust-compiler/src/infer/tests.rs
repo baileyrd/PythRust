@@ -6,7 +6,7 @@ use std::cell::Cell;
 use crate::ast::*;
 use crate::span::Span;
 
-use super::{infer, Type, Types};
+use super::{infer, Type, TypeVar, Types};
 
 #[derive(Default)]
 struct B {
@@ -1873,5 +1873,43 @@ fn a_shadowing_def_is_seen_whichever_comes_first() {
             src_err(&src).contains("no longer names the builtin exception"),
             "{src}"
         );
+    }
+}
+
+#[test]
+fn heap_and_mutable_types_are_language_level() {
+    let list = Type::List(Box::new(Type::Int));
+    let tuple = |fields: Vec<Type>| Type::Tuple(fields);
+    let opt = |t: Type| Type::Optional(Box::new(t));
+    let cases = [
+        (Type::Int, Some(false), Some(false)),
+        (Type::Range, Some(false), Some(false)),
+        (
+            tuple(vec![Type::Int, Type::Float]),
+            Some(false),
+            Some(false),
+        ),
+        (opt(Type::Int), Some(false), Some(false)),
+        (Type::Str, Some(true), Some(false)),
+        (Type::Exception, Some(true), Some(false)),
+        (tuple(vec![Type::Int, Type::Str]), Some(true), Some(false)),
+        (list.clone(), Some(true), Some(true)),
+        (tuple(vec![list.clone(), Type::Int]), Some(true), Some(true)),
+        (opt(list.clone()), Some(true), Some(true)),
+        (Type::Var(TypeVar(0)), None, None),
+        (
+            tuple(vec![Type::Var(TypeVar(0)), list]),
+            Some(true),
+            Some(true),
+        ),
+        (
+            tuple(vec![Type::Var(TypeVar(0)), Type::Str]),
+            Some(true),
+            None,
+        ),
+    ];
+    for (ty, heap, mutable) in cases {
+        assert_eq!(ty.holds_heap(), heap, "{ty}");
+        assert_eq!(ty.reaches_mutable(), mutable, "{ty}");
     }
 }

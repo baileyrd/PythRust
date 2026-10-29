@@ -44,32 +44,45 @@ pub struct FuncType {
     pub ret: Type,
 }
 
-/// How a type's values are held (D2), weakest first. Defined on the
-/// language-level type, so no backend's representation changes which
-/// modes a program may write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Holding {
-    /// Copied: a scalar or `range`, or a tuple or optional of them.
-    Value,
-    /// On the heap, unchangeable: a `str` or an exception, or a tuple or
-    /// optional holding one and no list.
-    Immutable,
-    /// On the heap, holding a list, which can change in place.
-    Mutable,
-}
-
 impl Type {
-    /// How values of this type are held; `None` while it is generic.
-    pub fn holding(&self) -> Option<Holding> {
+    /// Whether values of this type are heap values (D2): a `str`, list
+    /// or exception, or a tuple or optional holding one. The rest are
+    /// copied. Defined on the language-level type, so no backend's
+    /// representation changes which modes a program may write. `None`
+    /// while it depends on a generic type.
+    pub fn holds_heap(&self) -> Option<bool> {
         match self {
-            Type::Int | Type::Float | Type::Bool | Type::None | Type::Range => Some(Holding::Value),
-            Type::Str | Type::Exception => Some(Holding::Immutable),
-            Type::List(_) => Some(Holding::Mutable),
-            Type::Tuple(fields) => fields
-                .iter()
-                .try_fold(Holding::Value, |h, f| Some(h.max(f.holding()?))),
-            Type::Optional(present) => present.holding(),
-            Type::Var(_) => None,
+            Type::Str | Type::List(_) | Type::Exception => Some(true),
+            _ => self.any_part(Type::holds_heap),
+        }
+    }
+
+    /// Whether the type's own operations reach a mutable heap value, so
+    /// a value of it can change in place (D2 `mut`): a list, or a tuple
+    /// or optional holding one. Not an exception: no operation reaches
+    /// its argument. `None` while it depends on a generic type.
+    pub fn reaches_mutable(&self) -> Option<bool> {
+        match self {
+            Type::List(_) => Some(true),
+            _ => self.any_part(Type::reaches_mutable),
+        }
+    }
+
+    /// Whether `pred` holds of a tuple field or an optional's value;
+    /// false for any other type.
+    fn any_part(&self, pred: fn(&Type) -> Option<bool>) -> Option<bool> {
+        let parts: Vec<Option<bool>> = match self {
+            Type::Tuple(fields) => fields.iter().map(pred).collect(),
+            Type::Optional(present) => vec![pred(present)],
+            Type::Var(_) => vec![None],
+            _ => Vec::new(),
+        };
+        if parts.contains(&Some(true)) {
+            return Some(true);
+        }
+        match parts.contains(&None) {
+            true => None,
+            false => Some(false),
         }
     }
 

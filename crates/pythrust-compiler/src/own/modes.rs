@@ -13,16 +13,17 @@
 //! the summary's `result_aliases`); tempered code is barred from it by
 //! D3, checked with the body (`alias`).
 //!
-//! What a mode may be written on depends only on the parameter's type
-//! ([`Type::holding`]): `owned` on a heap type, `mut` on one holding a
-//! list, neither on a value type, which is copied.
+//! What a mode may be written on depends only on the parameter's type:
+//! `owned` on a heap type ([`Type::holds_heap`]), `mut` on one whose
+//! operations reach a list ([`Type::reaches_mutable`]), neither on a
+//! value type, which is copied.
 //!
 //! Diagnostics about the body come only from precise summaries: a
 //! program that does not lower yet has its modes checked once it does.
 
 use crate::ast::{FuncDef, Mode as Temper, Module, ParamMode, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
-use crate::infer::{Holding, Type};
+use crate::infer::Type;
 
 use super::{Analysis, Mode, Param, Precision, Summary};
 
@@ -61,17 +62,13 @@ fn defs(module: &Module) -> impl Iterator<Item = &FuncDef> {
 /// cannot have. A generic type may have any.
 fn fits(def: &FuncDef, types: &[Type]) -> Result<()> {
     for (p, ty) in def.params.iter().zip(types) {
-        let Some(holding) = ty.holding() else {
-            continue;
-        };
-        let (word, why) = match (p.mode, holding) {
-            (ParamMode::Read, _) | (ParamMode::Owned, Holding::Immutable | Holding::Mutable) => {
-                continue
-            }
-            (ParamMode::Mut, Holding::Mutable) => continue,
-            (ParamMode::Owned, Holding::Value) => ("owned", "are copied"),
-            (ParamMode::Mut, Holding::Value) => ("mut", "are copied"),
-            (ParamMode::Mut, Holding::Immutable) => ("mut", "cannot change in place"),
+        let (word, why) = match p.mode {
+            ParamMode::Read => continue,
+            ParamMode::Owned if ty.holds_heap() == Some(false) => ("owned", "are copied"),
+            ParamMode::Mut if ty.reaches_mutable() != Some(false) => continue,
+            ParamMode::Mut if ty.holds_heap() == Some(false) => ("mut", "are copied"),
+            ParamMode::Mut => ("mut", "cannot change in place"),
+            ParamMode::Owned => continue,
         };
         let message = format!(
             "`{}`: {} {why}; remove `{word}` from `{}`",
