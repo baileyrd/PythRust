@@ -181,20 +181,28 @@ fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
 /// recurse.
 fn free_all(mut todo: Vec<u64>) {
     while let Some(p) = todo.pop() {
-        // SAFETY: each entry is a live sequence whose reference is given up.
-        let s = unsafe { seq(p) };
-        let count = s.rc.get() - 1;
-        if count > 0 {
-            s.rc.set(count);
-            continue;
-        }
-        // SAFETY: the last reference: `p` came from `Box::into_raw` and no
-        // other reference remains.
-        let owned = unsafe { Box::from_raw(p as *mut PtSeq) };
-        LIVE.fetch_sub(1, Relaxed);
-        for (k, v) in owned.items.into_inner().into_iter().enumerate() {
-            dec_into(slot(owned.desc, k), v, &mut todo);
-        }
+        drop_one(p, &mut todo);
+    }
+}
+
+/// Drops one reference to sequence `p`; at zero frees it, pushing the
+/// sequences its slots own on `todo`. `todo` only allocates when a slot
+/// holds a sequence, so dropping a count above zero, or freeing a
+/// sequence of scalars and strings, allocates nothing.
+fn drop_one(p: u64, todo: &mut Vec<u64>) {
+    // SAFETY: `p` is a live sequence whose reference is given up.
+    let s = unsafe { seq(p) };
+    let count = s.rc.get() - 1;
+    if count > 0 {
+        s.rc.set(count);
+        return;
+    }
+    // SAFETY: the last reference: `p` came from `Box::into_raw` and no
+    // other reference remains.
+    let owned = unsafe { Box::from_raw(p as *mut PtSeq) };
+    LIVE.fetch_sub(1, Relaxed);
+    for (k, v) in owned.items.into_inner().into_iter().enumerate() {
+        dec_into(slot(owned.desc, k), v, todo);
     }
 }
 
@@ -545,7 +553,9 @@ pub unsafe extern "C" fn pt_seq_dec(s: *mut PtSeq) {
     if s.is_null() {
         return;
     }
-    free_all(vec![s as u64]);
+    let mut todo = Vec::new();
+    drop_one(s as u64, &mut todo);
+    free_all(todo);
 }
 
 /// `a == b`.
@@ -766,6 +776,26 @@ mod tests {
         unsafe {
             assert_eq!(seq(inner as u64).rc.get(), 3);
             pt_seq_dec(outer);
+            assert_eq!(seq(inner as u64).rc.get(), 1);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn dropping_allocates_only_for_sequences_in_slots() {
+        let inner = make(b"li", &[1]);
+        let flat = make(b"ls", &[]);
+        let outer = make(b"lli", &[inner as u64]);
+        // SAFETY: live until each reference is dropped.
+        unsafe {
+            pt_seq_inc(inner);
+            let mut todo = Vec::new();
+            drop_one(inner as u64, &mut todo);
+            drop_one(flat as u64, &mut todo);
+            assert_eq!(todo.capacity(), 0);
+            drop_one(outer as u64, &mut todo);
+            assert_eq!(todo, vec![inner as u64]);
+            free_all(todo);
             assert_eq!(seq(inner as u64).rc.get(), 1);
             pt_seq_dec(inner);
         }

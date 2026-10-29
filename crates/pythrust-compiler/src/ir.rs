@@ -22,9 +22,11 @@
 //! it. A borrowed parameter points at its caller's reference, which
 //! outlives the call; the function never releases, moves or reassigns
 //! it. A copy `a = x` whose `Retain` was cancelled borrows `x`'s
-//! reference until the `Forget(a)` that replaced its `Release`, within
-//! one block, while nothing ends `x`. Either is never released, and the
-//! copy is null again after its `Forget`.
+//! reference until the `Forget(a)`s that replaced its `Release`s; it is
+//! read only while `x` still holds that reference, and is null again
+//! after its `Forget`. Neither is ever released. (A copy that took `x`'s
+//! reference at `x`'s last use, `Forget(x)` in place of its `Retain`,
+//! owns it as any other local does.)
 //!
 //! Exceptions (D6, D8) are a tag plus a value without a second return
 //! register: [`Inst::Raise`] makes an exception the runtime's one
