@@ -1,4 +1,4 @@
-# An exception may hold a list (the native backend does not build it yet).
+# An exception may hold a list, natively too.
 # The exception keeps the list after the call, so a tempered function
 # holding its parameter in one writes `owned`. CPython runs this loosened.
 temper def check(owned xs: list[int]) -> int raises ValueError:

@@ -1013,7 +1013,9 @@ fn runtime(span: Span, message: &str) -> Diagnostic {
 }
 
 /// Rejects what lowering expresses but this backend does not: an
-/// exception holding a list, whose reference counts could form a cycle.
+/// exception whose argument holds a list that may hold an exception,
+/// whose reference counts could form a cycle (a list holding an
+/// exception holding that list). See [`may_cycle`].
 fn refuse_gaps(program: &Program) -> Result<()> {
     for func in &program.funcs {
         for inst in func.blocks.iter().flat_map(|b| &b.insts) {
@@ -1025,10 +1027,11 @@ fn refuse_gaps(program: &Program) -> Result<()> {
             else {
                 continue;
             };
-            if ir::holds(&program.types, func.ty(*arg), |t| matches!(t, Ty::List(_))) {
+            if may_cycle(&program.types, func.ty(*arg)) {
                 return Err(Diagnostic {
                     span: *span,
-                    message: "the native backend does not support an exception holding a list yet"
+                    message: "the native backend does not support an exception holding a list \
+                              of exceptions yet"
                         .into(),
                     kind: DiagKind::Backend,
                 });
@@ -1036,6 +1039,24 @@ fn refuse_gaps(program: &Program) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether an exception's argument of type `ty` may close a reference
+/// cycle: it holds, outside any exception, a list whose elements may
+/// hold an exception. Every other value is acyclic: a value is built
+/// from values that exist, so a cycle needs a list changed afterwards
+/// to reach back, and only an exception hides its argument's type. The
+/// last exception before that list on the cycle holds it by its type.
+fn may_cycle(types: &[Compound], ty: Ty) -> bool {
+    let (Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id)) = ty else {
+        return false;
+    };
+    match types.get(id.0) {
+        Some(Compound::List(t)) => ir::holds(types, *t, ir::is_exc),
+        Some(Compound::Opt(t)) => may_cycle(types, *t),
+        Some(Compound::Tuple(fields)) => fields.iter().any(|t| may_cycle(types, *t)),
+        None => false,
+    }
 }
 
 fn backend(message: String) -> Diagnostic {
@@ -1069,6 +1090,47 @@ mod tests {
         let program = lower::lower(&module, &types).expect("lower");
         let object = emit(&program, &render).expect("emit");
         (object, rendered.into_inner())
+    }
+
+    /// Whether `emit` refuses `src` as an exception that may close a
+    /// reference cycle.
+    fn refused_as_cycle(src: &str) -> bool {
+        let module = parser::parse(&lexer::lex(src).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = lower::lower(&module, &types).expect("lower");
+        let render = |d: &Diagnostic| d.message.clone();
+        match emit(&program, &render) {
+            Ok(_) => false,
+            Err(d) => {
+                assert!(d.message.contains("list of exceptions"), "{}", d.message);
+                true
+            }
+        }
+    }
+
+    #[test]
+    fn exceptions_holding_lists_build() {
+        for src in [
+            "e = ValueError([1])\nprint(e)\n",
+            "e = IndexError([['a'], []])\nprint(e)\n",
+            "e = ValueError(([1], ValueError(2)))\nprint(e)\n",
+            "xs: list[int] | None = [1]\ne = ValueError(xs)\nprint(e)\n",
+            "es = [ValueError(1)]\nprint(ValueError((1, 2)), es)\n",
+        ] {
+            assert!(!refused_as_cycle(src), "{src}");
+        }
+    }
+
+    #[test]
+    fn an_exception_holding_a_list_that_may_hold_one_is_refused() {
+        for src in [
+            "e = ValueError([ValueError(0)])\n",
+            "e = ValueError((1, [[ValueError(0)]]))\n",
+            "e = ValueError([(1, ValueError(0))])\n",
+            "x: Exception | None = None\ne = ValueError([x])\n",
+        ] {
+            assert!(refused_as_cycle(src), "{src}");
+        }
     }
 
     #[test]

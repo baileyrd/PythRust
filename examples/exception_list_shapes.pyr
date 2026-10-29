@@ -1,0 +1,41 @@
+# Exceptions holding lists in every shape the native backend builds:
+# nested, in tuples and optionals, changed after the exception holds
+# them, passed, returned, caught, re-raised and held in containers.
+def wrap(xs: list[int]) -> Exception:
+    return ValueError(xs)
+
+
+def fail(rows: list[list[str]]) -> int:
+    raise IndexError(rows)
+
+
+xs = [1, 2]
+e = wrap(xs)
+xs.append(3)
+print(e, [e], (e, xs))
+print(e == e, e == wrap(xs))
+
+rows = [["a"], []]
+try:
+    fail(rows)
+except IndexError as err:
+    rows[1].append("b")
+    print(err)
+    print(str(err), len(rows))
+
+pair = ValueError(([1.5], "s", ValueError(0)))
+print(pair)
+maybe: list[int] | None = [4]
+print(ValueError(maybe), ValueError(None))
+
+errors = [ValueError([1]), IndexError([2, 3])]
+for x in errors:
+    print(x)
+
+try:
+    try:
+        raise ValueError([[7], [8, 9]])
+    except ValueError as inner:
+        raise inner
+except ValueError as outer:
+    print("again", outer)
