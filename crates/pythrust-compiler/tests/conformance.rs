@@ -42,8 +42,9 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use pythrust_compiler::ir::{Func, Inst, LocalId, Program};
 use pythrust_compiler::own::{self, Precision};
-use pythrust_compiler::{infer, lexer, parser};
+use pythrust_compiler::{infer, lexer, lower, parser, rc};
 
 type Res<T> = std::result::Result<T, String>;
 
@@ -603,6 +604,72 @@ fn corpus_ownership_coverage() -> Res<()> {
     }
     report(failures);
     Ok(())
+}
+
+/// A7's IR fact against the summaries (A8): in every program the native
+/// backend builds, a reference-counted parameter whose summary neither
+/// keeps nor returns a reference, and which its body never reassigns, is
+/// borrowed after `rc::elide`. The summaries check the fact but do not
+/// feed it; each is per instance here, as `build` lowers.
+#[test]
+fn corpus_unkept_parameters_are_borrowed() -> Res<()> {
+    let mut failures = Vec::new();
+    for case in load_corpus(&corpus_dir()?)? {
+        let name = stem(&case.source);
+        if !NATIVE.contains(&name.as_str()) {
+            continue;
+        }
+        let program = lowered(&read(&case.source)?)?;
+        failures.extend(
+            unkept_unborrowed(&program)
+                .iter()
+                .map(|m| format!("{name}: {m}")),
+        );
+    }
+    report(failures);
+    Ok(())
+}
+
+/// Each unkept, never reassigned parameter of `program` that
+/// `rc::elide` does not borrow.
+fn unkept_unborrowed(program: &Program) -> Vec<String> {
+    let summaries = own::infer(program);
+    let elided = rc::elide(program.clone());
+    let funcs = program.funcs.iter().zip(summaries).zip(elided.funcs);
+    let params = funcs.flat_map(|((func, summary), after)| {
+        let checked: Vec<LocalId> = func
+            .params
+            .iter()
+            .zip(&summary.params)
+            .filter(|(p, s)| !s.refs.kept && !s.refs.returned && func.locals[p.0].is_rc())
+            .map(|(p, _)| *p)
+            .filter(|p| !reassigns(func, *p))
+            .collect();
+        let missing = checked
+            .into_iter()
+            .filter(move |p| !after.borrowed.contains(p));
+        missing.map(move |p| {
+            format!(
+                "`{}` parameter {} is unkept but not borrowed",
+                func.name, p.0
+            )
+        })
+    });
+    params.collect()
+}
+
+/// `src` lowered as `build` lowers it, before elision.
+fn lowered(src: &str) -> Res<Program> {
+    let tokens = lexer::lex(src).map_err(|d| d.message)?;
+    let module = parser::parse(&tokens).map_err(|d| d.message)?;
+    let types = infer::infer(&module).map_err(|d| d.message)?;
+    lower::lower(&module, &types).map_err(|d| d.message)
+}
+
+/// Whether `func`'s body assigns local `p`.
+fn reassigns(func: &Func, p: LocalId) -> bool {
+    let mut insts = func.blocks.iter().flat_map(|b| &b.insts);
+    insts.any(|i| matches!(i, Inst::Assign { dest, .. } if *dest == p))
 }
 
 fn stem(source: &Path) -> String {

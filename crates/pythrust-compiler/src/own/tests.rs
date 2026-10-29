@@ -1,4 +1,4 @@
-use super::{analyze, check, Analysis, Mode, Param, Precision};
+use super::{analyze, check, Analysis, Mode, Param, Precision, Refs};
 use crate::diag::DiagKind;
 use crate::{infer, lexer, parser};
 
@@ -31,6 +31,17 @@ fn modes(src: &str, name: &str) -> (Vec<Mode>, Vec<bool>) {
         ps.iter().map(|p| p.result_aliases).collect(),
     )
 }
+
+/// `name`'s [`Refs`], as (kept, returned) per parameter.
+fn refs(src: &str, name: &str) -> Vec<(bool, bool)> {
+    let ps = params(src, name);
+    ps.iter().map(|p| (p.refs.kept, p.refs.returned)).collect()
+}
+
+const KEPT_RETURNED: Refs = Refs {
+    kept: true,
+    returned: true,
+};
 
 const READ: Mode = Mode::Read;
 const MUT: Mode = Mode::Mut;
@@ -157,6 +168,7 @@ fn conservative(src: &str) {
         mode: OWNED,
         result_aliases: true,
         holds_global: true,
+        refs: KEPT_RETURNED,
     };
     for (name, s) in &a.funcs {
         assert!(s.params.iter().all(|p| *p == owned), "{name}: {s:?}");
@@ -872,4 +884,49 @@ fn a_store_through_one_parameter_may_show_through_another() {
     // Storing an int creates no sharing.
     let ints = format!("{PUSH}def bump(a: list[int], b: list[int], c: list[int]) -> None:\n    a.append(1)\n    push(c, b)\nx = [1]\nbump(x, x, [2])\n");
     assert_eq!(checked(&ints), Ok(()));
+}
+
+#[test]
+fn reading_a_string_keeps_none_of_its_references() {
+    let src = "def shout(s: str, n: int) -> str:\n    t = s + \"!\"\n    c = s[0]\n    print(len(s), c, n)\n    return t\nprint(shout(\"hi\", 1))\n";
+    assert_eq!(refs(src, "shout"), vec![(false, false), (false, false)]);
+    assert_eq!(modes(src, "shout"), (vec![READ, READ], vec![false, false]));
+}
+
+#[test]
+fn returning_a_string_or_a_value_holding_it_is_returned() {
+    let src = "def same(s: str) -> str:\n    return s\ndef pair(s: str) -> tuple[str, int]:\n    return (s, 1)\ndef some(s: str) -> str | None:\n    if len(s) > 0:\n        return s\n    return None\ndef first(t: tuple[str, int]) -> str:\n    return t[0]\ndef boxed(s: str) -> list[str]:\n    xs = [\"a\"]\n    ys = xs\n    ys.append(s)\n    return xs\ndef via(s: str) -> str:\n    return same(s)\nprint(same(\"a\"), pair(\"b\"), some(\"c\"), first((\"d\", 2)), boxed(\"e\"), via(\"f\"))\n";
+    for name in ["same", "pair", "some", "first", "boxed", "via"] {
+        assert_eq!(refs(src, name), vec![(false, true)], "{name}");
+        assert_eq!(modes(src, name).0, vec![READ], "{name}");
+    }
+}
+
+#[test]
+fn storing_a_string_where_it_outlives_the_call_is_kept() {
+    let src = "names: list[str] = []\ndef log(s: str):\n    names.append(s)\ndef put(dst: list[str], s: str):\n    dst.append(s)\ndef fail(s: str):\n    raise ValueError(s)\ndef via(s: str):\n    log(s)\ndef nested(s: str):\n    names.append(s + \"\")\n    row = [s]\n    rows: list[list[str]] = [row]\n    print(len(rows))\nlog(\"a\")\nput(names, \"b\")\nvia(\"d\")\nnested(\"e\")\ntry:\n    fail(\"f\")\nexcept ValueError as e:\n    print(e)\nprint(names)\n";
+    for name in ["log", "fail", "via"] {
+        assert_eq!(refs(src, name), vec![(true, false)], "{name}");
+    }
+    assert_eq!(refs(src, "put"), vec![(false, false), (true, false)]);
+    assert_eq!(modes(src, "put").0, vec![MUT, READ]);
+    // A new string, and a list only the body can see, keep nothing.
+    assert_eq!(refs(src, "nested"), vec![(false, false)]);
+}
+
+#[test]
+fn a_list_parameter_kept_or_returned_has_its_references_kept_or_returned() {
+    let src = "kept: list[list[int]] = []\ndef keep(xs: list[int]):\n    kept.append(xs)\ndef same(xs: list[int]) -> list[int]:\n    return xs\ndef grow(xs: list[int]):\n    xs.append(1)\ndef field(t: tuple[list[int], str]) -> str:\n    return t[1]\nkeep([1])\nprint(same([2]))\ngrow([3])\nprint(field(([4], \"x\")))\n";
+    assert_eq!(refs(src, "keep"), vec![(true, false)]);
+    assert_eq!(refs(src, "same"), vec![(false, true)]);
+    assert_eq!(refs(src, "grow"), vec![(false, false)]);
+    // The string inside is returned, though no list of it is.
+    assert_eq!(refs(src, "field"), vec![(false, true)]);
+    assert_eq!(modes(src, "field"), (vec![READ], vec![false]));
+}
+
+#[test]
+fn ints_and_floats_hold_no_references() {
+    let src = "total: list[int] = []\ndef add(n: int, x: float) -> int:\n    total.append(n)\n    print(x)\n    return n\nprint(add(1, 2.0))\n";
+    assert_eq!(refs(src, "add"), vec![(false, false), (false, false)]);
 }

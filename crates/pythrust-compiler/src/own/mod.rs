@@ -2,9 +2,12 @@
 //!
 //! Per function, a [`Mode`] for each parameter and whether the result
 //! may alias it (`docs/research/ownership.md`); that document's `owned`
-//! is [`Mode::Owned`] or an aliased result. Only values that can hold
-//! a list are tracked: aliasing anything else (ints, strings, tuples of
-//! them) is unobservable, so such a parameter is always [`Mode::Read`].
+//! is [`Mode::Owned`] or an aliased result. Modes and aliasing track
+//! only values that can hold a list: aliasing anything else (strings,
+//! tuples of them) is unobservable, so such a parameter is always
+//! [`Mode::Read`]. What happens to the references a parameter holds,
+//! whatever its type, is [`Param::refs`] ([`refs`]): whether the call
+//! keeps or returns one.
 //!
 //! The analysis runs on the IR, so it sees only what lowering covers.
 //! [`analyze`] is the coverage gate: a program lowering cannot express
@@ -19,6 +22,7 @@ mod alias;
 mod body;
 mod calls;
 mod modes;
+mod refs;
 
 #[cfg(test)]
 mod tests;
@@ -55,6 +59,23 @@ pub struct Param {
     pub result_aliases: bool,
     /// Whether the call may leave a list a global holds inside it.
     pub holds_global: bool,
+    /// What happens to its references, whatever its type.
+    pub refs: Refs,
+}
+
+/// What a call may do with the references a parameter holds: to the
+/// value itself or to any value inside it, of any reference-counted type.
+/// Unlike [`Mode`], it does not distinguish the parameter's lists from
+/// other values it holds. A non-reference-counted parameter has neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Refs {
+    /// Whether one may outlive the call other than in the result: in a
+    /// list the caller or the module can see, a global, an exception, or
+    /// a callee that keeps it. A [`Mode::Owned`] parameter is kept.
+    pub kept: bool,
+    /// Whether the result may hold one. A parameter whose
+    /// [`Param::result_aliases`] is returned.
+    pub returned: bool,
 }
 
 /// A function's summary.
@@ -209,6 +230,7 @@ impl Summary {
             mode: Mode::Read,
             result_aliases: false,
             holds_global: false,
+            refs: Refs::default(),
         };
         Summary {
             params: vec![param; arity],
@@ -222,6 +244,10 @@ impl Summary {
             mode: Mode::Owned,
             result_aliases: true,
             holds_global: true,
+            refs: Refs {
+                kept: true,
+                returned: true,
+            },
         };
         Summary {
             params: vec![param; arity],
@@ -230,12 +256,14 @@ impl Summary {
     }
 
     /// The weakest summary covering both: per parameter, the stronger
-    /// mode, aliased if either is.
+    /// mode, aliased, kept or returned if either is.
     fn join(&mut self, other: &Summary) {
         for (p, q) in self.params.iter_mut().zip(&other.params) {
             p.mode = p.mode.max(q.mode);
             p.result_aliases |= q.result_aliases;
             p.holds_global |= q.holds_global;
+            p.refs.kept |= q.refs.kept;
+            p.refs.returned |= q.refs.returned;
         }
         self.result_global |= other.result_global;
     }
