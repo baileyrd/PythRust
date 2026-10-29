@@ -1180,3 +1180,57 @@ fn an_exception_in_a_list_a_callee_returns_is_returned() {
         "tempered `relay` returns `e`; write `owned e`"
     );
 }
+
+#[test]
+fn a_list_extracted_from_a_returned_container_keeps_its_strings() {
+    let field = "names: list[list[str]] = []\ntemper def box(owned s: str) -> tuple[list[str], int]:\n    return ([s], 1)\ntemper def relay(s: str) -> list[str]:\n    pair = box(s)\n    return pair[0]\nprint(relay(\"x\"))\n";
+    let want = "tempered `relay` returns `s`; write `owned s`";
+    assert_eq!(mode_err(field).0, want);
+    assert_eq!(
+        checked(&field.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+    let opt = "names: list[list[str]] = []\ntemper def maybe(owned s: str) -> list[str] | None:\n    return [s]\ntemper def relay(s: str) -> list[str]:\n    m = maybe(s)\n    if m is None:\n        return [\"y\"]\n    return m\nprint(relay(\"x\"))\n";
+    assert_eq!(mode_err(opt).0, want);
+    assert_eq!(
+        checked(&opt.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+    let stored = field.replace(
+        "    return pair[0]\n",
+        "    names.append(pair[0])\n    return [\"y\"]\n",
+    );
+    assert_eq!(
+        mode_err(&stored).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    let stored = opt.replace(
+        "    return m\n",
+        "    names.append(m)\n    return [\"y\"]\n",
+    );
+    assert_eq!(
+        mode_err(&stored).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    // A container whose list holds none of `s` keeps nothing of it.
+    let unrelated = field
+        .replace("return ([s], 1)", "print(s)\n    return ([\"z\"], 1)")
+        .replace("box(owned s", "box(s");
+    assert_eq!(checked(&unrelated), Ok(()));
+}
+
+#[test]
+fn an_exception_in_a_returned_container_is_returned() {
+    let src = "temper def box(owned e: Exception) -> tuple[list[Exception], int]:\n    return ([e], 1)\ntemper def relay(e: Exception) -> list[Exception]:\n    pair = box(e)\n    return pair[0]\nprint(len(relay(ValueError(\"a\"))))\n";
+    assert_eq!(
+        mode_err(src),
+        (
+            "tempered `relay` returns `e`; write `owned e`".into(),
+            "e".into()
+        )
+    );
+    assert_eq!(
+        checked(&src.replace("relay(e: Exception)", "relay(owned e: Exception)")),
+        Ok(())
+    );
+}

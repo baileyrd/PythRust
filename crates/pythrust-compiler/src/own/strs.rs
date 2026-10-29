@@ -172,8 +172,9 @@ impl<'a> Held<'a> {
     }
 
     /// A callee returns what it says it may of an argument's strings or
-    /// its lists' elements, and keeps what it says it does. A list result
-    /// holds what is returned in its abstract lists.
+    /// its lists' elements, and keeps what it says it does. The lists the
+    /// result holds, itself or inside a tuple or optional, hold what is
+    /// returned, so extracting one keeps it.
     fn call(&mut self, dest: LocalId, callee: usize, args: &[Operand]) -> bool {
         let params = &self.summaries[callee].params;
         let mut returned = Origins::new();
@@ -186,9 +187,18 @@ impl<'a> Held<'a> {
                 kept.extend(self.holdings(*a));
             }
         }
-        let changed = grow(&mut self.escaped, &kept);
+        let mut changed = grow(&mut self.escaped, &kept);
+        // The result's own lists, at any depth, hold what it returns.
+        let fresh: Objs = self.flow.points_to(Operand::Local(dest));
+        let fresh: Objs = fresh
+            .into_iter()
+            .filter(|o| matches!(o, Obj::Fresh(l, _) if *l == dest.0))
+            .collect();
+        if !fresh.is_empty() {
+            changed |= self.store(&fresh, &returned);
+        }
         if self.is_list(dest) {
-            return self.store_fresh(dest, &returned) | changed;
+            return changed;
         }
         grow(&mut self.has[dest.0], &returned) | changed
     }
