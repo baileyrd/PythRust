@@ -8,10 +8,11 @@
 //! or not. [`elide`] removes what it proves unneeded, in three passes,
 //! each keeping the IR's ownership invariant:
 //!
-//! 1. `borrow`: a parameter the callee never moves, reassigns or
-//!    releases before its exit is *borrowed* ([`Func::borrowed`]): the
-//!    callee no longer drops it, and every call releases the argument
-//!    itself after the call instead of moving it in.
+//! 1. `borrow`: a parameter its function does not `retains` (never
+//!    moves, reassigns or releases before its exit, a per-function fact)
+//!    is *borrowed* ([`Func::borrowed`]): the callee no longer drops it,
+//!    and every call releases the argument itself after the call instead
+//!    of moving it in.
 //! 2. `cancel`: a copy `a = x; Retain(a)` released again in the same
 //!    block, while `x` still holds its reference, borrows from `x`:
 //!    both refcount operations go.
@@ -19,10 +20,12 @@
 //!    every path to it (never assigned, moved out or released) does
 //!    nothing, so it goes.
 //!
-//! Nothing here reads the ownership summaries of [`own`](crate::own):
-//! those track list aliasing (a string parameter is always `read`),
-//! while what decides a refcount is whether the callee keeps the
-//! reference itself, which the IR states exactly.
+//! Nothing here reads the ownership summaries of [`own`](crate::own)
+//! (Nano, 2026-10-29): those track list aliasing (a string parameter is
+//! always `read`), while what decides a refcount is whether the callee
+//! keeps the reference itself, which the IR states exactly. Phase 4
+//! checks this fact against the summaries once they cover every
+//! reference-counted type (`docs/roadmap.md`, A8).
 
 #[cfg(test)]
 mod tests;
@@ -44,8 +47,9 @@ pub fn elide(mut program: Program) -> Program {
 /// Makes every parameter that can be borrowed so, rewriting its calls.
 fn borrow(program: &mut Program) {
     let funcs = &program.funcs;
+    let retained: Vec<BTreeSet<usize>> = funcs.iter().map(retains).collect();
     let borrowed: Vec<BTreeSet<usize>> = (0..funcs.len())
-        .map(|id| borrowable(funcs, FuncId(id)))
+        .map(|id| borrowable(funcs, FuncId(id), &retained[id]))
         .collect();
     for (f, params) in program.funcs.iter_mut().zip(&borrowed) {
         let locals: BTreeSet<LocalId> = params.iter().map(|&i| f.params[i]).collect();
@@ -60,27 +64,91 @@ fn borrow(program: &mut Program) {
     }
 }
 
-/// The positions of `f`'s parameters it can borrow: reference-counted,
-/// dropped only by its exit, and moved in by every call as lowering
-/// emits it, so [`release_after_calls`] can rewrite each.
-fn borrowable(funcs: &[Func], id: FuncId) -> BTreeSet<usize> {
-    let f = &funcs[id.0];
+/// The positions of `f`'s reference-counted parameters whose reference
+/// `f` may keep past, or give up before, its exit: one it moves,
+/// reassigns or releases anywhere but its exit, or names in an
+/// instruction [`keeps`] cannot see through. Computed once per function
+/// from its own body: lowering passes a variable to a call as a copy
+/// with its own `Retain`, so whatever a callee keeps is that copy's
+/// reference, never the caller's parameter, and the fact needs no
+/// callee's, call-graph order or fixpoint.
+fn retains(f: &Func) -> BTreeSet<usize> {
     let kept = |i: &usize| {
         let p = f.params[*i];
-        f.locals[p.0].is_rc() && only_exit_drops(f, p) && moved_in(funcs, id, *i)
+        let keeps_in = |b: &Block| b.insts.iter().any(|inst| keeps(inst, p, is_exit(b)));
+        f.locals[p.0].is_rc() && f.blocks.iter().any(keeps_in)
     };
     (0..f.params.len()).filter(kept).collect()
 }
 
-/// Whether `f` drops, moves or reassigns `p` only in a `Release` of its
-/// exit block.
-fn only_exit_drops(f: &Func, p: LocalId) -> bool {
-    f.blocks.iter().all(|b| {
-        b.insts.iter().all(|i| match i {
-            Inst::Release(l) => *l != p || is_exit(b),
-            _ => !ends(i, p),
-        })
-    })
+/// The positions of `f`'s parameters it can borrow: reference-counted,
+/// not [`retains`]-ed, and moved in by every call as lowering emits it,
+/// so [`release_after_calls`] can rewrite each.
+fn borrowable(funcs: &[Func], id: FuncId, retained: &BTreeSet<usize>) -> BTreeSet<usize> {
+    let f = &funcs[id.0];
+    let kept = |i: &usize| {
+        f.locals[f.params[*i].0].is_rc() && !retained.contains(i) && moved_in(funcs, id, *i)
+    };
+    (0..f.params.len()).filter(kept).collect()
+}
+
+/// Whether `inst` may keep or give up local `p`'s reference: anything
+/// but reading it or the exit's `Release`. Every instruction and rvalue
+/// is named, so a new one (a channel send, a call into Rust or Python)
+/// counts as keeping until it is classified here.
+fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
+    match inst {
+        Inst::Assign { dest, value, .. } => *dest == p || takes(value, p),
+        Inst::Release(l) => *l == p && !at_exit,
+        Inst::Forget(l) => *l == p,
+        // Each adds a reference of its own, or none.
+        Inst::Retain(_)
+        | Inst::Print { .. }
+        | Inst::Append { .. }
+        | Inst::SetGlobal { .. }
+        | Inst::DropGlobal(_)
+        | Inst::SetItem { .. }
+        | Inst::Raise { .. } => false,
+    }
+}
+
+/// Whether `value` takes over local `p`'s reference: a call's argument
+/// is owned. Every other rvalue borrows its operands and gives a new
+/// reference.
+fn takes(value: &Rvalue, p: LocalId) -> bool {
+    match value {
+        Rvalue::Call(_, args) => args.contains(&Operand::Local(p)),
+        Rvalue::Use(_)
+        | Rvalue::Int(..)
+        | Rvalue::Neg(_)
+        | Rvalue::Cmp(..)
+        | Rvalue::AddOverflows(..)
+        | Rvalue::StrLit(_)
+        | Rvalue::Concat(..)
+        | Rvalue::Repeat(..)
+        | Rvalue::Index(..)
+        | Rvalue::Len(_)
+        | Rvalue::Contains { .. }
+        | Rvalue::ToStr(_)
+        | Rvalue::CopyList(_)
+        | Rvalue::NewSeq(_)
+        | Rvalue::Field(..)
+        | Rvalue::Global(_)
+        | Rvalue::Wrap(_)
+        | Rvalue::Unwrap(_)
+        | Rvalue::IsNone(_)
+        | Rvalue::Float(..)
+        | Rvalue::IntPow(..)
+        | Rvalue::ToFloat(_)
+        | Rvalue::BoolToInt(_)
+        | Rvalue::FloatToInt(_)
+        | Rvalue::ParseFloat(_)
+        | Rvalue::ParseInt(_)
+        | Rvalue::NewExc(..)
+        | Rvalue::Raised
+        | Rvalue::PendingIs(_)
+        | Rvalue::Catch => false,
+    }
 }
 
 /// Whether every call to `callee` passes argument `i` as a constant or
@@ -151,7 +219,7 @@ fn cancelled_by(insts: &[Inst], k: usize) -> Option<(LocalId, usize)> {
         + 1
         + insts[k + 1..]
             .iter()
-            .position(|i| ends(i, a) || ends(i, x))?;
+            .position(|i| ends(i, a) || ends(i, x) || keeps(i, x, false))?;
     (insts[r] == Inst::Release(a)).then_some((a, r))
 }
 
@@ -259,9 +327,17 @@ fn call_args(inst: &Inst) -> Option<(FuncId, &[Operand])> {
 /// forgets it.
 fn ends(inst: &Inst, l: LocalId) -> bool {
     match inst {
+        // A call moving `l` in is followed by its `Forget`; one that
+        // borrows it leaves it as it was.
         Inst::Assign { dest, .. } => *dest == l,
         Inst::Release(x) | Inst::Forget(x) => *x == l,
-        _ => false,
+        Inst::Retain(_)
+        | Inst::Print { .. }
+        | Inst::Append { .. }
+        | Inst::SetGlobal { .. }
+        | Inst::DropGlobal(_)
+        | Inst::SetItem { .. }
+        | Inst::Raise { .. } => false,
     }
 }
 
