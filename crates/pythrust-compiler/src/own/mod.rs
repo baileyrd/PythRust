@@ -75,6 +75,12 @@ pub struct Strs {
     pub kept: bool,
     /// Whether the result may hold one.
     pub returned: bool,
+    /// As `kept`, for the elements, at any depth, of the lists it holds
+    /// as the caller passed them: no mode, since they are values of
+    /// their own, but a caller follows its strings through them.
+    pub elements_kept: bool,
+    /// As `returned`, for those elements.
+    pub elements_returned: bool,
 }
 
 /// A function's summary.
@@ -251,6 +257,8 @@ impl Summary {
             strs: Strs {
                 kept: true,
                 returned: true,
+                elements_kept: true,
+                elements_returned: true,
             },
         };
         Summary {
@@ -268,6 +276,8 @@ impl Summary {
             p.holds_global |= q.holds_global;
             p.strs.kept |= q.strs.kept;
             p.strs.returned |= q.strs.returned;
+            p.strs.elements_kept |= q.strs.elements_kept;
+            p.strs.elements_returned |= q.strs.elements_returned;
         }
         self.result_global |= other.result_global;
     }

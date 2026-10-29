@@ -41,6 +41,8 @@ fn strs(src: &str, name: &str) -> Vec<(bool, bool)> {
 const KEPT_RETURNED: Strs = Strs {
     kept: true,
     returned: true,
+    elements_kept: true,
+    elements_returned: true,
 };
 
 const READ: Mode = Mode::Read;
@@ -1081,4 +1083,100 @@ fn a_tempered_function_keeping_an_exception_writes_owned() {
     );
     let src = src.replace("again(e: Exception)", "again(owned e: Exception)");
     assert_eq!(checked(&src), Ok(()));
+}
+
+#[test]
+fn a_string_returned_through_a_callees_list_element_is_returned() {
+    let helper = "temper def first(xs: list[str]) -> str:\n    return xs[0]\ntemper def relay(s: str) -> str:\n    return first([s])\nprint(relay(\"x\"))\n";
+    assert_eq!(
+        mode_err(helper),
+        (
+            "tempered `relay` returns `s`; write `owned s`".into(),
+            "s".into()
+        )
+    );
+    let direct =
+        "temper def relay(s: str) -> str:\n    xs = [s]\n    return xs[0]\nprint(relay(\"x\"))\n";
+    assert_eq!(
+        mode_err(direct).0,
+        "tempered `relay` returns `s`; write `owned s`"
+    );
+    // The list's elements are not `first`'s own strings.
+    assert_eq!(
+        checked(&helper.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+    // A helper that only reads its list's elements returns none of them.
+    let read = "temper def count(xs: list[str]) -> int:\n    print(xs[0])\n    return len(xs)\ntemper def relay(s: str) -> int:\n    return count([s])\nprint(relay(\"x\"))\n";
+    assert_eq!(checked(read), Ok(()));
+}
+
+#[test]
+fn a_string_kept_through_a_callees_list_element_is_kept() {
+    let helper = "names: list[str] = []\ntemper def keep_first(xs: list[str]) -> None:\n    names.append(xs[0])\ntemper def relay(s: str) -> None:\n    keep_first([s])\nrelay(\"x\")\nprint(names)\n";
+    assert_eq!(
+        mode_err(helper).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    let direct = "names: list[str] = []\ntemper def relay(s: str) -> None:\n    xs = [s]\n    names.append(xs[0])\nrelay(\"x\")\nprint(names)\n";
+    assert_eq!(
+        mode_err(direct).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    assert_eq!(
+        checked(&helper.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+    // `keep_first` keeps an element, not its list: no mode on `xs`.
+    let strs = strs(
+        &helper.replace("relay(s: str)", "relay(owned s: str)"),
+        "keep_first",
+    );
+    assert_eq!(strs, vec![(false, false)]);
+}
+
+#[test]
+fn a_list_a_callee_returns_keeps_the_strings_in_it() {
+    let base = "names: list[list[str]] = []\ntemper def box(owned s: str) -> list[str]:\n    return [s]\ntemper def relay(s: str) -> list[str]:\n    return box(s)\nprint(relay(\"x\"))\n";
+    let want = "tempered `relay` returns `s`; write `owned s`";
+    assert_eq!(mode_err(base).0, want);
+    let bound = base.replace(
+        "    return box(s)\n",
+        "    b = box(s)\n    c = b\n    return c\n",
+    );
+    assert_eq!(mode_err(&bound).0, want);
+    let nested = base.replace(
+        "temper def relay(s: str) -> list[str]:\n    return box(s)\n",
+        "temper def relay(s: str) -> tuple[list[str], int] | None:\n    return (box(s), 1)\n",
+    );
+    assert_eq!(mode_err(&nested).0, want);
+    let stored = base.replace(
+        "temper def relay(s: str) -> list[str]:\n    return box(s)\n",
+        "temper def relay(s: str) -> list[str]:\n    b = box(s)\n    names.append(b)\n    return [\"y\"]\n",
+    );
+    assert_eq!(
+        mode_err(&stored).0,
+        "tempered `relay` keeps `s` after it returns; write `owned s`"
+    );
+    assert_eq!(
+        checked(&base.replace("relay(s: str)", "relay(owned s: str)")),
+        Ok(())
+    );
+}
+
+#[test]
+fn an_exception_in_a_list_a_callee_returns_is_returned() {
+    let src = "temper def box(owned e: Exception) -> list[Exception]:\n    return [e]\ntemper def relay(e: Exception) -> list[Exception]:\n    b = box(e)\n    return b\ntry:\n    raise ValueError(\"a\")\nexcept ValueError as e:\n    print(len(relay(e)))\n";
+    assert_eq!(
+        mode_err(src),
+        (
+            "tempered `relay` returns `e`; write `owned e`".into(),
+            "e".into()
+        )
+    );
+    let first = "temper def first(xs: list[Exception]) -> Exception:\n    return xs[0]\ntemper def relay(e: Exception) -> Exception:\n    return first([e])\nprint(relay(ValueError(\"a\")))\n";
+    assert_eq!(
+        mode_err(first).0,
+        "tempered `relay` returns `e`; write `owned e`"
+    );
 }

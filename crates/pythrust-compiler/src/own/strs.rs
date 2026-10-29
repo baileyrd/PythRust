@@ -7,15 +7,18 @@
 //! fields and its optional's value, recursively, but not past a list (a
 //! list's elements are values of their own, A6). An exception counts as
 //! a string. Which parameters have strings is a property of the
-//! language-level type ([`Type::holds_heap`], [`Type::reaches_mutable`]), so a tuple or optional of
-//! scalars never has any.
+//! language-level type ([`Type::holds_heap`], [`Type::reaches_mutable`]),
+//! so a tuple or optional of scalars never has any.
 //!
-//! It tracks, per local, which parameters' strings it may hold, and per
-//! abstract list of the settled points-to sets, which ones the body
-//! stores in it. A parameter's strings are [`Strs::kept`] when one may
-//! reach a list the caller or the module can see, a global, an
-//! exception (or is one raised), or a callee that keeps it; [`Strs::returned`] when the
-//! result may hold one. Flow-insensitive, like the summary it extends.
+//! It tracks, per local, which [`Origin`]s it may hold outside any list,
+//! and per abstract list of the settled points-to sets, which ones the
+//! body stores in it: a parameter's strings, or the elements of its
+//! lists, which a caller needs to follow its own strings through a
+//! callee (`first([s])` returns `s`). A parameter's strings are
+//! [`Strs::kept`] when one may reach a list the caller or the module can
+//! see, a global, an exception (or is one raised), or a callee that keeps
+//! it; [`Strs::returned`] when the result may hold one; the elements of
+//! its lists likewise. Flow-insensitive, like the summary it extends.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,8 +27,16 @@ use super::{source, Strs, Summary};
 use crate::infer::Type;
 use crate::ir::{Compound, Func, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
 
-/// Parameter positions.
-type Params = BTreeSet<usize>;
+/// Where a string held in the body came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Origin {
+    /// Parameter `i`'s strings.
+    Part(usize),
+    /// The elements of parameter `i`'s lists, as the caller passed them.
+    Element(usize),
+}
+
+type Origins = BTreeSet<Origin>;
 
 /// One [`Strs`] per parameter of `func`, its lists settled as `flow`.
 pub(super) fn params(
@@ -40,8 +51,10 @@ pub(super) fn params(
     let returned = held.returned();
     (0..func.params.len())
         .map(|i| Strs {
-            kept: kept.contains(&i),
-            returned: returned.contains(&i),
+            kept: kept.contains(&Origin::Part(i)),
+            returned: returned.contains(&Origin::Part(i)),
+            elements_kept: kept.contains(&Origin::Element(i)),
+            elements_returned: returned.contains(&Origin::Element(i)),
         })
         .collect()
 }
@@ -62,15 +75,13 @@ struct Held<'a> {
     func: &'a Func,
     summaries: &'a [Summary],
     flow: &'a Flow<'a>,
-    /// Per local, the parameters whose strings it may hold outside any
-    /// list.
-    has: Vec<Params>,
-    /// Per abstract list, the parameters whose strings the body may
-    /// store in it.
-    inside: BTreeMap<Obj, Params>,
-    /// Parameters a string of which went where the call cannot see its
-    /// end: a global, an exception, a callee that keeps it.
-    escaped: Params,
+    /// Per local, what it may hold outside any list.
+    has: Vec<Origins>,
+    /// Per abstract list, what the body may store in it.
+    inside: BTreeMap<Obj, Origins>,
+    /// What went where the call cannot see its end: a global, an
+    /// exception, a callee that keeps it.
+    escaped: Origins,
 }
 
 impl<'a> Held<'a> {
@@ -80,10 +91,10 @@ impl<'a> Held<'a> {
         summaries: &'a [Summary],
         flow: &'a Flow<'a>,
     ) -> Held<'a> {
-        let mut has = vec![Params::new(); func.locals.len()];
+        let mut has = vec![Origins::new(); func.locals.len()];
         for (i, p) in func.params.iter().enumerate() {
             if holds_str(&source(program, func.locals[p.0])) {
-                has[p.0].insert(i);
+                has[p.0].insert(Origin::Part(i));
             }
         }
         Held {
@@ -93,7 +104,7 @@ impl<'a> Held<'a> {
             flow,
             has,
             inside: BTreeMap::new(),
-            escaped: Params::new(),
+            escaped: Origins::new(),
         }
     }
 
@@ -141,43 +152,50 @@ impl<'a> Held<'a> {
             }
             _ => {}
         }
-        if !holds_str(&source(self.program, self.func.locals[dest.0])) {
+        // A list's own strings are its abstract lists' (`inside`).
+        let ty = source(self.program, self.func.locals[dest.0]);
+        if self.is_list(dest) || ty.holds_heap() == Some(false) {
             return false;
         }
         let gains = match value {
             // A character of a string is a new string.
-            Rvalue::Index(a, _) if self.is_str(*a) => Params::new(),
+            Rvalue::Index(a, _) if self.is_str(*a) => Origins::new(),
             Rvalue::Use(a)
             | Rvalue::Wrap(a)
             | Rvalue::Unwrap(a)
             | Rvalue::Field(a, _)
             | Rvalue::Index(a, _) => self.holdings(*a),
             Rvalue::NewSeq(items) => items.iter().flat_map(|a| self.holdings(*a)).collect(),
-            _ => Params::new(),
+            _ => Origins::new(),
         };
         grow(&mut self.has[dest.0], &gains)
     }
 
-    /// A callee returns what it says it may, and keeps what it says it
-    /// does.
+    /// A callee returns what it says it may of an argument's strings or
+    /// its lists' elements, and keeps what it says it does. A list result
+    /// holds what is returned in its abstract lists.
     fn call(&mut self, dest: LocalId, callee: usize, args: &[Operand]) -> bool {
         let params = &self.summaries[callee].params;
-        let mut returned = Params::new();
-        let mut kept = Params::new();
+        let mut returned = Origins::new();
+        let mut kept = Origins::new();
         for (a, p) in args.iter().zip(params) {
-            if p.strs.returned {
+            if p.strs.returned || p.strs.elements_returned {
                 returned.extend(self.holdings(*a));
             }
-            if p.strs.kept {
+            if p.strs.kept || p.strs.elements_kept {
                 kept.extend(self.holdings(*a));
             }
         }
-        grow(&mut self.has[dest.0], &returned) | grow(&mut self.escaped, &kept)
+        let changed = grow(&mut self.escaped, &kept);
+        if self.is_list(dest) {
+            return self.store_fresh(dest, &returned) | changed;
+        }
+        grow(&mut self.has[dest.0], &returned) | changed
     }
 
     /// Stores `value` in each of `lists`, or where the call cannot see
     /// its end if it knows none; whether anything grew.
-    fn store(&mut self, lists: &Objs, value: &Params) -> bool {
+    fn store(&mut self, lists: &Objs, value: &Origins) -> bool {
         if lists.is_empty() {
             return grow(&mut self.escaped, value);
         }
@@ -189,40 +207,45 @@ impl<'a> Held<'a> {
     }
 
     /// Stores `value` in the new list `dest` holds.
-    fn store_fresh(&mut self, dest: LocalId, value: &Params) -> bool {
+    fn store_fresh(&mut self, dest: LocalId, value: &Origins) -> bool {
         let fresh = self.flow.points_to(Operand::Local(dest));
         self.store(&fresh, value)
     }
 
-    /// The parameters whose strings `op` may hold, itself or in a list
-    /// it may reach.
-    fn holdings(&self, op: Operand) -> Params {
+    /// What `op` may hold, itself or in a list it may reach.
+    fn holdings(&self, op: Operand) -> Origins {
         let Operand::Local(l) = op else {
-            return Params::new();
+            return Origins::new();
         };
+        let lists = self.flow.reachable(&self.flow.points_to(op));
+        let elements = lists.iter().filter_map(|o| match o {
+            Obj::Param(i) => Some(Origin::Element(*i)),
+            _ => None,
+        });
         let mut out = self.has[l.0].clone();
-        out.extend(self.in_lists(&self.flow.reachable(&self.flow.points_to(op))));
+        out.extend(elements);
+        out.extend(self.stored(&lists));
         out
     }
 
-    /// The parameters whose strings the body stored in `lists`.
-    fn in_lists(&self, lists: &Objs) -> Params {
+    /// What the body stored in `lists`.
+    fn stored(&self, lists: &Objs) -> Origins {
         let inside = lists.iter().filter_map(|o| self.inside.get(o));
         inside.flatten().copied().collect()
     }
 
     /// What escaped, and what the body stored in a list the caller or
     /// the module can see after the call.
-    fn kept(&self) -> Params {
+    fn kept(&self) -> Origins {
         let params = (0..self.func.params.len()).map(Obj::Param);
         let roots: Objs = params.chain([Obj::World]).collect();
         let mut out = self.escaped.clone();
-        out.extend(self.in_lists(&self.flow.reachable(&roots)));
+        out.extend(self.stored(&self.flow.reachable(&roots)));
         out
     }
 
     /// What any `return` may hold.
-    fn returned(&self) -> Params {
+    fn returned(&self) -> Origins {
         let returns = self.func.blocks.iter().filter_map(|b| match &b.term {
             Term::Return(op) => Some(*op),
             _ => None,
@@ -243,7 +266,7 @@ impl<'a> Held<'a> {
 }
 
 /// Adds `more` to `set`; whether it grew.
-fn grow(set: &mut Params, more: &Params) -> bool {
+fn grow(set: &mut Origins, more: &Origins) -> bool {
     let before = set.len();
     set.extend(more.iter().copied());
     set.len() > before
