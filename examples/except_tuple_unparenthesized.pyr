@@ -1,7 +1,7 @@
 # expect-exit: 1
 # expect-error: multiple exception types must be parenthesized
-# Python before 3.14 rejects this too.
+# Python rejects this too: before 3.14 always, from 3.14 (PEP 758) with `as`.
 try:
     print(int("x"))
-except ValueError, IndexError:
-    print("caught")
+except ValueError, IndexError as e:
+    print("caught", e)
