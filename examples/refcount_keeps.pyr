@@ -1,0 +1,43 @@
+# Refcount elision (A7): a callee that keeps its argument, by storing it,
+# returning it, boxing it or raising it, keeps a reference of its own, so
+# the value outlives the caller's variable.
+def keep_in(rows: list[str], s: str) -> None:
+    rows.append(s)
+
+
+def back(s: str) -> str:
+    return s
+
+
+def pair(s: str) -> tuple[str, str]:
+    return (s, s)
+
+
+def boxed(xs: list[int]) -> list[list[int]]:
+    return [xs, xs]
+
+
+def fail_with(s: str) -> int:
+    raise ValueError(s)
+
+
+def length(s: str) -> int:
+    return len(s)
+
+
+rows = []
+word = "w" + str(1)
+keep_in(rows, word)
+keep_in(rows, "lit" + "!")
+kept = back(word)
+p = pair(word)
+xs = [1, 2]
+b = boxed(xs)
+xs.append(3)
+try:
+    fail_with(word)
+except ValueError as e:
+    print(e)
+word = "gone"
+xs = [0]
+print(rows, kept, p, b, xs, length(kept))

@@ -198,3 +198,93 @@ fn a_local_set_on_some_path_keeps_its_release() {
     assert!(f.blocks[0].insts.is_empty());
     assert_eq!(f.blocks[2].insts, vec![Inst::Release(LocalId(1))]);
 }
+
+/// The elided program for `def f(s: str) -> T` with `body`, called once.
+fn kept_by(sig: &str, body: &str, call: &str) -> Program {
+    elided(&format!("def f({sig}:\n{body}\n{call}\n"))
+}
+
+#[test]
+fn a_callee_storing_its_parameter_in_a_list_adds_its_own_reference() {
+    let p = kept_by(
+        "rows: list[str], s: str) -> None",
+        "    rows.append(s)",
+        "rows = []\nf(rows, 'a')\nprint(rows)",
+    );
+    let f = func(&p, "f");
+    // The list takes a reference of its own, so `f` keeps nothing.
+    assert_eq!(f.borrowed.len(), 2);
+    assert_eq!(count(f, |i| matches!(i, Inst::Append { .. })), 1);
+}
+
+#[test]
+fn a_callee_returning_or_boxing_its_parameter_adds_its_own_reference() {
+    let returned = kept_by("s: str) -> str", "    return s", "print(f('a'))");
+    let f = func(&returned, "f");
+    assert_eq!(f.borrowed.len(), 1);
+    // The result is a copy with its own `Retain`.
+    assert_eq!(retains(f), 1);
+    let boxed = kept_by(
+        "xs: list[int]) -> list[list[int]]",
+        "    return [xs, xs]",
+        "print(f([1]))",
+    );
+    let f = func(&boxed, "f");
+    assert_eq!(f.borrowed.len(), 1);
+    assert_eq!(
+        count(f, |i| matches!(
+            i,
+            Inst::Assign {
+                value: Rvalue::NewSeq(_),
+                ..
+            }
+        )),
+        1
+    );
+}
+
+#[test]
+fn a_callee_raising_its_parameter_adds_its_own_reference() {
+    let src = "def f(s: str) -> int:\n    raise ValueError(s)\ntry:\n    f('a')\nexcept ValueError as e:\n    print(e)\n";
+    let p = elided(src);
+    let f = func(&p, "f");
+    assert_eq!(f.borrowed.len(), 1);
+    assert_eq!(count(f, |i| matches!(i, Inst::Raise { .. })), 1);
+}
+
+#[test]
+fn a_parameter_passed_on_directly_is_retained() {
+    // Lowering always passes a copy; a parameter handed to a call as it
+    // is would be moved, so it counts as kept.
+    let p = elided("def g(s: str) -> int:\n    return len(s)\ndef f(s: str) -> int:\n    return g(s)\nprint(f('a'))\n");
+    let mut f = func(&p, "f").clone();
+    let s = Operand::Local(f.params[0]);
+    let id = p
+        .funcs
+        .iter()
+        .position(|g| g.name == "g")
+        .map(FuncId)
+        .expect("g");
+    f.blocks[0].insts.push(Inst::Assign {
+        dest: LocalId(f.locals.len() - 1),
+        value: Rvalue::Call(id, vec![s]),
+        span: Span { start: 0, end: 0 },
+    });
+    assert_eq!(super::retains(&f), BTreeSet::from([0]));
+}
+
+#[test]
+fn every_instruction_but_a_read_or_the_exit_release_keeps() {
+    let p = LocalId(0);
+    let assign = |value| Inst::Assign {
+        dest: LocalId(1),
+        value,
+        span: Span { start: 0, end: 0 },
+    };
+    assert!(keeps(&Inst::Release(p), p, false));
+    assert!(!keeps(&Inst::Release(p), p, true));
+    assert!(keeps(&Inst::Forget(p), p, true));
+    assert!(keeps(&copy(0, 1), p, false));
+    assert!(!keeps(&copy(1, 0), p, false));
+    assert!(!keeps(&assign(Rvalue::Len(Operand::Local(p))), p, false));
+}
