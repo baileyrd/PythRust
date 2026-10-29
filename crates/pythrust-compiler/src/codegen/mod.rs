@@ -1079,6 +1079,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+    use crate::exc::ExcKind;
     use crate::{infer, lexer, lower, parser};
 
     /// Compiles `src`, returning the object and every diagnostic rendered.
@@ -1135,6 +1136,19 @@ mod tests {
             "x: Exception | None = None\ne = ValueError([x])\n",
         ] {
             assert!(refused_as_cycle(src), "{src}");
+        }
+    }
+
+    /// The refusal is by type, and every class's value is an `Exception`,
+    /// so it holds for every class, outer and inner (B4).
+    #[test]
+    fn the_cycle_refusal_covers_every_exception_class() {
+        for outer in ExcKind::ALL {
+            for inner in ExcKind::ALL {
+                let (o, i) = (outer.name(), inner.name());
+                let src = format!("es: list[Exception] = [{i}(0)]\ne = {o}(es)\n");
+                assert!(refused_as_cycle(&src), "{src}");
+            }
         }
     }
 

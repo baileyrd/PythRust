@@ -685,6 +685,26 @@ def f(n: int) -> None:
     }
 
     #[test]
+    fn a_base_class_handler_removes_every_subclass() {
+        let src = "\
+def f(n: int) -> None:
+    try:
+        if n == 0:
+            raise ZeroDivisionError
+        if n == 1:
+            raise OverflowError
+        if n == 2:
+            raise ArithmeticError
+        raise IndexError
+    except ArithmeticError:
+        pass
+";
+        assert_eq!(raises(src, "f"), "IndexError");
+        let any = src.replace("except ArithmeticError", "except Exception");
+        assert_eq!(raises(&any, "f"), "");
+    }
+
+    #[test]
     fn a_clause_admits_the_classes_derived_from_its_own() {
         let src = "\
 temper def f(n: int) -> int raises ArithmeticError, LookupError:
