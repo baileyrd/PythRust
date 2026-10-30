@@ -5,7 +5,9 @@
 //! infers, through its callees, to a fixpoint for mutually recursive
 //! ones. A tempered function, or any function with a clause, has the set
 //! it declares, and its body must not let anything else escape. Callers
-//! see that declared set, so a clause is a contract.
+//! see that declared set, so a clause is a contract. A clause listing
+//! `Exception` admits any exception, so it promises callers nothing; when
+//! the body does not need it, a warning names the narrower clause.
 //!
 //! Only `raise` and `int(s)`/`float(s)` of a `str` raise (D7); faults
 //! never escape. A set holds exception classes (B4): each escape is an
@@ -20,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::ast::{
     Arg, Expr, ExprKind, FuncDef, Ident, Mode, Module, Stmt, StmtKind, Target, TargetKind,
 };
-use crate::diag::Result;
+use crate::diag::{Result, Warning};
 use crate::exc::ExcKind;
 use crate::span::Span;
 
@@ -74,13 +76,13 @@ impl Raises {
     }
 }
 
-/// Checks every declared set and returns each function's set: declared
-/// where there is one, else inferred.
+/// Checks every declared set and returns each function's set (declared
+/// where there is one, else inferred) and the warnings on clauses.
 pub(super) fn check(
     module: &Module,
     defs: &[&FuncDef],
     types: &Types,
-) -> Result<HashMap<String, Raises>> {
+) -> Result<(HashMap<String, Raises>, Vec<Warning>)> {
     let mut globals = Bindings::new();
     bindings(&module.body, &mut globals);
     let mut declared = HashMap::new();
@@ -105,13 +107,15 @@ pub(super) fn check(
     for group in scope::groups(defs) {
         a.infer_group(&group, &declared);
     }
+    let mut warnings = Vec::new();
     for f in defs {
         if let Some(set) = declared.get(f.name.name.as_str()) {
-            a.check_body(f, set)?;
+            warnings.extend(a.check_body(f, set)?);
         }
     }
+    warnings.sort_by_key(|w| (w.span.start, w.span.end));
     let sets = a.sets.into_iter().map(|(n, s)| (n.to_string(), s));
-    Ok(sets.collect())
+    Ok((sets.collect(), warnings))
 }
 
 /// The functions whose `def` runs before any other code: before every
@@ -159,12 +163,17 @@ fn declared_escape(name: &Ident, defs: &[&FuncDef], globals: &Bindings) -> Resul
         let msg = format!("`{n}` is not an exception; `raises` lists one of {names}");
         return Err(error(name.span, msg));
     };
-    let redefined = globals.contains_key(n) || defs.iter().any(|f| f.name.name == n);
-    if redefined {
+    if shadowed(n, globals, defs.iter().map(|f| f.name.name.as_str())) {
         let msg = format!("`{n}` is redefined, so it no longer names the builtin exception");
         return Err(error(name.span, msg));
     }
     Ok(builtin)
+}
+
+/// Whether a module variable or a function named `n` hides the builtin
+/// exception of that name, so a `raises` clause cannot name it.
+fn shadowed<'a>(n: &str, globals: &Bindings, mut defs: impl Iterator<Item = &'a str>) -> bool {
+    globals.contains_key(n) || defs.any(|d| d == n)
 }
 
 /// Where a variable's values come from.
@@ -305,8 +314,9 @@ impl<'a> Analysis<'a> {
     }
 
     /// The first escape from `f`'s body that `declared` does not admit,
-    /// in source order, is an error.
-    fn check_body(&self, f: &'a FuncDef, declared: &Raises) -> Result<()> {
+    /// in source order, is an error; else a declared `Exception` the body
+    /// does not need is a warning.
+    fn check_body(&self, f: &'a FuncDef, declared: &Raises) -> Result<Option<Warning>> {
         let got = self.body(f);
         let missing = got
             .sites
@@ -314,7 +324,9 @@ impl<'a> Analysis<'a> {
             .filter(|(e, _)| !declared.covers(**e))
             .min_by_key(|(_, at)| at.start);
         let Some((e, at)) = missing else {
-            return Ok(());
+            let nameable =
+                |e: ExcKind| !shadowed(e.name(), &self.globals, self.defs.keys().copied());
+            return Ok(vacuous(f, declared, &got, nameable));
         };
         let mut all = declared.clone();
         all.extend(got.clone());
@@ -349,16 +361,59 @@ fn undeclared(f: &FuncDef, e: ExcKind, all: &Raises, types: &Types) -> String {
     )
 }
 
+/// The warning for `f`'s clause listing `Exception` when no escape from
+/// its body (`got`) is of unknown class, so the clause can say more: the
+/// other declared classes plus what escapes, or no clause when that is
+/// nothing. An `Exception` escaping from a callee whose own clause lists
+/// it vacuously keeps this one quiet; the callee gets the warning. So
+/// does a narrower clause naming a class the module redefines, which no
+/// clause can name.
+fn vacuous(
+    f: &FuncDef,
+    declared: &Raises,
+    got: &Raises,
+    nameable: impl Fn(ExcKind) -> bool,
+) -> Option<Warning> {
+    let at = *declared.sites.get(&ExcKind::Exception)?;
+    if got.sites.contains_key(&ExcKind::Exception) {
+        return None;
+    }
+    let mut narrow = got.clone();
+    let listed = declared
+        .sites
+        .iter()
+        .filter(|(e, _)| **e != ExcKind::Exception);
+    listed.for_each(|(e, s)| narrow.add(*e, *s));
+    if !clause_classes(&narrow).into_iter().all(nameable) {
+        return None;
+    }
+    let escapes = match clause(got) {
+        none if none.is_empty() => "nothing".to_string(),
+        some => format!("only {some}"),
+    };
+    let fix = match clause(&narrow) {
+        none if none.is_empty() => "remove the `raises` clause".to_string(),
+        some => format!("write `raises {some}`"),
+    };
+    let name = &f.name.name;
+    let message = format!(
+        "`raises Exception` admits any exception, so it tells callers of `{name}` nothing, \
+         and {escapes} can escape it; {fix}"
+    );
+    Some(Warning { span: at, message })
+}
+
 /// The clause admitting every escape in `set`: the classes no other one
 /// there derives from (`Exception` admits all).
 fn clause(set: &Raises) -> String {
-    let derived = |e: ExcKind| set.escapes().any(|d| d != e && e.is_a(d));
-    let names: Vec<&str> = set
-        .escapes()
-        .filter(|e| !derived(*e))
-        .map(ExcKind::name)
-        .collect();
+    let names: Vec<&str> = clause_classes(set).into_iter().map(ExcKind::name).collect();
     names.join(", ")
+}
+
+/// The classes [`clause`] names.
+fn clause_classes(set: &Raises) -> Vec<ExcKind> {
+    let derived = |e: ExcKind| set.escapes().any(|d| d != e && e.is_a(d));
+    set.escapes().filter(|e| !derived(*e)).collect()
 }
 
 /// One scope being walked: a function body, or the module for globals.
@@ -618,6 +673,25 @@ mod tests {
             Ok(_) => panic!("expected an error for:\n{src}"),
             Err(msg) => msg,
         }
+    }
+
+    /// `src`'s warnings, as (the text the span covers, message).
+    fn warnings(src: &str) -> Vec<(String, String)> {
+        let types = types(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let at = |w: &crate::Warning| src[w.span.start..w.span.end].to_string();
+        types
+            .warnings()
+            .iter()
+            .map(|w| (at(w), w.message.clone()))
+            .collect()
+    }
+
+    fn vacuous(name: &str, escapes: &str, fix: &str) -> (String, String) {
+        let message = format!(
+            "`raises Exception` admits any exception, so it tells callers of `{name}` \
+             nothing, and {escapes} can escape it; {fix}"
+        );
+        ("Exception".to_string(), message)
     }
 
     #[test]
@@ -1087,5 +1161,193 @@ ValueError = IndexError()
     fn signature_errors_come_first() {
         let src = "temper def f(s) -> int:\n    return int(s)\n";
         assert_eq!(err(src), "tempered `f` must annotate parameter `s`");
+    }
+
+    #[test]
+    fn an_unneeded_raises_exception_warns_with_the_narrower_clause() {
+        let src = "temper def f(s: str) -> int raises Exception:\n    return int(s)\n";
+        let want = vacuous("f", "only ValueError", "write `raises ValueError`");
+        assert_eq!(warnings(src), vec![want]);
+        let loose = "def f(s) raises Exception:\n    return int(s)\n";
+        let want = vacuous("f", "only ValueError", "write `raises ValueError`");
+        assert_eq!(warnings(loose), vec![want]);
+    }
+
+    #[test]
+    fn a_raises_exception_nothing_needs_says_to_remove_the_clause() {
+        let src = "temper def f(n: int) -> int raises Exception:\n    return n\n";
+        let want = vacuous("f", "nothing", "remove the `raises` clause");
+        assert_eq!(warnings(src), vec![want]);
+    }
+
+    #[test]
+    fn the_narrower_clause_keeps_the_other_listed_classes() {
+        let src = "\
+def f(n: int) -> None raises IndexError, Exception:
+    raise ValueError
+def g(n: int) -> None raises ArithmeticError, Exception:
+    raise ZeroDivisionError
+def h(n: int) -> None raises IndexError, Exception:
+    pass
+";
+        let f = vacuous(
+            "f",
+            "only ValueError",
+            "write `raises IndexError, ValueError`",
+        );
+        let g = vacuous(
+            "g",
+            "only ZeroDivisionError",
+            "write `raises ArithmeticError`",
+        );
+        let h = vacuous("h", "nothing", "write `raises IndexError`");
+        assert_eq!(warnings(src), vec![f, g, h]);
+    }
+
+    #[test]
+    fn a_needed_raises_exception_does_not_warn() {
+        let src = "\
+temper def relay(owned e: Exception) -> None raises Exception:
+    raise e
+def caught(n: int) -> None raises Exception:
+    try:
+        raise ValueError
+    except Exception as e:
+        raise e
+";
+        assert_eq!(warnings(src), vec![]);
+    }
+
+    #[test]
+    fn only_the_callee_whose_clause_is_vacuous_warns() {
+        let src = "\
+def inner(s: str) -> int raises Exception:
+    return int(s)
+def outer(s: str) -> int raises Exception:
+    return inner(s)
+";
+        let want = vacuous("inner", "only ValueError", "write `raises ValueError`");
+        assert_eq!(warnings(src), vec![want]);
+    }
+
+    #[test]
+    fn no_clause_or_an_undeclared_escape_does_not_warn() {
+        assert_eq!(warnings("def f(e):\n    raise e\n"), vec![]);
+        assert_eq!(
+            warnings("temper def f(n: int) -> int:\n    return n\n"),
+            vec![]
+        );
+        let src = "temper def f(n: int) -> None raises ValueError:\n    raise ValueError\n";
+        assert_eq!(warnings(src), vec![]);
+    }
+
+    #[test]
+    fn the_narrower_clause_has_no_duplicate_or_covered_class() {
+        let src = "\
+def f(n: int) -> None raises ValueError, Exception:
+    raise ValueError
+def g(n: int) -> None raises LookupError, Exception:
+    if n == 0:
+        raise IndexError
+    raise ValueError
+";
+        let f = vacuous("f", "only ValueError", "write `raises ValueError`");
+        let g = vacuous(
+            "g",
+            "only IndexError, ValueError",
+            "write `raises LookupError, ValueError`",
+        );
+        assert_eq!(warnings(src), vec![f, g]);
+    }
+
+    #[test]
+    fn a_narrower_clause_naming_a_redefined_class_does_not_warn() {
+        let function = "\
+def ValueError():
+    pass
+def f(s: str) -> int raises Exception:
+    return int(s)
+";
+        assert_eq!(warnings(function), vec![]);
+        let variable = "\
+ZeroDivisionError = 1
+def f(n: int) -> None raises Exception:
+    raise IndexError
+def g(n: int) -> None raises ArithmeticError, Exception:
+    raise OverflowError
+";
+        let f = vacuous("f", "only IndexError", "write `raises IndexError`");
+        let g = vacuous("g", "only OverflowError", "write `raises ArithmeticError`");
+        assert_eq!(warnings(variable), vec![f, g]);
+    }
+
+    #[test]
+    fn warnings_come_in_source_order() {
+        let src = "\
+def b(n: int) -> int raises Exception:
+    return n
+def a(n: int) -> int raises Exception:
+    return b(n)
+";
+        let starts: Vec<usize> = types(src)
+            .unwrap()
+            .warnings()
+            .iter()
+            .map(|w| w.span.start)
+            .collect();
+        assert_eq!(starts.len(), 1, "{starts:?}");
+        let src = src.replace("return b(n)", "return n");
+        let warned = types(&src).unwrap();
+        let starts: Vec<usize> = warned.warnings().iter().map(|w| w.span.start).collect();
+        assert_eq!(starts.len(), 2);
+        assert!(starts.windows(2).all(|w| w[0] < w[1]), "{starts:?}");
+    }
+
+    /// `src` with the `raises` clause on the line at `at` replaced as
+    /// `message` suggests.
+    fn apply(src: &str, at: usize, message: &str) -> String {
+        let line_start = src[..at].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = src[at..].find('\n').map_or(src.len(), |i| at + i);
+        let line = &src[line_start..line_end];
+        let clause = line.find(" raises ").unwrap_or_else(|| panic!("{line}"));
+        let colon = line.rfind(':').unwrap_or_else(|| panic!("{line}"));
+        let fix = match message.split_once("write `raises ") {
+            Some((_, rest)) => format!(" raises {}", rest.trim_end_matches('`')),
+            None if message.ends_with("remove the `raises` clause") => String::new(),
+            None => panic!("no fix in {message}"),
+        };
+        let fixed = format!("{}{fix}{}", &line[..clause], &line[colon..]);
+        format!("{}{fixed}{}", &src[..line_start], &src[line_end..])
+    }
+
+    /// Applying every suggested clause, innermost first as the warnings
+    /// lead, leaves a program that checks with no warning.
+    #[test]
+    fn each_suggested_clause_checks_clean() {
+        let programs = [
+            "temper def f(s: str) -> int raises Exception:\n    return int(s)\n",
+            "def f(s) raises Exception:\n    return int(s)\n",
+            "temper def f(n: int) -> int raises Exception:\n    return n\n",
+            "def f(n: int) -> None raises IndexError, Exception:\n    raise ValueError\n",
+            "def f(n: int) -> None raises ArithmeticError, Exception:\n    raise ZeroDivisionError\n",
+            "def f(n: int) -> None raises ValueError, Exception:\n    raise ValueError\n",
+            "def f(n: int) -> None raises LookupError, Exception:\n    if n == 0:\n        raise IndexError\n    raise ValueError\n",
+            "def ValueError():\n    pass\ndef f(n: int) -> None raises Exception:\n    raise IndexError\n",
+            "LookupError = 1\ndef f(n: int) -> None raises Exception:\n    raise IndexError\n",
+            "temper def inner(s: str) -> int raises Exception:\n    return int(s)\ntemper def outer(s: str) -> int raises Exception:\n    return inner(s)\nprint(outer(\"1\"))\n",
+        ];
+        for program in programs {
+            let mut src = program.to_string();
+            for _ in 0..4 {
+                let types = types(&src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+                let Some(w) = types.warnings().first() else {
+                    break;
+                };
+                src = apply(&src, w.span.start, &w.message);
+            }
+            let types = types(&src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+            assert_eq!(types.warnings(), &[], "{src}");
+            assert_ne!(src, program, "no warning for:\n{program}");
+        }
     }
 }

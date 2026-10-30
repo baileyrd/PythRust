@@ -1010,6 +1010,48 @@ fn build_refuses_an_exception_that_may_close_a_cycle() -> Res<()> {
     Ok(())
 }
 
+/// A warning (an unneeded `raises Exception`) goes to stderr once the
+/// checks pass, before the program runs, and changes neither stdout nor
+/// the exit status: both match the program with the suggested clause.
+#[test]
+fn warnings_print_and_leave_output_and_status_unchanged() -> Res<()> {
+    let dir = scratch("warning")?;
+    let program = |clause: &str| {
+        format!(
+            "def f(s: str) -> int{clause}:\n    return int(s)\nprint(f(\"1\"))\nprint(f(\"x\"))\n"
+        )
+    };
+    let (warned, clean) = (dir.join("warned.pyr"), dir.join("clean.pyr"));
+    write(&warned, &program(" raises Exception"))?;
+    write(&clean, &program(" raises ValueError"))?;
+    let mut failures = Vec::new();
+    for command in ["check", "run"] {
+        let got = pythrust(command, &warned)?;
+        let want = pythrust(command, &clean)?;
+        let stderr = String::from_utf8_lossy(&got.stderr);
+        let warning = "warned.pyr:1:29: warning: `raises Exception`";
+        if !stderr.contains(warning) {
+            failures.push(format!("{command}: no warning in:\n{stderr}"));
+        }
+        if got.stdout != want.stdout || got.status.code() != want.status.code() {
+            failures.push(format!("{command}: {got:?}\nwant {want:?}"));
+        }
+    }
+    let run = pythrust("run", &warned)?;
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+    assert_eq!(run.status.code(), Some(1));
+    report(failures);
+    cleanup(&dir)
+}
+
+fn pythrust(command: &str, source: &Path) -> Res<std::process::Output> {
+    Command::new(pythrust_bin()?)
+        .arg(command)
+        .arg(source)
+        .output()
+        .map_err(|e| format!("cannot run pythrust {command}: {e}"))
+}
+
 /// Exceptions nest to any depth (`e = ValueError(e)`), so a native
 /// `repr` of one must stop where `run`'s does, with the same error at the
 /// same place and nothing printed by the failing `print`, and freeing a

@@ -26,6 +26,6 @@ pub mod own;
 pub mod parser;
 pub mod rc;
 
-pub use diag::{DiagKind, Diagnostic, Result};
+pub use diag::{DiagKind, Diagnostic, Result, Warning};
 pub use span::Span;
 pub use token::{Token, TokenKind};
