@@ -1,7 +1,9 @@
 //! `pythrust` command line: `run`, `check` or `build` a source file.
 //!
 //! The only place that does I/O. Stages are pure; this file reads the
-//! file, calls them, renders diagnostics as `path:line:col`, and for
+//! file, calls them, renders diagnostics and warnings as
+//! `path:line:col` (warnings once every check passes, before anything
+//! runs; they never change the exit status), and for
 //! `build` writes the object file and links it with the system linker:
 //! `cc` on Unix, MSVC's `link.exe` on Windows.
 
@@ -11,8 +13,10 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use pythrust_compiler::ast::Module;
+use pythrust_compiler::infer::Types;
 use pythrust_compiler::{
-    codegen, infer, interp, lexer, lower, own, parser, rc, DiagKind, Diagnostic, Span,
+    codegen, infer, interp, lexer, lower, own, parser, rc, DiagKind, Diagnostic, Span, Warning,
 };
 
 const USAGE: &str = "usage: pythrust <run|check|build> <file>";
@@ -110,20 +114,36 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if command == Command::Build {
-        return build(path, &src);
+    let (module, types) = match front(&src) {
+        Ok(checked) => checked,
+        Err(diag) => {
+            eprint!("{}", render(path, &src, &diag));
+            return ExitCode::FAILURE;
+        }
+    };
+    for w in types.warnings() {
+        eprint!("{}", render_warning(path, &src, w));
     }
+    match command {
+        Command::Check => ExitCode::SUCCESS,
+        Command::Build => build(path, &src, &module, &types),
+        Command::Run => run(path, &src, &module),
+    }
+}
+
+/// `pythrust run`: interprets the checked `module`.
+fn run(path: &str, src: &str, module: &Module) -> ExitCode {
     // Buffered for speed; flushed before any diagnostic so output already
     // printed precedes the error, as in CPython.
     let mut out = BufWriter::new(std::io::stdout());
-    let result = execute(command, &src, &mut out).and_then(|()| flush(&mut out));
+    let result = interp::run(module, &mut out).and_then(|()| flush(&mut out));
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(diag) => {
             // The diagnostic is the error worth reporting; a flush failure
             // here would only repeat a broken stdout.
             let _ = out.flush();
-            eprint!("{}", render(path, &src, &diag));
+            eprint!("{}", render(path, src, &diag));
             ExitCode::FAILURE
         }
     }
@@ -143,21 +163,14 @@ fn parse_args(args: &[String]) -> Result<(Command, &str), String> {
     Ok((command, path.as_str()))
 }
 
-/// Runs the pipeline for `command` over `src`, printing program output to
-/// `out`. Every compile stage finishes before anything runs.
-fn execute(
-    command: Command,
-    src: &str,
-    out: &mut (dyn Write + Send),
-) -> pythrust_compiler::Result<()> {
+/// The checks `run`, `check` and `build` share: lex, parse, infer, and
+/// check ownership over every function. All finish before anything runs.
+fn front(src: &str) -> pythrust_compiler::Result<(Module, Types)> {
     let tokens = lexer::lex(src)?;
     let module = parser::parse(&tokens)?;
     let types = infer::infer(&module)?;
     own::check(&module, &own::analyze(&module, &types))?;
-    match command {
-        Command::Check | Command::Build => Ok(()),
-        Command::Run => interp::run(&module, out),
-    }
+    Ok((module, types))
 }
 
 /// Flushes program output; a failure (say, a closed pipe) is a runtime error.
@@ -169,9 +182,10 @@ fn flush(out: &mut impl Write) -> pythrust_compiler::Result<()> {
     })
 }
 
-/// `pythrust build`: compiles and links, reporting any failure.
-fn build(path: &str, src: &str) -> ExitCode {
-    let built = compile(path, src)
+/// `pythrust build`: compiles the checked `module` and links it,
+/// reporting any failure.
+fn build(path: &str, src: &str, module: &Module, types: &Types) -> ExitCode {
+    let built = compile(path, src, module, types)
         .map_err(|diag| render(path, src, &diag))
         .and_then(|object| link(path, &object));
     match built {
@@ -183,16 +197,16 @@ fn build(path: &str, src: &str) -> ExitCode {
     }
 }
 
-/// Compiles `src` to an object file. Runtime errors in it are rendered
-/// now, against `path`, so the binary prints what `run` would.
-fn compile(path: &str, src: &str) -> pythrust_compiler::Result<Vec<u8>> {
-    let tokens = lexer::lex(src)?;
-    let module = parser::parse(&tokens)?;
-    let types = infer::infer(&module)?;
-    // The same checks as `check`, over every function, before lowering
-    // only what runs.
-    own::check(&module, &own::analyze(&module, &types))?;
-    let program = rc::elide(lower::lower(&module, &types)?);
+/// Compiles the checked `module` of `src` to an object file, lowering
+/// only what runs. Runtime errors in it are rendered now, against `path`,
+/// so the binary prints what `run` would.
+fn compile(
+    path: &str,
+    src: &str,
+    module: &Module,
+    types: &Types,
+) -> pythrust_compiler::Result<Vec<u8>> {
+    let program = rc::elide(lower::lower(module, types)?);
     codegen::emit(&program, &|diag| render(path, src, diag))
 }
 
@@ -386,15 +400,23 @@ fn runtime_lib() -> Result<PathBuf, String> {
 
 /// Renders `diag` as a header, the offending line, and a caret underline.
 fn render(path: &str, src: &str, diag: &Diagnostic) -> String {
-    let start = line_col(src, diag.span.start);
-    let text = line_text(src, diag.span.start);
-    let width = caret_width(text, start.col, diag.span, src);
+    let label = format!("{} error", diag.kind);
+    render_at(path, src, diag.span, &label, &diag.message)
+}
+
+/// Renders `w` as [`render`] does an error.
+fn render_warning(path: &str, src: &str, w: &Warning) -> String {
+    render_at(path, src, w.span, "warning", &w.message)
+}
+
+fn render_at(path: &str, src: &str, span: Span, label: &str, message: &str) -> String {
+    let start = line_col(src, span.start);
+    let text = line_text(src, span.start);
+    let width = caret_width(text, start.col, span, src);
     format!(
-        "{path}:{}:{}: {} error: {}\n  {text}\n  {}{}\n",
+        "{path}:{}:{}: {label}: {message}\n  {text}\n  {}{}\n",
         start.line,
         start.col,
-        diag.kind,
-        diag.message,
         " ".repeat(start.col - 1),
         "^".repeat(width),
     )
@@ -477,14 +499,24 @@ mod tests {
         assert!(parse_args(&args(&["run", "a", "b"])).is_err());
     }
 
+    /// What `main` does for `command` short of rendering: the checks,
+    /// then the program for `run`.
     fn exec(command: Command, src: &str) -> (pythrust_compiler::Result<()>, String) {
         let mut out = Vec::new();
-        let result = execute(command, src, &mut out);
+        let result = front(src).and_then(|(module, _)| match command {
+            Command::Run => interp::run(&module, &mut out),
+            Command::Check | Command::Build => Ok(()),
+        });
         (result, String::from_utf8_lossy(&out).into_owned())
     }
 
+    fn compiled(src: &str) -> pythrust_compiler::Result<Vec<u8>> {
+        let (module, types) = front(src)?;
+        compile("f.pyr", src, &module, &types)
+    }
+
     #[test]
-    fn execute_surfaces_the_first_stage_error() {
+    fn front_surfaces_the_first_stage_error() {
         let (err, _) = exec(Command::Check, "x = 1\ny = (2\n");
         assert_eq!(err.map_err(|d| d.kind), Err(DiagKind::Lex));
     }
@@ -520,9 +552,22 @@ mod tests {
     #[test]
     fn compile_reports_unsupported_code_as_a_backend_error() {
         let src = "x = print(7)\ndef print(n):\n    return 1\n";
-        let err = compile("f.pyr", src).map(drop);
+        let err = compiled(src).map(drop);
         assert_eq!(err.map_err(|d| d.kind), Err(DiagKind::Backend));
-        assert!(compile("f.pyr", "print(1 + 2)\n").is_ok());
+        assert!(compiled("print(1 + 2)\n").is_ok());
+    }
+
+    #[test]
+    fn checks_pass_with_warnings_and_render_them_at_the_clause() {
+        let src = "def f(n: int) -> int raises Exception:\n    return n\n";
+        let (_, types) = front(src).unwrap();
+        let [w] = types.warnings() else {
+            panic!("{:?}", types.warnings());
+        };
+        let out = render_warning("f.pyr", src, w);
+        let head = "f.pyr:1:29: warning: `raises Exception` admits any exception";
+        assert!(out.starts_with(head), "{out}");
+        assert!(out.ends_with("remove the clause\n  def f(n: int) -> int raises Exception:\n                              ^^^^^^^^^\n"), "{out}");
     }
 
     #[test]

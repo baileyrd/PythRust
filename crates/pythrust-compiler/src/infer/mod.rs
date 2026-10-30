@@ -30,7 +30,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::mem;
 
 use crate::ast::{Block, FuncDef, Module, StmtKind, TypeExpr};
-use crate::diag::{DiagKind, Diagnostic, Result};
+use crate::diag::{DiagKind, Diagnostic, Result, Warning};
 use crate::span::Span;
 
 pub use raises::Raises;
@@ -44,6 +44,7 @@ pub struct Types {
     nodes: HashMap<Span, Type>,
     funcs: HashMap<String, FuncType>,
     raises: HashMap<String, Raises>,
+    warnings: Vec<Warning>,
 }
 
 impl Types {
@@ -61,6 +62,12 @@ impl Types {
     /// declared by its `raises` clause (or tempering), else inferred.
     pub fn raises(&self, name: &str) -> Option<&Raises> {
         self.raises.get(name)
+    }
+
+    /// Lints on the module, in source order: a `raises` clause listing
+    /// `Exception` that its body does not need.
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
     }
 }
 
@@ -86,7 +93,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     c.resolve_schemes()?;
     let mut types = c.finish();
     temper::check(&defs, &types)?;
-    types.raises = raises::check(module, &defs, &types)?;
+    (types.raises, types.warnings) = raises::check(module, &defs, &types)?;
     Ok(types)
 }
 
@@ -454,6 +461,7 @@ impl Checker {
             nodes,
             funcs,
             raises: HashMap::new(),
+            warnings: Vec::new(),
         }
     }
 }

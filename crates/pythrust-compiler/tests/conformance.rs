@@ -1010,6 +1010,35 @@ fn build_refuses_an_exception_that_may_close_a_cycle() -> Res<()> {
     Ok(())
 }
 
+/// A warning (an unneeded `raises Exception`) goes to stderr once the
+/// checks pass, before the program runs, and changes no exit status.
+#[test]
+fn warnings_print_and_the_program_still_runs() -> Res<()> {
+    let dir = scratch("warning")?;
+    let source = dir.join("p.pyr");
+    write(
+        &source,
+        "def f(n: int) -> int raises Exception:\n    return n\nprint(f(1))\n",
+    )?;
+    let mut failures = Vec::new();
+    for command in ["check", "run"] {
+        let out = Command::new(pythrust_bin()?)
+            .arg(command)
+            .arg(&source)
+            .output()
+            .map_err(|e| format!("cannot run pythrust {command}: {e}"))?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let want_out = if command == "run" { "1\n" } else { "" };
+        let warned = stderr.contains("p.pyr:1:29: warning: `raises Exception`");
+        if !out.status.success() || stdout != want_out || !warned {
+            failures.push(format!("{command}: {:?}\n{stdout}\n{stderr}", out.status));
+        }
+    }
+    report(failures);
+    cleanup(&dir)
+}
+
 /// Exceptions nest to any depth (`e = ValueError(e)`), so a native
 /// `repr` of one must stop where `run`'s does, with the same error at the
 /// same place and nothing printed by the failing `print`, and freeing a
