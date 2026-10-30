@@ -21,16 +21,16 @@ That last point is the whole question. A catchable fault must reach the handler 
 
 ## The corpus, in numbers
 
-Over the 108 corpus programs that lower (1227 function instances, `main` included, 549 calls):
+Over the 108 corpus programs that lower (441 function instances, `main` included, 549 calls). A test is needed after a call whose callee may leave something pending: what `raises` tracks today, plus whatever an option makes catchable. So each option's count is the union of today's tested calls and the new ones:
 
 | | count |
 |---|---|
-| Calls tested today (a `raises` set or a parse builtin) | 61 |
-| Calls whose callee may fault, transitively, any fault | 375 (68%) |
+| Calls tested today (callee's `raises` set not empty) | 37, plus 24 tests after `int(s)` / `float(s)`: 61 tests |
+| Calls whose callee may fault, transitively, any fault | 396 (72%) |
 | ... counting `RecursionError`, which any call can raise | 549 (100%) |
-| Calls whose callee may raise `ZeroDivisionError` or `IndexError` | 98 (18%) |
-| Functions that may fault, any fault | 826 (67%) |
-| Functions that may raise `ZeroDivisionError` or `IndexError` | 276 (22%) |
+| Calls whose callee may raise `ZeroDivisionError`, `IndexError` or the unpacking `ValueError` | 98; with today's 37, 123 (22%) |
+| Functions that may fault, any fault | 329 (75%) |
+| Functions that may raise `ZeroDivisionError`, `IndexError` or the unpacking `ValueError` | 110 (25%) |
 | Fault sites: overflow checks / indexing / division / `Term::Fail` | 434 / 225 / 16 / 342 |
 
 Most `Term::Fail`s are unbound-name checks: 180 `NameError` and 113 `UnboundLocalError`. D7's list does not name these, and `exc::ExcKind` has no class for them.
@@ -53,19 +53,19 @@ A fault site already has its check and its cold failing branch, so making the fa
 ### 1. Faults stay fatal (D7 as is)
 
 - **`raises`:** unchanged. A set lists exactly what can be caught, so a tempered function's declaration is complete.
-- **Native cost:** none. 61 tested calls.
+- **Native cost:** none. 37 tested calls.
 - **Deviation:** stays. `except Exception` around `1 / 0` or `xs[10]` never runs, which is the most visible difference from Python and the first thing an EAFP habit (`try: xs[i] except IndexError:`) hits.
 
 ### 2. Every fault catchable at `except` sites, never in `raises`
 
-- **`raises`:** unchanged in syntax, but it no longer lists everything a caller can catch. It lists what the code raises, while faults escape implicitly, like a panic next to a `Result` in Rust. Listing faults is not an option: with 67% of functions able to fault, every tempered signature would carry them. The lowering needs its own fact, "this call may return with a fault pending", computed bottom-up over the call graph from the fault sites. That is the untracked error channel, and it is separate from `infer::Types::raises`.
-- **Native cost:** a test after every call, because any call can hit the recursion limit: 549 tests instead of 61. With today's `pt_raised` that is up to 5.5x on call-heavy code. With the inline flag it is a load and a branch per call. One possible refinement is to keep fatal any fault in a function that no `try` can reach (no `try` in it or any caller). That is sound, but it gives each function two behaviors depending on the whole program, so it is not proposed.
+- **`raises`:** unchanged in syntax, but it no longer lists everything a caller can catch. It lists what the code raises, while faults escape implicitly, like a panic next to a `Result` in Rust. Listing faults is not an option: with 75% of functions able to fault, every tempered signature would carry them. The lowering needs its own fact, "this call may return with a fault pending", computed bottom-up over the call graph from the fault sites. That is the untracked error channel, and it is separate from `infer::Types::raises`.
+- **Native cost:** a test after every call, because any call can hit the recursion limit: 549 tested calls instead of 37. With today's `pt_raised` that is up to 5.5x on call-heavy code. With the inline flag it is a load and a branch per call. One possible refinement is to keep fatal any fault in a function that no `try` can reach (no `try` in it or any caller). That is sound, but it gives each function two behaviors depending on the whole program, so it is not proposed.
 - **Deviation:** gone for the D7 faults. Two new ones appear instead. Catching `OverflowError` from `i64` arithmetic is a Pythrust-only behavior, since CPython's ints don't overflow. And `RecursionError` caught at depth 1000 leaves the handler running near the limit. Unbound names would still be fatal, or would need `NameError` and `UnboundLocalError` classes, which is a separate decision.
 
 ### 3. A subset catchable: `ZeroDivisionError` and `IndexError`; overflow and recursion stay fatal
 
-- **`raises`:** as in option 2, kept out of `raises`. Tracking them in `raises` would make 22% of functions declare `raises IndexError` or `ZeroDivisionError` (every tempered function that indexes or divides). The "may fault" fact is narrower: only division and indexing sites, and calls into functions that reach one.
-- **Native cost:** 98 tested calls (18%) instead of 61. Each test is a load and a branch with the inline flag. Recursion stays fatal, so a call does not need a test merely for being a call.
+- **`raises`:** as in option 2, kept out of `raises`. Tracking them in `raises` would make 25% of functions declare `raises IndexError` or `ZeroDivisionError` (every tempered function that indexes or divides). The "may fault" fact is narrower: only division and indexing sites, and calls into functions that reach one.
+- **Native cost:** 123 tested calls (22%) instead of 37: the 37 that `raises` already needs, plus 86 whose callee may divide, index or unpack. (The proposal said 98 (18%), counting only the new ones and only division and indexing; Codex's review of #59 caught the missing union. In the corpus, unpacking adds no call that division and indexing do not already.) Each test is a load and a branch with the inline flag. Recursion stays fatal, so a call does not need a test merely for being a call.
 - **Deviation:** the two visible cases match CPython: `except ZeroDivisionError` / `except ArithmeticError` / `except Exception` around `1 / 0`, and `except IndexError` / `except LookupError` around `xs[10]`. Three remain, recorded in grammar.md's deviations:
   - Overflow is fatal. It is already a deviation of its own, since CPython has no int overflow.
   - Recursion depth is fatal.
@@ -81,5 +81,5 @@ A fault site already has its check and its cold failing branch, so making the fa
 
 ## Method
 
-- Corpus counts: every `examples/*.pyr` that lowers, counted over the unelided IR. Fault sites are checked int arithmetic and negation, `**`, float `/ // %` and `**`, `Index`, `SetItem`, `Repeat`, `FloatToInt`, and each `Term::Fail` by its message's class. "May fault" is closed over the call graph. Division by a nonzero literal other than -1 is not counted.
+- Corpus counts: every `examples/*.pyr` that lowers, counted over the unelided IR. A call is tested today when its callee's `infer::Types::raises` set is not empty, as `lower` decides. Any fault: every checked int and float operation, `**`, `Index`, `SetItem`, `Repeat`, `FloatToInt` and `Term::Fail`. Catchable under option 3: int and float `/ // %` (not by a nonzero literal), `Index`, `SetItem`, and the unpacking `Term::Fail`s. "May" is closed over the call graph.
 - Benchmarks: the release `pythrust` and runtime, `fib(32)` and `bench/numeric.pyr`, each built with and without `raises ValueError` on the called function, so the only difference is the `pt_raised` test after each call. Same output; median wall time of 9 runs on the session's Linux x86-64 container.
