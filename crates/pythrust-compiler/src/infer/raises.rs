@@ -113,6 +113,7 @@ pub(super) fn check(
             warnings.extend(a.check_body(f, set)?);
         }
     }
+    warnings.sort_by_key(|w| (w.span.start, w.span.end));
     let sets = a.sets.into_iter().map(|(n, s)| (n.to_string(), s));
     Ok((sets.collect(), warnings))
 }
@@ -374,7 +375,7 @@ fn vacuous(f: &FuncDef, declared: &Raises, got: &Raises) -> Option<Warning> {
         some => format!("only {some}"),
     };
     let fix = match clause(&narrow) {
-        none if none.is_empty() => "remove the clause".to_string(),
+        none if none.is_empty() => "remove the `raises` clause".to_string(),
         some => format!("write `raises {some}`"),
     };
     let name = &f.name.name;
@@ -1157,7 +1158,7 @@ ValueError = IndexError()
     #[test]
     fn a_raises_exception_nothing_needs_says_to_remove_the_clause() {
         let src = "temper def f(n: int) -> int raises Exception:\n    return n\n";
-        let want = vacuous("f", "nothing", "remove the clause");
+        let want = vacuous("f", "nothing", "remove the `raises` clause");
         assert_eq!(warnings(src), vec![want]);
     }
 
@@ -1220,5 +1221,92 @@ def outer(s: str) -> int raises Exception:
         );
         let src = "temper def f(n: int) -> None raises ValueError:\n    raise ValueError\n";
         assert_eq!(warnings(src), vec![]);
+    }
+
+    #[test]
+    fn the_narrower_clause_has_no_duplicate_or_covered_class() {
+        let src = "\
+def f(n: int) -> None raises ValueError, Exception:
+    raise ValueError
+def g(n: int) -> None raises LookupError, Exception:
+    if n == 0:
+        raise IndexError
+    raise ValueError
+";
+        let f = vacuous("f", "only ValueError", "write `raises ValueError`");
+        let g = vacuous(
+            "g",
+            "only IndexError, ValueError",
+            "write `raises LookupError, ValueError`",
+        );
+        assert_eq!(warnings(src), vec![f, g]);
+    }
+
+    #[test]
+    fn warnings_come_in_source_order() {
+        let src = "\
+def b(n: int) -> int raises Exception:
+    return n
+def a(n: int) -> int raises Exception:
+    return b(n)
+";
+        let starts: Vec<usize> = types(src)
+            .unwrap()
+            .warnings()
+            .iter()
+            .map(|w| w.span.start)
+            .collect();
+        assert_eq!(starts.len(), 1, "{starts:?}");
+        let src = src.replace("return b(n)", "return n");
+        let warned = types(&src).unwrap();
+        let starts: Vec<usize> = warned.warnings().iter().map(|w| w.span.start).collect();
+        assert_eq!(starts.len(), 2);
+        assert!(starts.windows(2).all(|w| w[0] < w[1]), "{starts:?}");
+    }
+
+    /// `src` with the `raises` clause on the line at `at` replaced as
+    /// `message` suggests.
+    fn apply(src: &str, at: usize, message: &str) -> String {
+        let line_start = src[..at].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = src[at..].find('\n').map_or(src.len(), |i| at + i);
+        let line = &src[line_start..line_end];
+        let clause = line.find(" raises ").unwrap_or_else(|| panic!("{line}"));
+        let colon = line.rfind(':').unwrap_or_else(|| panic!("{line}"));
+        let fix = match message.split_once("write `raises ") {
+            Some((_, rest)) => format!(" raises {}", rest.trim_end_matches('`')),
+            None if message.ends_with("remove the `raises` clause") => String::new(),
+            None => panic!("no fix in {message}"),
+        };
+        let fixed = format!("{}{fix}{}", &line[..clause], &line[colon..]);
+        format!("{}{fixed}{}", &src[..line_start], &src[line_end..])
+    }
+
+    /// Applying every suggested clause, innermost first as the warnings
+    /// lead, leaves a program that checks with no warning.
+    #[test]
+    fn each_suggested_clause_checks_clean() {
+        let programs = [
+            "temper def f(s: str) -> int raises Exception:\n    return int(s)\n",
+            "def f(s) raises Exception:\n    return int(s)\n",
+            "temper def f(n: int) -> int raises Exception:\n    return n\n",
+            "def f(n: int) -> None raises IndexError, Exception:\n    raise ValueError\n",
+            "def f(n: int) -> None raises ArithmeticError, Exception:\n    raise ZeroDivisionError\n",
+            "def f(n: int) -> None raises ValueError, Exception:\n    raise ValueError\n",
+            "def f(n: int) -> None raises LookupError, Exception:\n    if n == 0:\n        raise IndexError\n    raise ValueError\n",
+            "temper def inner(s: str) -> int raises Exception:\n    return int(s)\ntemper def outer(s: str) -> int raises Exception:\n    return inner(s)\nprint(outer(\"1\"))\n",
+        ];
+        for program in programs {
+            let mut src = program.to_string();
+            for _ in 0..4 {
+                let types = types(&src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+                let Some(w) = types.warnings().first() else {
+                    break;
+                };
+                src = apply(&src, w.span.start, &w.message);
+            }
+            let types = types(&src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+            assert_eq!(types.warnings(), &[], "{src}");
+            assert_ne!(src, program, "no warning for:\n{program}");
+        }
     }
 }

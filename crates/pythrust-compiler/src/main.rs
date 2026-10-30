@@ -567,7 +567,7 @@ mod tests {
         let out = render_warning("f.pyr", src, w);
         let head = "f.pyr:1:29: warning: `raises Exception` admits any exception";
         assert!(out.starts_with(head), "{out}");
-        assert!(out.ends_with("remove the clause\n  def f(n: int) -> int raises Exception:\n                              ^^^^^^^^^\n"), "{out}");
+        assert!(out.ends_with("remove the `raises` clause\n  def f(n: int) -> int raises Exception:\n                              ^^^^^^^^^\n"), "{out}");
     }
 
     #[test]
