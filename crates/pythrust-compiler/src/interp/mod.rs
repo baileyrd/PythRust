@@ -98,7 +98,8 @@ fn rt_err(span: Span, message: String) -> Diagnostic {
 
 /// Why execution stopped before a statement or expression finished.
 enum Unwind<'m> {
-    /// A fault (D7): stops the program; `try` never catches it.
+    /// A fault: overflow, recursion depth, out-of-memory, a type error.
+    /// It stops the program; `try` never catches it.
     Fault(Diagnostic),
     /// A raised exception and the span it was raised at.
     Raise(Rc<Exc<'m>>, Span),
@@ -113,15 +114,13 @@ impl From<Diagnostic> for Unwind<'_> {
 /// The interpreter's result: a value, or an unwind.
 type Exec<'m, T> = std::result::Result<T, Unwind<'m>>;
 
-/// The catchable `ValueError` that `int(s)` and `float(s)` raise for a
-/// malformed string.
-fn value_error<'m>(message: String, span: Span) -> Unwind<'m> {
+/// A catchable exception of `kind` that no `raise` wrote: the `ValueError`
+/// of `int(s)` and `float(s)`, and the implicit faults `try` catches
+/// (docs/research/faults.md): division by zero, an index out of range, a
+/// wrong unpacking arity.
+fn raised<'m>(kind: ExcKind, message: String, span: Span) -> Unwind<'m> {
     let arg = Some(Value::str(&message));
-    let exc = Exc {
-        kind: ExcKind::Value,
-        arg,
-    };
-    Unwind::Raise(Rc::new(exc), span)
+    Unwind::Raise(Rc::new(Exc { kind, arg }), span)
 }
 
 struct Interp<'m, 'o> {
@@ -359,7 +358,7 @@ impl<'m> Interp<'m, '_> {
             TargetKind::Subscript { value, index } => {
                 let container = self.eval(value)?;
                 let index = self.eval(index)?;
-                Ok(set_item(&container, &index, v, target.span)?)
+                set_item(&container, &index, v, target.span)
             }
             TargetKind::Tuple(targets) => self.unpack(targets, v, target.span),
         }
@@ -371,11 +370,11 @@ impl<'m> Interp<'m, '_> {
         if values.len() != targets.len() {
             let (want, got) = (targets.len(), values.len());
             let message = if got > want {
-                format!("ValueError: too many values to unpack (expected {want})")
+                format!("too many values to unpack (expected {want})")
             } else {
-                format!("ValueError: not enough values to unpack (expected {want}, got {got})")
+                format!("not enough values to unpack (expected {want}, got {got})")
             };
-            return Err(rt_err(span, message).into());
+            return Err(raised(ExcKind::Value, message, span));
         }
         targets
             .iter()
@@ -410,7 +409,7 @@ impl<'m> Interp<'m, '_> {
                 let current = get_item(&container, &index, target.span)?;
                 let rhs = self.eval(value)?;
                 let new = in_place(op, current, &rhs, span)?;
-                Ok(set_item(&container, &index, new, target.span)?)
+                set_item(&container, &index, new, target.span)
             }
             TargetKind::Tuple(_) => Err(rt_err(
                 target.span,
@@ -460,7 +459,7 @@ impl<'m> Interp<'m, '_> {
             ExprKind::Binary { op, left, right } => {
                 let l = self.eval(left)?;
                 let r = self.eval(right)?;
-                Ok(ops::binary(*op, &l, &r, e.span)?)
+                ops::binary(*op, &l, &r, e.span)
             }
             ExprKind::Logical { op, left, right } => {
                 let l = self.eval(left)?;
@@ -486,7 +485,7 @@ impl<'m> Interp<'m, '_> {
             ExprKind::Subscript { value, index } => {
                 let container = self.eval(value)?;
                 let index = self.eval(index)?;
-                Ok(get_item(&container, &index, e.span)?)
+                get_item(&container, &index, e.span)
             }
             ExprKind::Attr { value, attr } => Ok(get_attr(self.eval(value)?, attr)?),
         }
@@ -693,7 +692,7 @@ fn collect_target<'m>(target: &'m Target, names: &mut HashSet<&'m str>) {
 
 /// `op=` semantics: `list +=` and `list *=` change the list itself, so
 /// aliases see it; everything else is the plain binary operator.
-fn in_place<'m>(op: BinOp, current: Value<'m>, rhs: &Value<'m>, span: Span) -> Result<Value<'m>> {
+fn in_place<'m>(op: BinOp, current: Value<'m>, rhs: &Value<'m>, span: Span) -> Exec<'m, Value<'m>> {
     let Value::List(list) = &current else {
         return ops::binary(op, &current, rhs, span);
     };
@@ -727,7 +726,7 @@ fn get_attr<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
     }
 }
 
-fn get_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Result<Value<'m>> {
+fn get_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Exec<'m, Value<'m>> {
     match container {
         Value::List(list) => {
             let list = list.borrow();
@@ -745,9 +744,9 @@ fn get_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Result<
             let v =
                 i128::from(r.start) + i128::try_from(i).unwrap_or(i128::MAX) * i128::from(r.step);
             // `i < len`, so `v` lies between start and stop and fits in i64.
-            i64::try_from(v)
+            Ok(i64::try_from(v)
                 .map(Value::Int)
-                .map_err(|_| ops::overflow(span))
+                .map_err(|_| ops::overflow(span))?)
         }
         other => Err(rt_err(
             span,
@@ -755,11 +754,17 @@ fn get_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Result<
                 "TypeError: '{}' object is not subscriptable",
                 other.type_name()
             ),
-        )),
+        )
+        .into()),
     }
 }
 
-fn set_item<'m>(container: &Value<'m>, index: &Value<'m>, v: Value<'m>, span: Span) -> Result<()> {
+fn set_item<'m>(
+    container: &Value<'m>,
+    index: &Value<'m>,
+    v: Value<'m>,
+    span: Span,
+) -> Exec<'m, ()> {
     let Value::List(list) = container else {
         return Err(rt_err(
             span,
@@ -767,15 +772,24 @@ fn set_item<'m>(container: &Value<'m>, index: &Value<'m>, v: Value<'m>, span: Sp
                 "TypeError: '{}' object does not support item assignment",
                 container.type_name()
             ),
-        ));
+        )
+        .into());
     };
-    let i = position(index, list.borrow().len(), "list", span)?;
+    let len = list.borrow().len();
+    let i =
+        resolve(index, len, "list", span)?.ok_or_else(|| out_of_range("list assignment", span))?;
     list.borrow_mut()[i] = v;
     Ok(())
 }
 
-/// Resolves a Python index (negative counts from the end) into `0..len`.
-fn position(index: &Value, len: usize, kind: &str, span: Span) -> Result<usize> {
+/// Resolves a Python index (negative counts from the end) into `0..len`;
+/// one out of range raises a catchable `IndexError`.
+fn position<'m>(index: &Value, len: usize, kind: &str, span: Span) -> Exec<'m, usize> {
+    resolve(index, len, kind, span)?.ok_or_else(|| out_of_range(kind, span))
+}
+
+/// `index` resolved into `0..len`, or `None` when out of range.
+fn resolve(index: &Value, len: usize, kind: &str, span: Span) -> Result<Option<usize>> {
     let i = index.int().ok_or_else(|| {
         rt_err(
             span,
@@ -791,8 +805,9 @@ fn position(index: &Value, len: usize, kind: &str, span: Span) -> Result<usize> 
     } else {
         i128::from(i)
     };
-    usize::try_from(resolved)
-        .ok()
-        .filter(|&r| r < len)
-        .ok_or_else(|| rt_err(span, format!("IndexError: {kind} index out of range")))
+    Ok(usize::try_from(resolved).ok().filter(|&r| r < len))
+}
+
+fn out_of_range<'m>(kind: &str, span: Span) -> Unwind<'m> {
+    raised(ExcKind::Index, format!("{kind} index out of range"), span)
 }

@@ -1,8 +1,0 @@
-# expect-exit: 1
-# deviation: faults are fatal (D7): `except IndexError` never catches an out-of-range index
-xs = [1, 2, 3]
-try:
-    print(xs[10])
-except IndexError:
-    print("caught")
-print("unreachable")

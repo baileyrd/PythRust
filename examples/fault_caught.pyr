@@ -1,0 +1,92 @@
+# Division by zero, an index out of range and a wrong unpacking arity
+# raise exceptions a `try` catches, as in Python; across calls too.
+def at(xs: list[int], i: int) -> int:
+    return xs[i]
+
+
+def ratio(a: int, b: int) -> float:
+    names = ["a", "b"]
+    return a / b + len(names)
+
+
+def swap(word: str) -> str:
+    a, b = word
+    return b + a
+
+
+xs = [1, 2, 3]
+try:
+    print(xs[10])
+except IndexError:
+    print("caught")
+
+for i in [1, 5, -4]:
+    try:
+        print(at(xs, i))
+    except LookupError as e:
+        print("lookup:", e)
+
+try:
+    xs[3] = 4
+except IndexError as e:
+    print("store:", e)
+
+try:
+    xs[-4] += 1
+except IndexError as e:
+    print("augmented:", e)
+
+print(xs)
+
+for pair in [[1, 2], [3]]:
+    try:
+        u, v = pair
+        print(u + v)
+    except ValueError as e:
+        print("list unpack:", e)
+
+for s in ["ab", "abc", "a"]:
+    try:
+        print(swap(s))
+    except ValueError as e:
+        print("unpack:", e)
+
+for d in [2, 0]:
+    try:
+        print(ratio(6, d))
+    except ZeroDivisionError as e:
+        print("ratio:", e)
+
+for x in [7, -7]:
+    for y in [0, 2]:
+        try:
+            print(x // y, x % y)
+        except ArithmeticError as e:
+            print("int:", e)
+
+for z in [0.0, 2.0]:
+    try:
+        print(7.5 / z, 7.5 // z)
+    except ZeroDivisionError as e:
+        print("float:", e)
+    try:
+        print(7.5 % z)
+    except ZeroDivisionError as e:
+        print("float:", e)
+
+word = "hey"
+try:
+    print(word[3])
+except IndexError as e:
+    print("string:", e)
+
+try:
+    print(range(3)[3])
+except IndexError as e:
+    print("range:", e)
+
+try:
+    p, q = range(5)
+except ValueError as e:
+    print("range unpack:", e)
+print("done")

@@ -75,6 +75,30 @@ impl FnGen<'_, '_, '_> {
         Ok(())
     }
 
+    /// Raises `kind` holding `message` when `cond` holds: a catchable
+    /// fault (a division by zero, an index out of range). The code after
+    /// runs either way, on a placeholder result, and lowering tests the
+    /// flag next.
+    pub(super) fn raise_if(
+        &mut self,
+        cond: Value,
+        kind: ExcKind,
+        message: &str,
+        span: Span,
+    ) -> Result<()> {
+        let (raise, ok) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(raise);
+        self.b.ins().brif(cond, raise, &[], ok, &[]);
+        self.b.switch_to_block(raise);
+        let code = self.b.ins().iconst(types::I8, i64::from(kind.code()));
+        let (m, m_len) = self.data(message.to_string())?;
+        let site = self.site(span)?;
+        self.call_rt(Rt::RaiseMsg, &[[code, m, m_len].as_slice(), &site].concat());
+        self.b.ins().jump(ok, &[]);
+        self.b.switch_to_block(ok);
+        Ok(())
+    }
+
     /// The diagnostic of an exception raised at `span` and never caught,
     /// rendered before and after its line: address and length of each.
     fn site(&mut self, span: Span) -> Result<[Value; 4]> {

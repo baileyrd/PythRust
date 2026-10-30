@@ -9,6 +9,7 @@
 
 mod exc;
 mod expr;
+mod faults;
 mod globals;
 mod opt;
 mod seq;
@@ -136,6 +137,7 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
     let mut cx = Cx {
         types,
         globals: globals::Globals::new(module, &defs),
+        faulting: faults::faulting(&defs, types),
         defs,
         instances: HashMap::new(),
         funcs: Vec::new(),
@@ -190,6 +192,8 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
 struct Cx<'a> {
     types: &'a Types,
     defs: HashMap<&'a str, &'a FuncDef>,
+    /// Functions that may return with a catchable fault pending.
+    faulting: HashSet<&'a str>,
     /// Instances by function name, argument types and result type.
     instances: HashMap<(String, Vec<Ty>, Ty), FuncId>,
     /// `None` until the instance is lowered.

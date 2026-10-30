@@ -188,9 +188,34 @@ impl FnBuilder<'_, '_> {
     }
 
     /// Whether a call to top-level `name` may raise: its `raises` set
-    /// is not empty, or unknown.
+    /// is not empty, or unknown, or it may fault catchably.
     pub(super) fn may_raise(&self, name: &str) -> bool {
-        self.cx.types.raises(name).is_none_or(|r| !r.is_empty())
+        self.cx.faulting.contains(name) || self.cx.types.raises(name).is_none_or(|r| !r.is_empty())
+    }
+
+    /// Raises `kind` holding `message` at `span` when the `Bool` `test`
+    /// holds: a catchable fault lowering detects itself.
+    pub(super) fn raise_if(
+        &mut self,
+        test: Rvalue,
+        kind: ExcKind,
+        message: &str,
+        span: Span,
+    ) -> Result<()> {
+        let cond = self.temp(Ty::Bool, test, span);
+        let (raise, ok) = (self.new_block(), self.new_block());
+        self.terminate(Term::Branch {
+            cond,
+            then: raise,
+            orelse: ok,
+        });
+        self.switch_to(raise);
+        let text = self.temp(Ty::Str, Rvalue::StrLit(message.to_string()), span);
+        let exc = self.new_exc(kind, &[text], span)?;
+        self.emit(Inst::Raise { exc, span });
+        self.raise_path()?;
+        self.switch_to(ok);
+        Ok(())
     }
 
     /// Whether a value of type `ty` is, or may hold, one of a type

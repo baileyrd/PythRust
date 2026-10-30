@@ -7,11 +7,14 @@ use cranelift_codegen::ir::{types, InstBuilder, MemFlagsData, Value};
 
 use super::{backend, FnGen, Rt};
 use crate::diag::Result;
+use crate::exc::ExcKind;
 use crate::ir::{CmpOp, Compound, LocalId, Operand, Ty};
 use crate::span::Span;
 
-const LIST_INDEX: &str = "IndexError: list index out of range";
-const RANGE_INDEX: &str = "IndexError: range object index out of range";
+const LIST_INDEX: &str = "list index out of range";
+const LIST_STORE: &str = "list assignment index out of range";
+const RANGE_INDEX: &str = "range object index out of range";
+const STR_INDEX: &str = "string index out of range";
 
 impl FnGen<'_, '_, '_> {
     /// A new sequence of type `ty` holding `items`.
@@ -59,7 +62,7 @@ impl FnGen<'_, '_, '_> {
     ) -> Result<Value> {
         let (s, i) = (self.operand(s), self.operand(i));
         let (v, status) = self.with_status(Rt::SeqGet, &[s, i])?;
-        self.fail_on(status, 1, span, LIST_INDEX)?;
+        self.raise_on(status, ExcKind::Index, LIST_INDEX, span)?;
         Ok(self.unslot(v, self.func.locals[dest.0]))
     }
 
@@ -75,8 +78,18 @@ impl FnGen<'_, '_, '_> {
     pub(super) fn range_item(&mut self, r: Operand, i: Operand, span: Span) -> Result<Value> {
         let (r, i) = (self.operand(r), self.operand(i));
         let (v, status) = self.with_status(Rt::RangeGet, &[r, i])?;
-        self.fail_on(status, 1, span, RANGE_INDEX)?;
+        self.raise_on(status, ExcKind::Index, RANGE_INDEX, span)?;
         Ok(v)
+    }
+
+    /// `s[i]` of string `s`: a new one-char string, or null when it
+    /// raises.
+    pub(super) fn str_item(&mut self, s: Operand, i: Operand, span: Span) -> Result<Value> {
+        let (s, i) = (self.operand(s), self.operand(i));
+        let c = self.call_rt_value(Rt::StrIndex, &[s, i])?;
+        let null = self.b.ins().icmp_imm_s(IntCC::Equal, c, 0);
+        self.raise_if(null, ExcKind::Index, STR_INDEX, span)?;
+        Ok(c)
     }
 
     /// `x in r` of range `r` and a number `x`.
@@ -98,7 +111,13 @@ impl FnGen<'_, '_, '_> {
     ) -> Result<()> {
         let (s, i, v) = (self.operand(list), self.operand(index), self.slot(value));
         let status = self.call_rt_value(Rt::ListSet, &[s, i, v])?;
-        self.fail_on(status, 1, span, LIST_INDEX)
+        self.raise_on(status, ExcKind::Index, LIST_STORE, span)
+    }
+
+    /// Raises `kind` holding `message` when a runtime call's status is 1.
+    fn raise_on(&mut self, status: Value, kind: ExcKind, message: &str, span: Span) -> Result<()> {
+        let hit = self.b.ins().icmp_imm_s(IntCC::Equal, status, 1);
+        self.raise_if(hit, kind, message, span)
     }
 
     /// Lexicographic `a op b`; an unordered pair (a NaN decides) is false

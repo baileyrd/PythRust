@@ -1,8 +1,0 @@
-# expect-exit: 1
-# deviation: faults are fatal (D7): not even `except Exception` catches a division by zero
-n = 0
-try:
-    print(10 // n)
-except Exception:
-    print("caught")
-print("unreachable")

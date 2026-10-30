@@ -34,6 +34,7 @@ mod opt;
 mod seq;
 
 use crate::diag::{DiagKind, Diagnostic, Result};
+use crate::exc::ExcKind;
 use crate::ir::{
     self, BlockId, CmpOp, Compound, Func, Inst, IntOp, LocalId, Operand, Program, Rvalue, Term, Ty,
 };
@@ -110,13 +111,14 @@ enum Rt {
     ExcStr,
     Raise,
     RaiseValue,
+    RaiseMsg,
     PendingIs,
     Catch,
     Uncaught,
 }
 
 impl Rt {
-    const ALL: [Rt; 52] = [
+    const ALL: [Rt; 53] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -166,6 +168,7 @@ impl Rt {
         Rt::ExcStr,
         Rt::Raise,
         Rt::RaiseValue,
+        Rt::RaiseMsg,
         Rt::PendingIs,
         Rt::Catch,
         Rt::Uncaught,
@@ -222,6 +225,7 @@ impl Rt {
             Rt::ExcStr => "pt_exc_str",
             Rt::Raise => "pt_raise",
             Rt::RaiseValue => "pt_raise_value",
+            Rt::RaiseMsg => "pt_raise_msg",
             Rt::PendingIs => "pt_pending_is",
             Rt::Catch => "pt_catch",
             Rt::Uncaught => "pt_uncaught",
@@ -272,6 +276,7 @@ impl Rt {
             Rt::ExcStr => (vec![ptr], Some(ptr)),
             Rt::Raise => (vec![ptr; 5], None),
             Rt::RaiseValue => (vec![ptr; 7], None),
+            Rt::RaiseMsg => (vec![I8, ptr, ptr, ptr, ptr, ptr, ptr], None),
             Rt::PendingIs => (vec![I32], Some(I8)),
             Rt::Catch => (vec![], Some(ptr)),
             Rt::Uncaught => (vec![], None),
@@ -720,7 +725,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Repeat(s, n) => self.rt_nonnull(Rt::StrRepeat, &[*s, *n], span, TOO_LARGE),
             Rvalue::Index(s, i) if is_seq(self.func.ty(*s)) => self.item(*s, *i, dest, span),
             Rvalue::Index(s, i) if self.func.ty(*s) == Ty::Range => self.range_item(*s, *i, span),
-            Rvalue::Index(s, i) => self.rt_nonnull(Rt::StrIndex, &[*s, *i], span, STR_INDEX),
+            Rvalue::Index(s, i) => self.str_item(*s, *i, span),
             Rvalue::Len(s) if is_seq(self.func.ty(*s)) => self.rt_on(Rt::SeqLen, &[*s]),
             Rvalue::Len(s) if self.func.ty(*s) == Ty::Range => self.rt_on(Rt::RangeLen, &[*s]),
             Rvalue::Len(s) => self.rt_on(Rt::StrLen, &[*s]),
@@ -884,7 +889,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     }
 
     fn floor_div(&mut self, a: Value, b: Value, span: Span) -> Result<Value> {
-        self.check_divisor(b, span)?;
+        let b = self.check_divisor(b, span)?;
         let min = self.b.ins().icmp_imm_s(IntCC::Equal, a, i64::MIN);
         let neg1 = self.b.ins().icmp_imm_s(IntCC::Equal, b, -1);
         let overflow = self.b.ins().band(min, neg1);
@@ -897,7 +902,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     }
 
     fn modulo(&mut self, a: Value, b: Value, span: Span) -> Result<Value> {
-        self.check_divisor(b, span)?;
+        let b = self.check_divisor(b, span)?;
         // `i64::MIN % -1` traps in hardware; any `x % -1` is 0, as is `x % 1`.
         let neg1 = self.b.ins().icmp_imm_s(IntCC::Equal, b, -1);
         let one = self.b.ins().iconst(types::I64, 1);
@@ -918,9 +923,13 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         self.b.ins().band(nonzero, differ)
     }
 
-    fn check_divisor(&mut self, b: Value, span: Span) -> Result<()> {
+    /// Raises `ZeroDivisionError` when `b` is 0; gives the divisor to
+    /// compute with, 1 in its place then, since the code after runs on.
+    fn check_divisor(&mut self, b: Value, span: Span) -> Result<Value> {
         let zero = self.b.ins().icmp_imm_s(IntCC::Equal, b, 0);
-        self.fail_if(zero, span, ZERO_DIV)
+        self.raise_if(zero, ExcKind::ZeroDivision, ZERO_DIV, span)?;
+        let one = self.b.ins().iconst(types::I64, 1);
+        Ok(self.b.ins().select(zero, one, b))
     }
 
     /// Branches to a cold failure block when `cond` is nonzero.
@@ -980,9 +989,8 @@ const OVERFLOW: &str = "OverflowError: integer overflow";
 const RECURSION: &str = "RecursionError: maximum recursion depth exceeded";
 /// Active calls allowed, as in the interpreter.
 const MAX_DEPTH: i64 = crate::interp::MAX_DEPTH as i64;
-const ZERO_DIV: &str = "ZeroDivisionError: integer division or modulo by zero";
+const ZERO_DIV: &str = "integer division or modulo by zero";
 const TOO_LARGE: &str = "MemoryError: repeated sequence is too large";
-const STR_INDEX: &str = "IndexError: string index out of range";
 const TOO_DEEP: &str =
     "RecursionError: maximum recursion depth exceeded while getting the repr of an object";
 
@@ -1096,7 +1104,6 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::exc::ExcKind;
     use crate::{infer, lexer, lower, parser};
 
     /// Compiles `src`, returning the object and every diagnostic rendered.
@@ -1181,27 +1188,30 @@ mod tests {
     fn renders_each_failure_site_once_at_compile_time() {
         let (_, rendered) = compile("x = 5\nprint(x + 1, x // 2, -x)\n");
         let count = |m: &str| rendered.iter().filter(|r| r.as_str() == m).count();
-        // `+`, `//` and `-` can overflow; `//` can also divide by zero.
+        // `+`, `//` and `-` can overflow. Dividing by zero raises instead,
+        // so only its raise site is rendered, around a marker.
         assert_eq!(count(OVERFLOW), 3);
-        assert_eq!(count(ZERO_DIV), 1);
+        assert!(!rendered.iter().any(|r| r.contains("ZeroDivisionError")));
     }
 
     #[test]
     fn run_time_message_parts_are_rendered_around_a_marker() {
         let (_, rendered) = compile("n = -2\nprint(2 ** n, float('x'), 1.5 / n)\n");
+        // `2 ** n`'s hint, and the raise sites of `float('x')` and `/`.
         let marked = rendered.iter().filter(|r| r.contains('\0')).count();
-        assert_eq!(marked, 2, "{rendered:?}");
-        assert!(rendered
-            .iter()
-            .any(|r| r == "ZeroDivisionError: division by zero"));
+        assert_eq!(marked, 3, "{rendered:?}");
     }
 
     #[test]
     fn string_failures_are_rendered_and_literals_stored_once() {
         let (object, rendered) = compile("s = 'needle'\nprint(s[5], s * 3, 'needle')\n");
         let count = |m: &str| rendered.iter().filter(|r| r.as_str() == m).count();
-        assert_eq!((count(STR_INDEX), count(TOO_LARGE)), (1, 1));
-        let lit = b"needle";
-        assert_eq!(object.windows(lit.len()).filter(|w| w == lit).count(), 1);
+        assert_eq!(count(TOO_LARGE), 1);
+        let stored = |lit: &[u8]| object.windows(lit.len()).filter(|w| *w == lit).count();
+        // The index error's message is data its raise hands the runtime.
+        assert_eq!(
+            (stored(b"needle"), stored(b"string index out of range")),
+            (1, 1)
+        );
     }
 }

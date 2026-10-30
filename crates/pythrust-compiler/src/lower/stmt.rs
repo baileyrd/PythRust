@@ -140,6 +140,7 @@ impl FnBuilder<'_, '_> {
                 }
                 let elem = self.slot_ty(ty, 0, target.span)?;
                 let l = self.temp(elem, Rvalue::Index(list, index), target.span);
+                self.check_raised(target.span)?;
                 let r = self.expr(value)?;
                 let v = self.arith(op, l, r, span)?;
                 self.store_item(list, index, v, target.span)
