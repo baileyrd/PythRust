@@ -6,6 +6,9 @@
 //! compiler's and runtime's non-test sources, so a message no program
 //! reaches yet is held to the rule too. Comments are not read: the code
 //! may say "borrowed" to its readers, never to a Pythrust programmer.
+//!
+//! If a legitimate string is ever flagged, add an allowlist entry with
+//! its reason; never loosen the scan or the words (Nano, 2026-10-30).
 
 use std::fs;
 use std::io;
@@ -189,7 +192,8 @@ fn messages_speak_python() -> Res<()> {
             if path.file_name().is_some_and(|n| n == "tests.rs") {
                 continue;
             }
-            let src = read(&path)?;
+            // A Windows checkout may have CRLF lines; `non_test` matches LF.
+            let src = read(&path)?.replace("\r\n", "\n");
             for lit in literals(non_test(&src)) {
                 let words = banned_in(&lit);
                 if !words.is_empty() {
