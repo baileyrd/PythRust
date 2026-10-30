@@ -1,8 +1,15 @@
 # D7 revisit: can a `try` catch a fault?
 
-**Status: proposal, for Nano's decision** (requested 2026-10-30, after M5 closed with D7 as is). No code. Numbers come from the corpus at `main` after #58 and from two native micro-benchmarks, both described under [Method](#method).
+**Status: decided 2026-10-30** (Nano, on #59): option 3, with the unpacking `ValueError` included. No code here; [roadmap.md](../roadmap.md#phase-4-m5-plan) orders the work. Numbers come from the corpus at `main` after #58 and from two native micro-benchmarks, both described under [Method](#method).
 
-**Recommendation: option 3, the subset, kept out of `raises`.** `ZeroDivisionError` and `IndexError` become catchable at `except` sites. They stay out of `raises` sets, and lowering tracks them with a "may fault" fact of its own. Overflow, recursion depth, unpacking arity, `MemoryError` and unbound names stay fatal. Do the inline pending-flag change described below first, whichever option is chosen.
+## Decided
+
+1. **Catchable, kept out of `raises`:** `ZeroDivisionError` (int and float `/`, `//`, `%`), `IndexError` (list, string and range reads, list stores), and the unpacking `ValueError` (a list or string of unknown length). **Fatal:** overflow, recursion depth, out-of-memory.
+2. **The rule:** implicit operator faults are never tracked in `raises`; an explicit `raise` and the parse builtins `int(s)` / `float(s)` stay tracked. A handler for a catchable fault is never reported unreachable. The `raises Exception` lint (#57) ignores implicit faults. An uncaught fault still prints `run`'s diagnostic and exits 1.
+3. **Order:** the inline pending-flag read lands first, as its own PR, with all flag access through one codegen helper so phase 5 can make it per task. The option-3 implementation follows.
+4. **Docs with the implementation:** D7 is superseded in grammar.md for these faults; the `except IndexError` around `xs[10]` deviation goes, and the fixtures that then agree with CPython lose their `# deviation:` tags.
+
+The analysis below is the proposal as written (it recommended option 3 without unpacking, which it raised as the open question).
 
 ## Today (D7)
 
