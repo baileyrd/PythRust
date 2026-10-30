@@ -163,12 +163,17 @@ fn declared_escape(name: &Ident, defs: &[&FuncDef], globals: &Bindings) -> Resul
         let msg = format!("`{n}` is not an exception; `raises` lists one of {names}");
         return Err(error(name.span, msg));
     };
-    let redefined = globals.contains_key(n) || defs.iter().any(|f| f.name.name == n);
-    if redefined {
+    if shadowed(n, globals, defs.iter().map(|f| f.name.name.as_str())) {
         let msg = format!("`{n}` is redefined, so it no longer names the builtin exception");
         return Err(error(name.span, msg));
     }
     Ok(builtin)
+}
+
+/// Whether a module variable or a function named `n` hides the builtin
+/// exception of that name, so a `raises` clause cannot name it.
+fn shadowed<'a>(n: &str, globals: &Bindings, mut defs: impl Iterator<Item = &'a str>) -> bool {
+    globals.contains_key(n) || defs.any(|d| d == n)
 }
 
 /// Where a variable's values come from.
@@ -319,7 +324,9 @@ impl<'a> Analysis<'a> {
             .filter(|(e, _)| !declared.covers(**e))
             .min_by_key(|(_, at)| at.start);
         let Some((e, at)) = missing else {
-            return Ok(vacuous(f, declared, &got));
+            let nameable =
+                |e: ExcKind| !shadowed(e.name(), &self.globals, self.defs.keys().copied());
+            return Ok(vacuous(f, declared, &got, nameable));
         };
         let mut all = declared.clone();
         all.extend(got.clone());
@@ -358,8 +365,15 @@ fn undeclared(f: &FuncDef, e: ExcKind, all: &Raises, types: &Types) -> String {
 /// its body (`got`) is of unknown class, so the clause can say more: the
 /// other declared classes plus what escapes, or no clause when that is
 /// nothing. An `Exception` escaping from a callee whose own clause lists
-/// it vacuously keeps this one quiet; the callee gets the warning.
-fn vacuous(f: &FuncDef, declared: &Raises, got: &Raises) -> Option<Warning> {
+/// it vacuously keeps this one quiet; the callee gets the warning. So
+/// does a narrower clause naming a class the module redefines, which no
+/// clause can name.
+fn vacuous(
+    f: &FuncDef,
+    declared: &Raises,
+    got: &Raises,
+    nameable: impl Fn(ExcKind) -> bool,
+) -> Option<Warning> {
     let at = *declared.sites.get(&ExcKind::Exception)?;
     if got.sites.contains_key(&ExcKind::Exception) {
         return None;
@@ -370,6 +384,9 @@ fn vacuous(f: &FuncDef, declared: &Raises, got: &Raises) -> Option<Warning> {
         .iter()
         .filter(|(e, _)| **e != ExcKind::Exception);
     listed.for_each(|(e, s)| narrow.add(*e, *s));
+    if !clause_classes(&narrow).into_iter().all(nameable) {
+        return None;
+    }
     let escapes = match clause(got) {
         none if none.is_empty() => "nothing".to_string(),
         some => format!("only {some}"),
@@ -389,13 +406,14 @@ fn vacuous(f: &FuncDef, declared: &Raises, got: &Raises) -> Option<Warning> {
 /// The clause admitting every escape in `set`: the classes no other one
 /// there derives from (`Exception` admits all).
 fn clause(set: &Raises) -> String {
-    let derived = |e: ExcKind| set.escapes().any(|d| d != e && e.is_a(d));
-    let names: Vec<&str> = set
-        .escapes()
-        .filter(|e| !derived(*e))
-        .map(ExcKind::name)
-        .collect();
+    let names: Vec<&str> = clause_classes(set).into_iter().map(ExcKind::name).collect();
     names.join(", ")
+}
+
+/// The classes [`clause`] names.
+fn clause_classes(set: &Raises) -> Vec<ExcKind> {
+    let derived = |e: ExcKind| set.escapes().any(|d| d != e && e.is_a(d));
+    set.escapes().filter(|e| !derived(*e)).collect()
 }
 
 /// One scope being walked: a function body, or the module for globals.
@@ -1243,6 +1261,27 @@ def g(n: int) -> None raises LookupError, Exception:
     }
 
     #[test]
+    fn a_narrower_clause_naming_a_redefined_class_does_not_warn() {
+        let function = "\
+def ValueError():
+    pass
+def f(s: str) -> int raises Exception:
+    return int(s)
+";
+        assert_eq!(warnings(function), vec![]);
+        let variable = "\
+ZeroDivisionError = 1
+def f(n: int) -> None raises Exception:
+    raise IndexError
+def g(n: int) -> None raises ArithmeticError, Exception:
+    raise OverflowError
+";
+        let f = vacuous("f", "only IndexError", "write `raises IndexError`");
+        let g = vacuous("g", "only OverflowError", "write `raises ArithmeticError`");
+        assert_eq!(warnings(variable), vec![f, g]);
+    }
+
+    #[test]
     fn warnings_come_in_source_order() {
         let src = "\
 def b(n: int) -> int raises Exception:
@@ -1293,6 +1332,8 @@ def a(n: int) -> int raises Exception:
             "def f(n: int) -> None raises ArithmeticError, Exception:\n    raise ZeroDivisionError\n",
             "def f(n: int) -> None raises ValueError, Exception:\n    raise ValueError\n",
             "def f(n: int) -> None raises LookupError, Exception:\n    if n == 0:\n        raise IndexError\n    raise ValueError\n",
+            "def ValueError():\n    pass\ndef f(n: int) -> None raises Exception:\n    raise IndexError\n",
+            "LookupError = 1\ndef f(n: int) -> None raises Exception:\n    raise IndexError\n",
             "temper def inner(s: str) -> int raises Exception:\n    return int(s)\ntemper def outer(s: str) -> int raises Exception:\n    return inner(s)\nprint(outer(\"1\"))\n",
         ];
         for program in programs {
