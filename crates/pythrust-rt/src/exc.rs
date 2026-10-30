@@ -7,8 +7,8 @@
 //!
 //! Raising makes an exception *pending*, with the diagnostic of the
 //! place it was raised at, rendered at compile time around the line
-//! [`pt_uncaught`] fills in. Generated code tests [`pt_raised`] after
-//! whatever can raise and branches to a handler, which takes the
+//! [`pt_uncaught`] fills in. Generated code reads [`PENDING_FLAG`] inline
+//! after whatever can raise and branches to a handler, which takes the
 //! exception with [`pt_catch`], or returns to its caller with it still
 //! pending. Compiled programs are single-threaded; the lock is
 //! uncontended and only makes the static safe.
@@ -16,6 +16,7 @@
 #![allow(unsafe_code)] // Exceptions and diagnostics cross the C ABI as pointers.
 
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use crate::seq::{self, PtSeq};
@@ -49,6 +50,12 @@ struct Pending {
 
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 
+/// Whether an exception is pending, 1 or 0. Generated code reads this
+/// byte inline instead of calling into the runtime; it is set and
+/// cleared with [`PENDING`], under its lock.
+#[unsafe(export_name = "pt_pending_flag")]
+pub static PENDING_FLAG: AtomicU8 = AtomicU8::new(0);
+
 /// The name of the exception kind `code`.
 pub(crate) fn name(code: u8) -> &'static str {
     NAMES.get(usize::from(code)).copied().unwrap_or("Exception")
@@ -77,11 +84,14 @@ fn pending() -> std::sync::MutexGuard<'static, Option<Pending>> {
 /// Makes `exc`, whose reference it takes, pending. One already pending
 /// (never, in generated code) is dropped.
 fn set_pending(exc: *mut PtSeq, head: &'static [u8], tail: &'static [u8]) {
-    let old = pending().replace(Pending {
+    let mut slot = pending();
+    let old = slot.replace(Pending {
         exc: exc as usize,
         head,
         tail,
     });
+    PENDING_FLAG.store(1, Ordering::Relaxed);
+    drop(slot);
     if let Some(old) = old {
         // SAFETY: a pending exception is live and owns its reference.
         unsafe { seq::pt_seq_dec(old.exc as *mut PtSeq) };
@@ -152,12 +162,6 @@ pub unsafe extern "C" fn pt_raise_value(
     }
 }
 
-/// Whether an exception is pending: 1 or 0.
-#[unsafe(no_mangle)]
-pub extern "C" fn pt_raised() -> u8 {
-    u8::from(pending().is_some())
-}
-
 /// Whether the pending exception's kind is in `codes`, a bit per kind
 /// code (the compiler sets a class's bit and those of the classes derived
 /// from it): 1 or 0.
@@ -172,8 +176,9 @@ pub extern "C" fn pt_pending_is(codes: u32) -> u8 {
 /// null if there is none.
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_catch() -> *mut PtSeq {
-    pending()
-        .take()
+    let mut slot = pending();
+    PENDING_FLAG.store(0, Ordering::Relaxed);
+    slot.take()
         .map_or(std::ptr::null_mut(), |p| p.exc as *mut PtSeq)
 }
 
@@ -213,6 +218,10 @@ mod tests {
     /// Serializes the tests: the pending exception is process-wide.
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
+    fn raised() -> u8 {
+        PENDING_FLAG.load(Ordering::Relaxed)
+    }
+
     #[test]
     fn raising_and_catching_move_one_reference() {
         let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
@@ -221,7 +230,7 @@ mod tests {
         // static.
         unsafe {
             let e = seq::pt_seq_new(b"x4".as_ptr(), 2, 0);
-            assert_eq!(pt_raised(), 0);
+            assert_eq!(raised(), 0);
             pt_raise(e, head.as_ptr(), 4, tail.as_ptr(), 1);
             seq::pt_seq_dec(e);
             let (recursion, runtime, value) = (1 << 4, 1 << 4 | 1 << 7, 1);
@@ -230,10 +239,10 @@ mod tests {
                 pt_pending_is(runtime),
                 pt_pending_is(value),
             );
-            assert_eq!((pt_raised(), tests), (1, (1, 1, 0)));
+            assert_eq!((raised(), tests), (1, (1, 1, 0)));
             assert_eq!(uncaught_line(e as u64), "RecursionError");
             let caught = pt_catch();
-            assert_eq!((caught, pt_raised()), (e, 0));
+            assert_eq!((caught, raised()), (e, 0));
             assert!(pt_catch().is_null());
             seq::pt_seq_dec(caught);
         }
