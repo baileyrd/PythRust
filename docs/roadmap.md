@@ -86,4 +86,10 @@ Track B, exceptions:
 - [x] **Lint for `raises Exception`** (B4 follow-up, Nano, 2026-10-30). A clause listing `Exception` whose body lets nothing of unknown class escape draws a warning naming the narrower clause; the CLI prints warnings to stderr once the checks pass, exit status unchanged (`diag::Warning`, `infer::Types::warnings`).
 - [ ] **B4 follow-up (Nano, 2026-10-29, #55).** Revisit D7 (faults fatal even under `except Exception`) once exception-to-`Result` lowering makes faults cheap to catch.
 
-- [ ] **M5 close.** A test that no diagnostic says "borrow", "lifetime" or "move out of"; docs updated; exit criteria checked.
+- [x] **M5 close.** Exit criteria from [handoff.md](handoff.md), each held by a test:
+  - *A tempered function rejects what a loose one accepts:* `tempering_alone_rejects` loosens every corpus program `check` rejects that tempers or declares something (modes, aliasing, `raises`) and requires it to pass, so tempering alone made the error; `tempered_matches_loose` holds that tempering never changes what an accepted program prints.
+  - *Diagnostics a Python programmer can act on:* each tempering error names the function and the parameter or call, in Python terms, and says the fix (``write `mut xs` ``, ``return a copy: `return list(xs)` ``, ``write `-> int raises ValueError` ``), asserted by the corpus's `expect-error` lines (`corpus_checks`).
+  - *No leaked borrow-checker vocabulary:* `tests/vocabulary.rs` fails on "borrow", "lifetime" or "move out of" in any error or warning the corpus produces under `check` and `run` (native code prints `run`'s diagnostics, `corpus_matches_native`), and in any string literal of the compiler's or runtime's non-test sources, so a message no program reaches yet is held to it too.
+  - *Explicit error types and exception-to-`Result` lowering:* D8 `raises` (B2) and the tag-plus-branch lowering (B3), with every exception program in `NATIVE`.
+
+  The D7 revisit above stays open: it is a language change after M5, not part of its exit.

@@ -612,6 +612,33 @@ fn corpus_checks() -> Res<()> {
     Ok(())
 }
 
+/// M5's exit: a tempered function rejects what a loose one accepts. Every
+/// program `check` rejects that tempers or declares something passes once
+/// loosened, so tempering alone made the error.
+#[test]
+fn tempering_alone_rejects() -> Res<()> {
+    let mut failures = Vec::new();
+    let mut rejected = 0;
+    for case in load_corpus(&corpus_dir()?)? {
+        if case.expect.check_error.is_none() {
+            continue;
+        }
+        let Some(loose) = loosen(&read(&case.source)?) else {
+            continue;
+        };
+        rejected += 1;
+        if let Err(msg) = check_source(&loose) {
+            failures.push(format!(
+                "{}: loosened, still {msg:?}",
+                case.source.display()
+            ));
+        }
+    }
+    assert!(rejected > 0, "the corpus has no program tempering rejects");
+    report(failures);
+    Ok(())
+}
+
 /// The ownership analysis behind `check` and `run` is a coverage gate:
 /// every checked program gets summaries, precise for each program the
 /// native backend builds, and otherwise conservative only for a gap the
