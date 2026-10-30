@@ -110,14 +110,13 @@ enum Rt {
     ExcStr,
     Raise,
     RaiseValue,
-    Raised,
     PendingIs,
     Catch,
     Uncaught,
 }
 
 impl Rt {
-    const ALL: [Rt; 53] = [
+    const ALL: [Rt; 52] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -167,7 +166,6 @@ impl Rt {
         Rt::ExcStr,
         Rt::Raise,
         Rt::RaiseValue,
-        Rt::Raised,
         Rt::PendingIs,
         Rt::Catch,
         Rt::Uncaught,
@@ -224,7 +222,6 @@ impl Rt {
             Rt::ExcStr => "pt_exc_str",
             Rt::Raise => "pt_raise",
             Rt::RaiseValue => "pt_raise_value",
-            Rt::Raised => "pt_raised",
             Rt::PendingIs => "pt_pending_is",
             Rt::Catch => "pt_catch",
             Rt::Uncaught => "pt_uncaught",
@@ -275,7 +272,6 @@ impl Rt {
             Rt::ExcStr => (vec![ptr], Some(ptr)),
             Rt::Raise => (vec![ptr; 5], None),
             Rt::RaiseValue => (vec![ptr; 7], None),
-            Rt::Raised => (vec![], Some(I8)),
             Rt::PendingIs => (vec![I32], Some(I8)),
             Rt::Catch => (vec![], Some(ptr)),
             Rt::Uncaught => (vec![], None),
@@ -289,6 +285,9 @@ struct Codegen<'r> {
     rt: HashMap<&'static str, ClifFunc>,
     /// The `i64` count of active Pythrust calls.
     depth: DataId,
+    /// The runtime's pending-exception flag byte, read only through
+    /// [`FnGen::pending_flag`].
+    pending: DataId,
     /// Read-only byte strings (failure messages, literals), deduplicated.
     bytes: HashMap<String, (DataId, usize)>,
     ptr: types::Type,
@@ -317,11 +316,15 @@ impl<'r> Codegen<'r> {
         let mut zero = DataDescription::new();
         zero.define_zeroinit(8);
         module.define_data(depth, &zero).map_err(module_err)?;
+        let pending = module
+            .declare_data("pt_pending_flag", Linkage::Import, true, false)
+            .map_err(module_err)?;
         let ptr = module.target_config().pointer_type();
         let mut cg = Codegen {
             module,
             render,
             depth,
+            pending,
             rt: HashMap::new(),
             bytes: HashMap::new(),
             ptr,
@@ -768,7 +771,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::ParseFloat(s) => self.parse_float(*s, span),
             Rvalue::ParseInt(s) => self.parse_int(*s, span),
             Rvalue::NewExc(kind, arg) => self.new_exc(*kind, *arg),
-            Rvalue::Raised => self.call_rt_value(Rt::Raised, &[]),
+            Rvalue::Raised => Ok(self.pending_flag()),
             Rvalue::PendingIs(classes) => self.pending_is(classes),
             Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
         }
@@ -811,6 +814,20 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         let addr = self.b.ins().symbol_value(self.cg.ptr, gv);
         let len = self.b.ins().iconst(self.cg.ptr, len as i64);
         Ok((addr, len))
+    }
+
+    /// Whether an exception is pending, an `i8` 1 or 0: the runtime's
+    /// flag byte, read inline rather than through a call. Every read of
+    /// the flag goes through here, so it can become per task (phase 5).
+    fn pending_flag(&mut self) -> Value {
+        let gv = self
+            .cg
+            .module
+            .declare_data_in_func(self.cg.pending, self.b.func);
+        let addr = self.b.ins().symbol_value(self.cg.ptr, gv);
+        self.b
+            .ins()
+            .load(types::I8, MemFlagsData::trusted(), addr, 0)
     }
 
     /// Calls `callee`, failing at `span` if `MAX_DEPTH` calls are active.
