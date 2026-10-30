@@ -1,0 +1,7 @@
+# `except Exception` catches a division by zero, as in Python.
+n = 0
+try:
+    print(10 // n)
+except Exception as e:
+    print("caught:", e)
+print("after")

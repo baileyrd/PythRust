@@ -676,7 +676,7 @@ fn subscript_assignment() {
         assign("xs", list(vec![])),
         assign_to(tsub(name("xs"), int(0)), int(1)),
     ]);
-    assert_eq!(msg, "IndexError: list index out of range");
+    assert_eq!(msg, "IndexError: list assignment index out of range");
 }
 
 #[test]
@@ -1251,26 +1251,105 @@ fn parse_builtins_raise_catchable_value_errors() {
 }
 
 #[test]
-fn faults_are_never_caught() {
+fn fatal_faults_are_never_caught() {
     let faults = [
-        ("[1][5]", "IndexError: list index out of range"),
-        ("1 // 0", "ZeroDivisionError"),
         ("9223372036854775807 + 1", "OverflowError"),
         ("int(\"99999999999999999999\")", "OverflowError"),
         (
             "int(float(\"nan\"))",
             "ValueError: cannot convert float NaN",
         ),
+        ("0.0 ** -1", "ZeroDivisionError: 0.0 cannot be raised"),
     ];
     for (expr, msg) in faults {
         let kind = msg.split(':').next().unwrap_or(msg);
         let src = format!("try:\n    print({expr})\nexcept {kind}:\n    print(\"caught\")\n");
         assert!(fails_src(&src).starts_with(msg), "{expr}");
     }
-    let unpack = "try:\n    a, b = [1]\nexcept ValueError:\n    print(\"caught\")\n";
-    assert!(fails_src(unpack).starts_with("ValueError: not enough values"));
     let deep = "def f(n):\n    return f(n + 1)\ntry:\n    f(0)\nexcept RecursionError:\n    print(\"caught\")\n";
     assert!(fails_src(deep).starts_with("RecursionError"));
+}
+
+#[test]
+fn division_index_and_unpacking_faults_are_catchable() {
+    let cases = [
+        (
+            "print(1 // 0)",
+            "ZeroDivisionError",
+            "integer division or modulo by zero",
+        ),
+        (
+            "print(1 % 0)",
+            "ArithmeticError",
+            "integer division or modulo by zero",
+        ),
+        ("print(1 / 0)", "Exception", "division by zero"),
+        (
+            "print(1.0 // 0.0)",
+            "ZeroDivisionError",
+            "float floor division by zero",
+        ),
+        (
+            "print(1.0 % 0.0)",
+            "ZeroDivisionError",
+            "float modulo by zero",
+        ),
+        (
+            "print(1 / 0.0)",
+            "ZeroDivisionError",
+            "float division by zero",
+        ),
+        ("print([1][5])", "IndexError", "list index out of range"),
+        (
+            "print(\"ab\"[-3])",
+            "LookupError",
+            "string index out of range",
+        ),
+        (
+            "print(range(2)[2])",
+            "IndexError",
+            "range object index out of range",
+        ),
+        (
+            "xs = [1]\n    xs[1] = 2",
+            "IndexError",
+            "list assignment index out of range",
+        ),
+        (
+            "xs = [1]\n    xs[1] += 2",
+            "IndexError",
+            "list index out of range",
+        ),
+        (
+            "a, b = [1]",
+            "ValueError",
+            "not enough values to unpack (expected 2, got 1)",
+        ),
+        (
+            "a, b = \"abc\"",
+            "ValueError",
+            "too many values to unpack (expected 2)",
+        ),
+    ];
+    for (stmt, class, msg) in cases {
+        let src = format!("try:\n    {stmt}\nexcept {class} as e:\n    print(e)\n");
+        assert_eq!(ok_src(&src), format!("{msg}\n"), "{stmt}");
+    }
+}
+
+#[test]
+fn a_catchable_fault_unwinds_through_calls_and_reports_uncaught_as_before() {
+    let src = "def at(xs, i):\n    return xs[i]\ndef f():\n    return at([1], 3)\n\
+               try:\n    f()\nexcept IndexError as e:\n    print(\"caught\", e)\n";
+    assert_eq!(ok_src(src), "caught list index out of range\n");
+    assert_eq!(
+        fails_src("print(1 // 0)\n"),
+        "ZeroDivisionError: integer division or modulo by zero"
+    );
+    assert_eq!(
+        fails_src("a, b = [1]\n"),
+        "ValueError: not enough values to unpack (expected 2, got 1)"
+    );
 }
 
 #[test]

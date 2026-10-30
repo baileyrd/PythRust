@@ -36,8 +36,10 @@ const NAMES: [&str; 9] = [
     "Exception",
 ];
 
-/// The descriptor of a `ValueError` holding a string.
-const VALUE_ERROR: &[u8] = b"x0s";
+/// The descriptors of an exception holding a string, by kind code.
+const WITH_MESSAGE: [&[u8]; 9] = [
+    b"x0s", b"x1s", b"x2s", b"x3s", b"x4s", b"x5s", b"x6s", b"x7s", b"x8s",
+];
 
 /// A raised exception not yet caught.
 struct Pending {
@@ -155,7 +157,42 @@ pub unsafe extern "C" fn pt_raise_value(
     // SAFETY: the descriptor is static and the slot a live string, whose
     // reference the exception adds before this one is dropped.
     unsafe {
-        let exc = seq::pt_seq_new(VALUE_ERROR.as_ptr(), VALUE_ERROR.len(), 1);
+        let desc = WITH_MESSAGE[0]; // ValueError
+        let exc = seq::pt_seq_new(desc.as_ptr(), desc.len(), 1);
+        seq::pt_seq_push(exc, arg as u64);
+        pstr::pt_str_dec(arg);
+        set_pending(exc, part(head, head_len), part(tail, tail_len));
+    }
+}
+
+/// An exception of kind `code` that no `raise` wrote, holding the
+/// message `msg`: a division by zero, an index out of range, a wrong
+/// unpacking arity. Raised like [`pt_raise`].
+///
+/// # Safety
+///
+/// `msg` points to `msg_len` bytes of UTF-8, and `head` and `tail` are
+/// as for [`pt_raise`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_raise_msg(
+    code: u8,
+    msg: *const u8,
+    msg_len: usize,
+    head: *const u8,
+    head_len: usize,
+    tail: *const u8,
+    tail_len: usize,
+) {
+    // SAFETY: guaranteed by the caller.
+    let text = String::from_utf8_lossy(unsafe { part(msg, msg_len) });
+    let arg = pstr::into_ptr(PtStr::new(text.into()));
+    let desc = WITH_MESSAGE
+        .get(usize::from(code))
+        .copied()
+        .unwrap_or(b"x8s");
+    // SAFETY: as in `pt_raise_value`.
+    unsafe {
+        let exc = seq::pt_seq_new(desc.as_ptr(), desc.len(), 1);
         seq::pt_seq_push(exc, arg as u64);
         pstr::pt_str_dec(arg);
         set_pending(exc, part(head, head_len), part(tail, tail_len));
@@ -272,6 +309,29 @@ mod tests {
                 "could not convert string to float: '2.5.1'"
             );
             pstr::pt_str_dec(text);
+            seq::pt_seq_dec(e);
+        }
+    }
+
+    #[test]
+    fn faults_raise_their_class_with_the_message() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+        let msg = b"list index out of range";
+        let none = b"";
+        // SAFETY: as above.
+        unsafe {
+            let n = none.as_ptr();
+            pt_raise_msg(1, msg.as_ptr(), msg.len(), n, 0, n, 0);
+            let lookup = 1 << 1 | 1 << 6;
+            assert_eq!(
+                (raised(), pt_pending_is(lookup), pt_pending_is(1)),
+                (1, 1, 0)
+            );
+            let e = pt_catch();
+            assert_eq!(
+                uncaught_line(e as u64),
+                "IndexError: list index out of range"
+            );
             seq::pt_seq_dec(e);
         }
     }

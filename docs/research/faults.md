@@ -1,6 +1,6 @@
 # D7 revisit: can a `try` catch a fault?
 
-**Status: decided 2026-10-30** (Nano, on #59): option 3, with the unpacking `ValueError` included. No code here; [roadmap.md](../roadmap.md#phase-4-m5-plan) orders the work. Numbers come from the corpus at `main` after #58 and from two native micro-benchmarks, both described under [Method](#method).
+**Status: decided 2026-10-30** (Nano, on #59) and implemented: option 3, with the unpacking `ValueError` included. The note itself has no code; [roadmap.md](../roadmap.md#phase-4-m5-plan) orders the work. Numbers come from the corpus at `main` after #58 and from two native micro-benchmarks, both described under [Method](#method).
 
 ## Decided
 

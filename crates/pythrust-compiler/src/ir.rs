@@ -31,13 +31,16 @@
 //! Exceptions (D6, D8) are a tag plus a value without a second return
 //! register: [`Inst::Raise`] makes an exception the runtime's one
 //! *pending* exception, and the code after anything that can raise (a
-//! call to a function whose `raises` set is not empty, `int(s)`,
-//! `float(s)`) tests [`Rvalue::Raised`] and branches to a handler or
-//! unwinds. A function unwinds by releasing its references and
+//! call to a function whose `raises` set is not empty or that may fault
+//! catchably, `int(s)`, `float(s)`, a division, an index) tests
+//! [`Rvalue::Raised`] and branches to a handler or unwinds. A function unwinds by releasing its references and
 //! returning, its result ignored, with the exception still pending; the
 //! module's code ends with [`Term::Uncaught`]. A handler tests the class
 //! with [`Rvalue::PendingIs`] and takes the exception with
-//! [`Rvalue::Catch`]. Faults (D7) stay [`Term::Fail`]s.
+//! [`Rvalue::Catch`]. The catchable faults (division by zero, an index
+//! out of range, unpacking arity) raise this way; the others (overflow,
+//! recursion depth, out-of-memory) stay [`Term::Fail`]s and failing
+//! rvalues.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -188,7 +191,8 @@ pub enum Inst {
     /// Drops the global's reference (null: nothing) and nulls it: the
     /// end of the module's code.
     DropGlobal(GlobalId),
-    /// `list[index] = value`; fails at `span` when out of range.
+    /// `list[index] = value`; raises `IndexError` at `span`, changing
+    /// nothing, when out of range.
     SetItem {
         list: Operand,
         index: Operand,
@@ -212,7 +216,8 @@ pub enum Operand {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Rvalue {
     Use(Operand),
-    /// Checked int arithmetic: overflow and division by zero fail.
+    /// Checked int arithmetic: overflow fails; `//` and `%` by zero raise
+    /// `ZeroDivisionError` as [`Rvalue::Float`] does.
     Int(IntOp, Operand, Operand),
     /// Negation of an `Int` (checked: `-i64::MIN` fails) or a `Float`.
     Neg(Operand),
@@ -230,7 +235,7 @@ pub enum Rvalue {
     /// `s * n`, a `Str` and an `Int`. Fails when too large to allocate.
     Repeat(Operand, Operand),
     /// `s[i]` on a `Str` (a one-char `Str`) or a list (an element).
-    /// Fails when `i` is out of range.
+    /// Raises `IndexError` when `i` is out of range, giving null or 0.
     Index(Operand, Operand),
     /// `len(s)` of a `Str` (in chars), list, tuple or range: an `Int`.
     /// For a range whose length does not fit in one, -1.
@@ -259,7 +264,8 @@ pub enum Rvalue {
     /// Whether an optional is `None`: a `Bool`.
     IsNone(Operand),
     /// Float arithmetic with Python semantics: `/`, `//` and `%` by zero
-    /// and `**` out of range fail.
+    /// raise `ZeroDivisionError` (pending, at the `Inst`'s span) and give
+    /// a placeholder; `**` out of range fails.
     Float(FloatOp, Operand, Operand),
     /// Checked int `**`: overflow and a negative exponent fail.
     IntPow(Operand, Operand),
@@ -295,6 +301,9 @@ pub enum FloatOp {
     Sub,
     Mul,
     Div,
+    /// `/` of two ints, computed in floats: `Div`, but dividing by zero
+    /// says so as Python's int division does.
+    IntDiv,
     FloorDiv,
     Mod,
     Pow,

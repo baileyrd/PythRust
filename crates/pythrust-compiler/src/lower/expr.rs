@@ -53,8 +53,12 @@ impl<'a> FnBuilder<'_, 'a> {
 
     /// `-v` or `+v` of an int or float `v`.
     fn unary_number(&mut self, op: UnaryOp, v: Operand, span: Span) -> Result<Operand> {
-        match op {
-            UnaryOp::Neg => Ok(self.temp(self.ty(v), Rvalue::Neg(v), span)),
+        match (op, v) {
+            // A negative literal stays a literal, so `x / -2.0` is known
+            // not to divide by zero. `i64::MIN` is no literal to negate.
+            (UnaryOp::Neg, Operand::Float(f)) => Ok(Operand::Float(-f)),
+            (UnaryOp::Neg, Operand::Int(n)) if n != i64::MIN => Ok(Operand::Int(-n)),
+            (UnaryOp::Neg, _) => Ok(self.temp(self.ty(v), Rvalue::Neg(v), span)),
             _ => Ok(v),
         }
     }
@@ -81,25 +85,23 @@ impl<'a> FnBuilder<'_, 'a> {
             (BinOp::Mul, Ty::Str, Ty::Int) => (Ty::Str, Rvalue::Repeat(l, r)),
             (BinOp::Mul, Ty::Int, Ty::Str) => (Ty::Str, Rvalue::Repeat(r, l)),
             (BinOp::Pow, Ty::Int, Ty::Int) => (Ty::Int, Rvalue::IntPow(l, r)),
-            (BinOp::Div, Ty::Int, Ty::Int) => self.float_arith(op, l, r, span),
+            (BinOp::Div, Ty::Int, Ty::Int) => self.float_arith(FloatOp::IntDiv, l, r, span),
             (_, Ty::Int, Ty::Int) => (Ty::Int, Rvalue::Int(int_op(op, span)?, l, r)),
-            (_, Ty::Int | Ty::Float, Ty::Int | Ty::Float) => self.float_arith(op, l, r, span),
+            (_, Ty::Int | Ty::Float, Ty::Int | Ty::Float) => {
+                self.float_arith(float_op(op), l, r, span)
+            }
             _ => return Err(unsupported(span, "arithmetic on a non-number")),
         };
-        Ok(self.temp(ty, value, span))
+        let may_raise = divides(&value);
+        let v = self.temp(ty, value, span);
+        if may_raise {
+            self.check_raised(span)?;
+        }
+        Ok(v)
     }
 
     /// `l op r` in floats, each side an int or a float.
-    fn float_arith(&mut self, op: BinOp, l: Operand, r: Operand, span: Span) -> (Ty, Rvalue) {
-        let op = match op {
-            BinOp::Add => FloatOp::Add,
-            BinOp::Sub => FloatOp::Sub,
-            BinOp::Mul => FloatOp::Mul,
-            BinOp::Div => FloatOp::Div,
-            BinOp::FloorDiv => FloatOp::FloorDiv,
-            BinOp::Mod => FloatOp::Mod,
-            BinOp::Pow => FloatOp::Pow,
-        };
+    fn float_arith(&mut self, op: FloatOp, l: Operand, r: Operand, span: Span) -> (Ty, Rvalue) {
         let (a, b) = (self.as_float(l, span), self.as_float(r, span));
         (Ty::Float, Rvalue::Float(op, a, b))
     }
@@ -768,6 +770,30 @@ fn bind_params(def: &FuncDef, args: &[Arg], ops: Vec<Operand>) -> Result<Vec<Opt
         *slot = Some(op);
     }
     Ok(slots)
+}
+
+/// Whether `value` divides by what may be zero, which raises.
+fn divides(value: &Rvalue) -> bool {
+    let divisor = match value {
+        Rvalue::Int(IntOp::FloorDiv | IntOp::Mod, _, b) => b,
+        Rvalue::Float(FloatOp::Div | FloatOp::IntDiv | FloatOp::FloorDiv | FloatOp::Mod, _, b) => b,
+        _ => return false,
+    };
+    !matches!(*divisor, Operand::Int(n) if n != 0)
+        && !matches!(*divisor, Operand::Float(f) if f != 0.0)
+}
+
+/// The float operation for `op`.
+fn float_op(op: BinOp) -> FloatOp {
+    match op {
+        BinOp::Add => FloatOp::Add,
+        BinOp::Sub => FloatOp::Sub,
+        BinOp::Mul => FloatOp::Mul,
+        BinOp::Div => FloatOp::Div,
+        BinOp::FloorDiv => FloatOp::FloorDiv,
+        BinOp::Mod => FloatOp::Mod,
+        BinOp::Pow => FloatOp::Pow,
+    }
 }
 
 /// The int operation for `op`; `/` and `**` are not one.

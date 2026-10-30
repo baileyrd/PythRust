@@ -172,8 +172,10 @@ fn optional_tuples_are_rebuilt_to_the_declared_type() {
 #[test]
 fn list_unpacking_checks_every_short_length() {
     let p = lowered("a, b, c = [1, 2, 3]\nprint(a, b, c)\n");
-    // One check for too many items, one per shorter length (0, 1, 2).
-    assert_eq!(fails(&p), 4);
+    // One raise for too many items, one per shorter length (0, 1, 2),
+    // each a catchable `ValueError`, not a fault.
+    let value = |r: &Rvalue| matches!(r, Rvalue::NewExc(ExcKind::Value, Some(_)));
+    assert_eq!((assigns(&p, value), fails(&p)), (4, 0));
 }
 
 #[test]
@@ -376,7 +378,7 @@ fn ints_meeting_floats_compute_in_floats() {
     let values = rvalues(main);
     // An int constant converts at compile time, a variable at run time.
     let div = values.iter().find_map(|v| match v {
-        Rvalue::Float(FloatOp::Div, _, b) => Some(*b),
+        Rvalue::Float(FloatOp::IntDiv, _, b) => Some(*b),
         _ => None,
     });
     assert_eq!(div, Some(Operand::Float(2.0)));
@@ -807,6 +809,27 @@ fn only_what_may_raise_is_tested_after() {
         .iter()
         .filter(|f| f.name != "<module>")
         .any(uncaught));
+}
+
+#[test]
+fn catchable_faults_are_tested_where_they_happen() {
+    let src = "xs = [1]\ns = \"a\"\nn = 0\nxs[n] = 2\nxs[n] += 1\n\
+               print(xs[n], s[n], 1 // n, 1.0 % n, 1 / n, 7 // 2, 7.0 / -2.0)\n";
+    let p = lowered(src);
+    // The store, the read and store of `+=`, the two reads, and the three
+    // divisions by `n`; never a division by a nonzero literal.
+    assert_eq!(assigns(&p, |r| matches!(r, Rvalue::Raised)), 8);
+}
+
+#[test]
+fn calls_into_what_may_fault_are_tested_after() {
+    let src = "def at(xs, i):\n    return xs[i]\ndef via(xs):\n    return at(xs, 0)\n\
+               def half(n):\n    return n // 2\ndef pair(t: tuple[int, int]) -> int:\n    return t[0]\n\
+               print(via([1]), half(4), pair((1, 2)))\n";
+    let p = lowered(src);
+    // `via`, which reaches `at`'s index, but neither `half`, dividing by
+    // a literal, nor `pair`, reading a tuple's field.
+    assert_eq!(assigns(&p, |r| matches!(r, Rvalue::Raised)), 1);
 }
 
 #[test]

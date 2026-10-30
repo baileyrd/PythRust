@@ -9,8 +9,10 @@
 //! `Exception` admits any exception, so it promises callers nothing; when
 //! the body does not need it, a warning names the narrower clause.
 //!
-//! Only `raise` and `int(s)`/`float(s)` of a `str` raise (D7); faults
-//! never escape. A set holds exception classes (B4): each escape is an
+//! Only `raise` and `int(s)`/`float(s)` of a `str` count. The faults a
+//! `try` can catch (division by zero, an index out of range, unpacking
+//! arity) are implicit in the operators and never tracked here; lowering
+//! has its own fact for them (`lower/faults.rs`). A set holds exception classes (B4): each escape is an
 //! instance of its class or of one derived from it. It over-approximates:
 //! `int(s)` counts whether or not `s` parses, and a raised value whose
 //! class is not known before it runs (a parameter, a call's result) is
@@ -717,6 +719,20 @@ def f(xs: list[int], n: int):
     return xs[10] + n // 0 + int(2.5) + int(True) + int() + float(n)
 ";
         assert_eq!(raises(src, "f"), "");
+    }
+
+    #[test]
+    fn catchable_faults_need_no_clause_and_leave_the_lint_alone() {
+        let src = "\
+temper def at(xs: list[int], i: int) -> int:
+    a, b = xs
+    return xs[i] // a
+def g(xs: list[int]) -> int raises Exception:
+    return xs[0] % 2
+";
+        assert_eq!(raises(src, "at"), "");
+        let fix = "remove the `raises` clause";
+        assert_eq!(warnings(src), vec![vacuous("g", "nothing", fix)]);
     }
 
     #[test]

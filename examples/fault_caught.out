@@ -1,0 +1,26 @@
+caught
+2
+lookup: list index out of range
+lookup: list index out of range
+store: list assignment index out of range
+augmented: list index out of range
+[1, 2, 3]
+3
+list unpack: not enough values to unpack (expected 2, got 1)
+ba
+unpack: too many values to unpack (expected 2)
+unpack: not enough values to unpack (expected 2, got 1)
+5.0
+ratio: division by zero
+int: integer division or modulo by zero
+3 1
+int: integer division or modulo by zero
+-4 1
+float: float division by zero
+float: float modulo by zero
+3.75 3.0
+1.5
+string: string index out of range
+range: range object index out of range
+range unpack: too many values to unpack (expected 2)
+done

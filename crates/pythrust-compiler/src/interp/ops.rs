@@ -3,14 +3,20 @@
 
 use std::rc::Rc;
 
-use super::rt_err;
 use super::value::{Num, Value};
+use super::{raised, rt_err, Exec, Unwind};
 use crate::ast::{BinOp, UnaryOp};
 use crate::diag::{Diagnostic, Result};
+use crate::exc::ExcKind;
 use crate::span::Span;
 
 /// Evaluates `l op r`.
-pub(super) fn binary<'m>(op: BinOp, l: &Value<'m>, r: &Value<'m>, span: Span) -> Result<Value<'m>> {
+pub(super) fn binary<'m>(
+    op: BinOp,
+    l: &Value<'m>,
+    r: &Value<'m>,
+    span: Span,
+) -> Exec<'m, Value<'m>> {
     if let (Some(a), Some(b)) = (l.num(), r.num()) {
         return match (a, b) {
             (Num::Int(x), Num::Int(y)) => int_op(op, x, y, span),
@@ -26,8 +32,8 @@ pub(super) fn binary<'m>(op: BinOp, l: &Value<'m>, r: &Value<'m>, span: Span) ->
         (BinOp::Add, Value::Tuple(x), Value::Tuple(y)) => {
             Ok(Value::Tuple(Rc::from([&x[..], &y[..]].concat())))
         }
-        (BinOp::Mul, _, _) => repeat(l, r, span),
-        _ => Err(unsupported(op, l, r, span)),
+        (BinOp::Mul, _, _) => Ok(repeat(l, r, span)?),
+        _ => Err(unsupported(op, l, r, span).into()),
     }
 }
 
@@ -55,21 +61,22 @@ pub(super) fn unary<'m>(op: UnaryOp, v: &Value<'m>, span: Span) -> Result<Value<
     }
 }
 
-fn int_op<'m>(op: BinOp, a: i64, b: i64, span: Span) -> Result<Value<'m>> {
+fn int_op<'m>(op: BinOp, a: i64, b: i64, span: Span) -> Exec<'m, Value<'m>> {
     let checked = match op {
         BinOp::Add => a.checked_add(b),
         BinOp::Sub => a.checked_sub(b),
         BinOp::Mul => a.checked_mul(b),
+        BinOp::Div if b == 0 => return Err(zero_div(span, "division by zero")),
         BinOp::Div => return float_op(op, a as f64, b as f64, span).map(Value::Float),
         BinOp::FloorDiv => floor_div(a, b, span)?,
         BinOp::Mod => Some(int_mod(a, b, span)?),
-        BinOp::Pow => return int_pow(a, b, span),
+        BinOp::Pow => return Ok(int_pow(a, b, span)?),
     };
-    checked.map(Value::Int).ok_or_else(|| overflow(span))
+    Ok(checked.map(Value::Int).ok_or_else(|| overflow(span))?)
 }
 
 /// Floors toward negative infinity. `None` on overflow (`i64::MIN // -1`).
-fn floor_div(a: i64, b: i64, span: Span) -> Result<Option<i64>> {
+fn floor_div<'m>(a: i64, b: i64, span: Span) -> Exec<'m, Option<i64>> {
     if b == 0 {
         return Err(int_zero_div(span));
     }
@@ -85,7 +92,7 @@ fn floor_div(a: i64, b: i64, span: Span) -> Result<Option<i64>> {
 }
 
 /// The remainder takes the sign of the divisor, as in Python.
-fn int_mod(a: i64, b: i64, span: Span) -> Result<i64> {
+fn int_mod<'m>(a: i64, b: i64, span: Span) -> Exec<'m, i64> {
     if b == 0 {
         return Err(int_zero_div(span));
     }
@@ -130,18 +137,18 @@ fn huge_pow(a: i64, b: i64) -> Option<i64> {
     }
 }
 
-fn float_op(op: BinOp, a: f64, b: f64, span: Span) -> Result<f64> {
+fn float_op<'m>(op: BinOp, a: f64, b: f64, span: Span) -> Exec<'m, f64> {
     match op {
         BinOp::Add => Ok(a + b),
         BinOp::Sub => Ok(a - b),
         BinOp::Mul => Ok(a * b),
-        BinOp::Div if b == 0.0 => Err(zero_div(span, "division by zero")),
+        BinOp::Div if b == 0.0 => Err(zero_div(span, "float division by zero")),
         BinOp::Div => Ok(a / b),
         BinOp::FloorDiv if b == 0.0 => Err(zero_div(span, "float floor division by zero")),
         BinOp::FloorDiv => Ok(float_divmod(a, b).0),
-        BinOp::Mod if b == 0.0 => Err(zero_div(span, "float modulo")),
+        BinOp::Mod if b == 0.0 => Err(zero_div(span, "float modulo by zero")),
         BinOp::Mod => Ok(float_divmod(a, b).1),
-        BinOp::Pow => float_pow(a, b, span),
+        BinOp::Pow => Ok(float_pow(a, b, span)?),
     }
 }
 
@@ -176,7 +183,11 @@ fn float_divmod(a: f64, b: f64) -> (f64, f64) {
 /// error here; Python returns a complex number, which Pythrust lacks.
 fn float_pow(a: f64, b: f64, span: Span) -> Result<f64> {
     if a == 0.0 && b < 0.0 {
-        return Err(zero_div(span, "0.0 cannot be raised to a negative power"));
+        // `**` stays a fault, unlike `/`, `//` and `%` (grammar.md, Deviations).
+        return Err(rt_err(
+            span,
+            "ZeroDivisionError: 0.0 cannot be raised to a negative power".to_string(),
+        ));
     }
     if a < 0.0 && b.is_finite() && b.fract() != 0.0 {
         return Err(rt_err(
@@ -246,12 +257,13 @@ pub(super) fn overflow(span: Span) -> Diagnostic {
     rt_err(span, "OverflowError: integer overflow".to_string())
 }
 
-fn int_zero_div(span: Span) -> Diagnostic {
+fn int_zero_div<'m>(span: Span) -> Unwind<'m> {
     zero_div(span, "integer division or modulo by zero")
 }
 
-fn zero_div(span: Span, what: &str) -> Diagnostic {
-    rt_err(span, format!("ZeroDivisionError: {what}"))
+/// `/`, `//` or `%` by zero: a catchable `ZeroDivisionError`.
+fn zero_div<'m>(span: Span, what: &str) -> Unwind<'m> {
+    raised(ExcKind::ZeroDivision, what.to_string(), span)
 }
 
 fn unsupported(op: BinOp, l: &Value, r: &Value, span: Span) -> Diagnostic {

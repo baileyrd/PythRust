@@ -3,6 +3,7 @@
 
 use crate::ast::{Arg, Expr, ExprKind, Target, TargetKind, UnaryOp};
 use crate::diag::Result;
+use crate::exc::ExcKind;
 use crate::infer::Type;
 use crate::ir::{CmpOp, Inst, Operand, Rvalue, Ty};
 use crate::span::Span;
@@ -101,7 +102,9 @@ impl FnBuilder<'_, '_> {
         if self.ty(i) != Ty::Int {
             return Err(unsupported(span, "an index that is not an int"));
         }
-        Ok(self.temp(item, Rvalue::Index(s, i), span))
+        let item = self.temp(item, Rvalue::Index(s, i), span);
+        self.check_raised(span)?;
+        Ok(item)
     }
 
     /// The field a tuple index names: a literal, as inference requires,
@@ -195,7 +198,7 @@ impl FnBuilder<'_, '_> {
             value,
             span,
         });
-        Ok(())
+        self.check_raised(span)
     }
 
     /// Binds `v` to `target` as unpacking and `for` do: a name takes the
@@ -219,7 +222,7 @@ impl FnBuilder<'_, '_> {
         let ty = self.ty(s);
         let mut items = Vec::new();
         if let Ty::List(_) | Ty::Str | Ty::Range = ty {
-            self.check_unpack_len(s, targets.len(), span);
+            self.check_unpack_len(s, targets.len(), span)?;
             let elem = self.item_ty(ty, span)?;
             for k in 0..targets.len() {
                 let i = Operand::Int(i64::try_from(k).unwrap_or(i64::MAX));
@@ -243,29 +246,27 @@ impl FnBuilder<'_, '_> {
             .try_for_each(|(target, v)| self.bind(target, v))
     }
 
-    /// Fails as Python does unless list, string or range `s` has exactly
-    /// `want` items.
-    /// The shortfall is in the message, so each possible length below
-    /// `want` gets its own check. A range too long for an int has length
-    /// -1 here: too many.
-    fn check_unpack_len(&mut self, s: Operand, want: usize, span: Span) {
+    /// Raises Python's `ValueError` unless list, string or range `s` has
+    /// exactly `want` items. The shortfall is in the message, so each
+    /// possible length below `want` gets its own check. A range too long
+    /// for an int has length -1 here: too many.
+    fn check_unpack_len(&mut self, s: Operand, want: usize, span: Span) -> Result<()> {
         let n = self.temp(Ty::Int, Rvalue::Len(s), span);
         let want_i = i64::try_from(want).unwrap_or(i64::MAX);
-        let message = format!("ValueError: too many values to unpack (expected {want})");
-        self.fail_if(
-            Rvalue::Cmp(CmpOp::Gt, n, Operand::Int(want_i)),
-            span,
-            &message,
-        );
+        let message = format!("too many values to unpack (expected {want})");
+        let value = ExcKind::Value;
+        let long = Rvalue::Cmp(CmpOp::Gt, n, Operand::Int(want_i));
+        self.raise_if(long, value, &message, span)?;
         if self.ty(s) == Ty::Range {
-            self.fail_if(Rvalue::Cmp(CmpOp::Lt, n, Operand::Int(0)), span, &message);
+            let huge = Rvalue::Cmp(CmpOp::Lt, n, Operand::Int(0));
+            self.raise_if(huge, value, &message, span)?;
         }
         for got in 0..want {
             let got_i = i64::try_from(got).unwrap_or(i64::MAX);
             let short = Rvalue::Cmp(CmpOp::Eq, n, Operand::Int(got_i));
-            let message =
-                format!("ValueError: not enough values to unpack (expected {want}, got {got})");
-            self.fail_if(short, span, &message);
+            let message = format!("not enough values to unpack (expected {want}, got {got})");
+            self.raise_if(short, value, &message, span)?;
         }
+        Ok(())
     }
 }

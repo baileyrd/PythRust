@@ -1,0 +1,18 @@
+# expect-exit: 1
+# A fault nothing catches unwinds through the calls, then stops the
+# program with the diagnostic it always gave.
+def pick(rows: list[list[int]], i: int) -> int:
+    row = rows[0]
+    return row[i]
+
+
+def total(rows: list[list[int]]) -> int:
+    names = ["x"]
+    return pick(rows, 5) + len(names)
+
+
+try:
+    print(total([[1, 2]]))
+except ValueError:
+    print("not this one")
+print("unreachable")

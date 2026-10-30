@@ -5,7 +5,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use super::value::{str_repr, Exc, Num, Range, Value};
-use super::{rt_err, value_error, Exec};
+use super::{raised, rt_err, Exec};
 use crate::ast::Ident;
 use crate::diag::Result;
 use crate::exc::ExcKind;
@@ -270,11 +270,11 @@ fn float_to_int<'m>(f: f64, span: Span) -> Result<Value<'m>> {
 }
 
 /// A malformed string raises a catchable `ValueError`; one out of range
-/// is an overflow fault (D7).
+/// is an overflow fault.
 fn parse_int<'m>(s: &str, span: Span) -> Exec<'m, Value<'m>> {
     let invalid = || {
         let message = format!("invalid literal for int() with base 10: {}", str_repr(s));
-        value_error(message, span)
+        raised(ExcKind::Value, message, span)
     };
     let text = strip_underscores(s.trim()).ok_or_else(invalid)?;
     let digits = text.strip_prefix(['+', '-']).unwrap_or(&text);
@@ -306,7 +306,7 @@ fn to_float<'m>(v: &Value<'m>, span: Span) -> Exec<'m, Value<'m>> {
         .map(Value::Float)
         .ok_or_else(|| {
             let message = format!("could not convert string to float: {}", str_repr(s));
-            value_error(message, span)
+            raised(ExcKind::Value, message, span)
         })
 }
 

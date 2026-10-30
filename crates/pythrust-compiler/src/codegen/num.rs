@@ -8,6 +8,7 @@ use cranelift_codegen::ir::{types, InstBuilder, StackSlotData, StackSlotKind, Tr
 
 use super::{backend, runtime, FnGen, Rt, OVERFLOW};
 use crate::diag::Result;
+use crate::exc::ExcKind;
 use crate::ir::{CmpOp, FloatOp, Operand, Ty};
 use crate::span::Span;
 
@@ -30,15 +31,19 @@ impl FnGen<'_, '_, '_> {
             FloatOp::Sub => return Ok(self.b.ins().fsub(x, y)),
             FloatOp::Mul => return Ok(self.b.ins().fmul(x, y)),
             FloatOp::Pow => return self.float_pow(x, y, span),
-            FloatOp::Div => "ZeroDivisionError: division by zero",
-            FloatOp::FloorDiv => "ZeroDivisionError: float floor division by zero",
-            FloatOp::Mod => "ZeroDivisionError: float modulo",
+            FloatOp::Div => "float division by zero",
+            FloatOp::IntDiv => "division by zero",
+            FloatOp::FloorDiv => "float floor division by zero",
+            FloatOp::Mod => "float modulo by zero",
         };
         let zero = self.b.ins().f64const(0.0);
         let is_zero = self.b.ins().fcmp(FloatCC::Equal, y, zero);
-        self.fail_if(is_zero, span, by_zero)?;
+        self.raise_if(is_zero, ExcKind::ZeroDivision, by_zero, span)?;
+        // The code after runs on when it raises: divide by 1 then.
+        let one = self.b.ins().f64const(1.0);
+        let y = self.b.ins().select(is_zero, one, y);
         match op {
-            FloatOp::Div => Ok(self.b.ins().fdiv(x, y)),
+            FloatOp::Div | FloatOp::IntDiv => Ok(self.b.ins().fdiv(x, y)),
             FloatOp::FloorDiv => self.call_rt_value(Rt::FloatFloorDiv, &[x, y]),
             _ => self.call_rt_value(Rt::FloatMod, &[x, y]),
         }
