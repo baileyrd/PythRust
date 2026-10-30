@@ -39,9 +39,9 @@ impl FnGen<'_, '_, '_> {
         let zero = self.b.ins().f64const(0.0);
         let is_zero = self.b.ins().fcmp(FloatCC::Equal, y, zero);
         self.raise_if(is_zero, ExcKind::ZeroDivision, by_zero, span)?;
-        // The code after runs on when it raises: divide by 1 then.
+        // Should the raise rejoin, the code after divides by 1.
         let one = self.b.ins().f64const(1.0);
-        let y = self.b.ins().select(is_zero, one, y);
+        let y = self.go_on_with(is_zero, one, y);
         match op {
             FloatOp::Div | FloatOp::IntDiv => Ok(self.b.ins().fdiv(x, y)),
             FloatOp::FloorDiv => self.call_rt_value(Rt::FloatFloorDiv, &[x, y]),

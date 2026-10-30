@@ -70,7 +70,7 @@ impl FnGen<'_, '_, '_> {
             Rt::RaiseValue,
             &[[p, p_len, text].as_slice(), &site].concat(),
         );
-        self.b.ins().jump(ok, &[]);
+        self.after_raise(ok);
         self.b.switch_to_block(ok);
         Ok(())
     }
@@ -94,7 +94,7 @@ impl FnGen<'_, '_, '_> {
         let (m, m_len) = self.data(message.to_string())?;
         let site = self.site(span)?;
         self.call_rt(Rt::RaiseMsg, &[[code, m, m_len].as_slice(), &site].concat());
-        self.b.ins().jump(ok, &[]);
+        self.after_raise(ok);
         self.b.switch_to_block(ok);
         Ok(())
     }
