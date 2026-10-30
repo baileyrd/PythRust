@@ -1,0 +1,6 @@
+# expect-exit: 1
+# An exception of no class in a tuple handler passes through it.
+try:
+    raise ValueError("not caught")
+except (IndexError, ArithmeticError):
+    print("never")

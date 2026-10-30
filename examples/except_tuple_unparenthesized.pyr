@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-error: multiple exception types must be parenthesized
+# CPython 3.13, the oracle, rejects this too; 3.14 accepts it (PEP 758).
+try:
+    print(int("x"))
+except ValueError, IndexError:
+    print("caught")

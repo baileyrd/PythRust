@@ -207,9 +207,10 @@ fn sx_stmt(s: &Stmt) -> String {
 fn sx_handler(h: &Handler) -> String {
     let binding = h.binding.as_ref().map(|b| format!(" as {}", b.name));
     let binding = binding.unwrap_or_default();
+    let classes: Vec<&str> = h.classes.iter().map(|c| c.name.as_str()).collect();
     format!(
         " (except {}{binding} {})",
-        h.exception.name,
+        classes.join(" "),
         sx_block(&h.body)
     )
 }
@@ -817,6 +818,25 @@ fn try_spans_cover_every_handler() {
 }
 
 #[test]
+fn tuple_handlers() {
+    let body = "try : NL INDENT x NL DEDENT";
+    let cases = [
+        ("( ValueError , IndexError )", "ValueError IndexError"),
+        ("( ValueError , IndexError , )", "ValueError IndexError"),
+        ("( ValueError , )", "ValueError"),
+        ("( ValueError )", "ValueError"),
+    ];
+    for (classes, sx) in cases {
+        assert_eq!(
+            ok(&format!(
+                "{body} except {classes} as e : NL INDENT y NL DEDENT"
+            )),
+            format!("(try (x) (except {sx} as e (y)))")
+        );
+    }
+}
+
+#[test]
 fn try_except_errors() {
     let body = "try : NL INDENT x NL DEDENT";
     assert_eq!(
@@ -827,9 +847,33 @@ fn try_except_errors() {
         .starts_with("bare `except:` is not supported yet"));
     assert_eq!(
         err(&format!(
-            "{body} except ( ValueError ) : NL INDENT y NL DEDENT"
+            "{body} except ValueError , IndexError : NL INDENT y NL DEDENT"
         )),
-        "expected an exception name, such as `ValueError`, found `(`"
+        "multiple exception types must be parenthesized, \
+         as in `except (ValueError, IndexError):`"
+    );
+    assert_eq!(
+        err(&format!("{body} except ( ) : NL INDENT y NL DEDENT")),
+        "`except ()` catches nothing and is not supported; name at least one exception class"
+    );
+    for nested in ["( ( A , B ) , C )", "( A , ( B , ) )"] {
+        assert!(
+            err(&format!("{body} except {nested} : NL INDENT y NL DEDENT"))
+                .starts_with("nested tuples of exception classes are not supported"),
+            "{nested}"
+        );
+    }
+    assert_eq!(
+        err(&format!(
+            "{body} except ( ValueError , , ) : NL INDENT y NL DEDENT"
+        )),
+        "expected an exception name, such as `ValueError`, found `,`"
+    );
+    assert_eq!(
+        err(&format!(
+            "{body} except ( ValueError IndexError ) : NL INDENT y NL DEDENT"
+        )),
+        "expected `)`, found name `IndexError`"
     );
     assert_eq!(
         err(&format!(

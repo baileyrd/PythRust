@@ -280,9 +280,10 @@ pub enum Rvalue {
     NewExc(ExcKind, Option<Operand>),
     /// Whether an exception is pending: a `Bool`.
     Raised,
-    /// Whether the pending exception, which there is, is one of this
-    /// class: of it or of a class derived from it, as `except` tests.
-    PendingIs(ExcKind),
+    /// Whether the pending exception, which there is, is one of these
+    /// classes: of one or of a class derived from one, as `except` tests.
+    /// Never empty.
+    PendingIs(Vec<ExcKind>),
     /// The pending exception, which there is, with its reference; none
     /// is pending after.
     Catch,

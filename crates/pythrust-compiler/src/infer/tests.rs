@@ -1836,6 +1836,30 @@ fn except_names_a_builtin_exception() {
 }
 
 #[test]
+fn every_class_of_a_tuple_handler_is_a_builtin_exception() {
+    let handler =
+        |classes: &str| format!("try:\n    pass\nexcept ({classes}) as e:\n    print(e)\n");
+    assert!(infer_src(&handler("ValueError, IndexError")).is_ok());
+    assert!(infer_src(&handler("ValueError, ValueError")).is_ok());
+    assert!(src_err(&handler("ValueError, KeyError")).starts_with("`KeyError` is not an exception"));
+    let shadowed = format!("IndexError = 1\n{}", handler("ValueError, IndexError"));
+    assert!(src_err(&shadowed).contains("`IndexError` is redefined here"));
+}
+
+#[test]
+fn exception_classes_are_not_held_in_variables() {
+    let held = "errs = (ValueError, IndexError)\n";
+    assert!(src_err(held).starts_with("exception classes can't be held in variables"));
+    assert!(src_err("e = ValueError\n").starts_with("exception classes can't be held"));
+    let caught = "errs = 1\ntry:\n    pass\nexcept errs:\n    pass\n";
+    assert!(src_err(caught).starts_with("`errs` is a variable: exception classes can't be held"));
+    let in_tuple = "errs = 1\ntry:\n    pass\nexcept (ValueError, errs):\n    pass\n";
+    assert!(src_err(in_tuple).starts_with("`errs` is a variable"));
+    let unknown = "try:\n    pass\nexcept errs:\n    pass\n";
+    assert!(src_err(unknown).starts_with("`errs` is not an exception"));
+}
+
+#[test]
 fn handler_name_has_one_fixed_type() {
     let src = "e = 1\ntry:\n    pass\nexcept ValueError as e:\n    pass\n";
     assert!(src_err(src).starts_with("cannot change the type of `e`"));

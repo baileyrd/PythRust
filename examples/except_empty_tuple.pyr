@@ -1,0 +1,7 @@
+# expect-exit: 1
+# deviation: `except ()` catches nothing in Python; Pythrust rejects it as a parse error
+# expect-error: `except ()` catches nothing and is not supported
+try:
+    print("body")
+except ():
+    print("never")

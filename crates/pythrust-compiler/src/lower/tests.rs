@@ -813,12 +813,21 @@ fn only_what_may_raise_is_tested_after() {
 fn handlers_test_their_kinds_in_order() {
     let src = "try:\n    raise IndexError\nexcept ValueError:\n    pass\nexcept IndexError as e:\n    print(e)\n";
     let p = lowered(src);
-    let tests = |kind| move |r: &Rvalue| *r == Rvalue::PendingIs(kind);
+    let tests = |kind| move |r: &Rvalue| *r == Rvalue::PendingIs(vec![kind]);
     assert_eq!(assigns(&p, tests(ExcKind::Value)), 1);
     assert_eq!(assigns(&p, tests(ExcKind::Index)), 1);
     assert_eq!(assigns(&p, |r| matches!(r, Rvalue::Catch)), 2);
     let new = |r: &Rvalue| matches!(r, Rvalue::NewExc(ExcKind::Index, None));
     assert_eq!(assigns(&p, new), 1);
+}
+
+#[test]
+fn a_tuple_handler_tests_its_classes_at_once() {
+    let src = "try:\n    raise IndexError\nexcept (ValueError, LookupError) as e:\n    print(e)\n";
+    let p = lowered(src);
+    let both = Rvalue::PendingIs(vec![ExcKind::Value, ExcKind::Lookup]);
+    assert_eq!(assigns(&p, |r| *r == both), 1);
+    assert_eq!(assigns(&p, |r| matches!(r, Rvalue::PendingIs(_))), 1);
 }
 
 #[test]

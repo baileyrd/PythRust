@@ -198,7 +198,8 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             out.extend(
                 handlers
                     .iter()
-                    .map(|h| (h.exception.name.as_str(), h.exception.span)),
+                    .flat_map(|h| &h.classes)
+                    .map(|c| (c.name.as_str(), c.span)),
             );
             let bodies = handlers.iter().flat_map(|h| &h.body);
             body.iter().chain(bodies).for_each(|s| stmt_names(s, out));

@@ -7,7 +7,7 @@ cargo test --test conformance                 # goldens agree with CPython and `
 PYTHRUST_BLESS=1 cargo test --test conformance corpus_matches_cpython   # regenerate goldens
 ```
 
-`PYTHON` picks the oracle (default `python3`, baseline 3.12). `PYTHRUST_BIN` picks the binary (default: the one Cargo built for the test run).
+`PYTHON` picks the oracle (default `python3`; it must be CPython 3.13, which `corpus_matches_cpython` checks first and CI pins). `PYTHRUST_BIN` picks the binary (default: the one Cargo built for the test run).
 
 Directives go in the leading comment block, which Python ignores:
 

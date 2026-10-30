@@ -8,7 +8,7 @@ use crate::ast::{
 use crate::diag::{Diagnostic, Result};
 use crate::span::Span;
 
-use super::expr::int_literal;
+use super::expr::{int_literal, CLASS_NOT_A_VALUE};
 use super::solve::{self, Access, Binary, Constraint, Need};
 use super::ty::Type;
 use super::{builtins, scope};
@@ -114,18 +114,27 @@ impl Checker {
         self.expect(value.span, &Type::Exception, &t, what)
     }
 
-    /// `except Name [as e]:` and its block. `Name` must be a builtin
-    /// exception class that nothing shadows; `e` is an `Exception`.
+    /// `except Name [as e]:` or `except (A, B) [as e]:` and its block.
+    /// Each name must be a builtin exception class that nothing shadows;
+    /// `e` is an `Exception`.
     fn handler(&mut self, h: &Handler) -> Result<()> {
-        let name = &h.exception.name;
-        if !self.is_exception_name(name) {
-            return Err(error(h.exception.span, not_an_exception(name)));
+        if let Some(c) = h.classes.iter().find(|c| !self.is_exception_name(&c.name)) {
+            return Err(error(c.span, self.not_a_class(&c.name)));
         }
         if let Some(b) = &h.binding {
             self.bind_name(&b.name, b.span, &Type::Exception)?;
             self.nodes.insert(b.span, Type::Exception);
         }
         self.block(&h.body)
+    }
+
+    /// Why handler name `name` is not a builtin exception class.
+    fn not_a_class(&self, name: &str) -> String {
+        let variable = self.lookup(name).is_some();
+        if variable && !builtins::is_exception(name) {
+            return format!("`{name}` is a variable: {CLASS_NOT_A_VALUE}");
+        }
+        not_an_exception(name)
     }
 
     /// Whether `name` here is a builtin exception: one of D6's names that

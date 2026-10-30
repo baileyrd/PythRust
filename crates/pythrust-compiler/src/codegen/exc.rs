@@ -31,13 +31,13 @@ impl FnGen<'_, '_, '_> {
         Ok(e)
     }
 
-    /// Whether the pending exception is one of `class`. The runtime
-    /// knows no hierarchy: it gets the set of the codes of `class` and
-    /// every class derived from it, a bit per code.
-    pub(super) fn pending_is(&mut self, class: ExcKind) -> Result<Value> {
+    /// Whether the pending exception is one of `classes`. The runtime
+    /// knows no hierarchy: it gets the set of the codes of `classes` and
+    /// every class derived from one, a bit per code.
+    pub(super) fn pending_is(&mut self, classes: &[ExcKind]) -> Result<Value> {
         let codes = ExcKind::ALL
             .into_iter()
-            .filter(|k| k.is_a(class))
+            .filter(|k| classes.iter().any(|c| k.is_a(*c)))
             .fold(0u32, |set, k| set | 1 << k.code());
         let codes = self.b.ins().iconst(types::I32, i64::from(codes));
         self.call_rt_value(Rt::PendingIs, &[codes])

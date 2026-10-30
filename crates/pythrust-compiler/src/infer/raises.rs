@@ -217,7 +217,7 @@ fn bindings<'a>(block: &'a [Stmt], out: &mut Bindings<'a>) {
             StmtKind::Try { body, handlers } => {
                 bindings(body, out);
                 for h in handlers {
-                    caught(h.binding.as_ref(), &h.exception.name, out);
+                    caught(h.binding.as_ref(), &h.classes, out);
                     bindings(&h.body, out);
                 }
             }
@@ -241,12 +241,14 @@ fn opaque<'a>(target: &'a Target, out: &mut Bindings<'a>) {
     }
 }
 
-fn caught<'a>(binding: Option<&'a Ident>, name: &str, out: &mut Bindings<'a>) {
+fn caught<'a>(binding: Option<&'a Ident>, classes: &[Ident], out: &mut Bindings<'a>) {
     let Some(b) = binding else {
         return;
     };
-    let source = ExcKind::from_name(name).map_or(Source::Opaque, Source::Caught);
-    out.entry(&b.name).or_default().push(source);
+    let sources = classes
+        .iter()
+        .map(|c| ExcKind::from_name(&c.name).map_or(Source::Opaque, Source::Caught));
+    out.entry(&b.name).or_default().extend(sources);
 }
 
 /// The module-wide facts, and each function's set so far.
@@ -422,7 +424,8 @@ impl<'a> Cx<'_, 'a> {
             StmtKind::Try { body, handlers } => {
                 let classes: Vec<ExcKind> = handlers
                     .iter()
-                    .filter_map(|h| ExcKind::from_name(&h.exception.name))
+                    .flat_map(|h| &h.classes)
+                    .filter_map(|c| ExcKind::from_name(&c.name))
                     .collect();
                 out.extend(self.block(body).caught(&classes));
                 handlers
@@ -659,6 +662,36 @@ def f(s: str) -> int:
         raise OverflowError(\"bad\")
 ";
         assert_eq!(raises(src, "f"), "IndexError, OverflowError");
+    }
+
+    #[test]
+    fn a_tuple_handler_catches_each_of_its_classes() {
+        let src = "\
+def f(n: int) -> None:
+    try:
+        if n == 0:
+            raise IndexError
+        if n == 1:
+            raise ZeroDivisionError
+        raise RecursionError
+    except (LookupError, ZeroDivisionError):
+        pass
+";
+        assert_eq!(raises(src, "f"), "RecursionError");
+    }
+
+    #[test]
+    fn a_tuple_binding_re_raised_may_be_any_of_its_classes() {
+        let src = "\
+def f(n: int) -> None:
+    try:
+        if n == 0:
+            raise IndexError
+        raise ValueError
+    except (IndexError, ValueError) as e:
+        raise e
+";
+        assert_eq!(raises(src, "f"), "IndexError, ValueError");
     }
 
     #[test]
