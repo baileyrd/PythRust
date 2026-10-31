@@ -5,6 +5,7 @@
 //! importable modules), and [`ir`] for the backend. Stages: [`lexer`], [`parser`],
 //! [`infer`], [`interp`]; and for native code [`lower`], [`rc`] (refcount
 //! elision), [`codegen`].
+//! [`interop`] holds the pure parts of Rust binding builds (M6b).
 //! [`own`] summarizes how functions use their parameters, on the IR.
 //! See `docs/grammar.md` for the language these types describe.
 
@@ -20,6 +21,7 @@ pub mod token;
 
 pub mod codegen;
 pub mod infer;
+pub mod interop;
 pub mod interp;
 pub mod lexer;
 pub mod lower;

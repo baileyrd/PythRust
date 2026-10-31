@@ -47,3 +47,18 @@ jobs:
       - run: cargo test --locked --test conformance corpus_matches_native
         env:
           PYTHRUST_VALGRIND: "1"
+
+  rust-version:
+    # The oldest toolchain a program calling Rust bindings builds with:
+    # every such build compiles `pythrust-rt` with the user's toolchain,
+    # so its `rust-version` is checked here by building the probe binding.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal && rustup toolchain install 1.88.0 --profile minimal && rustup default stable
+      - run: cargo build --locked -p pythrust-compiler
+      - name: Build the probe binding with Rust 1.88
+        run: |
+          printf 'import probe\nprint(probe.double(21), probe.half(5.0))\n' > "$RUNNER_TEMP/main.pyr"
+          RUSTUP_TOOLCHAIN=1.88.0 ./target/debug/pythrust build --rust probe=crates/pythrust-compiler/tests/rust/probe "$RUNNER_TEMP/main.pyr"
+          test "$("$RUNNER_TEMP/main")" = "42 2.5"

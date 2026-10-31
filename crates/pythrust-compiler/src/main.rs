@@ -5,11 +5,13 @@
 //! `path:line:col` (warnings once every check passes, before anything
 //! runs; they never change the exit status), and for
 //! `build` writes the object file and links it with the system linker:
-//! `cc` on Unix, MSVC's `link.exe` on Windows.
+//! `cc` on Unix, MSVC's `link.exe` on Windows. A program calling Rust
+//! bindings first has cargo build them with the runtime ([`cargo`]).
 
 #![forbid(unsafe_code)]
 
 mod bindings;
+mod cargo;
 
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -18,6 +20,7 @@ use std::process::ExitCode;
 use bindings::Sources;
 use pythrust_compiler::ast::{Binding, Module};
 use pythrust_compiler::infer::Types;
+use pythrust_compiler::interop::gen;
 use pythrust_compiler::{
     codegen, infer, interp, lexer, lower, own, parser, rc, stdlib, DiagKind, Diagnostic, Span,
     Warning,
@@ -155,11 +158,7 @@ fn main() -> ExitCode {
     }
     match inv.command {
         Command::Check => ExitCode::SUCCESS,
-        Command::Build if !module.stubs.is_empty() => {
-            eprintln!("pythrust: {}", stdlib::RUST_BUILD_GAP);
-            ExitCode::FAILURE
-        }
-        Command::Build => build(&sources, &module, &types),
+        Command::Build => build(&sources, &module, &types, &inv.rust),
         Command::Run if !module.stubs.is_empty() => {
             eprintln!("pythrust: {}", stdlib::RUST_RUN_GAP);
             ExitCode::FAILURE
@@ -254,17 +253,66 @@ fn flush(out: &mut impl Write) -> pythrust_compiler::Result<()> {
 
 /// `pythrust build`: compiles the checked `module` and links it,
 /// reporting any failure.
-fn build(sources: &Sources, module: &Module, types: &Types) -> ExitCode {
-    let built = compile(sources, module, types)
-        .map_err(|diag| sources.render(&diag))
-        .and_then(|object| link(sources.path(), &object));
-    match built {
+fn build(sources: &Sources, module: &Module, types: &Types, rust: &[(&str, &str)]) -> ExitCode {
+    match native(sources, module, types, rust) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprint!("{message}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// What a program links against: a runtime staticlib, and the system
+/// libraries it needs.
+struct Runtime {
+    lib: PathBuf,
+    native: Vec<String>,
+}
+
+/// Compiles and links `module`. A program calling Rust bindings first
+/// has its shims generated, which names any stub this step cannot call
+/// before anything is compiled; cargo then builds them with the runtime.
+fn native(
+    sources: &Sources,
+    module: &Module,
+    types: &Types,
+    rust: &[(&str, &str)],
+) -> Result<(), String> {
+    let out = absolute(&output_path(sources.path())?)?;
+    let render = |diag: &Diagnostic| sources.render(diag);
+    let shims = match module.stubs.is_empty() {
+        true => None,
+        false => {
+            Some(gen::shims(&module.stubs, &|span| sources.place(span)).map_err(|d| render(&d))?)
+        }
+    };
+    let object = compile(sources, module, types).map_err(|d| render(&d))?;
+    let runtime = match shims {
+        None => plain_runtime()?,
+        Some(lib) => cargo::build(&lib, &called(module, rust)?, &out)?,
+    };
+    link(&out, &object, &runtime)
+}
+
+/// The bindings `module` calls, with absolute directories.
+fn called(module: &Module, rust: &[(&str, &str)]) -> Result<Vec<cargo::Crate>, String> {
+    let calls = |name: &str| {
+        let prefix = format!("{name}.");
+        module
+            .stubs
+            .iter()
+            .any(|s| s.name.name.starts_with(&prefix))
+    };
+    rust.iter()
+        .filter(|(name, _)| calls(name))
+        .map(|(name, dir)| {
+            Ok(cargo::Crate {
+                name: name.to_string(),
+                dir: absolute(Path::new(dir))?,
+            })
+        })
+        .collect()
 }
 
 /// Compiles the checked `module` to an object file, lowering only what
@@ -279,14 +327,21 @@ fn compile(
     codegen::emit(&program, &|diag| sources.render(diag))
 }
 
-/// Links `object` with the runtime into the executable for `path`.
-/// Every path handed to the linker is absolute, so none can read as an
-/// option (`-work/...`) or a response file (`@scope/...`).
-fn link(path: &str, object: &[u8]) -> Result<(), String> {
-    let out = absolute(&output_path(path)?)?;
-    let runtime = absolute(&runtime_lib()?)?;
-    let dir = private_dir(output_dir(&out))?;
-    let linked = link_in(&dir, object, &runtime, &out);
+/// The plain runtime, `pythrust-rt`, and the system libraries a Rust
+/// staticlib needs.
+fn plain_runtime() -> Result<Runtime, String> {
+    Ok(Runtime {
+        lib: absolute(&runtime_lib()?)?,
+        native: NATIVE_LIBS.iter().map(ToString::to_string).collect(),
+    })
+}
+
+/// Links `object` with `runtime` into the executable `out`. Every path
+/// handed to the linker is absolute, so none can read as an option
+/// (`-work/...`) or a response file (`@scope/...`).
+fn link(out: &Path, object: &[u8], runtime: &Runtime) -> Result<(), String> {
+    let dir = private_dir(output_dir(out))?;
+    let linked = link_in(&dir, object, runtime, out);
     let removed = std::fs::remove_dir_all(&dir)
         .map_err(|e| format!("pythrust: cannot remove {}: {e}\n", dir.display()));
     linked.and(removed)
@@ -338,7 +393,7 @@ fn same_file(a: &Path, b: &Path) -> Result<bool, String> {
 }
 
 /// Writes `object` into `dir` and links it with `runtime` into `out`.
-fn link_in(dir: &Path, object: &[u8], runtime: &Path, out: &Path) -> Result<(), String> {
+fn link_in(dir: &Path, object: &[u8], runtime: &Runtime, out: &Path) -> Result<(), String> {
     let obj = dir.join(OBJECT);
     std::fs::OpenOptions::new()
         .write(true)
@@ -349,8 +404,8 @@ fn link_in(dir: &Path, object: &[u8], runtime: &Path, out: &Path) -> Result<(), 
     let mut linker = linker()?;
     let output = linker
         .arg(&obj)
-        .arg(runtime)
-        .args(NATIVE_LIBS)
+        .arg(&runtime.lib)
+        .args(&runtime.native)
         .args(LINK_FLAGS)
         .args(output_args(out))
         .output()
@@ -727,7 +782,7 @@ mod tests {
         let dir = private_dir(&std::env::temp_dir()).unwrap();
         let source = dir.join(SELF_NAMED);
         std::fs::write(&source, "print(1)\n").unwrap();
-        let err = link(source.to_str().unwrap(), b"object").unwrap_err();
+        let err = output_path(source.to_str().unwrap()).unwrap_err();
         assert!(err.contains("would overwrite"), "{err}");
         assert_eq!(std::fs::read(&source).unwrap(), b"print(1)\n");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -741,7 +796,7 @@ mod tests {
         let source = dir.join("p.pyr");
         std::fs::write(&source, "print(1)\n").unwrap();
         std::os::unix::fs::symlink(&source, dir.join("p")).unwrap();
-        let err = link(source.to_str().unwrap(), b"object").unwrap_err();
+        let err = output_path(source.to_str().unwrap()).unwrap_err();
         assert!(err.contains("would overwrite"), "{err}");
         assert_eq!(std::fs::read(&source).unwrap(), b"print(1)\n");
         std::fs::remove_dir_all(&dir).unwrap();

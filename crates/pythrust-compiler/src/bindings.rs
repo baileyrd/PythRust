@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use pythrust_compiler::ast::Binding;
+use pythrust_compiler::interop::gen;
 use pythrust_compiler::{infer, lexer, parser, stdlib, Diagnostic, Span, TokenKind, Warning};
 
 /// A source file and the offset its spans start at.
@@ -66,6 +67,13 @@ impl Sources {
         (file, unshift(span, file.base))
     }
 
+    /// `file:line` of `span`, as a shim's comment names its stub.
+    pub(crate) fn place(&self, span: Span) -> String {
+        let (file, span) = self.locate(span);
+        let line = crate::line_col(&file.text, span.start).line;
+        format!("{}:{line}", file.path)
+    }
+
     /// Renders `diag` against the file it belongs to.
     pub(crate) fn render(&self, diag: &Diagnostic) -> String {
         let (file, span) = self.locate(diag.span);
@@ -105,6 +113,8 @@ pub(crate) fn check_name(name: &str, earlier: &[&str]) -> Result<(), String> {
         "is a standard module"
     } else if infer::is_builtin(name) {
         "is a builtin"
+    } else if gen::reserved_crate(name) {
+        "cannot name a Rust crate here"
     } else if earlier.contains(&name) {
         "is given twice"
     } else {
@@ -217,6 +227,9 @@ mod tests {
             ("fast-fs", "is not a name"),
             ("fäst", "is not a name"),
             ("a b", "is not a name"),
+            ("std", "cannot name a Rust crate here"),
+            ("pythrust_rt", "cannot name a Rust crate here"),
+            ("crate", "cannot name a Rust crate here"),
         ];
         for (name, why) in cases {
             let err = check_name(name, &[]).err().unwrap_or_default();

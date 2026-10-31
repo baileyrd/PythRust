@@ -184,8 +184,8 @@ temper def add(a: int, b: int) -> int:
     ...
 ";
 
-/// `check` checks calls against a binding's stub; `run` and `build`
-/// refuse with the named gaps until the native M6b PRs land.
+/// `check` checks calls against a binding's stub; `run` refuses with
+/// its named gap, and `build` names a type it cannot pass yet.
 #[test]
 fn rust_binding_checks_and_run_and_build_name_their_gaps() {
     let dir = binding("gaps", FASTFS);
@@ -214,11 +214,15 @@ main()
     let out = pythrust_rust("build", &dir, "rust_gaps", src);
     assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
-    assert!(err.contains("build cannot call Rust bindings yet"), "{err}");
-    // Imported but never called, a binding still stops `build`.
+    assert!(err.contains("fastfs.pyr:1:28: backend error"), "{err}");
+    assert!(
+        err.contains("build cannot pass `str` to or from Rust yet"),
+        "{err}"
+    );
+    // Imported but never called, a binding's stubs still need shims.
     let out = pythrust_rust("build", &dir, "rust_uncalled", "import fastfs\nprint(1)\n");
     assert_eq!(out.status.code(), Some(1));
-    assert!(text(&out.stderr).contains("build cannot call Rust bindings yet"));
+    assert!(text(&out.stderr).contains("build cannot pass `str`"));
     // Given but not imported, a binding changes nothing.
     let out = pythrust_rust("run", &dir, "rust_unused", "print(1)\n");
     assert_eq!(text(&out.stdout), "1\n", "{out:?}");
