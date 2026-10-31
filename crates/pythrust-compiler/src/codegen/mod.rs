@@ -36,7 +36,8 @@ mod seq;
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
 use crate::ir::{
-    self, BlockId, CmpOp, Compound, Func, Inst, IntOp, LocalId, Operand, Program, Rvalue, Term, Ty,
+    self, BlockId, CmpOp, Compound, FloatOp, Func, Inst, IntOp, LocalId, Operand, Program, Rvalue,
+    Term, Ty,
 };
 use crate::span::Span;
 
@@ -454,6 +455,9 @@ struct FnGen<'b, 'c, 'r> {
     types: &'c [Compound],
     vars: Vec<Variable>,
     blocks: Vec<cranelift_codegen::ir::Block>,
+    /// While translating a site whose flag test is fused ([`fused`]):
+    /// where its raise goes, and the local it would have defined.
+    raise_to: Option<(BlockId, Option<LocalId>)>,
 }
 
 impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
@@ -492,20 +496,71 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             types,
             vars,
             blocks,
+            raise_to: None,
         };
         for (i, block) in func.blocks.iter().enumerate() {
             if i > 0 {
                 g.b.switch_to_block(g.blocks[i]);
             }
-            for inst in &block.insts {
-                g.inst(inst)?;
-            }
-            g.term(&block.term)?;
+            g.body(block)?;
         }
         g.b.seal_all_blocks();
         let config = g.cg.module.target_config();
         g.b.finalize(config);
         Ok(())
+    }
+
+    /// A block's instructions and terminator. A catchable fault site
+    /// followed by the flag test lowering puts after it is fused: the
+    /// site's cold raise branch goes straight where the test would, so
+    /// the path that does not raise neither reads the flag nor rejoins.
+    fn body(&mut self, block: &ir::Block) -> Result<()> {
+        let Some(f) = fused(block) else {
+            block.insts.iter().try_for_each(|i| self.inst(i))?;
+            return self.term(&block.term);
+        };
+        let (before, site) = block.insts.split_at(f.site);
+        before.iter().try_for_each(|i| self.inst(i))?;
+        self.raise_to = Some((f.raised, f.dest));
+        let done = self.inst(&site[0]);
+        self.raise_to = None;
+        done?;
+        let ok = self.block(f.ok);
+        self.b.ins().jump(ok, &[]);
+        Ok(())
+    }
+
+    /// Ends a cold raise branch: back to `ok`, where lowering's flag test
+    /// follows, or, fused, to the raise path, with the site's local
+    /// defined as zero (null) so that path releases nothing stale.
+    fn after_raise(&mut self, ok: cranelift_codegen::ir::Block) {
+        let Some((raised, dest)) = self.raise_to else {
+            self.b.ins().jump(ok, &[]);
+            return;
+        };
+        if let Some(d) = dest {
+            let zero = self.zero(self.func.locals[d.0]);
+            self.b.def_var(self.vars[d.0], zero);
+        }
+        let raised = self.block(raised);
+        self.b.ins().jump(raised, &[]);
+    }
+
+    /// What to compute with after `raise_if(raised, ..)`: `v`, or `safe`
+    /// when it raised and the raise rejoins this path. A fused raise
+    /// never does, so then `v` needs no select.
+    fn go_on_with(&mut self, raised: Value, safe: Value, v: Value) -> Value {
+        match self.raise_to {
+            Some(_) => v,
+            None => self.b.ins().select(raised, safe, v),
+        }
+    }
+
+    fn zero(&mut self, ty: Ty) -> Value {
+        match ty {
+            Ty::Float => self.b.ins().f64const(0.0),
+            _ => self.b.ins().iconst(self.cg.clif_ty(ty), 0),
+        }
     }
 
     fn inst(&mut self, inst: &Inst) -> Result<()> {
@@ -929,7 +984,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         let zero = self.b.ins().icmp_imm_s(IntCC::Equal, b, 0);
         self.raise_if(zero, ExcKind::ZeroDivision, ZERO_DIV, span)?;
         let one = self.b.ins().iconst(types::I64, 1);
-        Ok(self.b.ins().select(zero, one, b))
+        Ok(self.go_on_with(zero, one, b))
     }
 
     /// Branches to a cold failure block when `cond` is nonzero.
@@ -993,6 +1048,66 @@ const ZERO_DIV: &str = "integer division or modulo by zero";
 const TOO_LARGE: &str = "MemoryError: repeated sequence is too large";
 const TOO_DEEP: &str =
     "RecursionError: maximum recursion depth exceeded while getting the repr of an object";
+
+/// A fault site fused with the flag test after it ([`FnGen::body`]).
+struct Fused {
+    /// The site's index in its block.
+    site: usize,
+    /// The local it defines, if any.
+    dest: Option<LocalId>,
+    /// Where the test branches when an exception is pending, and not.
+    raised: BlockId,
+    ok: BlockId,
+}
+
+/// The fusable site of `block`: one whose every raise goes through
+/// [`FnGen::after_raise`], followed only by the test of the flag, which
+/// the block then branches on.
+fn fused(block: &ir::Block) -> Option<Fused> {
+    let [.., site, Inst::Assign {
+        dest: flag,
+        value: Rvalue::Raised,
+        ..
+    }] = block.insts.as_slice()
+    else {
+        return None;
+    };
+    let Term::Branch {
+        cond: Operand::Local(cond),
+        then,
+        orelse,
+    } = block.term
+    else {
+        return None;
+    };
+    let dest = match site {
+        Inst::SetItem { .. } => None,
+        Inst::Assign { dest, value, .. } if raises_inline(value) => Some(*dest),
+        _ => return None,
+    };
+    (cond == *flag).then_some(Fused {
+        site: block.insts.len() - 2,
+        dest,
+        raised: then,
+        ok: orelse,
+    })
+}
+
+/// Whether `value` raises only through [`FnGen::after_raise`]: not a
+/// call, whose callee leaves the exception pending.
+fn raises_inline(value: &Rvalue) -> bool {
+    matches!(
+        value,
+        Rvalue::Index(..)
+            | Rvalue::Int(IntOp::FloorDiv | IntOp::Mod, ..)
+            | Rvalue::Float(
+                FloatOp::Div | FloatOp::IntDiv | FloatOp::FloorDiv | FloatOp::Mod,
+                ..
+            )
+            | Rvalue::ParseInt(_)
+            | Rvalue::ParseFloat(_)
+    )
+}
 
 /// Whether `ty` is a list or tuple.
 fn is_seq(ty: Ty) -> bool {
@@ -1134,6 +1249,48 @@ mod tests {
                 true
             }
         }
+    }
+
+    #[test]
+    fn every_inline_fault_test_is_fused() {
+        let src = "def f(xs: list[int], s: str, i: int, d: float) -> float:\n    \
+                   xs[i] = xs[i] // i + xs[i] % i\n    a, b = xs\n    \
+                   return len(s[i]) + i / i + d / d + d // d + d % d + int(s) + float(s)\n\
+                   print(f([1, 2], \"3\", 1, 2.0))\n";
+        let module = parser::parse(&lexer::lex(src).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = crate::rc::elide(lower::lower(&module, &types).expect("lower"));
+        let blocks = program.funcs.iter().flat_map(|f| &f.blocks);
+        // A block ending in the flag test, but for the test after a call:
+        // what comes before it, past the releases of the call's arguments.
+        let tested = |b: &&ir::Block| {
+            let mut back = b.insts.iter().rev();
+            let raised = |i: &Inst| {
+                matches!(
+                    i,
+                    Inst::Assign {
+                        value: Rvalue::Raised,
+                        ..
+                    }
+                )
+            };
+            let call = |i: &Inst| {
+                matches!(
+                    i,
+                    Inst::Assign {
+                        value: Rvalue::Call(..),
+                        ..
+                    }
+                )
+            };
+            let released = |i: &&Inst| matches!(i, Inst::Release(_) | Inst::Forget(_));
+            back.next().is_some_and(raised) && !back.find(|i| !released(i)).is_some_and(call)
+        };
+        let tests: Vec<&ir::Block> = blocks.filter(tested).collect();
+        // The store, three reads, `//`, `%` and `/` on ints, three float
+        // divisions and two parses.
+        assert_eq!(tests.len(), 12);
+        assert!(tests.iter().all(|b| fused(b).is_some()));
     }
 
     #[test]
