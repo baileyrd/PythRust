@@ -45,7 +45,7 @@ impl FnBuilder<'_, '_> {
             let (Some(kop), Some(vop)) = (pair.first(), pair.get(1)) else {
                 return Err(internal(span, "a dict display of odd length"));
             };
-            slots.push(self.probe(*kop, key, k.span)?);
+            slots.push(self.stored(*kop, key, k.span)?);
             slots.push(self.expect(*vop, value, v.span)?);
         }
         Ok(self.temp(ty, Rvalue::NewSeq(slots), span))
@@ -62,7 +62,7 @@ impl FnBuilder<'_, '_> {
         let elem = self.elem_of(ty, span)?;
         let mut slots = Vec::new();
         for (op, item) in ops.into_iter().zip(items) {
-            slots.push(self.probe(op, elem, item.span)?);
+            slots.push(self.stored(op, elem, item.span)?);
         }
         Ok(self.temp(ty, Rvalue::NewSeq(slots), span))
     }
@@ -113,6 +113,19 @@ impl FnBuilder<'_, '_> {
         self.expect(k, key, span)
     }
 
+    /// `k` as a key of type `key` to store, as [`Self::probe`] fits it.
+    /// `run` does not specialize generic code, so it cannot always tell
+    /// that a generic body's table is `int`-keyed and may keep a stored
+    /// `bool` as `True`; there `build` refuses rather than differ
+    /// (grammar.md, Deviations).
+    fn stored(&mut self, k: Operand, key: Ty, span: Span) -> Result<Operand> {
+        if (self.ty(k), key) == (Ty::Bool, Ty::Int) && !self.subst.is_empty() {
+            let what = "a bool stored as a key of an int-keyed dict or set in a generic function";
+            return Err(unsupported(span, what));
+        }
+        self.probe(k, key, span)
+    }
+
     /// `d[k]`: raises `KeyError(k)` when `k` is missing, holding `k` as
     /// written (`True`, not the int it probes as).
     pub(super) fn dict_read(&mut self, d: Operand, k: Operand, span: Span) -> Result<Operand> {
@@ -146,7 +159,7 @@ impl FnBuilder<'_, '_> {
         span: Span,
     ) -> Result<()> {
         let (key, value) = self.key_value(self.ty(d), span)?;
-        let index = self.probe(k, key, span)?;
+        let index = self.stored(k, key, span)?;
         let value = self.expect(v, value, span)?;
         self.emit(Inst::SetItem {
             list: d,
@@ -173,7 +186,7 @@ impl FnBuilder<'_, '_> {
             (Ty::Set(_), "add", [arg]) => {
                 let v = self.expr(&arg.value)?;
                 let elem = self.elem_of(ty, span)?;
-                let value = self.probe(v, elem, arg.span)?;
+                let value = self.stored(v, elem, arg.span)?;
                 self.emit(Inst::Append {
                     list: t,
                     value,

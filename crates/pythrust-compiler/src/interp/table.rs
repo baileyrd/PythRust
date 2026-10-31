@@ -133,3 +133,46 @@ impl<'m> Table<'m> {
         self.entries.push((k, value));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const Z: Span = Span { start: 0, end: 0 };
+
+    fn put<'m>(t: &mut Table<'m>, k: Value<'m>) {
+        let key = Key::of(&k, Z).expect("hashable");
+        t.insert(key, k, Value::None);
+    }
+
+    fn keys(t: &Table) -> Vec<String> {
+        t.entries().iter().map(|(k, _)| format!("{k:?}")).collect()
+    }
+
+    #[test]
+    fn an_int_keyed_table_stores_a_bool_key_as_its_int() {
+        let mut t = Table::default();
+        put(&mut t, Value::Bool(true));
+        assert_eq!(keys(&t), ["Bool(true)"]);
+        t.int_keyed();
+        assert_eq!(keys(&t), ["Int(1)"]);
+        // Tagging again is a no-op, and later bools are stored as ints.
+        t.int_keyed();
+        put(&mut t, Value::Bool(false));
+        put(&mut t, Value::Bool(true));
+        assert_eq!(keys(&t), ["Int(1)", "Int(0)"]);
+    }
+
+    #[test]
+    fn storing_an_int_makes_a_table_int_keyed() {
+        let mut t = Table::default();
+        put(&mut t, Value::Bool(false));
+        put(&mut t, Value::Int(5));
+        put(&mut t, Value::Bool(true));
+        assert_eq!(keys(&t), ["Int(0)", "Int(5)", "Int(1)"]);
+        let mut bools = Table::keyed(false);
+        put(&mut bools, Value::Bool(true));
+        put(&mut bools, Value::Bool(false));
+        assert_eq!(keys(&bools), ["Bool(true)", "Bool(false)"]);
+    }
+}

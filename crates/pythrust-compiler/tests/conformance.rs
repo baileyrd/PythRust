@@ -438,6 +438,21 @@ const NATIVE: &[&str] = &[
 ];
 
 /// What the native backend says about a program outside its subset.
+/// The corpus programs `run` accepts that `build` refuses, each a named
+/// backend gap, with why. `corpus_matches_native` fails when one builds,
+/// so a closed gap moves to `NATIVE`.
+const NATIVE_GAPS: &[(&str, &str)] = &[
+    (
+        "exception_list_cycle",
+        "an exception may close a reference cycle; native code has no cycle collector",
+    ),
+    (
+        "dict_bool_key_generic",
+        "a generic function storing a bool key into an int-keyed table: `run` cannot \
+         always tell the table is int-keyed, so `build` refuses rather than differ",
+    ),
+];
+
 const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";
 
 /// Builds the runtime library `pythrust build` links against, with the
@@ -994,9 +1009,23 @@ fn corpus_matches_native() -> Res<()> {
         if case.expect.check_error.is_some() {
             continue;
         }
+        let name = case
+            .source
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let gap = NATIVE_GAPS.iter().find(|(g, _)| *g == name);
         let Some(exe) = build_native(&case.source, &dir)? else {
+            if gap.is_none() {
+                failures.push(format!("{name}: a backend gap not in `NATIVE_GAPS`"));
+            }
             continue;
         };
+        if gap.is_some() {
+            failures.push(format!(
+                "{name}: builds now; move it from `NATIVE_GAPS` to `NATIVE`"
+            ));
+        }
         failures.extend(oversized(&exe)?);
         let got = run(&mut Command::new(&exe), TIMEOUT)?;
         let failed = mismatch(&case, &got);
@@ -1008,11 +1037,7 @@ fn corpus_matches_native() -> Res<()> {
         if memchecked {
             failures.extend(memcheck(&case, &exe)?);
         }
-        built.extend(
-            case.source
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned()),
-        );
+        built.push(name);
     }
     failures.extend(leftover_build_dirs(&dir)?);
     fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -1044,6 +1069,28 @@ fn build_refuses_an_exception_that_may_close_a_cycle() -> Res<()> {
     );
     assert!(stderr.contains(NATIVE_UNSUPPORTED), "{stderr}");
     assert!(stderr.contains("no cycle collector"), "{stderr}");
+    assert_eq!(run_pythrust(&source)?.status, 0);
+    Ok(())
+}
+
+/// A generic function storing a bool key into an int-keyed table is a
+/// named backend gap (`dict_bool_key_generic`): `build` refuses at the
+/// store, since `run` may show the key as `True` there.
+#[test]
+fn build_refuses_a_bool_key_stored_in_generic_code() -> Res<()> {
+    let source = corpus_dir()?.join("dict_bool_key_generic.pyr");
+    let out = Command::new(pythrust_bin()?)
+        .arg("build")
+        .arg(&source)
+        .output()
+        .map_err(|e| format!("cannot run pythrust build: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains(NATIVE_UNSUPPORTED), "{stderr}");
+    assert!(
+        stderr.contains("a bool stored as a key of an int-keyed dict or set in a generic function"),
+        "{stderr}"
+    );
     assert_eq!(run_pythrust(&source)?.status, 0);
     Ok(())
 }
