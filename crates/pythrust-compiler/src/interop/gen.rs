@@ -165,7 +165,8 @@ fn shim(stub: &StubDef, locate: &dyn Fn(Span) -> String) -> Result<String> {
     Ok(format!(
         "{STUB_MARK}{}: the stub for `{func}`\n\
          #[unsafe(no_mangle)]\n\
-         pub extern \"C\" fn {}({}) -> {} {{\n    r#{binding}::r#{func}({})\n}}\n",
+         pub extern \"C\" fn {}({}) -> {} {{\n    \
+         pythrust_rt::abi::call(|| r#{binding}::r#{func}({}))\n}}\n",
         one_line(&locate(stub.span)),
         symbol(dotted),
         decl.join(", "),

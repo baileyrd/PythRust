@@ -2,7 +2,8 @@
 //! generating inline. Output buffering, `print` formatting, runtime
 //! error exits, strings ([`str`]), lists and tuples ([`seq`]), dicts and sets ([`table`]), ranges
 //! ([`range`]), numbers ([`num`]), exceptions ([`exc`]), bytes and files
-//! ([`obj`]), and the `sys` and `os` modules ([`sys`], [`os`]).
+//! ([`obj`]), the `sys` and `os` modules ([`sys`], [`os`]), and what
+//! Rust binding shims call ([`abi`]).
 //!
 //! The C ABI surface is the only `unsafe` in the project. Each exported
 //! item (or module, for [`str`], [`seq`], [`table`], [`range`], [`num`], [`exc`], [`obj`], [`sys`] and [`os`]) carries `allow(unsafe_code)` and a
@@ -12,6 +13,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod abi;
 pub mod exc;
 pub mod num;
 pub mod obj;

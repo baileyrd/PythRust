@@ -26,11 +26,11 @@ fn shims_call_the_binding_with_scalars() {
     let double = "// stub probe.pyr@0: the stub for `double`\n\
                   #[unsafe(no_mangle)]\n\
                   pub extern \"C\" fn pt_rs_5probe_6double(a0: i64) -> i64 {\n    \
-                  r#probe::r#double(a0)\n}\n";
+                  pythrust_rt::abi::call(|| r#probe::r#double(a0))\n}\n";
     assert!(lib.contains(double), "{lib}");
     assert!(
         lib.contains(
-            "fn pt_rs_5probe_3mix(a0: f64, a1: i64) -> f64 {\n    r#probe::r#mix(a0, a1)\n}"
+            "fn pt_rs_5probe_3mix(a0: f64, a1: i64) -> f64 {\n    pythrust_rt::abi::call(|| r#probe::r#mix(a0, a1))\n}"
         ),
         "{lib}"
     );

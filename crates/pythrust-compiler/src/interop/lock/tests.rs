@@ -42,7 +42,7 @@ fn parse_reads_packages_and_dependencies() {
         (itoa.name.as_str(), itoa.version.as_str()),
         ("itoa", "1.0.1")
     );
-    assert!(itoa.is_registry());
+    assert!(itoa.is_pinned());
     assert_eq!(itoa.checksum.as_deref(), Some("sum-itoa-1.0.1"));
 }
 
@@ -250,4 +250,26 @@ fn verify_compares_shared_edges_by_resolved_version() {
         err.starts_with("binding `a`: dependencies differ from its Cargo.lock (`b 1.0.0` depends on `c 1.0.0`, not `c 0.2.0`)"),
         "{err}"
     );
+}
+
+#[test]
+fn other_registries_are_pinned_and_checked() {
+    let sparse = "sparse+https://my-registry.example/index/";
+    let text = lock_text("a", &["s"], &[])
+        + &format!("\n[[package]]\nname = \"s\"\nversion = \"1.2.0\"\nsource = \"{sparse}\"\nchecksum = \"c\"\n");
+    let a = parse(&text).unwrap_or_else(|e| panic!("{e}"));
+    let seeded = seed(&[("a", &a)]).unwrap_or_default();
+    assert!(
+        seeded.contains(&format!(
+            "name = \"s\"\nversion = \"1.2.0\"\nsource = \"{sparse}\""
+        )),
+        "{seeded}"
+    );
+    let mut newer = a.clone();
+    newer.packages[1].version = "1.3.0".into();
+    let err = verify(&newer, &[("a", &a)])
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("`s 1.3.0` is not pinned"), "{err}");
 }

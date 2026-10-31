@@ -114,10 +114,11 @@ fn unquote(value: &str) -> Option<String> {
 }
 
 impl Package {
-    fn is_registry(&self) -> bool {
-        self.source
-            .as_deref()
-            .is_some_and(|s| s.starts_with("registry+"))
+    /// Whether the lock pins this package: any source but a path (no
+    /// source) or git, which [`refuse_git`] refuses. So an alternative
+    /// registry (`sparse+...`) is pinned like crates.io.
+    fn is_pinned(&self) -> bool {
+        self.source.is_some() && !self.is_git()
     }
 
     fn is_git(&self) -> bool {
@@ -269,7 +270,7 @@ fn union<'a>(bindings: &[BindingLock<'a>]) -> Result<Union<'a>, LockError> {
     let mut owner: BTreeMap<(String, String), &str> = BTreeMap::new();
     for &(binding, lock) in bindings {
         refuse_git(binding, lock)?;
-        for p in lock.packages.iter().filter(|p| p.is_registry()) {
+        for p in lock.packages.iter().filter(|p| p.is_pinned()) {
             let clash = owner.iter().find(|((name, version), _)| {
                 *name == p.name && *version != p.version && compatible(version, &p.version)
             });
@@ -296,7 +297,7 @@ fn union<'a>(bindings: &[BindingLock<'a>]) -> Result<Union<'a>, LockError> {
 /// resolves to the same version. Entries the build did not need may be
 /// missing.
 pub fn verify(built: &Lock, bindings: &[BindingLock]) -> Result<(), LockError> {
-    for p in built.packages.iter().filter(|p| p.is_registry()) {
+    for p in built.packages.iter().filter(|p| p.is_pinned()) {
         let pinned: Vec<(&str, &Package, &Lock)> = bindings
             .iter()
             .filter_map(|&(b, l)| l.find(&p.name, &p.version).map(|q| (b, q, l)))

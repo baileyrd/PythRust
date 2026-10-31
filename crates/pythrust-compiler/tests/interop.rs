@@ -108,7 +108,17 @@ fn lock_text(root: &str, versions: &[&str]) -> String {
 /// `pythrust build` of `src` as `dir/main.pyr` with each `(name, dir)`
 /// binding, then the program's output if the build succeeded.
 fn build(dir: &Path, src: &str, bindings: &[(&str, &Path)]) -> (Output, Option<Output>) {
-    let path = dir.join("main.pyr");
+    build_as(dir, "main.pyr", src, bindings)
+}
+
+/// [`build`] of the file `dir/file`.
+fn build_as(
+    dir: &Path,
+    file: &str,
+    src: &str,
+    bindings: &[(&str, &Path)],
+) -> (Output, Option<Output>) {
+    let path = dir.join(file);
     fs::write(&path, src).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_pythrust"));
     command.arg("build");
@@ -379,4 +389,49 @@ fn a_git_dependency_is_refused() {
         err,
         "pythrust: binding `a`: git dependencies are not supported yet; use a crates.io version (`g`)\n"
     );
+}
+
+/// A panic in a binding ends the program with status 1, after what the
+/// program printed before the call, and without aborting.
+#[test]
+fn a_panic_in_a_binding_keeps_earlier_output_and_exits_1() {
+    let dir = scratch("panic");
+    let src = "import probe\nprint(\"before\")\nprint(probe.boom(1))\nprint(\"after\")\n";
+    let (built, ran) = build(&dir, src, &[("probe", &probe())]);
+    let Some(ran) = ran else {
+        panic!("build failed:\n{}", text(&built.stderr));
+    };
+    assert_eq!(ran.status.code(), Some(1), "{ran:?}");
+    assert_eq!(text(&ran.stdout), "before\n");
+    let err = text(&ran.stderr);
+    assert!(err.contains("boom 1"), "{err}");
+    assert!(!err.contains("cannot unwind"), "{err}");
+}
+
+/// A binding's own output comes where the call is in the program.
+#[test]
+fn a_bindings_output_keeps_program_order() {
+    let dir = scratch("order");
+    let src = "import probe\nprint(\"a\")\nx = probe.say(1)\nprint(\"c\", x)\n";
+    let out = stdout(build(&dir, src, &[("probe", &probe())]));
+    assert_eq!(out, "a\nrust says 1\nc 1\n");
+}
+
+/// `a.pyr` and `a.b.pyr` in one directory get their own generated crates.
+#[test]
+fn programs_named_alike_build_apart() {
+    let dir = scratch("alike");
+    let probe = probe();
+    let a = "import probe\nprint(probe.double(1))\n";
+    let ab = "import probe\nprint(probe.double(2))\n";
+    assert_eq!(
+        stdout(build_as(&dir, "a.pyr", a, &[("probe", &probe)])),
+        "2\n"
+    );
+    assert_eq!(
+        stdout(build_as(&dir, "a.b.pyr", ab, &[("probe", &probe)])),
+        "4\n"
+    );
+    assert!(dir.join(".pythrust/a/lib.rs").is_file());
+    assert!(dir.join(".pythrust/a.b/lib.rs").is_file());
 }

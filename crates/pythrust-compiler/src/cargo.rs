@@ -14,6 +14,9 @@ use pythrust_compiler::interop::lock::{self, Lock};
 
 use crate::Runtime;
 
+/// The oldest Rust that builds `pythrust-rt`: its `rust-version`.
+const MIN_RUST: &str = "1.88";
+
 /// Where the runtime's source is, for an installed `pythrust`.
 const RT_SRC_ENV: &str = "PYTHRUST_RT_SRC";
 
@@ -169,10 +172,17 @@ fn read_lock(path: &Path) -> Result<Lock, String> {
     lock::parse(&text).map_err(|e| format!("pythrust: {}: {e}\n", path.display()))
 }
 
-/// `.pythrust/<stem>/` beside the executable `out`, created if missing.
+/// `.pythrust/<name>/` beside the executable `out`, named by its file
+/// name without the host's executable extension, which no other
+/// program's output in that directory shares (`a.pyr` builds `a`,
+/// `a.b.pyr` builds `a.b`, or `a.exe` and `a.b.exe`), created if missing.
 fn crate_dir(out: &Path) -> Result<PathBuf, String> {
-    let stem = out.file_stem().unwrap_or_default();
-    let dir = crate::output_dir(out).join(".pythrust").join(stem);
+    let name = match std::env::consts::EXE_EXTENSION {
+        "" => out.file_name(),
+        _ => out.file_stem(),
+    }
+    .unwrap_or_default();
+    let dir = crate::output_dir(out).join(".pythrust").join(name);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("pythrust: cannot create {}: {e}\n", dir.display()))?;
     Ok(dir)
@@ -231,7 +241,7 @@ fn host() -> String {
 fn run(mut command: Command) -> Result<Output, String> {
     command.output().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => {
-            "pythrust: building Rust bindings needs cargo (Rust 1.87 or later), which is not installed\n".to_string()
+            format!("pythrust: building Rust bindings needs cargo (Rust {MIN_RUST} or later), which is not installed\n")
         }
         _ => format!("pythrust: cannot run cargo: {e}\n"),
     })
@@ -296,6 +306,12 @@ mod tests {
         let windows = "  --> C:\\x\\.pythrust\\p\\lib.rs:12:9\n";
         assert_eq!(shim_line(windows), Some(12));
         assert_eq!(failed_crate("error: failed to download"), None);
+    }
+
+    #[test]
+    fn the_named_minimum_is_the_runtimes_rust_version() {
+        let manifest = include_str!("../../pythrust-rt/Cargo.toml");
+        assert!(manifest.contains(&format!("\nrust-version = \"{MIN_RUST}\"\n")));
     }
 
     #[test]
