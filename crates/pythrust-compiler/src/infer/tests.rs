@@ -2189,6 +2189,32 @@ fn a_bool_key_fits_an_int_key_in_displays_and_generic_helpers() {
     assert_eq!(src_err(index), "no error");
     let unused = "d = {}\nprint(d.get(True))\n";
     assert_eq!(src_err(unused), "no error");
+    let probe = "def f(d, k):\n    return d.get(k)\nprint(f({1: 2}, True), f({\"a\": 1}, \"a\"))\n";
+    assert_eq!(src_err(probe), "no error");
+    let generic = "def f(d, k):\n    return d[k]\nprint(f({1: 2}, True), f({\"a\": 1}, \"a\"))\n";
+    assert_eq!(src_err(generic), "no error");
+    let bare = "def f(d: dict, k):\n    return d[k]\nprint(f({1: 2}, True))\n";
+    assert_eq!(src_err(bare), "no error");
+    let typed = "def f(d: dict[int, int], k):\n    return d[k]\nprint(f({1: 2}, \"a\"))\n";
+    assert!(src_err(typed).contains("dict key"), "{}", src_err(typed));
     let wrong = "d: dict[str, int] = {True: 7}\n";
     assert!(src_err(wrong).contains("dict key"), "{}", src_err(wrong));
+}
+
+#[test]
+fn a_view_inside_a_compared_value_is_refused() {
+    let why = "dict_keys[int] cannot be compared";
+    for cmp in [
+        "[v] == [v]",
+        "(v, 1) != (v, 1)",
+        "{1: v} == {1: v}",
+        "[v] in [[v]]",
+    ] {
+        let src = format!("v = {{1: 2}}.keys()\nprint({cmp})\n");
+        assert!(src_err(&src).contains(why), "{cmp}: {}", src_err(&src));
+    }
+    let later = "xs = []\nprint(xs == xs)\nxs.append({1: 2}.keys())\n";
+    assert!(src_err(later).contains(why), "{}", src_err(later));
+    let fine = "print([[1]] == [[1]], ({1: 2}, 1) == ({1: 2}, 1), [1] in [[1]])\n";
+    assert_eq!(src_err(fine), "no error");
 }

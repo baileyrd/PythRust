@@ -58,6 +58,8 @@ pub(super) enum Need {
     /// A dict key or set element type: `int`, `str`, `bool`, `None`, or
     /// a tuple or optional of them.
     Hashable(Type),
+    /// `==` on a value of this type: no dict view inside it.
+    Comparable(Type),
     /// `index` is a key of a dict keyed by `key` (`d.get(index)`).
     Key {
         key: Type,
@@ -213,6 +215,7 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             elems: elems.iter().map(r).collect(),
         },
         Need::Hashable(t) => Need::Hashable(r(t)),
+        Need::Comparable(t) => Need::Comparable(r(t)),
         Need::Key { key, index } => Need::Key {
             key: r(key),
             index: r(index),
@@ -247,7 +250,9 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Binary(b) => vec![&b.left, &b.right, &b.out],
         Need::Negate { operand, out } => vec![operand, out],
         Need::Equal { left, right } | Need::Order { left, right } => vec![left, right],
-        Need::Len(t) | Need::Hashable(t) | Need::ToNumber { arg: t, .. } => vec![t],
+        Need::Len(t) | Need::Hashable(t) | Need::Comparable(t) | Need::ToNumber { arg: t, .. } => {
+            vec![t]
+        }
         Need::OrNone { value, out } => vec![value, out],
         Need::Probe { container, item } => vec![container, item],
         Need::ToList { arg, elem } => vec![arg, elem],
@@ -278,6 +283,7 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         } => index_of(s, c, value, index, *literal, out, *access),
         Need::Unpack { value, elems } => unpack(s, c, value, elems),
         Need::Hashable(t) => hashable(s, c, t),
+        Need::Comparable(t) => comparable(s, c, t),
         Need::OrNone { value, out } => or_none(s, c, value, out),
         Need::Probe { container, item } => probe(s, container, item),
         Need::ToList { arg, elem } => to_list(s, c, arg, elem),
@@ -385,13 +391,6 @@ fn equal(s: &mut Subst, c: &Constraint, l: &Type, r: &Type) -> Result<Step> {
     if l.is_numeric() && r.is_numeric() {
         return Ok(Step::Done(vec![]));
     }
-    if let Some(view) = [&l, &r].into_iter().find(|t| matches!(t, Type::View(..))) {
-        let msg = format!(
-            "{} cannot be compared; compare lists instead, as in `list(d.keys())`",
-            s.zonk(view)
-        );
-        return Err(error(c, msg));
-    }
     match (&l, &r) {
         (Type::Optional(_), Type::None) | (Type::None, Type::Optional(_)) => {
             return Ok(Step::Done(vec![]))
@@ -413,7 +412,32 @@ fn equal(s: &mut Subst, c: &Constraint, l: &Type, r: &Type) -> Result<Step> {
         );
         return Err(error(c, msg));
     }
-    Ok(Step::Done(vec![]))
+    Ok(Step::Done(vec![Need::Comparable(l)]))
+}
+
+/// A view compares by identity in CPython, so a type holding one, at
+/// any depth, is not comparable; the parts are checked as they become
+/// known.
+fn comparable(s: &Subst, c: &Constraint, t: &Type) -> Result<Step> {
+    let Some(t) = known(s, t) else {
+        return Ok(Step::Waiting);
+    };
+    let parts = match t {
+        Type::View(..) => {
+            let msg = format!(
+                "{} cannot be compared; compare lists instead, as in `list(d.keys())`",
+                s.zonk(&t)
+            );
+            return Err(error(c, msg));
+        }
+        Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => vec![*inner],
+        Type::Dict(key, value) => vec![*key, *value],
+        Type::Tuple(items) => items,
+        _ => vec![],
+    };
+    Ok(Step::Done(
+        parts.into_iter().map(Need::Comparable).collect(),
+    ))
 }
 
 fn order(s: &mut Subst, c: &Constraint, l: &Type, r: &Type) -> Result<Step> {
@@ -534,12 +558,15 @@ fn index_of(
 /// The key of `d[k]` flows into the dict's key type, as an argument
 /// does into a parameter; what cannot be decided yet comes back. A
 /// `bool` key of an `int`-keyed dict is the int it equals, as in Python
-/// (`d[True]` is `d[1]`), so a `bool` index waits for an unknown key
-/// type rather than fixing it to `bool`.
+/// (`d[True]` is `d[1]`), so while either side could still be that
+/// pair the key waits rather than unifying the two (`def f(d, k):
+/// return d[k]` serves `f({1: 2}, True)`).
 fn dict_key(s: &mut Subst, c: &Constraint, key: &Type, index: &Type) -> Result<Step> {
     match (s.resolve(key), s.resolve(index)) {
         (Type::Int, Type::Bool) => return Ok(Step::Done(vec![])),
-        (Type::Var(_), Type::Bool) => return Ok(Step::Waiting),
+        (Type::Var(_), Type::Bool | Type::Var(_)) | (Type::Int, Type::Var(_)) => {
+            return Ok(Step::Waiting)
+        }
         _ => {}
     }
     match s.assign(key, index) {
