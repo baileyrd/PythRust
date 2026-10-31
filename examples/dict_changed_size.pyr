@@ -1,0 +1,10 @@
+# expect-exit: 1
+# Assigning to an existing key while a for loop runs over the dict is legal; adding a key stops the program with a RuntimeError.
+d = {1: "a", 2: "b"}
+for k in d:
+    d[k] = d[k] + "!"
+print(d)
+for k in d:
+    print(k)
+    d[k + 10] = "new"
+print("not reached")

@@ -872,6 +872,7 @@ impl<'a> Parser<'a> {
             TokenKind::None => ExprKind::None,
             TokenKind::LParen => return self.paren(),
             TokenKind::LBracket => return self.list(),
+            TokenKind::LBrace => return self.braces(),
             _ => return Err(self.unexpected("an expression")),
         };
         self.bump();
@@ -911,6 +912,49 @@ impl<'a> Parser<'a> {
             kind: ExprKind::List(items),
             span: self.span_from(start),
         })
+    }
+
+    /// `'{' '}'` (an empty dict), a dict display `{k: v, ...}` or a set
+    /// display `{a, ...}`; the first item decides which, as in Python.
+    fn braces(&mut self) -> Result<Expr> {
+        let start = self.bump().span;
+        let kind = if self.at(&TokenKind::RBrace) {
+            ExprKind::Dict(Vec::new())
+        } else {
+            let first = self.expr()?;
+            match self.at(&TokenKind::Colon) {
+                true => ExprKind::Dict(self.dict_items(first)?),
+                false => ExprKind::Set(self.rest_of_list(first)?),
+            }
+        };
+        self.expect(&TokenKind::RBrace)?;
+        Ok(Expr {
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `':' expr (',' expr ':' expr)* [',']`, after the first key.
+    fn dict_items(&mut self, first: Expr) -> Result<Vec<(Expr, Expr)>> {
+        let mut key = first;
+        let mut items = Vec::new();
+        loop {
+            self.expect(&TokenKind::Colon)?;
+            items.push((key, self.expr()?));
+            if !self.eat(&TokenKind::Comma) || !starts_expr(self.peek()) {
+                return Ok(items);
+            }
+            key = self.expr()?;
+        }
+    }
+
+    /// `(',' expr)* [',']`, after the first item.
+    fn rest_of_list(&mut self, first: Expr) -> Result<Vec<Expr>> {
+        let mut items = vec![first];
+        while self.eat(&TokenKind::Comma) && starts_expr(self.peek()) {
+            items.push(self.expr()?);
+        }
+        Ok(items)
     }
 }
 
@@ -1085,6 +1129,7 @@ fn starts_expr(kind: &TokenKind) -> bool {
             | TokenKind::None
             | TokenKind::LParen
             | TokenKind::LBracket
+            | TokenKind::LBrace
             | TokenKind::Minus
             | TokenKind::Plus
             | TokenKind::Not
@@ -1116,6 +1161,8 @@ fn expr_noun(kind: &ExprKind) -> &'static str {
         | ExprKind::None => "a literal",
         ExprKind::Tuple(_) => "an empty tuple",
         ExprKind::List(_) => "a list",
+        ExprKind::Dict(_) => "a dict display",
+        ExprKind::Set(_) => "a set display",
         ExprKind::Call { .. } => "a function call",
         ExprKind::IfExp { .. } => "a conditional expression",
         ExprKind::Compare { .. } => "a comparison",
@@ -1186,6 +1233,8 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::RParen => ")",
         TokenKind::LBracket => "[",
         TokenKind::RBracket => "]",
+        TokenKind::LBrace => "{",
+        TokenKind::RBrace => "}",
         TokenKind::Comma => ",",
         TokenKind::Colon => ":",
         TokenKind::Dot => ".",

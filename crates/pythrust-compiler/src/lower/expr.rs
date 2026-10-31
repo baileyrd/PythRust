@@ -26,6 +26,8 @@ impl<'a> FnBuilder<'_, 'a> {
             ExprKind::Float(f) => Ok(Operand::Float(*f)),
             ExprKind::Str(text) => Ok(self.temp(Ty::Str, Rvalue::StrLit(text.clone()), e.span)),
             ExprKind::Tuple(items) | ExprKind::List(items) => self.display(items, e.span),
+            ExprKind::Dict(_) => Err(unsupported(e.span, "dicts")),
+            ExprKind::Set(_) => Err(unsupported(e.span, "sets")),
             ExprKind::Subscript { value, index } => self.subscript(value, index, e.span),
             ExprKind::Attr { .. } => Err(unsupported(e.span, "attributes other than methods")),
         }

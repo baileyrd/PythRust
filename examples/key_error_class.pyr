@@ -1,0 +1,12 @@
+# expect-exit: 1
+# KeyError is a LookupError; its message is its argument's repr, as in Python.
+try:
+    raise KeyError("k")
+except LookupError as e:
+    print("caught", e)
+try:
+    raise KeyError(7)
+except (IndexError, KeyError) as e:
+    print("tuple", e)
+print(KeyError(), str(KeyError("s")), ValueError(KeyError("inner")))
+raise KeyError(ValueError("v"))

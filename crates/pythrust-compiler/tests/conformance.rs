@@ -379,6 +379,7 @@ const NATIVE: &[&str] = &[
     "int_control",
     "int_parse_overflow",
     "int_pow_negative",
+    "key_error_class",
     "keyword_args",
     "aliasing",
     "list_copy",

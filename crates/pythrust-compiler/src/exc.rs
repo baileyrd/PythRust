@@ -4,7 +4,7 @@
 //! ```text
 //! Exception
 //! ├── ArithmeticError: OverflowError, ZeroDivisionError
-//! ├── LookupError: IndexError
+//! ├── LookupError: IndexError, KeyError
 //! ├── RuntimeError: RecursionError
 //! └── ValueError
 //! ```
@@ -24,10 +24,11 @@ pub enum ExcKind {
     Lookup,
     Runtime,
     Exception,
+    Key,
 }
 
 impl ExcKind {
-    pub const ALL: [ExcKind; 9] = [
+    pub const ALL: [ExcKind; 10] = [
         ExcKind::Value,
         ExcKind::Index,
         ExcKind::ZeroDivision,
@@ -37,6 +38,7 @@ impl ExcKind {
         ExcKind::Lookup,
         ExcKind::Runtime,
         ExcKind::Exception,
+        ExcKind::Key,
     ];
 
     /// The builtin exception class named `name`.
@@ -55,6 +57,7 @@ impl ExcKind {
             ExcKind::Lookup => "LookupError",
             ExcKind::Runtime => "RuntimeError",
             ExcKind::Exception => "Exception",
+            ExcKind::Key => "KeyError",
         }
     }
 
@@ -63,7 +66,7 @@ impl ExcKind {
         match self {
             ExcKind::Exception => None,
             ExcKind::ZeroDivision | ExcKind::Overflow => Some(ExcKind::Arithmetic),
-            ExcKind::Index => Some(ExcKind::Lookup),
+            ExcKind::Index | ExcKind::Key => Some(ExcKind::Lookup),
             ExcKind::Recursion => Some(ExcKind::Runtime),
             ExcKind::Value | ExcKind::Arithmetic | ExcKind::Lookup | ExcKind::Runtime => {
                 Some(ExcKind::Exception)
@@ -121,6 +124,8 @@ mod tests {
         assert!(ExcKind::ZeroDivision.is_a(ExcKind::Arithmetic));
         assert!(ExcKind::Overflow.is_a(ExcKind::Arithmetic));
         assert!(ExcKind::Index.is_a(ExcKind::Lookup));
+        assert!(ExcKind::Key.is_a(ExcKind::Lookup));
+        assert!(!ExcKind::Key.is_a(ExcKind::Index));
         assert!(ExcKind::Recursion.is_a(ExcKind::Runtime));
         assert!(!ExcKind::Value.is_a(ExcKind::Arithmetic));
         assert!(!ExcKind::Arithmetic.is_a(ExcKind::ZeroDivision));

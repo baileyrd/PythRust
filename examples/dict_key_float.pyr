@@ -1,0 +1,6 @@
+# deviation: float dict keys and set elements are not supported yet (nor tuples holding floats); CPython accepts them.
+# expect-exit: 1
+# expect-error: float dict keys and set elements are not supported yet
+print("before")
+prices = {1.5: "a"}
+print(prices)

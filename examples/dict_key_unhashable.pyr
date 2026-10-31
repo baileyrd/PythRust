@@ -1,0 +1,5 @@
+# deviation: an unhashable key is a compile error, so nothing runs; CPython prints, then raises TypeError.
+# expect-exit: 1
+# expect-error: unhashable type: list[int]
+print("before")
+d = {[1]: 2}

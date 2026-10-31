@@ -7,10 +7,13 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use super::builtins::Builtin;
+use super::methods::Method;
 use super::rt_err;
+use super::table::{Key, Table, TableRef};
 use crate::ast::{CmpOp, FuncDef};
 use crate::diag::Result;
 use crate::exc::ExcKind;
+use crate::infer::View;
 use crate::span::Span;
 
 /// A shared, mutable list. Python lists alias, so lists are reference counted.
@@ -26,12 +29,19 @@ pub(super) enum Value<'m> {
     Float(f64),
     Str(Rc<str>),
     List(ListRef<'m>),
+    /// A dict: its table maps keys to values.
+    Dict(TableRef<'m>),
+    /// A set: its table maps elements to `None`.
+    Set(TableRef<'m>),
     Tuple(Rc<[Value<'m>]>),
+    /// `d.keys()`, `d.values()` or `d.items()`: a snapshot of the dict's
+    /// keys, values or pairs when it was made (grammar.md, Deviations).
+    View(View, Rc<[Value<'m>]>),
     Range(Range),
     Func(Rc<Func<'m>>),
     Builtin(Builtin),
-    /// `xs.append`, bound to its list.
-    Append(ListRef<'m>),
+    /// A method bound to its receiver: `xs.append`, `d.get`.
+    Method(Rc<Method<'m>>),
     Exc(Rc<Exc<'m>>),
 }
 
@@ -46,12 +56,14 @@ impl Exc<'_> {
     /// `str(e)`: the argument as a string, or empty without one. An
     /// exception argument gives its own message (`str(ValueError(inner))`
     /// is `str(inner)`), followed in a loop so deep chains cannot
-    /// exhaust the stack.
+    /// exhaust the stack. A `KeyError`'s message is its argument's
+    /// `repr`, as in Python (`KeyError: 'k'`).
     pub fn message(&self, span: Span) -> Result<String> {
         let mut exc = self;
         loop {
             match &exc.arg {
                 None => return Ok(String::new()),
+                Some(v) if exc.kind == ExcKind::Key => return v.repr(span),
                 Some(Value::Exc(inner)) => exc = inner,
                 Some(v) => return v.to_str(span),
             }
@@ -103,6 +115,14 @@ impl<'m> Value<'m> {
         Value::List(Rc::new(RefCell::new(items)))
     }
 
+    pub fn dict(table: Table<'m>) -> Self {
+        Value::Dict(Table::new_ref(table))
+    }
+
+    pub fn set(table: Table<'m>) -> Self {
+        Value::Set(Table::new_ref(table))
+    }
+
     pub fn num(&self) -> Option<Num> {
         match self {
             Value::Bool(b) => Some(Num::Int(i64::from(*b))),
@@ -128,9 +148,10 @@ impl<'m> Value<'m> {
             Value::Float(f) => *f != 0.0,
             Value::Str(s) => !s.is_empty(),
             Value::List(l) => !l.borrow().is_empty(),
-            Value::Tuple(t) => !t.is_empty(),
+            Value::Dict(t) | Value::Set(t) => !t.borrow().is_empty(),
+            Value::Tuple(t) | Value::View(_, t) => !t.is_empty(),
             Value::Range(r) => r.len() != 0,
-            Value::Func(_) | Value::Builtin(_) | Value::Append(_) | Value::Exc(_) => true,
+            Value::Func(_) | Value::Builtin(_) | Value::Method(_) | Value::Exc(_) => true,
         }
     }
 
@@ -143,11 +164,14 @@ impl<'m> Value<'m> {
             Value::Float(_) => "float",
             Value::Str(_) => "str",
             Value::List(_) => "list",
+            Value::Dict(_) => "dict",
+            Value::Set(_) => "set",
             Value::Tuple(_) => "tuple",
+            Value::View(view, _) => view.name(),
             Value::Range(_) => "range",
             Value::Func(_) => "function",
             Value::Builtin(b) if b.exception().is_some() => "type",
-            Value::Builtin(_) | Value::Append(_) => "builtin_function_or_method",
+            Value::Builtin(_) | Value::Method(_) => "builtin_function_or_method",
             Value::Exc(e) => e.kind.name(),
         }
     }
@@ -171,10 +195,18 @@ impl<'m> Value<'m> {
 
     /// Iterates a value as `for` and unpacking do. A list is read by index
     /// on every step, so appending while iterating behaves as in Python.
+    /// A dict yields its keys, a set its elements, in insertion order.
     pub fn iter(&self, span: Span) -> Result<Iter<'m>> {
         match self {
             Value::List(l) => Ok(Iter::List(Rc::clone(l), 0)),
-            Value::Tuple(t) => Ok(Iter::Tuple(Rc::clone(t), 0)),
+            Value::Dict(t) | Value::Set(t) => Ok(Iter::Table(TableIter {
+                table: Rc::clone(t),
+                is_set: matches!(self, Value::Set(_)),
+                next: 0,
+                len: t.borrow().len(),
+                changed: false,
+            })),
+            Value::Tuple(t) | Value::View(_, t) => Ok(Iter::Tuple(Rc::clone(t), 0)),
             Value::Str(s) => Ok(Iter::Chars(s.chars().collect(), 0)),
             Value::Range(r) => Ok(Iter::Range(*r, Some(r.start))),
             other => Err(rt_err(
@@ -229,6 +261,30 @@ pub(super) enum Iter<'m> {
     Chars(Vec<char>, usize),
     /// The next value, or `None` once the range is exhausted.
     Range(Range, Option<i64>),
+    Table(TableIter<'m>),
+}
+
+/// Iteration over a dict's keys or a set's elements. A table whose size
+/// changes stops the iteration and sets `changed`: Python raises a
+/// `RuntimeError` at that step, which the caller reports.
+pub(super) struct TableIter<'m> {
+    table: TableRef<'m>,
+    is_set: bool,
+    next: usize,
+    len: usize,
+    changed: bool,
+}
+
+impl Iter<'_> {
+    /// Python's message when the dict or set being iterated changed
+    /// size, which ended the iteration.
+    pub fn changed_size(&self) -> Option<&'static str> {
+        match self {
+            Iter::Table(t) if t.changed && t.is_set => Some("Set changed size during iteration"),
+            Iter::Table(t) if t.changed => Some("dictionary changed size during iteration"),
+            _ => None,
+        }
+    }
 }
 
 impl<'m> Iterator for Iter<'m> {
@@ -255,6 +311,16 @@ impl<'m> Iterator for Iter<'m> {
                 let v = (*next).filter(|v| r.in_bounds(*v))?;
                 *next = v.checked_add(r.step);
                 Some(Value::Int(v))
+            }
+            Iter::Table(t) => {
+                let table = t.table.borrow();
+                if table.len() != t.len {
+                    t.changed = true;
+                    return None;
+                }
+                let (k, _) = table.entry(t.next)?;
+                t.next += 1;
+                Some(k.clone())
             }
         }
     }
@@ -285,10 +351,16 @@ fn eq_at<'m>(a: &Value<'m>, b: &Value<'m>, depth: usize, span: Span) -> Result<b
         }
         (Value::Tuple(x), Value::Tuple(y)) if Rc::ptr_eq(x, y) => true,
         (Value::Tuple(x), Value::Tuple(y)) => seq_eq(x, y, deeper(depth, span)?, span)?,
+        (Value::Dict(x), Value::Dict(y)) | (Value::Set(x), Value::Set(y)) if Rc::ptr_eq(x, y) => {
+            true
+        }
+        (Value::Dict(x), Value::Dict(y)) | (Value::Set(x), Value::Set(y)) => {
+            table_eq(&x.borrow(), &y.borrow(), deeper(depth, span)?, span)?
+        }
         (Value::Range(x), Value::Range(y)) => x.same_sequence(y),
         (Value::Func(x), Value::Func(y)) => Rc::ptr_eq(x, y),
         (Value::Builtin(x), Value::Builtin(y)) => x == y,
-        (Value::Append(x), Value::Append(y)) => Rc::ptr_eq(x, y),
+        (Value::Method(x), Value::Method(y)) => x.same(y),
         (Value::Exc(x), Value::Exc(y)) => Rc::ptr_eq(x, y),
         _ => false,
     })
@@ -380,6 +452,23 @@ fn seq_order<'m>(
     Ok(Some(a.len().cmp(&b.len())))
 }
 
+/// Same keys, each with equal values, in any order. Sets hold `None`
+/// values, so this is set equality too.
+fn table_eq<'m>(a: &Table<'m>, b: &Table<'m>, depth: usize, span: Span) -> Result<bool> {
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    for (k, v) in a.entries() {
+        let Some(w) = b.get(&Key::of(k, span)?) else {
+            return Ok(false);
+        };
+        if !eq_at(v, w, depth, span)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn seq_eq<'m>(a: &[Value<'m>], b: &[Value<'m>], depth: usize, span: Span) -> Result<bool> {
     if a.len() != b.len() {
         return Ok(false);
@@ -414,7 +503,8 @@ impl Num {
 fn contains<'m>(container: &Value<'m>, item: &Value<'m>, span: Span) -> Result<bool> {
     match (container, item) {
         (Value::List(l), _) => any_eq(&l.borrow(), item, span),
-        (Value::Tuple(t), _) => any_eq(t, item, span),
+        (Value::Dict(t) | Value::Set(t), _) => Ok(t.borrow().contains(&Key::of(item, span)?)),
+        (Value::Tuple(t) | Value::View(_, t), _) => any_eq(t, item, span),
         (Value::Str(s), Value::Str(sub)) => Ok(s.contains(&**sub)),
         (Value::Str(_), _) => Err(rt_err(
             span,
@@ -491,6 +581,15 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
             let close = if t.len() == 1 { ",)" } else { ")" };
             return write_items(t, id, ("(", close), active, out, span);
         }
+        Value::Dict(t) | Value::Set(t) => return write_table(v, t, active, out, span),
+        Value::View(view, items) => {
+            out.push_str(view.name());
+            out.push('(');
+            let id = Rc::as_ptr(items).cast::<()>();
+            write_items(items, id, ("[", "]"), active, out, span)?;
+            out.push(')');
+            return Ok(());
+        }
         Value::Exc(e) => {
             enter_repr(active, Rc::as_ptr(e).cast::<()>(), span)?;
             out.push_str(e.kind.name());
@@ -513,7 +612,11 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
         Value::Func(f) => format!("<function {}>", f.def.name.name),
         Value::Builtin(b) if b.exception().is_some() => format!("<class '{}'>", b.name()),
         Value::Builtin(b) => format!("<built-in function {}>", b.name()),
-        Value::Append(_) => "<built-in method append of list object>".to_string(),
+        Value::Method(m) => format!(
+            "<built-in method {} of {} object>",
+            m.name().as_str(),
+            m.owner()
+        ),
     };
     out.push_str(&text);
     Ok(())
@@ -530,6 +633,43 @@ fn enter_repr(active: &mut Vec<*const ()>, id: *const (), span: Span) -> Result<
         ));
     }
     active.push(id);
+    Ok(())
+}
+
+/// `{k: v, ...}` for a dict, `{a, ...}` for a set, `set()` for an empty
+/// set. A dict that contains itself renders as `{...}`, as in Python.
+fn write_table(
+    v: &Value,
+    t: &TableRef,
+    active: &mut Vec<*const ()>,
+    out: &mut String,
+    span: Span,
+) -> Result<()> {
+    let id = Rc::as_ptr(t).cast::<()>();
+    if active.contains(&id) {
+        out.push_str("{...}");
+        return Ok(());
+    }
+    let table = t.borrow();
+    let is_set = matches!(v, Value::Set(_));
+    if is_set && table.is_empty() {
+        out.push_str("set()");
+        return Ok(());
+    }
+    enter_repr(active, id, span)?;
+    out.push('{');
+    for (i, (k, value)) in table.entries().iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_repr(k, active, out, span)?;
+        if !is_set {
+            out.push_str(": ");
+            write_repr(value, active, out, span)?;
+        }
+    }
+    out.push('}');
+    active.pop();
     Ok(())
 }
 

@@ -1410,3 +1410,164 @@ fn list_copy_composes_with_exceptions() {
     let err = err.expect("list() of a non-list is a fault");
     assert!(err.message.starts_with("TypeError"), "{}", err.message);
 }
+
+// ---- dicts and sets (M6) ------------------------------------------------
+
+/// Runs source `src` without type checking: stdout, then the error
+/// message if it failed.
+fn run_src(src: &str) -> (String, Option<String>) {
+    let tokens = crate::lexer::lex(src).expect("lexes");
+    let parsed = crate::parser::parse(&tokens).expect("parses");
+    let mut out = Vec::new();
+    let result = run(&parsed, &mut out);
+    let out = String::from_utf8(out).expect("utf-8 output");
+    (out, result.err().map(|d| d.message))
+}
+
+fn src_ok(src: &str) -> String {
+    let (out, err) = run_src(src);
+    assert_eq!(err, None, "output so far: {out}");
+    out
+}
+
+fn src_fails(src: &str) -> String {
+    run_src(src)
+        .1
+        .unwrap_or_else(|| panic!("{src:?} should fail"))
+}
+
+#[test]
+fn dicts_keep_insertion_order_and_first_keys() {
+    let out = src_ok("d = {2: 'b', 1: 'a'}\nd[2] = 'B'\nd[3] = 'c'\nd[True] = 'one'\nprint(d)\n");
+    assert_eq!(out, "{2: 'B', 1: 'one', 3: 'c'}\n");
+    let out = src_ok("print({(1, 'a'): None, (1, True): 0}, {}, set(), {None})\n");
+    assert_eq!(out, "{(1, 'a'): None, (1, True): 0} {} set() {None}\n");
+}
+
+#[test]
+fn dict_and_set_equality_ignores_order() {
+    let out = src_ok("print({1: 2, 3: 4} == {3: 4, 1: 2}, {1: 2} == {1: 3}, {1, 2} == {2, 1})\n");
+    assert_eq!(out, "True False True\n");
+    let out = src_ok("print({1: [2]} == {1: [2]}, {1: 2} == {1: 2, 3: 4}, {1} == {2})\n");
+    assert_eq!(out, "True False False\n");
+}
+
+#[test]
+fn a_dict_holding_itself_prints_as_python_does() {
+    let out = src_ok("d = {1: []}\nd[1].append(d)\nprint(d)\n");
+    assert_eq!(out, "{1: [{...}]}\n");
+}
+
+#[test]
+fn methods_bind_to_their_receiver() {
+    let out = src_ok("d = {1: 2}\ns = {1}\nprint(d.get, s.add, [].append)\n");
+    assert_eq!(
+        out,
+        "<built-in method get of dict object> <built-in method add of set object> \
+         <built-in method append of list object>\n"
+    );
+    let out =
+        src_ok("d = {1: 2}\ng = d.get\nprint(g(1), g(5), g(5, 0), d.get == g, d.get == {}.get)\n");
+    assert_eq!(out, "2 None 0 True False\n");
+}
+
+#[test]
+fn a_missing_key_raises_a_key_error_holding_the_key() {
+    let out = src_ok("try:\n    {}[('a', 1)]\nexcept KeyError as e:\n    print(e)\n");
+    assert_eq!(out, "('a', 1)\n");
+    assert_eq!(src_fails("d = {'a': 1}\nd['b']\n"), "KeyError: 'b'");
+    assert_eq!(src_fails("raise KeyError()\n"), "KeyError");
+    assert_eq!(src_fails("raise KeyError('')\n"), "KeyError: ''");
+}
+
+#[test]
+fn growing_a_table_while_iterating_is_fatal() {
+    let src = "d = {1: 1}\ntry:\n    for k in d:\n        d[k + 1] = 0\nexcept Exception:\n    print('caught')\n";
+    assert_eq!(
+        src_fails(src),
+        "RuntimeError: dictionary changed size during iteration"
+    );
+    let src = "s = {1}\nfor k in s:\n    s.add(k + 1)\nelse:\n    print('else')\n";
+    assert_eq!(
+        src_fails(src),
+        "RuntimeError: Set changed size during iteration"
+    );
+    let out = src_ok("d = {1: 1}\nfor k in d:\n    d[k] = 5\nprint(d)\n");
+    assert_eq!(out, "{1: 5}\n");
+}
+
+#[test]
+fn unhashable_keys_and_bad_method_calls_are_type_errors() {
+    assert_eq!(
+        src_fails("d = {[1]: 2}\n"),
+        "TypeError: unhashable type: 'list'"
+    );
+    assert_eq!(
+        src_fails("print(1.5 in {1})\n"),
+        "TypeError: unhashable type: 'float'"
+    );
+    assert_eq!(
+        src_fails("set().add(1, 2)\n"),
+        "TypeError: add() takes exactly one argument (2 given)"
+    );
+    assert_eq!(
+        src_fails("{}.get()\n"),
+        "TypeError: get expected at least 1 argument, got 0"
+    );
+    assert_eq!(
+        src_fails("{}.get(1, 2, 3)\n"),
+        "TypeError: get expected at most 2 arguments, got 3"
+    );
+    assert_eq!(
+        src_fails("{}.keys(1)\n"),
+        "TypeError: keys() takes no arguments (1 given)"
+    );
+    assert_eq!(
+        src_fails("{1}.get(1)\n"),
+        "AttributeError: 'set' object has no attribute 'get'"
+    );
+    assert_eq!(
+        src_fails("{1}[0]\n"),
+        "TypeError: 'set' object is not subscriptable"
+    );
+    assert_eq!(
+        src_fails("s = {1}\ns[0] = 1\n"),
+        "TypeError: 'set' object does not support item assignment"
+    );
+}
+
+#[test]
+fn views_are_snapshots_and_set_copies_an_iterable() {
+    let out = src_ok(
+        "d = {'a': 1, 'b': 2}\nks = d.keys()\nd['c'] = 3\nprint(ks, d.values(), d.items())\n",
+    );
+    assert_eq!(
+        out,
+        "dict_keys(['a', 'b']) dict_values([1, 2, 3]) dict_items([('a', 1), ('b', 2), ('c', 3)])\n"
+    );
+    let out =
+        src_ok("v = {1: 'x'}.items()\nprint(len(v), (1, 'x') in v, list(v), bool({}.keys()))\n");
+    assert_eq!(out, "1 True [(1, 'x')] False\n");
+    let out = src_ok("print(set('abca'), set([3, 1, 3]), set({2: 0, 1: 0}), len(set(range(5))))\n");
+    assert_eq!(out, "{'a', 'b', 'c'} {3, 1} {2, 1} 5\n");
+    let out = src_ok("a, b = {'x': 1, 'y': 2}\nprint(a, b, bool({}), bool({0}))\n");
+    assert_eq!(out, "x y False True\n");
+}
+
+#[test]
+fn sorted_is_stable_and_uses_less_than() {
+    let out = src_ok("print(sorted([(1, 'b'), (0, 'z'), (1, 'a')]), sorted('cba'), sorted({3: 0, 1: 0}), sorted([]))\n");
+    assert_eq!(
+        out,
+        "[(0, 'z'), (1, 'a'), (1, 'b')] ['a', 'b', 'c'] [1, 3] []\n"
+    );
+    let out = src_ok("xs = [3, 1, 2]\nys = sorted(xs)\nprint(xs, ys, sorted([1.5, True, 0]))\n");
+    assert_eq!(out, "[3, 1, 2] [1, 2, 3] [0, True, 1.5]\n");
+    assert!(src_fails("sorted([1, 'a'])\n").starts_with("TypeError: '<' not supported"));
+}
+
+#[test]
+fn a_bool_key_is_the_int_it_equals() {
+    let out = src_ok("d = {1: 'one'}\nd[True] = 'true'\nprint(d, d[True], d.get(True), True in {1}, 0 in {False})\n");
+    assert_eq!(out, "{1: 'true'} true true True True\n");
+}

@@ -706,8 +706,11 @@ fn annotation_shapes_are_checked() {
     let bad = b.ty("list", vec![b.ty("int", vec![]), b.ty("str", vec![])]);
     let msg = err(vec![b.ann("xs", bad, b.list(vec![]))]);
     assert_eq!(msg, "`list` takes one type argument");
-    let msg = err(vec![b.ann("x", b.ty("dict", vec![]), b.i(1))]);
-    assert_eq!(msg, "unknown type `dict`");
+    let msg = err(vec![b.ann("x", b.ty("frozenset", vec![]), b.i(1))]);
+    assert_eq!(msg, "unknown type `frozenset`");
+    let bad = b.ty("dict", vec![b.ty("int", vec![])]);
+    let msg = err(vec![b.ann("x", bad, b.i(1))]);
+    assert!(msg.starts_with("`dict` takes two type arguments"), "{msg}");
     let msg = err(vec![b.ann("x", b.ty("tuple", vec![]), b.i(1))]);
     assert!(msg.starts_with("`tuple` needs its element types"), "{msg}");
 }
@@ -850,7 +853,7 @@ fn builtin_misuse_is_an_error() {
         ),
         (
             b.call("list", vec![b.s("ab")]),
-            "`list` copies a list: expected list[T0], found str",
+            "`list` copies a list, dict, set or dict view, not str",
         ),
         (
             b.call("list", vec![]),
@@ -1824,10 +1827,11 @@ fn except_names_a_builtin_exception() {
         "LookupError",
         "RuntimeError",
         "Exception",
+        "KeyError",
     ] {
         assert!(infer_src(&handler(name)).is_ok(), "{name}");
     }
-    assert!(src_err(&handler("KeyError")).starts_with("`KeyError` is not an exception"));
+    assert!(src_err(&handler("TypeError")).starts_with("`TypeError` is not an exception"));
     assert!(src_err(&handler("BaseException")).starts_with("`BaseException` is not an"));
     let shadowed = format!("Exception = 1\n{}", handler("Exception"));
     assert!(src_err(&shadowed).contains("no longer names the builtin exception"));
@@ -1841,7 +1845,9 @@ fn every_class_of_a_tuple_handler_is_a_builtin_exception() {
         |classes: &str| format!("try:\n    pass\nexcept ({classes}) as e:\n    print(e)\n");
     assert!(infer_src(&handler("ValueError, IndexError")).is_ok());
     assert!(infer_src(&handler("ValueError, ValueError")).is_ok());
-    assert!(src_err(&handler("ValueError, KeyError")).starts_with("`KeyError` is not an exception"));
+    assert!(
+        src_err(&handler("ValueError, TypeError")).starts_with("`TypeError` is not an exception")
+    );
     let shadowed = format!("IndexError = 1\n{}", handler("ValueError, IndexError"));
     assert!(src_err(&shadowed).contains("`IndexError` is redefined here"));
 }
@@ -1926,6 +1932,13 @@ fn heap_and_mutable_types_are_language_level() {
         (list.clone(), Some(true), Some(true)),
         (tuple(vec![list.clone(), Type::Int]), Some(true), Some(true)),
         (opt(list.clone()), Some(true), Some(true)),
+        (
+            Type::Dict(Box::new(Type::Str), Box::new(Type::Int)),
+            Some(true),
+            Some(true),
+        ),
+        (Type::Set(Box::new(Type::Int)), Some(true), Some(true)),
+        (opt(Type::Set(Box::new(Type::Str))), Some(true), Some(true)),
         (Type::Var(TypeVar(0)), None, None),
         (
             tuple(vec![Type::Var(TypeVar(0)), list]),
@@ -1942,4 +1955,266 @@ fn heap_and_mutable_types_are_language_level() {
         assert_eq!(ty.holds_heap(), heap, "{ty}");
         assert_eq!(ty.reaches_mutable(), mutable, "{ty}");
     }
+}
+
+// ---- dicts and sets (M6) ---------------------------------------------------
+
+/// The return type `src` infers for its function `f`.
+fn ret_of(src: &str) -> String {
+    let types = infer_src(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+    let sig = types.func("f").unwrap_or_else(|| panic!("no `f`"));
+    sig.ret.to_string()
+}
+
+#[test]
+fn dict_and_set_displays_infer_their_types() {
+    let ret = |body: &str| ret_of(&format!("def f():\n    return {body}\n"));
+    assert_eq!(ret("{\"a\": 1}"), "dict[str, int]");
+    assert_eq!(
+        ret("{(1, \"a\"): [1.5]}"),
+        "dict[tuple[int, str], list[float]]"
+    );
+    assert_eq!(ret("{1, 2}"), "set[int]");
+    assert_eq!(ret("set(\"ab\")"), "set[str]");
+    assert_eq!(ret("set(range(3))"), "set[int]");
+    assert_eq!(ret("{1: 2}.keys()"), "dict_keys[int]");
+    assert_eq!(ret("{1: \"a\"}.values()"), "dict_values[str]");
+    assert_eq!(ret("{1: \"a\"}.items()"), "dict_items[int, str]");
+    assert_eq!(ret("list({1: \"a\"}.items())"), "list[tuple[int, str]]");
+    assert_eq!(ret("list({\"k\": 1})"), "list[str]");
+    assert_eq!(ret("sorted({2, 1})"), "list[int]");
+    assert_eq!(ret("sorted({1: 2}.values())"), "list[int]");
+    assert_eq!(ret("{1: \"a\"}.get(1)"), "str | None");
+    assert_eq!(ret("{1: \"a\"}.get(1, \"z\")"), "str");
+    assert_eq!(ret("len({1: 2}) + len({3})"), "int");
+    assert_eq!(ret("2 in {1: 2}"), "bool");
+}
+
+#[test]
+fn an_empty_display_takes_its_types_from_use() {
+    let src = "def f():\n    d = {}\n    d[\"k\"] = [1]\n    return d\n";
+    assert_eq!(ret_of(src), "dict[str, list[int]]");
+    let src = "def f():\n    s = set()\n    s.add((1, None))\n    return s\n";
+    assert_eq!(ret_of(src), "set[tuple[int, None]]");
+    let src = "def f():\n    d: dict[str, int | None] = {\"a\": None}\n    return d\n";
+    assert_eq!(ret_of(src), "dict[str, int | None]");
+}
+
+#[test]
+fn get_of_an_optional_value_stays_optional() {
+    let src = "def f():\n    d: dict[int, str | None] = {}\n    return d.get(1)\n";
+    assert_eq!(ret_of(src), "str | None");
+    let src = "def f():\n    d: dict[int, None] = {}\n    return d.get(1)\n";
+    assert_eq!(ret_of(src), "None");
+}
+
+#[test]
+fn generic_functions_take_dicts() {
+    let src = "def first(d, k):\n    return d[k]\n\
+               def f():\n    return (first({1: \"a\"}, 1), first({\"x\": 2.5}, \"x\"))\n";
+    assert_eq!(ret_of(src), "tuple[str, float]");
+}
+
+#[test]
+fn keys_and_elements_must_be_hashable() {
+    let msg = |src: &str| src_err(src);
+    let kinds = "a key or element is int, str, bool, None or a tuple of them";
+    let unhashable = |t: &str| format!("unhashable type: {t}; {kinds}");
+    let later = |t: &str| format!("{t} dict keys and set elements are not supported yet; {kinds}");
+    assert_eq!(msg("d = {[1]: 2}\n"), unhashable("list[int]"));
+    assert_eq!(msg("s = {(1, [2])}\n"), unhashable("list[int]"));
+    assert_eq!(msg("s = {{1: 2}}\n"), unhashable("dict[int, int]"));
+    assert_eq!(msg("s = set([[1]])\n"), unhashable("list[int]"));
+    assert_eq!(msg("x: set[set[int]] = set()\n"), unhashable("set[int]"));
+    assert_eq!(msg("s = {{1: 2}.keys()}\n"), unhashable("dict_keys[int]"));
+    assert_eq!(msg("d = {1.5: 2}\n"), later("float"));
+    assert_eq!(msg("d = {(1, 2.5): 2}\n"), later("float"));
+    assert_eq!(msg("s = set()\ns.add(1.0)\n"), later("float"));
+    assert_eq!(msg("def f(d):\n    d[0.5] = 1\nf({})\n"), later("float"));
+    assert_eq!(msg("s = {ValueError()}\n"), later("Exception"));
+    assert_eq!(
+        msg("x: dict[int | None, tuple[str, bool]] = {}\n"),
+        "no error"
+    );
+}
+
+#[test]
+fn dict_and_set_misuse_is_an_error() {
+    let cases = [
+        ("d = {1: 2, \"a\": 3}\n", "dict keys must share one type"),
+        ("d = {1: 2, 3: \"a\"}\n", "dict values must share one type"),
+        ("s = {1, \"a\"}\n", "set elements must share one type"),
+        (
+            "d = {1: 2}\nd[\"a\"] = 3\n",
+            "dict key: expected int, found str",
+        ),
+        (
+            "d = {1: 2}\nprint(d[\"a\"])\n",
+            "dict key: expected int, found str",
+        ),
+        (
+            "d = {1: 2}\nd[1] = \"x\"\n",
+            "cannot assign str into dict[int, int]",
+        ),
+        ("s = {1}\nprint(s[0])\n", "set[int] is not subscriptable"),
+        ("s = {1}\ns[0] = 1\n", "set[int] is not subscriptable"),
+        ("d = {1: 2}\nd.add(1)\n", "`add` needs a set"),
+        ("s = {1}\ns.get(1)\n", "`get` needs a dict"),
+        ("s = [1]\ns.keys()\n", "`keys` needs a dict"),
+        (
+            "s = {1}\ns.add(\"a\")\n",
+            "added value does not match the set",
+        ),
+        (
+            "d = {1: 2}\nd.get()\n",
+            "`get` takes 1 or 2 arguments but 0 were given",
+        ),
+        (
+            "d = {1: 2}\nd.keys(1)\n",
+            "`keys` takes no arguments but 1 were given",
+        ),
+        ("s = {1}\ns.add(x=1)\n", "`add` takes no keyword arguments"),
+        (
+            "d = {1: 2}\nd.get(1, \"a\")\n",
+            "the default of `get` must match",
+        ),
+        ("d = {1: 2}\nd.pop(1)\n", "unknown method `.pop`"),
+        ("print({1: 2} < {1: 2})\n", "cannot order dict[int, int]"),
+        (
+            "print({1} == [1])\n",
+            "cannot compare set[int] with list[int]",
+        ),
+        (
+            "print({1: 2} + {3: 4})\n",
+            "unsupported operand types for +",
+        ),
+        ("x: dict[int] = {}\n", "`dict` takes two type arguments"),
+        (
+            "x: set[int, int] = set()\n",
+            "`set` takes one type argument",
+        ),
+        ("x = set(1)\n", "int is not iterable"),
+        (
+            "x = set(1, 2)\n",
+            "`set` takes 0 to 1 arguments but 2 were given",
+        ),
+        (
+            "x = {1: 2}.keys()\nprint(x == x)\n",
+            "dict_keys[int] cannot be compared",
+        ),
+        (
+            "print({1: 2}.items()[0])\n",
+            "dict_items[int, int] is not subscriptable",
+        ),
+        (
+            "a, b = {1: 2, 3: 4}.keys()\n",
+            "cannot unpack dict_keys[int]",
+        ),
+        (
+            "print({1: 2}.values() + [1])\n",
+            "unsupported operand types for +",
+        ),
+        (
+            "print(list(\"ab\"))\n",
+            "`list` copies a list, dict, set or dict view, not str",
+        ),
+        (
+            "print(sorted([{1}]))\n",
+            "cannot order set[int] against set[int]",
+        ),
+        (
+            "print(sorted([1], reverse=True))\n",
+            "`sorted` takes no keyword arguments",
+        ),
+        (
+            "d = {1: \"a\"}\nprint(d.get(\"x\"))\n",
+            "dict key: expected int, found str",
+        ),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src:?}: {got}");
+    }
+}
+
+#[test]
+fn optional_dict_and_set_literals_check_against_the_present_type() {
+    let src = "x: dict[str, int] | None = {\"a\": 1}\ny: set[int | None] | None = {None}\n";
+    assert!(infer_src(src).is_ok(), "{}", src_err(src));
+}
+
+#[test]
+fn a_dict_or_set_probe_must_be_hashable() {
+    let why = "float dict keys and set elements are not supported yet";
+    assert!(src_err("print(1.0 in {1})\n").contains(why));
+    assert!(src_err("print(1.0 not in {1: 2})\n").contains(why));
+    assert!(src_err("print(1.0 in {1: 2}.keys())\n").contains(why));
+    assert_eq!(src_err("print(1.0 in {1: 2}.values())\n"), "no error");
+    assert_eq!(
+        src_err("print(True in {1}, 1.0 in [1], 1 in {1: 2})\n"),
+        "no error"
+    );
+}
+
+#[test]
+fn get_without_a_default_never_drops_its_none() {
+    let msg = "`get` without a default may return None, but int is expected";
+    assert!(src_err("d = {}\nx: int = d.get(1)\n").starts_with(msg));
+    assert!(src_err("d = {}\nx = d.get(1)\nx = 5\n").starts_with(msg));
+    assert_eq!(
+        src_err("d = {}\nx: int | None = d.get(1)\nprint(x)\n"),
+        "no error"
+    );
+    assert_eq!(src_err("d = {}\nprint(d.get(1))\n"), "no error");
+}
+
+#[test]
+fn get_keeps_its_none_through_generic_and_typed_returns() {
+    let msg = "`get` without a default may return None, but int is expected";
+    let typed = "def f(d) -> int:\n    return d.get(1)\nprint(f({}))\n";
+    assert!(src_err(typed).contains(msg), "{}", src_err(typed));
+    let generic = "def f(d):\n    return d.get(1)\nx: int = f({})\n";
+    assert!(src_err(generic).contains(msg), "{}", src_err(generic));
+    let optional = "def f(d) -> int | None:\n    return d.get(1)\nprint(f({}))\n";
+    assert_eq!(src_err(optional), "no error");
+}
+
+#[test]
+fn a_bool_key_fits_an_int_key_in_displays_and_generic_helpers() {
+    let display = "d: dict[int, int] = {True: 7}\nprint(d[1])\n";
+    assert_eq!(src_err(display), "no error");
+    let get = "def f(d):\n    return d.get(True)\nprint(f({1: 7}))\n";
+    assert_eq!(src_err(get), "no error");
+    let index = "def f(d):\n    return d[True]\nprint(f({1: 7}))\n";
+    assert_eq!(src_err(index), "no error");
+    let unused = "d = {}\nprint(d.get(True))\n";
+    assert_eq!(src_err(unused), "no error");
+    let probe = "def f(d, k):\n    return d.get(k)\nprint(f({1: 2}, True), f({\"a\": 1}, \"a\"))\n";
+    assert_eq!(src_err(probe), "no error");
+    let generic = "def f(d, k):\n    return d[k]\nprint(f({1: 2}, True), f({\"a\": 1}, \"a\"))\n";
+    assert_eq!(src_err(generic), "no error");
+    let bare = "def f(d: dict, k):\n    return d[k]\nprint(f({1: 2}, True))\n";
+    assert_eq!(src_err(bare), "no error");
+    let typed = "def f(d: dict[int, int], k):\n    return d[k]\nprint(f({1: 2}, \"a\"))\n";
+    assert!(src_err(typed).contains("dict key"), "{}", src_err(typed));
+    let wrong = "d: dict[str, int] = {True: 7}\n";
+    assert!(src_err(wrong).contains("dict key"), "{}", src_err(wrong));
+}
+
+#[test]
+fn a_view_inside_a_compared_value_is_refused() {
+    let why = "dict_keys[int] cannot be compared";
+    for cmp in [
+        "[v] == [v]",
+        "(v, 1) != (v, 1)",
+        "{1: v} == {1: v}",
+        "[v] in [[v]]",
+    ] {
+        let src = format!("v = {{1: 2}}.keys()\nprint({cmp})\n");
+        assert!(src_err(&src).contains(why), "{cmp}: {}", src_err(&src));
+    }
+    let later = "xs = []\nprint(xs == xs)\nxs.append({1: 2}.keys())\n";
+    assert!(src_err(later).contains(why), "{}", src_err(later));
+    let fine = "print([[1]] == [[1]], ({1: 2}, 1) == ({1: 2}, 1), [1] in [[1]])\n";
+    assert_eq!(src_err(fine), "no error");
 }

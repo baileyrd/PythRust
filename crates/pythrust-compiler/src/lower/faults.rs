@@ -146,9 +146,13 @@ impl<'a> Sites<'a> {
                 self.expr(value);
                 self.expr(index);
             }
-            ExprKind::Tuple(items) | ExprKind::List(items) => {
+            ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
                 items.iter().for_each(|x| self.expr(x))
             }
+            ExprKind::Dict(items) => items
+                .iter()
+                .flat_map(|(k, v)| [k, v])
+                .for_each(|x| self.expr(x)),
             ExprKind::Unary { operand, .. } => self.expr(operand),
             ExprKind::Logical { left, right, .. } => {
                 self.expr(left);

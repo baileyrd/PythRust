@@ -1,0 +1,5 @@
+# deviation: a dict view is a snapshot, so a held view does not see later changes to its dict (docs/grammar.md#deviations-from-python)
+d = {"a": 1}
+ks = d.keys()
+d["b"] = 2
+print(ks, len(ks), "b" in ks)

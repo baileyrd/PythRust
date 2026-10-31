@@ -52,10 +52,12 @@ fn signature(f: &FuncDef, types: &Types) -> Result<()> {
     Err(error(f.name.span, format!("{what}{fix}")))
 }
 
-/// Whether `t` names every element type: no bare `list`.
+/// Whether `t` names every element type: no bare `list`, `dict` or
+/// `set`.
 fn complete(t: &TypeExpr) -> bool {
-    let bare_list = t.name.name == "list" && t.args.is_empty();
-    !bare_list && t.args.iter().all(complete)
+    let container = matches!(t.name.name.as_str(), "list" | "dict" | "set");
+    let bare = container && t.args.is_empty();
+    !bare && t.args.iter().all(complete)
 }
 
 /// "; write `{prefix}{t}`" when the inferred `t` can be spelled, else "".
@@ -67,11 +69,13 @@ fn suggest(prefix: &str, inferred: Option<&Type>) -> String {
 }
 
 /// Whether `t` can be written as an annotation: no inference variables
-/// (generic or unconstrained), no `range` and no empty tuple.
+/// (generic or unconstrained), no `range`, no dict view and no empty
+/// tuple.
 fn spellable(t: &Type) -> bool {
     match t {
-        Type::Var(_) | Type::Range => false,
-        Type::List(inner) | Type::Optional(inner) => spellable(inner),
+        Type::Var(_) | Type::Range | Type::View(..) => false,
+        Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => spellable(inner),
+        Type::Dict(key, value) => spellable(key) && spellable(value),
         Type::Tuple(items) => !items.is_empty() && items.iter().all(spellable),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Exception => true,
     }
@@ -180,6 +184,22 @@ show([1, 2, 3])
             "tempered `f` must spell the element types of its return type; \
              write `-> tuple[list[int], int]`"
         );
+    }
+
+    #[test]
+    fn bare_dict_and_set_annotations_are_incomplete() {
+        let dict = "temper def f(d: dict) -> int:\n    return d[\"a\"]\n";
+        assert_eq!(
+            err(dict),
+            "tempered `f` must spell the element types of `d`; write `d: dict[str, int]`"
+        );
+        let set = "temper def f(n: int) -> set:\n    return {n}\n";
+        assert_eq!(
+            err(set),
+            "tempered `f` must spell the element types of its return type; write `-> set[int]`"
+        );
+        let full = "temper def f(d: dict[str, set[int]]) -> int:\n    return len(d)\n";
+        assert_eq!(check(full), Ok(()));
     }
 
     #[test]

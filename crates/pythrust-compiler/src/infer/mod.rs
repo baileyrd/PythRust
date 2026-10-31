@@ -36,7 +36,7 @@ use crate::span::Span;
 pub use raises::Raises;
 use solve::{Constraint, Need};
 use subst::Subst;
-pub use ty::{FuncType, ParamType, Type, TypeVar};
+pub use ty::{FuncType, ParamType, Type, TypeVar, View};
 
 /// The typed view of a module: what the backend consumes.
 #[derive(Debug, Clone, PartialEq)]

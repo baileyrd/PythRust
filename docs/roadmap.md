@@ -108,7 +108,9 @@ Nano, 2026-10-31. A real program drives M6, so the gaps it hits decide the order
 
 Cards, in order (one PR or more each):
 
-- [ ] **`dict` and `set`.** Prerequisite for the driver. Extends the `mut`/`owned` predicates (`infer::Type::holds_heap`, `reaches_mutable`) and B3b's refusal of an exception that may close a reference cycle to the new container types.
+- [ ] **`dict` and `set`.** Prerequisite for the driver. Extends the `mut`/`owned` predicates (`infer::Type::holds_heap`, `reaches_mutable`) and B3b's refusal of an exception that may close a reference cycle to the new container types. Two PRs:
+  - [x] *Front end and interpreter:* displays, `dict[K, V]`/`set[T]` with hashable keys, subscripts, `in`, `len`, `for`, `set()`, `set.add`, `dict.get`, typed views from `dict.keys/values/items`, `sorted()`, `list()` of a dict, set or view, a catchable `KeyError` (a `LookupError`, native too; `str` is the key's `repr`), the mode predicates, and the [deviations](grammar.md#deviations-from-python) (set order, key types, snapshot views, size change fatal), as Nano decided on #64 (2026-10-31). `build` reports dicts and sets as a named backend gap, so the `own` analysis stays conservative for them.
+  - [ ] *Native:* runtime tables in `pythrust-rt`, lowering and codegen, corpus parity (`dicts`, `sets`, `key_error` in `NATIVE`), the `own` and `rc` facts for dict stores and `set.add` (a store keeps its key and value, like `append`), and `codegen::may_cycle` counting a dict whose values, or a set whose elements, may hold an exception (B3b). D4 extended to dicts and sets in tempered code: changing a container's size inside a `for` over it is a compile error with the fix-it `for k in list(d)`. `for k in d.keys()` iterates the dict directly (no copy) and `x in d.keys()` is a lookup. `sorted()` natively, and the `True`-is-`1` key test in both backends.
 - [ ] **M6a. Stdlib core:** what fclone-lite needs, Python-compatible as above.
 - [ ] **M6b. Rust binary-level interop.**
 - [ ] **M6c. Concurrency:** uncolored tasks, channels and `shared[T]`.
