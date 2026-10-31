@@ -278,6 +278,10 @@ pub enum Rvalue {
     /// A module function's result (M6a), a new value of the
     /// destination's type; the operands are its arguments, borrowed.
     Std(StdFn, Vec<Operand>),
+    /// A Rust binding function's result (M6b), by its dotted name: a new
+    /// value of the destination's type; the operands are its arguments
+    /// in parameter order, borrowed. It raises only what its stub says.
+    Rust(String, Vec<Operand>),
     /// `a + b` on two `Str`s.
     Concat(Operand, Operand),
     /// `s * n`, a `Str` and an `Int`. Fails when too large to allocate.

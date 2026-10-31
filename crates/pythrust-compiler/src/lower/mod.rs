@@ -23,7 +23,7 @@ mod tests;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::ast::{FuncDef, Module, StmtKind};
+use crate::ast::{FuncDef, Module, StmtKind, StubDef};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::infer::{scope, Type, TypeVar, Types};
 use crate::ir::{
@@ -135,8 +135,10 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
             defs.insert(f.name.name.as_str(), f);
         }
     }
+    let stubs = module.stubs.iter().map(|f| (f.name.name.as_str(), f));
     let mut cx = Cx {
         types,
+        stubs: stubs.collect(),
         globals: globals::Globals::new(module, &defs),
         faulting: faults::faulting(&defs, types),
         defs,
@@ -193,6 +195,8 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
 struct Cx<'a> {
     types: &'a Types,
     defs: HashMap<&'a str, &'a FuncDef>,
+    /// The Rust binding functions, by dotted name (M6b).
+    stubs: HashMap<&'a str, &'a StubDef>,
     /// Functions that may return with a catchable fault pending.
     faulting: HashSet<&'a str>,
     /// Instances by function name, argument types and result type.

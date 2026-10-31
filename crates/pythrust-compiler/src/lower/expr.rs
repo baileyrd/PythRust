@@ -1,6 +1,6 @@
 //! Expressions: each lowers to an operand, emitting what it needs first.
 
-use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
+use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, StubDef, UnaryOp};
 use crate::diag::{Diagnostic, Result};
 use crate::exc::ExcKind;
 use crate::infer::Type;
@@ -645,6 +645,9 @@ impl<'a> FnBuilder<'_, 'a> {
         if name == "print" {
             return self.print(args, ops, span);
         }
+        if let Some(stub) = self.cx.stubs.get(name).copied() {
+            return self.rust(stub, args, ops, span);
+        }
         // A module function's one keyword parameter is its only one, so
         // its operand is already in place (`os.listdir(path=p)`).
         let positional = StdFn::from_name(name).and_then(StdFn::keyword);
@@ -695,6 +698,41 @@ impl<'a> FnBuilder<'_, 'a> {
         let ty = self.ty_at(span)?;
         let v = self.temp(ty, Rvalue::Std(f, ops), span);
         if f.raises().is_some() {
+            self.check_raised(span)?;
+        }
+        Ok(v)
+    }
+
+    /// A Rust binding function's call (M6b), its arguments put in
+    /// parameter order as inference bound them. One whose stub says
+    /// `raises` is followed by the test for it.
+    fn rust(
+        &mut self,
+        stub: &StubDef,
+        args: &[Arg],
+        ops: Vec<Operand>,
+        span: Span,
+    ) -> Result<Operand> {
+        let mut slots: Vec<Option<Operand>> = vec![None; stub.params.len()];
+        for (i, (a, op)) in args.iter().zip(ops).enumerate() {
+            let slot = match &a.name {
+                Some(kw) => stub.params.iter().position(|p| p.name.name == kw.name),
+                None => Some(i),
+            };
+            let Some(slot) = slot.and_then(|k| slots.get_mut(k)) else {
+                return Err(super::internal(
+                    a.span,
+                    "an argument inference did not bind",
+                ));
+            };
+            *slot = Some(op);
+        }
+        let ops: Option<Vec<Operand>> = slots.into_iter().collect();
+        let ops = ops.ok_or_else(|| super::internal(span, "a parameter inference left unbound"))?;
+        let name = &stub.name.name;
+        let ty = self.ty_at(span)?;
+        let v = self.temp(ty, Rvalue::Rust(name.clone(), ops), span);
+        if self.may_raise(name) {
             self.check_raised(span)?;
         }
         Ok(v)

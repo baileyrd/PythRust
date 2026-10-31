@@ -153,3 +153,129 @@ fn run_passes_the_arguments_after_the_file_to_sys_argv() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
+
+/// A Rust binding's stub, `fastfs.pyr` in a directory of its own, for
+/// `--rust fastfs=<dir>` (M6b).
+fn binding(test: &str, stub: &str) -> PathBuf {
+    let dir = std::env::temp_dir()
+        .join(format!("pythrust-cli-{}", std::process::id()))
+        .join(format!("{test} binding"));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("fastfs.pyr"), stub).unwrap();
+    dir
+}
+
+fn pythrust_rust(command: &str, dir: &PathBuf, name: &str, src: &str) -> Output {
+    let mut flag = std::ffi::OsString::from("fastfs=");
+    flag.push(dir);
+    Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .arg(command)
+        .arg("--rust")
+        .arg(flag)
+        .arg(source(name, src))
+        .output()
+        .unwrap()
+}
+
+const FASTFS: &str = "\
+temper def file_xxh3(path: str) -> str raises OSError: ...
+
+temper def add(a: int, b: int) -> int:
+    ...
+";
+
+/// `check` checks calls against a binding's stub; `run` and `build`
+/// refuse with the named gaps until the native M6b PRs land.
+#[test]
+fn rust_binding_checks_and_run_and_build_name_their_gaps() {
+    let dir = binding("gaps", FASTFS);
+    let src = "\
+import fastfs
+
+def main() -> None:
+    try:
+        print(fastfs.file_xxh3(\"x\"), fastfs.add(b=2, a=1))
+    except OSError as e:
+        print(e)
+
+print(\"start\")
+main()
+";
+    let out = pythrust_rust("check", &dir, "rust_gaps", src);
+    assert!(out.status.success(), "{out:?}");
+    let out = pythrust_rust("run", &dir, "rust_gaps", src);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stdout), "");
+    let err = text(&out.stderr);
+    assert_eq!(
+        err,
+        "pythrust: run cannot call Rust bindings yet; use build\n"
+    );
+    let out = pythrust_rust("build", &dir, "rust_gaps", src);
+    assert_eq!(out.status.code(), Some(1));
+    let err = text(&out.stderr);
+    assert!(err.contains("build cannot call Rust bindings yet"), "{err}");
+    // Imported but never called, a binding still stops `build`.
+    let out = pythrust_rust("build", &dir, "rust_uncalled", "import fastfs\nprint(1)\n");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(text(&out.stderr).contains("build cannot call Rust bindings yet"));
+    // Given but not imported, a binding changes nothing.
+    let out = pythrust_rust("run", &dir, "rust_unused", "print(1)\n");
+    assert_eq!(text(&out.stdout), "1\n", "{out:?}");
+}
+
+/// A call that does not match the stub is a type error in the program;
+/// an error in the stub renders against the stub's own file.
+#[test]
+fn rust_binding_errors_render_against_their_file() {
+    let dir = binding("errors", FASTFS);
+    let src = "import fastfs\nx: int = fastfs.add(1, \"a\")\n";
+    let out = pythrust_rust("check", &dir, "rust_mismatch", src);
+    let err = text(&out.stderr);
+    assert!(err.contains("rust_mismatch.pyr:2:24: type error"), "{err}");
+    assert!(err.contains("argument `b` of `fastfs.add`"), "{err}");
+
+    let dir = binding("bad stub", "temper def f(mut x: int) -> int: ...\n");
+    let out = pythrust_rust("check", &dir, "rust_bad_stub", "import fastfs\n");
+    let err = text(&out.stderr);
+    assert!(err.contains("fastfs.pyr:1:14: parse error"), "{err}");
+    assert!(err.contains("not supported in stubs yet"), "{err}");
+}
+
+/// A stub with no functions is refused by every command, so `run` and
+/// `build` cannot miss an import of it.
+#[test]
+fn rust_binding_without_functions_is_refused() {
+    for (test, stub) in [("empty", ""), ("comments", "# nothing yet\n")] {
+        let dir = binding(test, stub);
+        for command in ["check", "run", "build"] {
+            let name = format!("rust_{test}_{command}");
+            let out = pythrust_rust(command, &dir, &name, "import fastfs\nprint(1)\n");
+            assert_eq!(out.status.code(), Some(1), "{command}: {out:?}");
+            assert_eq!(text(&out.stdout), "", "{command}");
+            let err = text(&out.stderr);
+            assert!(
+                err.contains("the stub for `fastfs` declares no functions"),
+                "{err}"
+            );
+        }
+    }
+}
+
+/// `import` of a name no `--rust` gives says how to give one; a binding
+/// named like a standard module is refused before anything is read.
+#[test]
+fn rust_binding_names_are_resolved() {
+    let out = pythrust("check", "rust_not_given", "import fastfs\n");
+    let err = text(&out.stderr);
+    assert!(err.contains("needs `--rust fastfs=path`"), "{err}");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .args(["check", "--rust", "os=anywhere"])
+        .arg(source("rust_os", "import os\n"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = text(&out.stderr);
+    assert!(err.contains("`os` is a standard module"), "{err}");
+}

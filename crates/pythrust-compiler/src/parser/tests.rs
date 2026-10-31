@@ -1327,7 +1327,8 @@ fn import_comes_first_at_module_level() {
     assert_eq!(src_err("def f():\n    import sys\n"), late);
     assert_eq!(
         src_err("import json\n"),
-        "no module named `json`; the modules are: hashlib, os, sys"
+        "no module named `json`; the modules are: hashlib, os, sys; \
+         a Rust binding needs `--rust json=path`"
     );
     assert!(src_err("import sys.argv\n").contains("import the top-level module"));
     assert_eq!(
@@ -1394,4 +1395,213 @@ fn sha256_is_one_call_with_its_hexdigest() {
     ] {
         assert_eq!(src_err(&format!("import hashlib\n{bad}")), only, "{bad}");
     }
+}
+
+// Rust binding stubs (M6b).
+
+fn stub(src: &str) -> diag::Result<Binding> {
+    super::parse_stub(&lex(src)?, "fastfs")
+}
+
+fn stub_err(src: &str) -> String {
+    match stub(src) {
+        Ok(b) => panic!("{src:?} parsed: {b:?}"),
+        Err(d) => {
+            assert_eq!(d.kind, DiagKind::Parse, "{d}");
+            d.message
+        }
+    }
+}
+
+const FASTFS: &str = "\
+# A stub.
+temper def file_xxh3(path: str) -> str raises OSError: ...
+
+temper def add(a: int, b: int) -> int:
+    ...
+temper def nothing() -> None: ...
+";
+
+fn fastfs() -> Binding {
+    stub(FASTFS).unwrap_or_else(|d| panic!("{d}"))
+}
+
+#[test]
+fn stub_signatures_get_dotted_names() {
+    let b = fastfs();
+    assert_eq!(b.name, "fastfs");
+    let names: Vec<&str> = b.funcs.iter().map(|f| f.name.name.as_str()).collect();
+    assert_eq!(names, ["fastfs.file_xxh3", "fastfs.add", "fastfs.nothing"]);
+    let xxh3 = &b.funcs[0];
+    assert_eq!(xxh3.params[0].name.name, "path");
+    assert_eq!(xxh3.params[0].annotation.name.name, "str");
+    assert_eq!(xxh3.returns.name.name, "str");
+    assert_eq!(xxh3.raises[0].name, "OSError");
+    assert!(b.funcs[1].raises.is_empty());
+    for empty in ["", "# only a comment\n"] {
+        assert_eq!(
+            stub_err(empty),
+            "the stub for `fastfs` declares no functions"
+        );
+    }
+}
+
+#[test]
+fn stub_rules_are_named_errors() {
+    let only = "a stub holds only `temper def` signatures whose bodies are `...`";
+    assert_eq!(stub_err("def f() -> int: ...\n"), only);
+    assert_eq!(stub_err("x = 1\n"), only);
+    assert_eq!(stub_err("import os\n"), only);
+    assert_eq!(stub_err("temper def f() -> int:\n    pass\n"), only);
+    assert_eq!(stub_err("temper def f() -> int:\n    ...\n    ...\n"), only);
+    assert_eq!(
+        stub_err("temper def f(mut x: int) -> int: ...\n"),
+        "`mut` and `owned` are not supported in stubs yet; drop it from `x`"
+    );
+    assert!(
+        stub_err("temper def f(owned x: str) -> int: ...\n").contains("not supported in stubs yet")
+    );
+    assert_eq!(
+        stub_err("temper def f(x: int = 1) -> int: ...\n"),
+        "stub parameter `x` cannot have a default"
+    );
+    assert_eq!(
+        stub_err("temper def f(x) -> int: ...\n"),
+        "stub parameter `x` must be annotated"
+    );
+    assert_eq!(
+        stub_err("temper def f(x: int): ...\n"),
+        "stub `f` must annotate its return type"
+    );
+    assert_eq!(
+        stub_err("temper def f() -> int: ...\ntemper def f() -> int: ...\n"),
+        "`fastfs.f` is defined twice"
+    );
+    assert_eq!(
+        stub_err("temper def f(x: int, x: int) -> int: ...\n"),
+        "duplicate parameter `x`"
+    );
+}
+
+#[test]
+fn stub_types_are_those_that_cross() {
+    for ty in ["int", "float", "bool", "str", "bytes"] {
+        let src = format!("temper def f(x: {ty}) -> {ty}: ...\n");
+        assert!(stub(&src).is_ok(), "{ty}");
+    }
+    assert!(stub("temper def f() -> None: ...\n").is_ok());
+    let param = "a stub parameter must be one of int, float, bool, str, bytes;";
+    for bad in [
+        "None",
+        "list[int]",
+        "int | None",
+        "dict[str, int]",
+        "Exception",
+    ] {
+        let src = format!("temper def f(x: {bad}) -> int: ...\n");
+        assert!(stub_err(&src).starts_with(param), "{bad}");
+    }
+    let result = "a stub result must be one of int, float, bool, str, bytes, or None;";
+    for bad in ["list[str]", "str | None", "tuple[int, int]"] {
+        let src = format!("temper def f() -> {bad}: ...\n");
+        assert!(stub_err(&src).starts_with(result), "{bad}");
+    }
+}
+
+#[test]
+fn stub_raises_only_os_error_or_exception() {
+    assert!(stub("temper def f() -> int raises Exception: ...\n").is_ok());
+    assert!(stub("temper def f() -> int raises OSError, Exception: ...\n").is_ok());
+    let msg = stub_err("temper def f() -> int raises ValueError: ...\n");
+    assert!(
+        msg.starts_with("a stub raises only `OSError` or `Exception`"),
+        "{msg}"
+    );
+    let msg = stub_err("temper def f() -> int raises FileNotFoundError: ...\n");
+    assert!(msg.ends_with("not `FileNotFoundError`"), "{msg}");
+    assert_eq!(
+        stub_err("temper def f() -> int raises OSError, OSError: ...\n"),
+        "`OSError` is listed twice in `raises`"
+    );
+}
+
+#[test]
+fn ellipsis_outside_a_stub_says_use_pass() {
+    let stmt = "`...` is for stub bodies only; use pass";
+    assert_eq!(src_err("def f():\n    ...\n"), stmt);
+    assert_eq!(src_err("if True:\n    ...\n"), stmt);
+    // No body shares the `:` line, so `pass` moves down too.
+    let inline = "`...` is for stub bodies only; use pass on its own indented line";
+    assert_eq!(src_err("def f() -> None: ...\n"), inline);
+    assert_eq!(src_err("if True: ...\n"), inline);
+    assert!(src_parse("def f() -> None:\n    pass\nif True:\n    pass\n").is_ok());
+    assert_eq!(src_err("...\n"), stmt);
+    // As a value, `pass` would not parse: no fix-it.
+    let value = "`...` (Ellipsis) is not supported; it is legal only as a stub body";
+    assert_eq!(src_err("x = ...\n"), value);
+    assert_eq!(src_err("print(...)\n"), value);
+    assert_eq!(src_err("x = [1, ...]\n"), value);
+}
+
+fn with_fastfs(src: &str) -> diag::Result<Module> {
+    super::parse_with(&lex(src)?, &[fastfs()])
+}
+
+#[test]
+fn importing_a_binding_resolves_its_functions() {
+    let m = with_fastfs("import sys, fastfs\nx = fastfs.add(1, b=2)\n")
+        .unwrap_or_else(|d| panic!("{d}"));
+    let stubs: Vec<&str> = m.stubs.iter().map(|f| f.name.name.as_str()).collect();
+    assert_eq!(stubs, ["fastfs.file_xxh3", "fastfs.add", "fastfs.nothing"]);
+    let StmtKind::Assign { value, .. } = &m.body[1].kind else {
+        panic!("{:?}", m.body[1]);
+    };
+    let ExprKind::Call { func, .. } = &value.kind else {
+        panic!("{value:?}");
+    };
+    assert_eq!(func.kind, ExprKind::Name("fastfs.add".to_string()));
+    // Imported twice, its functions come once; given but not imported,
+    // none come.
+    // A binding built by hand with no functions cannot be imported.
+    let empty = Binding {
+        name: "empty".to_string(),
+        funcs: Vec::new(),
+    };
+    let tokens = lex("import empty\nprint(1)\n").unwrap_or_else(|d| panic!("{d}"));
+    let err = super::parse_with(&tokens, &[empty])
+        .err()
+        .map(|d| d.message);
+    assert_eq!(
+        err.as_deref(),
+        Some("the stub for `empty` declares no functions")
+    );
+    let twice = with_fastfs("import fastfs\nimport fastfs\n").map(|m| m.stubs.len());
+    assert_eq!(twice, Ok(3));
+    assert_eq!(with_fastfs("x = 1\n").map(|m| m.stubs.len()), Ok(0));
+}
+
+#[test]
+fn a_binding_name_is_not_a_value() {
+    let err = |src: &str| {
+        with_fastfs(src)
+            .err()
+            .map(|d| d.message)
+            .unwrap_or_default()
+    };
+    let funcs = "fastfs.file_xxh3, fastfs.add, fastfs.nothing";
+    assert_eq!(
+        err("import fastfs\nx = fastfs\n"),
+        format!("`fastfs` is a Rust binding, not a value; use one of its functions: {funcs}")
+    );
+    assert_eq!(
+        err("import fastfs\nfastfs.nope()\n"),
+        format!("the stub for `fastfs` has no `nope`; its functions are: {funcs}")
+    );
+    assert_eq!(
+        err("import fastfs\ndef fastfs():\n    pass\n"),
+        "`fastfs` names an imported Rust binding; choose another name"
+    );
+    let msg = "no module named `fastfs`; the modules are: hashlib, os, sys; \
+               a Rust binding needs `--rust fastfs=path`";
+    assert_eq!(src_err("import fastfs\n"), msg);
 }

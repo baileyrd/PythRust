@@ -90,6 +90,8 @@ pub enum TokenKind {
     Comma,
     Colon,
     Dot,
+    /// `...`, only as a Rust binding stub's body (M6b).
+    Ellipsis,
     Arrow,
     /// `|`, only in `T | None` annotations.
     Pipe,
