@@ -13,6 +13,14 @@ use super::{builtins, error, Checker, Func, TruthUse};
 pub(super) const CLASS_NOT_A_VALUE: &str = "exception classes can't be held in variables; \
      name them where they are used, as in `except (ValueError, IndexError):`";
 
+/// How `checked` matches a part of a display against its slot: a dict
+/// key as a key (a `bool` fits an `int` key), anything else as a value.
+#[derive(Clone, Copy)]
+enum Slot {
+    Key,
+    Element,
+}
+
 impl Checker {
     /// Infers `e` and records its type at its span.
     pub(super) fn expr(&mut self, e: &Expr) -> Result<Type> {
@@ -437,27 +445,48 @@ impl Checker {
     /// type (it is not `None`).
     pub(super) fn checked(&mut self, e: &Expr, expected: &Type) -> Result<Type> {
         let resolved = self.subst.resolve(expected);
-        let slots: Vec<(&Expr, Type)> = match (&e.kind, &resolved) {
+        let slots: Vec<(&Expr, Type, Slot)> = match (&e.kind, &resolved) {
             (ExprKind::List(_) | ExprKind::Tuple(_), Type::Optional(inner))
             | (ExprKind::Dict(_) | ExprKind::Set(_), Type::Optional(inner)) => {
                 return self.checked(e, inner)
             }
             (ExprKind::List(items), Type::List(elem)) | (ExprKind::Set(items), Type::Set(elem)) => {
-                items.iter().map(|x| (x, (**elem).clone())).collect()
+                items
+                    .iter()
+                    .map(|x| (x, (**elem).clone(), Slot::Element))
+                    .collect()
             }
             (ExprKind::Dict(items), Type::Dict(key, value)) => items
                 .iter()
-                .flat_map(|(k, v)| [(k, (**key).clone()), (v, (**value).clone())])
+                .flat_map(|(k, v)| {
+                    [
+                        (k, (**key).clone(), Slot::Key),
+                        (v, (**value).clone(), Slot::Element),
+                    ]
+                })
                 .collect(),
-            (ExprKind::Tuple(items), Type::Tuple(elems)) if elems.len() == items.len() => {
-                items.iter().zip(elems.iter().cloned()).collect()
-            }
+            (ExprKind::Tuple(items), Type::Tuple(elems)) if elems.len() == items.len() => items
+                .iter()
+                .zip(elems.iter().cloned())
+                .map(|(x, t)| (x, t, Slot::Element))
+                .collect(),
             _ => return self.expr(e),
         };
         let mut found = Vec::new();
-        for (x, slot) in slots {
+        for (x, slot, kind) in slots {
             let t = self.checked(x, &slot)?;
-            self.expect(x.span, &slot, &t, "element does not match the annotation")?;
+            match kind {
+                Slot::Key => self.need(
+                    Need::Key {
+                        key: slot,
+                        index: t.clone(),
+                    },
+                    x.span,
+                ),
+                Slot::Element => {
+                    self.expect(x.span, &slot, &t, "element does not match the annotation")?
+                }
+            }
             found.push(t);
         }
         let t = match (&e.kind, resolved) {

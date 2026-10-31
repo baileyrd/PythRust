@@ -2178,3 +2178,17 @@ fn get_keeps_its_none_through_generic_and_typed_returns() {
     let optional = "def f(d) -> int | None:\n    return d.get(1)\nprint(f({}))\n";
     assert_eq!(src_err(optional), "no error");
 }
+
+#[test]
+fn a_bool_key_fits_an_int_key_in_displays_and_generic_helpers() {
+    let display = "d: dict[int, int] = {True: 7}\nprint(d[1])\n";
+    assert_eq!(src_err(display), "no error");
+    let get = "def f(d):\n    return d.get(True)\nprint(f({1: 7}))\n";
+    assert_eq!(src_err(get), "no error");
+    let index = "def f(d):\n    return d[True]\nprint(f({1: 7}))\n";
+    assert_eq!(src_err(index), "no error");
+    let unused = "d = {}\nprint(d.get(True))\n";
+    assert_eq!(src_err(unused), "no error");
+    let wrong = "d: dict[str, int] = {True: 7}\n";
+    assert!(src_err(wrong).contains("dict key"), "{}", src_err(wrong));
+}

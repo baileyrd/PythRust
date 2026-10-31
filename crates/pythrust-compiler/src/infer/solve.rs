@@ -281,7 +281,7 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         Need::OrNone { value, out } => or_none(s, c, value, out),
         Need::Probe { container, item } => probe(s, container, item),
         Need::ToList { arg, elem } => to_list(s, c, arg, elem),
-        Need::Key { key, index } => dict_key(s, c, key, index).map(Step::Done),
+        Need::Key { key, index } => dict_key(s, c, key, index),
         Need::ToNumber { func, arg } => to_number(s, c, func, arg),
         Need::Assign {
             target,
@@ -506,7 +506,13 @@ fn index_of(
         return tuple_index(s, c, items, literal, out);
     }
     if let Type::Dict(key, item) = &t {
-        let mut deferred = dict_key(s, c, key, index)?;
+        let mut deferred = match dict_key(s, c, key, index)? {
+            Step::Done(deferred) => deferred,
+            Step::Waiting => vec![Need::Key {
+                key: (**key).clone(),
+                index: index.clone(),
+            }],
+        };
         deferred.extend(element(s, c, &t, item, out, access)?);
         return Ok(Step::Done(deferred));
     }
@@ -528,13 +534,16 @@ fn index_of(
 /// The key of `d[k]` flows into the dict's key type, as an argument
 /// does into a parameter; what cannot be decided yet comes back. A
 /// `bool` key of an `int`-keyed dict is the int it equals, as in Python
-/// (`d[True]` is `d[1]`).
-fn dict_key(s: &mut Subst, c: &Constraint, key: &Type, index: &Type) -> Result<Vec<Need>> {
-    if (s.resolve(key), s.resolve(index)) == (Type::Int, Type::Bool) {
-        return Ok(vec![]);
+/// (`d[True]` is `d[1]`), so a `bool` index waits for an unknown key
+/// type rather than fixing it to `bool`.
+fn dict_key(s: &mut Subst, c: &Constraint, key: &Type, index: &Type) -> Result<Step> {
+    match (s.resolve(key), s.resolve(index)) {
+        (Type::Int, Type::Bool) => return Ok(Step::Done(vec![])),
+        (Type::Var(_), Type::Bool) => return Ok(Step::Waiting),
+        _ => {}
     }
     match s.assign(key, index) {
-        Ok(deferred) => Ok(assigns(deferred, "dict key")),
+        Ok(deferred) => Ok(Step::Done(assigns(deferred, "dict key"))),
         Err(clash) => {
             let msg = format!("dict key: {}", mismatch(s, clash, key, index));
             Err(error(c, msg))
@@ -764,14 +773,17 @@ pub(super) fn assigns(deferred: Vec<(Type, Type)>, what: &str) -> Vec<Need> {
 /// `solve`.
 pub(super) fn default_assigns(s: &mut Subst, pending: Vec<Constraint>) -> Result<Vec<Constraint>> {
     let mut waiting = solve(s, pending)?;
-    while let Some(i) = waiting
-        .iter()
-        .position(|c| matches!(c.need, Need::Assign { .. } | Need::OrNone { .. }))
-    {
+    while let Some(i) = waiting.iter().position(|c| {
+        matches!(
+            c.need,
+            Need::Assign { .. } | Need::OrNone { .. } | Need::Key { .. }
+        )
+    }) {
         let c = waiting.swap_remove(i);
         match &c.need {
             Need::Assign { target, value, .. } => expect(s, &c, target, value)?,
             Need::OrNone { value, out } => default_or_none(s, &c, value, out)?,
+            Need::Key { key, index } => expect(s, &c, key, index)?,
             _ => {}
         }
         waiting = solve(s, waiting)?;
