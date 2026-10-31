@@ -1562,6 +1562,19 @@ fn importing_a_binding_resolves_its_functions() {
     assert_eq!(func.kind, ExprKind::Name("fastfs.add".to_string()));
     // Imported twice, its functions come once; given but not imported,
     // none come.
+    // A binding built by hand with no functions cannot be imported.
+    let empty = Binding {
+        name: "empty".to_string(),
+        funcs: Vec::new(),
+    };
+    let tokens = lex("import empty\nprint(1)\n").unwrap_or_else(|d| panic!("{d}"));
+    let err = super::parse_with(&tokens, &[empty])
+        .err()
+        .map(|d| d.message);
+    assert_eq!(
+        err.as_deref(),
+        Some("the stub for `empty` declares no functions")
+    );
     let twice = with_fastfs("import fastfs\nimport fastfs\n").map(|m| m.stubs.len());
     assert_eq!(twice, Ok(3));
     assert_eq!(with_fastfs("x = 1\n").map(|m| m.stubs.len()), Ok(0));

@@ -242,6 +242,26 @@ fn rust_binding_errors_render_against_their_file() {
     assert!(err.contains("not supported in stubs yet"), "{err}");
 }
 
+/// A stub with no functions is refused by every command, so `run` and
+/// `build` cannot miss an import of it.
+#[test]
+fn rust_binding_without_functions_is_refused() {
+    for (test, stub) in [("empty", ""), ("comments", "# nothing yet\n")] {
+        let dir = binding(test, stub);
+        for command in ["check", "run", "build"] {
+            let name = format!("rust_{test}_{command}");
+            let out = pythrust_rust(command, &dir, &name, "import fastfs\nprint(1)\n");
+            assert_eq!(out.status.code(), Some(1), "{command}: {out:?}");
+            assert_eq!(text(&out.stdout), "", "{command}");
+            let err = text(&out.stderr);
+            assert!(
+                err.contains("the stub for `fastfs` declares no functions"),
+                "{err}"
+            );
+        }
+    }
+}
+
 /// `import` of a name no `--rust` gives says how to give one; a binding
 /// named like a standard module is refused before anything is read.
 #[test]

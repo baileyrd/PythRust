@@ -18,7 +18,7 @@ impl Parser<'_> {
         let mut stmts = Vec::new();
         loop {
             let name = self.expect_name("a module name")?;
-            if self.import_binding(&name) {
+            if self.import_binding(&name)? {
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }

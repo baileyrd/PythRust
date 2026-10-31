@@ -35,8 +35,7 @@ impl<'a> Parser<'a> {
         // An import is known by its functions (`Module::stubs`), so a
         // binding without any could slip past `run` and `build`.
         if funcs.is_empty() {
-            let msg = format!("the stub for `{name}` declares no functions");
-            return Err(error(self.tok(0).span, msg));
+            return Err(error(self.tok(0).span, no_functions(name)));
         }
         Ok(Binding {
             name: name.to_string(),
@@ -100,16 +99,21 @@ impl<'a> Parser<'a> {
     }
 
     /// Records the import of binding `name`, if one is given by that
-    /// name; whether it was.
-    pub(super) fn import_binding(&mut self, name: &Ident) -> bool {
+    /// name; whether it was. A binding is known to later stages by its
+    /// functions (`Module::stubs`), so one with none, which only a
+    /// caller building a [`Binding`] by hand can pass, is refused.
+    pub(super) fn import_binding(&mut self, name: &Ident) -> Result<bool> {
         let Some(binding) = self.bindings.iter().find(|b| b.name == name.name) else {
-            return false;
+            return Ok(false);
         };
+        if binding.funcs.is_empty() {
+            return Err(error(name.span, no_functions(&name.name)));
+        }
         if self.imported_binding(&name.name).is_none() {
             self.imported_bindings.push(binding);
             self.stubs.extend(binding.funcs.iter().cloned());
         }
-        true
+        Ok(true)
     }
 
     /// The imported binding named `name`, if any.
@@ -152,6 +156,10 @@ impl<'a> Parser<'a> {
             span,
         })
     }
+}
+
+fn no_functions(binding: &str) -> String {
+    format!("the stub for `{binding}` declares no functions")
 }
 
 /// A stub parameter: annotated with a crossing type, no mode, no default.
