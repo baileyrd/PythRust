@@ -82,7 +82,7 @@ Each milestone ends in something runnable.
 
 **M5. Tempering and ownership (phase 4).** `temper def` enforced: required annotations, explicit error types, borrow by default with inferred ownership, exception-to-Result lowering. Exit: a tempered function rejects what a loose one accepts, with diagnostics a Python programmer can act on, and no leaked Rust borrow-checker vocabulary. **Done 2026-10-30**; see [roadmap.md](roadmap.md#phase-4-m5-plan) for the evidence and the open D7 revisit.
 
-**M6. Interop and ecosystem (phase 5).** Python typed bridge (dynamic import, stubs, runtime check at the crossing), Rust binary-level interop, one tool with one manifest and one lockfile for all three dependency kinds, uncolored concurrency with channels and the shared-lock wrapper. Exit: a real script that imports a Python package, calls a Rust crate, and runs tasks concurrently.
+**M6. Interop and ecosystem (phase 5).** Python typed bridge (dynamic import, stubs, runtime check at the crossing), Rust binary-level interop, one tool with one manifest and one lockfile for all three dependency kinds, uncolored concurrency with channels and the shared-lock wrapper. Exit: a real script that imports a Python package, calls a Rust crate, and runs tasks concurrently. Driven first by fclone-lite, a duplicate-file finder; order and stdlib direction in [roadmap.md](roadmap.md#phase-5-m6-plan) (Nano, 2026-10-31).
 
 Estimates (gut, not a plan): M0 to M3 a few weeks; M4 about a month; M5 several months; M6 open-ended.
 

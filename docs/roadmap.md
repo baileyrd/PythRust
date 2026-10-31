@@ -26,7 +26,7 @@ Status against main `1202fc46e2a14527f1002fd757f4291443fabec3` (including merged
 
 - [x] **B: baseline parser.** PR #6 supplies recursive-descent parsing and parser-error checks for the original subset. Optional parsing landed separately in PR #13 (see the ordered follow-ups below).
 - [x] **F: CLI integration.** PR #17 wires `check` through lex/parse/infer and `run` through lex/parse/infer/interp. Tests cover program output, compile errors producing no output, output retained before runtime errors, and check never executing. Runtime errors exit 1; stdout is flushed before diagnostics.
-- [ ] **C/D/E: remaining regression coverage.** Verify the zero-iteration/nonempty-loop diagnostic and output invariant, source-level `2 ** 64`, and nonliteral negative exponent behavior through the integrated pipeline. Keep `2.0 ** -1` legal. The passing 35-program corpus does not by itself establish coverage for each of these dedicated regressions.
+- [x] **C/D/E: remaining regression coverage.** `tests/cli.rs` runs the `pythrust` binary: `int_accumulator_errors_whatever_the_loop_runs` holds that `total = 0` then `total += 1.5` in a loop fails `check` and `run` with the `0.0` fix-it and prints nothing, for an empty and a nonempty loop alike; `int_power_overflow_is_a_runtime_error` runs source-level `2 ** 64` (`OverflowError`, earlier output kept); `negative_int_exponent_says_use_a_float_base` covers a nonliteral negative exponent at runtime, a literal one at compile time, and `2.0 ** -1` printing `0.5`.
 - [x] **C: Optional return interaction (module level).** An explicit `T | None` return annotation permits fall-through to `None`; PR #10's `optional_return_may_fall_through` covers this. No arbitrary union inference is implied.
 
 - [x] **E: index/string/list-equality spec and corpus.** PR #11 records negative list/string/tuple indexing, Unicode code-point strings, substring membership, same-element-type list equality and compile-error-before-output behavior. Its 29-program corpus includes `tuple_index_error`, `tuple_index_error_negative`, `str_in_non_str`, `list_eq_mismatch` and `list_eq_int_float`; see [corpus instructions](../examples/README.md). These fixtures are now included in #17's executable corpus validation.
@@ -40,7 +40,7 @@ Status against main `1202fc46e2a14527f1002fd757f4291443fabec3` (including merged
 3. [x] **E: Optional conformance fixtures and type-checks after parsing.** PR #16 covers Optional basics and narrowing, for-target narrowing, None-first annotation error/fix-it, non-None identity rejection and arithmetic on un-narrowed Optional. Its non-ignored `corpus_checks` test checks lex/parse/infer diagnostics and successful programs; CPython checks validate goldens/deviations. PR #17 also enables `corpus_matches_pythrust` and validates these fixtures through the executable pipeline. Do not relax loose-mode Optional inference until corpus evidence motivates revisiting the annotation requirement.
 4. [x] **C: narrowing through `and`, `or`, `not` and conditional expressions.** `if best is None or k > best:` type-checks, as do compound guards and `x + 1 if x is not None else 0`; see the rule in [the grammar](grammar.md#deviations-from-python). A truth test (`if x:`) does not narrow; the error suggests `x is not None`. Fixtures `optional_short_circuit`, `optional_short_circuit_unnarrowed` and `optional_truth_test`.
 
-- [ ] **F: final-flush and cross-stream ordering regressions.** #17 implements final-flush error handling and stdout flushing before diagnostics, but the inspected tests do not directly inject a final-flush failure or assert process-level stdout/stderr ordering. Keep these coverage limits explicit; corpus stdout/status success does not prove them.
+- [x] **F: final-flush and cross-stream ordering regressions.** `tests/cli.rs`: `output_precedes_the_runtime_error_on_one_stream` sends stdout and stderr to one file and requires the program's output before the diagnostic; `a_failed_final_flush_is_a_runtime_error` gives `run` a pipe with no reader, so its only write, the final flush, fails, and requires exit 1 and `cannot write output`. That test is ignored on Windows with a stated reason (Nano, 2026-10-31), never skipped silently.
 
 ## Phase-3 native status (M4 done)
 
@@ -95,3 +95,22 @@ Track B, exceptions:
   - *Explicit error types and exception-to-`Result` lowering:* D8 `raises` (B2) and the tag-plus-branch lowering (B3), with every exception program in `NATIVE`.
 
   M5 closes with D7 as is (Nano, 2026-10-30); the D7 revisit above is post-M5 work.
+
+## Phase 5 (M6) plan
+
+Nano, 2026-10-31. A real program drives M6, so the gaps it hits decide the order of stdlib work, not a list made in advance.
+
+**Driver: fclone-lite**, a duplicate-file finder: walk a directory tree, group files by size, hash the candidates in groups of two or more, print each group of identical files. Oracle and speed baseline: `rusty_fclone` and a Python version of the same program, as CPython is for the corpus.
+
+**Predicted gap order, a hypothesis to correct:** command-line arguments and `print` formatting; directory walking and reading files as bytes; `dict` and `set`; hashing. Record here what the program actually hits first, and reorder when it differs.
+
+**Stdlib direction (unparked):** a Python-compatible surface over a Rust runtime. Anything shipped matches CPython or is on the [deviations list](grammar.md#deviations-from-python). I/O errors are tracked in `raises`, under an `OSError` base in the class hierarchy. No Rust-style API.
+
+Cards, in order (one PR or more each):
+
+- [ ] **`dict` and `set`.** Prerequisite for the driver. Extends the `mut`/`owned` predicates (`infer::Type::holds_heap`, `reaches_mutable`) and B3b's refusal of an exception that may close a reference cycle to the new container types.
+- [ ] **M6a. Stdlib core:** what fclone-lite needs, Python-compatible as above.
+- [ ] **M6b. Rust binary-level interop.**
+- [ ] **M6c. Concurrency:** uncolored tasks, channels and `shared[T]`.
+- [ ] **M6d. Package tool:** one manifest and one lockfile for all three dependency kinds.
+- [ ] **M6e. Python typed bridge.** Waits for a second app that needs it.
