@@ -48,7 +48,7 @@ Code starts **loose** (Python-feeling, inferred) and is **tempered** (hardened, 
 ## Interop
 
 - **Python libraries:** a typed bridge. Python modules import as a dynamic type by default. Tempering the boundary means adding type stubs. The compiler trusts a stub but inserts a cheap runtime check at the crossing so a wrong stub fails loudly. Existing type hints and `.pyi` stub packages are read directly.
-- **Rust crates:** called at the binary level through a shared calling convention. Ownership and Result-style errors line up, so there is no dynamic boundary.
+- **Rust crates:** called at the binary level through a shared calling convention. The app owns a small binding crate and declares its functions in a Pythrust stub; the compiler generates the shims, and rustc checks each stub against the Rust signature at build time, so there is no dynamic boundary. Plain values cross, a `Result` error is a `raises`, and a panic is fatal ([research/rust-interop.md](research/rust-interop.md)).
 - Rejected: embed-CPython-only, and full source-compatibility with all of Python.
 
 ## Compiler

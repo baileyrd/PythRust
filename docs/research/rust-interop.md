@@ -1,84 +1,156 @@
 # M6b: Rust binary-level interop
 
-**Status: decided 2026-10-31** (Nano approved all five recommendations of the scope proposal, with the conditions folded in below; revised after the PR #75 reviews, Nano 2026-10-31). Not yet implemented; [roadmap.md](../roadmap.md#phase-5-m6-plan) orders the work.
+**Status: decided 2026-10-31.** Nano approved the scope proposal's five recommendations with conditions, then revised them after the reviews of PR #75 (the EGM review, `pythrust-expert`, Codex and Dottius): the lockfile mechanism, the raise convention, the driver check, and three cuts (`abi::Raise`, the parallel `group_xxh3` with lists and threads, native `run`). Not yet implemented; [roadmap.md](../roadmap.md#phase-5-m6-plan) orders the work.
 
-A Pythrust program calls functions of a Rust *binding crate* the app owns, declared to Pythrust by a *stub* of tempered signatures. `pythrust build` generates one shim per stub function and has cargo compile the shims, the binding and the runtime into one static library; rustc thereby checks every stub against the real Rust signature. The compiler gains no dependency. A binding's crates.io dependencies are the app's, not Pythrust's.
+## Objective
+
+[design.md](../design.md#interop) promises that a Pythrust program can call Rust crates at the binary level. M6b delivers the smallest real form of that: a program calls functions of a Rust crate the app owns, with types checked on both sides and no change to the compiler's dependencies or its `forbid(unsafe_code)`. fclone-lite is the app that forces the work: natively it is bound by hashing speed (see the roadmap's M6a hashing entry), and the Rust crate ecosystem has faster hashes.
 
 ## Decided
 
-1. **Binding crate plus stub.** The binding is ordinary safe Rust: no `unsafe`, no macros, no Pythrust dependency beyond `pythrust_rt::abi::Raise` when it raises a named builtin. Its stub is a `.pyr` file of `temper def` signatures whose bodies are `...`. Outside a stub a `...` body is a named error ("stub bodies only; use pass"), a deliberate omission listed in the deviations, to revisit when Protocol or trait support lands. A stub parameter written `mut` or `owned` is a named error ("not supported in stubs yet"), since Rust's changes would be lost. A proc-macro export (adds `syn`/`quote`) and calling arbitrary crate functions directly (a `u128` result does not fit `int`) were rejected.
-2. **`run` is native for interop programs.** The interpreter cannot call Rust: loading a library at run time needs `unsafe` in the compiler, which stays `forbid(unsafe_code)`. `run` of a program that imports a binding builds it natively and executes it, printing one line on stderr every run saying so. Like `cargo run`, this runs the binding's build scripts and fetches its dependencies: the same trust as building it.
-3. **Naming a binding: `--rust name=path`** on `check`, `run` and `build`. Interim: M6d's manifest supersedes it.
+1. **Binding crate plus stub.** The app owns a *binding crate*: ordinary Rust with no Pythrust dependency. Its *stub* is a `.pyr` file of `temper def` signatures whose bodies are `...`. Outside a stub a `...` body is a named error ("stub bodies only; use pass"), a deliberate omission listed in the deviations, to revisit when Protocol or trait support lands. A stub parameter written `mut` or `owned` is a named error ("not supported in stubs yet"), since a change Rust makes would be lost.
+2. **`run` refuses for now.** The interpreter cannot call Rust: loading a library at run time needs `unsafe` in the compiler. `run` of a program that imports a binding is the named gap "run cannot call Rust bindings yet; use build". Revisit when an app needs `run` for interop programs.
+3. **Naming a binding: `--rust name=path`** on `check` and `build` (and on `run`, which then refuses). Interim: M6d's manifest supersedes it.
 4. **Driver:** fclone-lite hashing with xxh3 through a `fastfs` binding (below).
-5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/` beside the program (ignored by git), so a rebuild recompiles only what changed.
+5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/` next to the program's `.pyr` file, ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
+
+## Alternatives considered
+
+| Option | Why not |
+| --- | --- |
+| A builtin xxh3 in `pythrust-rt`, as `hashlib.sha256` is | Fixes the driver, not the design's promise of calling Rust crates; every later crate would need the same |
+| A proc-macro export attribute in the binding | Adds `syn` and `quote`, and the binding then depends on Pythrust |
+| Hand-written `extern "C"` functions in the binding | Puts `unsafe` in every app, unaudited |
+| Calling arbitrary crate functions directly | Results such as `u128` do not fit `int`; the binding is where an app adapts a crate |
+| One staticlib per binding | Each would carry its own copy of std; two in one executable clash |
+| Loading a library at run time | Needs `unsafe` in the compiler, or a C loader in the runtime, for `run` only |
 
 ## How a call works
 
-```
-apps/fclone-lite/fastfs/Cargo.toml     # depends on xxhash-rust and rayon
+```text
+apps/fclone-lite/fastfs/Cargo.toml     # depends on xxhash-rust; declares an empty [workspace]
 apps/fclone-lite/fastfs/Cargo.lock     # committed; required
 apps/fclone-lite/fastfs/src/lib.rs     # pub fn file_xxh3(path: &str) -> std::io::Result<String>
-apps/fclone-lite/fastfs/fastfs.pyr     # temper def file_xxh3(path: str) -> str raises OSError: ...
+apps/fclone-lite/fastfs/fastfs.pyr     # the stub, below
+```
+
+```python
+temper def file_xxh3(path: str) -> str raises OSError:
+    ...
 ```
 
 The program writes `import fastfs` and calls `fastfs.file_xxh3(p)`. Imports keep M6a's rules: first in the module, no `from`, a module is not a value.
 
-1. `check` reads the stub and checks calls against it like any tempered function. No cargo.
-2. `build` writes a generated crate into `.pythrust/`: one `extern "C"` shim per stub function (`pt_rs_fastfs_file_xxh3`) that converts the arguments, calls `fastfs::file_xxh3`, and converts the result. It depends on the binding and on `pythrust-rt` (as an rlib) and is built as the one staticlib the program links in place of the plain runtime. Two Rust staticlibs in one executable would each carry std, so there is exactly one.
+### Resolution
+
+- `--rust name=path` comes before the file and may repeat. `path` is the binding's directory, and the stub is `path/name.pyr`.
+- `name` is the binding crate's library name, a Rust identifier, and the shim calls `name::function`: stub functions live at the crate root.
+- A name that is a standard module (`sys`, `os`, `hashlib`) or repeats is an error. So is a missing directory or stub, and an `import` of a name no `--rust` gives.
+
+### Front end
+
+The driver passes the parsed stubs to the parser (`parser::parse` gains the bindings), which resolves `fastfs.file_xxh3` to one dotted name as it does `os.listdir`. A stub function is a function with a signature and no body: `infer` checks calls against it and skips the return check; `own` gives it a fixed summary (every parameter `read`, a fresh result), as it does module functions today; `rc` treats its result as fresh. The lexer gains a `...` token, and a stub body may sit on the `def` line or the next. Stub diagnostics are rendered against the stub's own file, so spans carry which source they belong to. The `raises Exception` lint skips stubs, whose bodies say nothing.
+
+### Build
+
+1. `check` reads the stubs and checks calls against them. No cargo.
+2. `build` writes a generated crate into `.pythrust/`: one `extern "C"` shim per stub function, which converts the arguments, calls the binding, and converts the result. It depends on every binding and on `pythrust-rt` by path, and cargo builds it as the one staticlib the program links in place of the plain runtime.
 3. **Reproducible dependencies.** The binding's committed `Cargo.lock` decides every crates.io version. `cargo build --locked` cannot be used: the generated crate is the root, so its lockfile must also list the generated package and `pythrust-rt`, which the binding's lock lacks, and cargo refuses to add them under `--locked` (checked with cargo 1.99.1 on a scratch binding). Instead `build`:
     1. copies the binding's `Cargo.lock` into `.pythrust/` as the seed;
-    2. runs `cargo build` without `--locked`; cargo keeps every version the seed pins and adds only the two path packages (also checked: a seeded `itoa 1.0.1` stayed `1.0.1`);
+    2. runs `cargo build` without `--locked`; cargo keeps every version the seed pins and adds only the path packages (also checked: a seeded `itoa 1.0.1` stayed `1.0.1`);
     3. compares the registry entries (name, version, checksum) of the resulting lock with the binding's, and fails with a named error if any was added, removed or changed ("binding `fastfs`: dependencies differ from its Cargo.lock; update and commit the binding's lockfile"). `pythrust-rt` has no dependencies, so any registry difference comes from the binding.
 
-    A binding without a `Cargo.lock` is a named error ("binding `fastfs` has no Cargo.lock; run `cargo generate-lockfile` in it and commit the file"). The generated manifest declares an empty `[workspace]`, so a `.pythrust/` inside another cargo workspace still builds. The regression test is a clean first build from an ordinary binding lock, not only a warm rebuild.
-4. rustc compiles the shims against the real signatures, so a stub saying `bytes` where Rust takes `&str` fails the build. Pythrust reports "`fastfs.pyr:3`: the stub for `file_xxh3` does not match the Rust function" and shows rustc's output after it, as Rust's output, not as a Pythrust diagnostic (the vocabulary test keeps scanning Pythrust's own strings).
-5. Codegen calls a shim like the M6a functions that raise (`os.listdir`): scalars and pointers, plus the call site's rendered diagnostic (`head`, `tail`, as `os.rs`'s `Site`). On an error the shim sets the runtime's pending exception (`exc.rs`) and returns a placeholder, and lowering tests the pending flag after the call (`check_raised`), as for any call that may raise. There is no new per-call status return, and the C ABI is unchanged.
+    A binding without a `Cargo.lock` is a named error ("binding `fastfs` has no Cargo.lock; run `cargo generate-lockfile` in it and commit the file"). The regression test is a clean first build from an ordinary binding lock, not only a warm rebuild.
+4. rustc compiles the shims against the real signatures, so a stub saying `bytes` where Rust takes `&str` fails the build. Each shim carries a comment naming its stub line, so Pythrust reports "`fastfs.pyr:1`: the stub for `file_xxh3` does not match the Rust function" and then rustc's output, as Rust's output, not as a Pythrust diagnostic. An error outside the shims (in the binding, or fetching a crate) is reported as "binding `fastfs` failed to build" with cargo's output.
+5. The link reuses `link_in` with the generated staticlib in place of `runtime_lib()`, and with the native libraries cargo reports for it (`--print native-static-libs`) in place of the fixed `NATIVE_LIBS` list, since a binding's dependencies may need more.
+
+### Plumbing
+
+| Item | Choice |
+| --- | --- |
+| Runtime as a dependency | `pythrust-rt` gains `rlib` beside `staticlib` |
+| Runtime source | a path fixed when `pythrust` is compiled (its `CARGO_MANIFEST_DIR`), overridable by `PYTHRUST_RT_SRC`; an interop build ignores `PYTHRUST_RT` |
+| Generated manifest | edition 2021, an empty `[workspace]`, crate `pythrust_bindings` |
+| Profile | the profile `pythrust` itself was built with, so the debug leak check stays on in tests; `panic = "unwind"` always |
+| Target | `--target` set to the host triple `pythrust` targets, so a `windows-gnu` default cannot meet MSVC's `link.exe` |
+| Directories | `--target-dir .pythrust/target`; generated sources written to a temporary file and renamed. The object file and final link still use the private build directory (`private_dir`) |
+| Minimum toolchain | Rust 1.82 (`#[unsafe(no_mangle)]`); a missing `cargo` or an older rustc is a named error |
+
+### The shim
+
+Shims follow the M6a functions that raise (`pt_os_path_getsize` in `os.rs`): scalars and pointers in, the call site's rendered diagnostic as `head`/`tail` pointers, and on an error the runtime's pending exception (`exc.rs`) is set and a placeholder returned; lowering tests the pending flag after the call (`check_raised`), as for any call that may raise. There is no per-call status return, and the C ABI is unchanged. The whole template for `file_xxh3`:
+
+```rust
+// fastfs.pyr:1
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_rs_6fastfs_9file_xxh3(
+    path: *const pythrust_rt::abi::Str,
+    head: *const u8, head_len: usize, tail: *const u8, tail_len: usize,
+) -> *mut pythrust_rt::abi::Str {
+    // SAFETY: codegen passes a live string and a static site.
+    let (path, at) = unsafe { (pythrust_rt::abi::arg_str(path), pythrust_rt::abi::site(head, head_len, tail, tail_len)) };
+    pythrust_rt::abi::call(at, || fastfs::file_xxh3(path))
+}
+```
+
+The symbol length-prefixes each part, so no two binding and function names collide. `abi` is a new, safe public module of `pythrust-rt` holding everything else: `arg_*` conversions in (a `bool` arrives as a `u8`), the `IntoResult` trait out (implemented for each result type in the table, and for `Result<T, std::io::Error>`, which raises), and `call`, which flushes the runtime's buffered stdout, runs the function under `catch_unwind`, and converts the result or the panic. A stub saying `-> str` over a Rust function returning `i64`, or declaring no `raises` over a function returning `Result`, fails rustc because no `IntoResult` matches.
 
 ## Unsafe
 
-The compiler stays `forbid(unsafe_code)`. The generated shims are the only new `unsafe`: `#[unsafe(no_mangle)]` and the pointer reads at the boundary, all from one fixed template in the compiler, audited like `pythrust-rt`'s C surface. Conversions live in a new safe module, `pythrust-rt::abi`, so the template is a few lines per function. A test generates the shims for the probe binding's stub and checks that the source holds only the template's expected `unsafe` items, so the template cannot grow new ones silently. CLAUDE.md's exception names the generated binding shims.
+The compiler stays `forbid(unsafe_code)`. The generated shims are the only new `unsafe` Pythrust writes, all from the one fixed template above, audited like `pythrust-rt`'s C surface. A test generates the shims for the probe binding's stub and checks each holds exactly one `#[unsafe(no_mangle)]`, one `unsafe extern "C" fn` and one `unsafe {}` block, and nothing else marked `unsafe`. The template's names avoid the words the vocabulary test (`tests/vocabulary.rs`) bans. [CLAUDE.md](../../CLAUDE.md)'s `unsafe` exception names the generated shims. The binding's own dependencies may use `unsafe`; trusting them is the same as trusting any crate the app depends on.
 
 ## Types across the boundary
 
-Only plain values cross, and every parameter is `read`: Rust borrows for the call or gets a copy, and cannot keep a Pythrust value, since a borrowed `&str` or `&[u8]` cannot outlive the call.
+Every parameter is `read`: Rust borrows for the call, and a borrow cannot outlive it.
 
 | Pythrust | Rust parameter | Rust result | Notes |
 | --- | --- | --- | --- |
-| `int` | `i64` | `i64`; `u64`, `usize`, `i32`, `u32` | A result outside `i64` is the fatal integer overflow, as `2 ** 64` is |
+| `int` | `i64` | `i64` | |
 | `float` | `f64` | `f64` | |
-| `bool` | `bool` | `bool` | |
-| `None` | (none) | `()` | |
-| `str` | `&str` | `String`, `&'static str` | No copy in; a fresh string out |
+| `bool` | `bool` | `bool` | Crosses the C ABI as a `u8` |
+| `None` | not allowed | `()` | |
+| `str` | `&str` | `String` | No copy in; a fresh string out |
 | `bytes` | `&[u8]` | `Vec<u8>` | No copy in |
-| `list[T]`, `T` one of the above | `Vec<T>` | `Vec<T>` | A copy each way |
 
-**Threads.** A binding's threads see only plain Rust data and call-scoped borrows, never runtime objects. Every argument is converted on the calling thread before the binding runs: a list becomes a `Vec` of plain Rust values (`String`, not a runtime string). A `&str` or `&[u8]` argument borrows the runtime's immutable buffer, and safe Rust may hand it to scoped threads (`std::thread::scope`) that are joined before the call returns; that is allowed (Nano, 2026-10-31), since the buffer cannot change or be freed during the call. Runtime handles and refcount operations stay on the calling thread, and results are converted back there, so the refcounts stay single-threaded until M6c. The probe binding includes a function that spawns threads over a copied list and one whose scoped thread reads a borrowed `&str`, tested on every CI platform and under memcheck.
+### Threads
 
-**Errors.** A result of `Result<T, E>` raises when it is `Err`, and the stub must say `raises`, as any tempered function must. `E = std::io::Error` reuses M6a's mapping: the four known `OSError` subclasses map (`FileNotFoundError`, `PermissionError`, `IsADirectoryError`, `NotADirectoryError`); other errors become a plain `OSError` (a listed deviation: CPython raises e.g. `FileExistsError`). An `io::Error` carries no file name, so `str(e)` lacks CPython's `: 'path'`. `E = pythrust_rt::abi::Raise` (an exception kind and a message) raises a named builtin such as `ValueError`. The shim checks the raised class against the stub's `raises`; an undeclared one stops the program with a fault naming the stub. (design.md's "cheap check at the crossing" is the Python bridge's; this is the same idea applied to a stub's `raises`.)
+Pythrust values never reach Rust threads; Rust threads see plain Rust data and call-scoped borrows (Nano, 2026-10-31). A binding may hand a `&str` or `&[u8]` argument to scoped threads (`std::thread::scope`) joined before it returns: the borrow checker already keeps them from outliving the call, and the runtime buffer cannot change during it. Runtime handles and refcount operations happen only on the calling thread, so refcounts stay single-threaded until M6c (concurrency). A panic in a thread the binding detaches and never joins is not caught.
 
-**Panics.** Each shim catches a panic, which would otherwise abort across `extern "C"`, and stops the program as a fault does: the panic's message, exit 1. A panic is never catchable, like overflow.
+### Errors
 
-**Ownership.** Every result is a new value owned by the caller, so `own` and `rc` treat a shim call as a runtime constructor. Tuples stay out of the ABI, as Nano required for the boxed layout ([native.md](../native.md)).
+A function returning `Result<T, std::io::Error>` raises on `Err`, and its stub must say `raises OSError` (or `Exception`); rustc enforces the match through `IntoResult`, so there is no runtime check. M6a's mapping applies: the four known subclasses map (`FileNotFoundError`, `PermissionError`, `IsADirectoryError`, `NotADirectoryError`), and any other error is a plain `OSError`, a listed deviation (CPython raises e.g. `FileExistsError`). An `io::Error` carries no file name, so `str(e)` lacks CPython's `: 'path'`; one without an errno raises `OSError` with its message alone. Other error types are not accepted.
+
+### Panics
+
+`call` catches a panic, which would otherwise abort across `extern "C"`, and stops the program as a fault does: it flushes stdout, prints Pythrust's fault diagnostic at the call site with the panic's message (a non-string payload reads "Rust panic"), and exits 1. A panic hook installed at startup keeps Rust's own "thread panicked" line from also printing. A panic is never catchable, like overflow.
+
+### Ownership
+
+Every result is a new value owned by the caller, which is how `own` and `rc` (the ownership and refcount analyses) already treat a module function's result. Tuples stay out of the ABI, as Nano required for the boxed layout ([native.md](../native.md#choices-made-inside-the-settled-design)).
 
 ## Oracle
 
-CPython cannot import a Rust binding, so an interop program has no CPython oracle. Its tests compare its output with a pure-Pythrust program doing the same work; for the driver, `fclone_lite.py`. Interop is a Pythrust extension, listed as such in [grammar.md](../grammar.md#deviations-from-python), not a deviation of shared behavior.
+CPython cannot import a Rust binding, so an interop program has no CPython oracle. Its tests compare it with a pure-Pythrust program doing the same work; for the driver, `fclone_lite.py`. Interop is a Pythrust extension, listed as such in [grammar.md](../grammar.md#deviations-from-python).
 
 ## Driver: fast fclone-lite
 
-M6a left native fclone-lite hash-bound (see the roadmap's M6a hashing entry). rusty_fclone's edge is xxh3, partial hashing and rayon, which a binding can call. The driver is `apps/fclone-lite/fclone_fast.pyr`: the same walk and grouping in Pythrust, hashing through `fastfs`.
+`apps/fclone-lite/fclone_fast.pyr` keeps fclone-lite's walk and grouping by size, and hashes each file with `fastfs.file_xxh3(path: str) -> str raises OSError`: xxh3-128 of the file streamed in Rust, as 32 lowercase hex digits. Partial hashing, which rusty_fclone also uses, is an algorithm change pure Pythrust can make once a sized `read` exists, so it is out of scope; the rusty_fclone row is not like-for-like.
 
-1. `fastfs.file_xxh3(path: str) -> str raises OSError`: xxh3-128 of the file streamed in Rust, as 32 hex digits. It exercises `str` in and out and `io::Error` to `OSError`.
-2. `fastfs.group_xxh3(paths: list[str]) -> list[str]`: the same for a whole size group, hashed in parallel with rayon, one digest per path. A file that fails to read gives `""`; a comment on the stub's signature says so. The driver re-hashes each `""` entry with `file_xxh3`, so its `OSError` surfaces exactly as in the serial driver. It exercises `list[str]` both ways and the thread rule above.
+Done means: the same duplicate groups as `fclone_lite.py` on the M6a trees, compared as sets of groups, since `fclone_lite.py` prints a size's groups in SHA-256 digest order and xxh3 orders them differently; fixtures with two distinct duplicated payloads of one size, and with an unreadable file (made unreadable by a method that holds for root, and skipped visibly where none exists, as on Windows); benchmark rows for native fclone-lite, `fclone_fast`, CPython and rusty_fclone; and xxhash-rust justified in the driver PR as the app's dependency. No speedup is claimed before the benchmark runs.
 
-Done means: the same duplicate groups as `fclone_lite.py` on the M6a trees and on a tree holding an unreadable file, compared as normalized groups, since `fclone_lite.py` prints a size's groups in SHA-256 digest order and xxh3 orders them differently; a fixture holds two distinct duplicated payloads of the same size (an xxh3 collision is ignored, as rusty_fclone does); benchmark rows for native fclone-lite, `fclone_fast` with each function, CPython and rusty_fclone; and xxhash-rust and rayon justified in that PR as the app's dependencies. No speedup is claimed before the benchmark runs.
+**Follow-up only if measured:** if `fclone_fast` is not already I/O-bound, a later PR adds `group_xxh3(paths: list[str]) -> list[str]`, hashing a size group in parallel with rayon, with the `list[str]` row and a probe whose scoped thread reads a borrowed `&str`.
 
 ## Not in this cut
 
-Each waits for an app that needs it: Rust objects held by Pythrust (a hasher with `update`), callbacks from Rust into Pythrust, `dict`, `set` and tuples crossing, `mut` parameters (`&mut Vec`), generic functions, naming crates.io crates directly in `import`, and the manifest (M6d).
+Each waits for an app that needs it: named-builtin raises (`abi::Raise`); lists, `dict`, `set` and tuples crossing; other integer widths and `&'static str` results; native `run`; Rust objects held by Pythrust (a hasher with `update`); callbacks from Rust into Pythrust; `mut` parameters; generic functions; naming crates.io crates directly in `import`; and the manifest (M6d).
 
 ## Risks
 
-- **Build time.** A first build compiles the runtime and the binding with cargo: likely tens of seconds, then incremental. Measured in the native PR.
-- **Runtime source.** The generated crate needs `pythrust-rt` as source. Inside the repo that is a path dependency; an installed `pythrust` must ship it, which is M6d's problem.
-- **Windows.** The combined staticlib must link with MSVC as today's runtime does; the existing Windows job covers it.
+| Risk | Mitigation |
+| --- | --- |
+| `build` runs the binding's build scripts and fetches its crates | The same trust as `cargo build`; `--rust` names each binding explicitly, and the lockfile check pins versions |
+| First build time (runtime plus binding with cargo, probably tens of seconds) | Incremental after that; measured in the plumbing PR, which fails if a first CI build exceeds 120 s |
+| Runtime source missing for an installed `pythrust` | `PYTHRUST_RT_SRC` names it; shipping it is M6d's |
+| A binding's dependencies need system libraries | Taken from cargo's `native-static-libs` |
+| Binding output interleaving with Pythrust's buffered stdout | `call` flushes before every shim call; a binding calling `std::process::exit` loses unflushed output, a documented limit |
+| Windows linking | Target pinned to MSVC; the existing Windows job builds the probe |
