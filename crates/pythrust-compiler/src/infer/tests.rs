@@ -853,7 +853,7 @@ fn builtin_misuse_is_an_error() {
         ),
         (
             b.call("list", vec![b.s("ab")]),
-            "`list` copies a list: expected list[T0], found str",
+            "`list` copies a list, dict, set or dict view, not str",
         ),
         (
             b.call("list", vec![]),
@@ -1977,9 +1977,13 @@ fn dict_and_set_displays_infer_their_types() {
     assert_eq!(ret("{1, 2}"), "set[int]");
     assert_eq!(ret("set(\"ab\")"), "set[str]");
     assert_eq!(ret("set(range(3))"), "set[int]");
-    assert_eq!(ret("{1: 2}.keys()"), "list[int]");
-    assert_eq!(ret("{1: \"a\"}.values()"), "list[str]");
-    assert_eq!(ret("{1: \"a\"}.items()"), "list[tuple[int, str]]");
+    assert_eq!(ret("{1: 2}.keys()"), "dict_keys[int]");
+    assert_eq!(ret("{1: \"a\"}.values()"), "dict_values[str]");
+    assert_eq!(ret("{1: \"a\"}.items()"), "dict_items[int, str]");
+    assert_eq!(ret("list({1: \"a\"}.items())"), "list[tuple[int, str]]");
+    assert_eq!(ret("list({\"k\": 1})"), "list[str]");
+    assert_eq!(ret("sorted({2, 1})"), "list[int]");
+    assert_eq!(ret("sorted({1: 2}.values())"), "list[int]");
     assert_eq!(ret("{1: \"a\"}.get(1)"), "str | None");
     assert_eq!(ret("{1: \"a\"}.get(1, \"z\")"), "str");
     assert_eq!(ret("len({1: 2}) + len({3})"), "int");
@@ -2014,18 +2018,20 @@ fn generic_functions_take_dicts() {
 #[test]
 fn keys_and_elements_must_be_hashable() {
     let msg = |src: &str| src_err(src);
-    let why = "cannot be a dict key or set element; use int, str, bool, None or a tuple of them";
-    assert_eq!(msg("d = {[1]: 2}\n"), format!("list[int] {why}"));
-    assert_eq!(msg("d = {1.5: 2}\n"), format!("float {why}"));
-    assert_eq!(msg("s = {(1, [2])}\n"), format!("list[int] {why}"));
-    assert_eq!(msg("s = {{1: 2}}\n"), format!("dict[int, int] {why}"));
-    assert_eq!(msg("s = set([[1]])\n"), format!("list[int] {why}"));
-    assert_eq!(msg("x: set[set[int]] = set()\n"), format!("set[int] {why}"));
-    assert_eq!(msg("s = set()\ns.add(1.0)\n"), format!("float {why}"));
-    assert_eq!(
-        msg("def f(d):\n    d[0.5] = 1\nf({})\n"),
-        format!("float {why}")
-    );
+    let kinds = "a key or element is int, str, bool, None or a tuple of them";
+    let unhashable = |t: &str| format!("unhashable type: {t}; {kinds}");
+    let later = |t: &str| format!("{t} dict keys and set elements are not supported yet; {kinds}");
+    assert_eq!(msg("d = {[1]: 2}\n"), unhashable("list[int]"));
+    assert_eq!(msg("s = {(1, [2])}\n"), unhashable("list[int]"));
+    assert_eq!(msg("s = {{1: 2}}\n"), unhashable("dict[int, int]"));
+    assert_eq!(msg("s = set([[1]])\n"), unhashable("list[int]"));
+    assert_eq!(msg("x: set[set[int]] = set()\n"), unhashable("set[int]"));
+    assert_eq!(msg("s = {{1: 2}.keys()}\n"), unhashable("dict_keys[int]"));
+    assert_eq!(msg("d = {1.5: 2}\n"), later("float"));
+    assert_eq!(msg("d = {(1, 2.5): 2}\n"), later("float"));
+    assert_eq!(msg("s = set()\ns.add(1.0)\n"), later("float"));
+    assert_eq!(msg("def f(d):\n    d[0.5] = 1\nf({})\n"), later("float"));
+    assert_eq!(msg("s = {ValueError()}\n"), later("Exception"));
     assert_eq!(
         msg("x: dict[int | None, tuple[str, bool]] = {}\n"),
         "no error"
@@ -2092,6 +2098,38 @@ fn dict_and_set_misuse_is_an_error() {
             "x = set(1, 2)\n",
             "`set` takes 0 to 1 arguments but 2 were given",
         ),
+        (
+            "x = {1: 2}.keys()\nprint(x == x)\n",
+            "dict_keys[int] cannot be compared",
+        ),
+        (
+            "print({1: 2}.items()[0])\n",
+            "dict_items[int, int] is not subscriptable",
+        ),
+        (
+            "a, b = {1: 2, 3: 4}.keys()\n",
+            "cannot unpack dict_keys[int]",
+        ),
+        (
+            "print({1: 2}.values() + [1])\n",
+            "unsupported operand types for +",
+        ),
+        (
+            "print(list(\"ab\"))\n",
+            "`list` copies a list, dict, set or dict view, not str",
+        ),
+        (
+            "print(sorted([{1}]))\n",
+            "cannot order set[int] against set[int]",
+        ),
+        (
+            "print(sorted([1], reverse=True))\n",
+            "`sorted` takes no keyword arguments",
+        ),
+        (
+            "d = {1: \"a\"}\nprint(d.get(\"x\"))\n",
+            "dict key: expected int, found str",
+        ),
     ];
     for (src, want) in cases {
         let got = src_err(src);
@@ -2103,4 +2141,29 @@ fn dict_and_set_misuse_is_an_error() {
 fn optional_dict_and_set_literals_check_against_the_present_type() {
     let src = "x: dict[str, int] | None = {\"a\": 1}\ny: set[int | None] | None = {None}\n";
     assert!(infer_src(src).is_ok(), "{}", src_err(src));
+}
+
+#[test]
+fn a_dict_or_set_probe_must_be_hashable() {
+    let why = "float dict keys and set elements are not supported yet";
+    assert!(src_err("print(1.0 in {1})\n").contains(why));
+    assert!(src_err("print(1.0 not in {1: 2})\n").contains(why));
+    assert!(src_err("print(1.0 in {1: 2}.keys())\n").contains(why));
+    assert_eq!(src_err("print(1.0 in {1: 2}.values())\n"), "no error");
+    assert_eq!(
+        src_err("print(True in {1}, 1.0 in [1], 1 in {1: 2})\n"),
+        "no error"
+    );
+}
+
+#[test]
+fn get_without_a_default_never_drops_its_none() {
+    let msg = "`get` without a default may return None, but int is expected";
+    assert!(src_err("d = {}\nx: int = d.get(1)\n").starts_with(msg));
+    assert!(src_err("d = {}\nx = d.get(1)\nx = 5\n").starts_with(msg));
+    assert_eq!(
+        src_err("d = {}\nx: int | None = d.get(1)\nprint(x)\n"),
+        "no error"
+    );
+    assert_eq!(src_err("d = {}\nprint(d.get(1))\n"), "no error");
 }

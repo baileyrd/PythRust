@@ -1,4 +1,5 @@
-//! The closed builtin functions: `print len list set range str int float bool`,
+//! The closed builtin functions: `print len list set sorted range str int
+//! float bool`,
 //! and the builtin exception classes (D6, B4), which build an `Exception`
 //! when called.
 
@@ -21,7 +22,7 @@ pub(super) fn exception_names() -> String {
 pub(super) fn is_builtin(name: &str) -> bool {
     let function = matches!(
         name,
-        "print" | "len" | "list" | "set" | "range" | "str" | "int" | "float" | "bool"
+        "print" | "len" | "list" | "set" | "sorted" | "range" | "str" | "int" | "float" | "bool"
     );
     function || is_exception(name)
 }
@@ -43,6 +44,7 @@ impl Checker {
             }
             "list" => self.copy_list(args, span),
             "set" => self.new_set(args, span),
+            "sorted" => self.sorted(args, span),
             "range" => self.range(args, span),
             "str" | "bool" => {
                 self.positional(name, args, 0, 1, span)?;
@@ -76,13 +78,36 @@ impl Checker {
         Ok(Type::None)
     }
 
-    /// `list(xs)`: a shallow copy of a list, of the same type.
+    /// `list(x)`: a new list of a list's elements (a shallow copy), a
+    /// dict's keys, a set's elements or a dict view's items.
     fn copy_list(&mut self, args: &[Arg], span: Span) -> Result<Type> {
-        let list = Type::List(Box::new(self.subst.fresh()));
-        for (t, at) in self.positional("list", args, 1, 1, span)? {
-            self.expect(at, &list, &t, "`list` copies a list")?;
+        let elem = self.subst.fresh();
+        for (arg, _) in self.positional("list", args, 1, 1, span)? {
+            let need = Need::ToList {
+                arg,
+                elem: elem.clone(),
+            };
+            self.need(need, span);
         }
-        Ok(list)
+        Ok(Type::List(Box::new(elem)))
+    }
+
+    /// `sorted(xs)`: a new list of what `xs` iterates over, in `<` order.
+    fn sorted(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        let elem = self.subst.fresh();
+        for (iterable, _) in self.positional("sorted", args, 1, 1, span)? {
+            let need = Need::Iter {
+                iterable,
+                elem: elem.clone(),
+            };
+            self.need(need, span);
+        }
+        let order = Need::Order {
+            left: elem.clone(),
+            right: elem.clone(),
+        };
+        self.need(order, span);
+        Ok(Type::List(Box::new(elem)))
     }
 
     /// `set()` or `set(xs)`: a new set of what `xs` iterates over.

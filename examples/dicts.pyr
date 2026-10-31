@@ -46,3 +46,15 @@ def count(words: list[str]) -> dict[str, int]:
     return counts
 
 print(count(["a", "b", "a", "c", "b", "a"]))
+
+views = {"b": 2, "a": 1}
+print(views.keys(), views.values(), views.items())
+print(len(views.items()), "a" in views.keys(), 2 in views.values(), ("a", 1) in views.items())
+print(bool({}.keys()), list(views), sorted(views), sorted(views.values()), list(views.items()))
+for key in views.keys():
+    views[key] = 0
+print(views)
+
+by_int = {1: "one"}
+by_int[True] = "true"
+print(by_int, by_int[1], by_int.get(True), True in by_int)

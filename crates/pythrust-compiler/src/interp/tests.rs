@@ -1537,13 +1537,37 @@ fn unhashable_keys_and_bad_method_calls_are_type_errors() {
 }
 
 #[test]
-fn views_are_new_lists_and_set_copies_an_iterable() {
+fn views_are_snapshots_and_set_copies_an_iterable() {
     let out = src_ok(
         "d = {'a': 1, 'b': 2}\nks = d.keys()\nd['c'] = 3\nprint(ks, d.values(), d.items())\n",
     );
-    assert_eq!(out, "['a', 'b'] [1, 2, 3] [('a', 1), ('b', 2), ('c', 3)]\n");
+    assert_eq!(
+        out,
+        "dict_keys(['a', 'b']) dict_values([1, 2, 3]) dict_items([('a', 1), ('b', 2), ('c', 3)])\n"
+    );
+    let out =
+        src_ok("v = {1: 'x'}.items()\nprint(len(v), (1, 'x') in v, list(v), bool({}.keys()))\n");
+    assert_eq!(out, "1 True [(1, 'x')] False\n");
     let out = src_ok("print(set('abca'), set([3, 1, 3]), set({2: 0, 1: 0}), len(set(range(5))))\n");
     assert_eq!(out, "{'a', 'b', 'c'} {3, 1} {2, 1} 5\n");
     let out = src_ok("a, b = {'x': 1, 'y': 2}\nprint(a, b, bool({}), bool({0}))\n");
     assert_eq!(out, "x y False True\n");
+}
+
+#[test]
+fn sorted_is_stable_and_uses_less_than() {
+    let out = src_ok("print(sorted([(1, 'b'), (0, 'z'), (1, 'a')]), sorted('cba'), sorted({3: 0, 1: 0}), sorted([]))\n");
+    assert_eq!(
+        out,
+        "[(0, 'z'), (1, 'a'), (1, 'b')] ['a', 'b', 'c'] [1, 3] []\n"
+    );
+    let out = src_ok("xs = [3, 1, 2]\nys = sorted(xs)\nprint(xs, ys, sorted([1.5, True, 0]))\n");
+    assert_eq!(out, "[3, 1, 2] [1, 2, 3] [0, True, 1.5]\n");
+    assert!(src_fails("sorted([1, 'a'])\n").starts_with("TypeError: '<' not supported"));
+}
+
+#[test]
+fn a_bool_key_is_the_int_it_equals() {
+    let out = src_ok("d = {1: 'one'}\nd[True] = 'true'\nprint(d, d[True], d.get(True), True in {1}, 0 in {False})\n");
+    assert_eq!(out, "{1: 'true'} true true True True\n");
 }

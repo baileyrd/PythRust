@@ -457,7 +457,7 @@ impl<'a> Cx<'a> {
 fn is_closed(t: &Type, subst: &Subst) -> bool {
     match t {
         Type::Var(v) => subst.contains_key(v),
-        Type::List(t) | Type::Set(t) | Type::Optional(t) => is_closed(t, subst),
+        Type::List(t) | Type::Set(t) | Type::Optional(t) | Type::View(_, t) => is_closed(t, subst),
         Type::Dict(k, v) => is_closed(k, subst) && is_closed(v, subst),
         Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
@@ -493,7 +493,7 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::Exception => Ty::Exc,
         // No native dict or set yet, so the body built none: any slot
         // type will do, as for an open variable.
-        Type::Dict(..) | Type::Set(_) => Ty::None,
+        Type::Dict(..) | Type::Set(_) | Type::View(..) => Ty::None,
     }
 }
 
@@ -931,6 +931,7 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::Exception => Ok(Ty::Exc),
         Type::Dict(..) => Err(unsupported(span, "dicts")),
         Type::Set(_) => Err(unsupported(span, "sets")),
+        Type::View(..) => Err(unsupported(span, "dict views")),
         Type::Var(v) => subst
             .get(v)
             .copied()

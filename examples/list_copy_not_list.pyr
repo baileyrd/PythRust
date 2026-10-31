@@ -1,4 +1,4 @@
-# deviation: `list(x)` only copies a list; CPython also accepts any iterable.
+# deviation: `list(x)` copies a list, dict, set or dict view only; CPython also accepts any iterable.
 # expect-exit: 1
 # expect-error: `list` copies a list
 print("before")

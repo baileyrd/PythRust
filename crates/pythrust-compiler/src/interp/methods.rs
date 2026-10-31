@@ -10,6 +10,7 @@ use super::value::{ListRef, Value};
 use super::{rt_err, Exec};
 use crate::ast::Ident;
 use crate::diag::Result;
+use crate::infer::View;
 
 /// A method's name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,14 +153,19 @@ pub(super) fn call<'m>(m: &Method<'m>, args: Args<'m>) -> Exec<'m, Value<'m>> {
             let default = arg();
             Ok(dict.borrow().get(&key).cloned().unwrap_or(default))
         }
-        Method::Table(view, _, dict) => {
+        Method::Table(name, _, dict) => {
             let dict = dict.borrow();
+            let view = match name {
+                Name::Keys => View::Keys,
+                Name::Values => View::Values,
+                _ => View::Items,
+            };
             let items = dict.entries().iter().map(|(k, v)| match view {
-                Name::Keys => k.clone(),
-                Name::Values => v.clone(),
-                _ => Value::Tuple(Rc::from([k.clone(), v.clone()])),
+                View::Keys => k.clone(),
+                View::Values => v.clone(),
+                View::Items => Value::Tuple(Rc::from([k.clone(), v.clone()])),
             });
-            Ok(Value::list(items.collect()))
+            Ok(Value::View(view, items.collect()))
         }
     }
 }

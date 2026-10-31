@@ -12,7 +12,7 @@ use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 
 use super::subst::{Clash, Subst};
-use super::ty::{Type, TypeVar};
+use super::ty::{Type, TypeVar, View};
 
 /// What a constraint requires.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +58,23 @@ pub(super) enum Need {
     /// A dict key or set element type: `int`, `str`, `bool`, `None`, or
     /// a tuple or optional of them.
     Hashable(Type),
+    /// `index` is a key of a dict keyed by `key` (`d.get(index)`).
+    Key {
+        key: Type,
+        index: Type,
+    },
+    /// `list(x)` is a `list[elem]`: `x` is a list, a dict (its keys), a
+    /// set or a dict view.
+    ToList {
+        arg: Type,
+        elem: Type,
+    },
+    /// `item in container`: a dict or set hashes `item`, so it must be
+    /// hashable even where `==` would compare it (`1.0 in {1}`).
+    Probe {
+        container: Type,
+        item: Type,
+    },
     /// `out` is `value | None` (`d.get(k)`), or `value` when that already
     /// admits `None`.
     OrNone {
@@ -196,6 +213,18 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             elems: elems.iter().map(r).collect(),
         },
         Need::Hashable(t) => Need::Hashable(r(t)),
+        Need::Key { key, index } => Need::Key {
+            key: r(key),
+            index: r(index),
+        },
+        Need::ToList { arg, elem } => Need::ToList {
+            arg: r(arg),
+            elem: r(elem),
+        },
+        Need::Probe { container, item } => Need::Probe {
+            container: r(container),
+            item: r(item),
+        },
         Need::OrNone { value, out } => Need::OrNone {
             value: r(value),
             out: r(out),
@@ -220,6 +249,9 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Equal { left, right } | Need::Order { left, right } => vec![left, right],
         Need::Len(t) | Need::Hashable(t) | Need::ToNumber { arg: t, .. } => vec![t],
         Need::OrNone { value, out } => vec![value, out],
+        Need::Probe { container, item } => vec![container, item],
+        Need::ToList { arg, elem } => vec![arg, elem],
+        Need::Key { key, index } => vec![key, index],
         Need::Iter { iterable, elem } => vec![iterable, elem],
         Need::Assign { target, value, .. } => vec![target, value],
         Need::Index {
@@ -247,6 +279,9 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         Need::Unpack { value, elems } => unpack(s, c, value, elems),
         Need::Hashable(t) => hashable(s, c, t),
         Need::OrNone { value, out } => or_none(s, c, value, out),
+        Need::Probe { container, item } => probe(s, container, item),
+        Need::ToList { arg, elem } => to_list(s, c, arg, elem),
+        Need::Key { key, index } => dict_key(s, c, key, index).map(Step::Done),
         Need::ToNumber { func, arg } => to_number(s, c, func, arg),
         Need::Assign {
             target,
@@ -350,6 +385,13 @@ fn equal(s: &mut Subst, c: &Constraint, l: &Type, r: &Type) -> Result<Step> {
     if l.is_numeric() && r.is_numeric() {
         return Ok(Step::Done(vec![]));
     }
+    if let Some(view) = [&l, &r].into_iter().find(|t| matches!(t, Type::View(..))) {
+        let msg = format!(
+            "{} cannot be compared; compare lists instead, as in `list(d.keys())`",
+            s.zonk(view)
+        );
+        return Err(error(c, msg));
+    }
     match (&l, &r) {
         (Type::Optional(_), Type::None) | (Type::None, Type::Optional(_)) => {
             return Ok(Step::Done(vec![]))
@@ -405,7 +447,13 @@ fn len(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
     };
     let sized = matches!(
         t,
-        Type::Str | Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::Tuple(_) | Type::Range
+        Type::Str
+            | Type::List(_)
+            | Type::Dict(..)
+            | Type::Set(_)
+            | Type::View(..)
+            | Type::Tuple(_)
+            | Type::Range
     );
     if sized {
         return Ok(Step::Done(vec![]));
@@ -419,7 +467,9 @@ fn iter(s: &mut Subst, c: &Constraint, iterable: &Type, elem: &Type) -> Result<S
         return Ok(Step::Waiting);
     };
     match &t {
-        Type::List(item) | Type::Set(item) | Type::Dict(item, _) => expect(s, c, elem, item)?,
+        Type::List(item) | Type::Set(item) | Type::Dict(item, _) | Type::View(_, item) => {
+            expect(s, c, elem, item)?
+        }
         Type::Str => expect(s, c, elem, &Type::Str)?,
         Type::Range => expect(s, c, elem, &Type::Int)?,
         Type::Tuple(items) => items.iter().try_for_each(|item| expect(s, c, elem, item))?,
@@ -476,8 +526,13 @@ fn index_of(
 }
 
 /// The key of `d[k]` flows into the dict's key type, as an argument
-/// does into a parameter; what cannot be decided yet comes back.
+/// does into a parameter; what cannot be decided yet comes back. A
+/// `bool` key of an `int`-keyed dict is the int it equals, as in Python
+/// (`d[True]` is `d[1]`).
 fn dict_key(s: &mut Subst, c: &Constraint, key: &Type, index: &Type) -> Result<Vec<Need>> {
+    if (s.resolve(key), s.resolve(index)) == (Type::Int, Type::Bool) {
+        return Ok(vec![]);
+    }
     match s.assign(key, index) {
         Ok(deferred) => Ok(assigns(deferred, "dict key")),
         Err(clash) => {
@@ -570,6 +625,9 @@ fn unpack(s: &mut Subst, c: &Constraint, value: &Type, elems: &[Type]) -> Result
     Ok(Step::Done(vec![]))
 }
 
+/// The dict key and set element types, for messages.
+const KEY_TYPES: &str = "a key or element is int, str, bool, None or a tuple of them";
+
 fn hashable(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
     let Some(t) = known(s, t) else {
         return Ok(Step::Waiting);
@@ -578,10 +636,15 @@ fn hashable(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
         Type::Int | Type::Bool | Type::Str | Type::None => Ok(Step::Done(vec![])),
         Type::Tuple(items) => Ok(Step::Done(items.into_iter().map(Need::Hashable).collect())),
         Type::Optional(present) => Ok(Step::Done(vec![Need::Hashable(*present)])),
+        // Python's mutable containers, and views of them, never hash.
+        Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::View(..) => {
+            let msg = format!("unhashable type: {}; {KEY_TYPES}", s.zonk(&t));
+            Err(error(c, msg))
+        }
+        // Hashable in Python: floats wait on NaN and `-0.0` keys.
         other => {
             let msg = format!(
-                "{} cannot be a dict key or set element; use int, str, bool, None \
-                 or a tuple of them",
+                "{} dict keys and set elements are not supported yet; {KEY_TYPES}",
                 s.zonk(&other)
             );
             Err(error(c, msg))
@@ -589,9 +652,41 @@ fn hashable(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
     }
 }
 
+fn to_list(s: &mut Subst, c: &Constraint, arg: &Type, elem: &Type) -> Result<Step> {
+    let Some(t) = known(s, arg) else {
+        return Ok(Step::Waiting);
+    };
+    match &t {
+        Type::List(item) | Type::Set(item) | Type::Dict(item, _) | Type::View(_, item) => {
+            expect(s, c, elem, item)?;
+            Ok(Step::Done(vec![]))
+        }
+        other => {
+            let msg = format!(
+                "`list` copies a list, dict, set or dict view, not {}",
+                s.zonk(other)
+            );
+            Err(error(c, msg))
+        }
+    }
+}
+
+fn probe(s: &mut Subst, container: &Type, item: &Type) -> Result<Step> {
+    match known(s, container) {
+        None => Ok(Step::Waiting),
+        Some(Type::Dict(..) | Type::Set(_) | Type::View(View::Keys, _)) => {
+            Ok(Step::Done(vec![Need::Hashable(item.clone())]))
+        }
+        Some(_) => Ok(Step::Done(vec![])),
+    }
+}
+
 fn or_none(s: &mut Subst, c: &Constraint, value: &Type, out: &Type) -> Result<Step> {
     let Some(t) = known(s, value) else {
-        return Ok(Step::Waiting);
+        return match known(s, out) {
+            None | Some(Type::None | Type::Optional(_)) => Ok(Step::Waiting),
+            Some(other) => Err(error(c, may_be_none(s, &other))),
+        };
     };
     let result = match t {
         Type::None | Type::Optional(_) => t,
@@ -599,6 +694,28 @@ fn or_none(s: &mut Subst, c: &Constraint, value: &Type, out: &Type) -> Result<St
     };
     expect(s, c, out, &result)?;
     Ok(Step::Done(vec![]))
+}
+
+/// Why `d.get(k)` cannot be `expected`.
+fn may_be_none(s: &Subst, expected: &Type) -> String {
+    format!(
+        "`get` without a default may return None, but {} is expected; \
+         pass a default, as in `d.get(k, default)`",
+        s.zonk(expected)
+    )
+}
+
+/// Settles a `d.get(k)` whose dict's value type nothing decided: the
+/// dict is never filled, so the result is always `None`, or the present
+/// type of the optional it flows into.
+fn default_or_none(s: &mut Subst, c: &Constraint, value: &Type, out: &Type) -> Result<()> {
+    match known(s, out) {
+        Some(Type::Optional(present)) => expect(s, c, value, &present),
+        _ => {
+            expect(s, c, value, &Type::None)?;
+            expect(s, c, out, &Type::None)
+        }
+    }
 }
 
 fn to_number(s: &mut Subst, c: &Constraint, func: &str, arg: &Type) -> Result<Step> {
@@ -642,17 +759,20 @@ pub(super) fn assigns(deferred: Vec<(Type, Type)>, what: &str) -> Vec<Need> {
 
 /// Settles the assignments still waiting at module end: a value nothing
 /// else constrains takes its target's type (`x: int | None = xs[0]` with
-/// `xs` never filled makes `xs` a `list[int | None]`). The rest stays
-/// waiting, as in `solve`.
+/// `xs` never filled makes `xs` a `list[int | None]`), and so does a
+/// `d.get(k)` of a dict never filled. The rest stays waiting, as in
+/// `solve`.
 pub(super) fn default_assigns(s: &mut Subst, pending: Vec<Constraint>) -> Result<Vec<Constraint>> {
     let mut waiting = solve(s, pending)?;
     while let Some(i) = waiting
         .iter()
-        .position(|c| matches!(c.need, Need::Assign { .. }))
+        .position(|c| matches!(c.need, Need::Assign { .. } | Need::OrNone { .. }))
     {
         let c = waiting.swap_remove(i);
-        if let Need::Assign { target, value, .. } = &c.need {
-            expect(s, &c, target, value)?;
+        match &c.need {
+            Need::Assign { target, value, .. } => expect(s, &c, target, value)?,
+            Need::OrNone { value, out } => default_or_none(s, &c, value, out)?,
+            _ => {}
         }
         waiting = solve(s, waiting)?;
     }

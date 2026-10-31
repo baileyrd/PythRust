@@ -1,13 +1,14 @@
-//! The closed set of builtins: `print len list set range str int float bool`,
+//! The closed set of builtins: `print len list set sorted range str int
+//! float bool`,
 //! and the builtin exceptions, which build an exception value when called.
 
 use std::io::Write;
 use std::rc::Rc;
 
 use super::table::{Key, Table};
-use super::value::{str_repr, Exc, Num, Range, Value};
+use super::value::{compare, str_repr, Exc, Num, Range, Value};
 use super::{raised, rt_err, Exec};
-use crate::ast::Ident;
+use crate::ast::{CmpOp, Ident};
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::span::Span;
@@ -18,6 +19,7 @@ pub(super) enum Builtin {
     Len,
     List,
     Set,
+    Sorted,
     Range,
     Str,
     Int,
@@ -40,6 +42,7 @@ impl Builtin {
             "len" => Builtin::Len,
             "list" => Builtin::List,
             "set" => Builtin::Set,
+            "sorted" => Builtin::Sorted,
             "range" => Builtin::Range,
             "str" => Builtin::Str,
             "int" => Builtin::Int,
@@ -55,6 +58,7 @@ impl Builtin {
             Builtin::Len => "len",
             Builtin::List => "list",
             Builtin::Set => "set",
+            Builtin::Sorted => "sorted",
             Builtin::Range => "range",
             Builtin::Str => "str",
             Builtin::Int => "int",
@@ -84,6 +88,7 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
         Builtin::Len => len(one(b, pos, span)?, span)?,
         Builtin::List => copy_list(one(b, pos, span)?, span)?,
         Builtin::Set => new_set(opt(b, pos, span)?, span)?,
+        Builtin::Sorted => sorted(one(b, pos, span)?, span)?,
         Builtin::Range => range(pos, span)?,
         Builtin::Str => {
             Value::str(&opt(b, pos, span)?.map_or(Ok(String::new()), |v| v.to_str(span))?)
@@ -161,7 +166,7 @@ fn len<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
         Value::Str(s) => s.chars().count() as i128,
         Value::List(l) => l.borrow().len() as i128,
         Value::Dict(t) | Value::Set(t) => t.borrow().len() as i128,
-        Value::Tuple(t) => t.len() as i128,
+        Value::Tuple(t) | Value::View(_, t) => t.len() as i128,
         Value::Range(r) => r.len(),
         other => {
             return Err(rt_err(
@@ -185,6 +190,9 @@ fn len<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
 fn copy_list<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
     match v {
         Value::List(l) => Ok(Value::list(l.borrow().clone())),
+        Value::Dict(_) | Value::Set(_) | Value::View(..) => {
+            Ok(Value::list(v.iter(span)?.collect()))
+        }
         other => Err(rt_err(
             span,
             format!("TypeError: '{}' object is not iterable", other.type_name()),
@@ -192,7 +200,35 @@ fn copy_list<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
     }
 }
 
-/// `range(stop)`, `range(start, stop)`, `range(start, stop, step)`.
+/// `sorted(xs)`: a new list of what `xs` iterates over, stably merge
+/// sorted with `<` alone, as Python's sort compares.
+fn sorted<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
+    let items: Vec<Value<'m>> = v.iter(span)?.collect();
+    Ok(Value::list(merge_sort(items, span)?))
+}
+
+fn merge_sort<'m>(mut items: Vec<Value<'m>>, span: Span) -> Result<Vec<Value<'m>>> {
+    if items.len() < 2 {
+        return Ok(items);
+    }
+    let right = items.split_off(items.len() / 2);
+    let (left, right) = (merge_sort(items, span)?, merge_sort(right, span)?);
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    let (mut left, mut right) = (left.into_iter().peekable(), right.into_iter().peekable());
+    while let (Some(l), Some(r)) = (left.peek(), right.peek()) {
+        // Take from the right only when strictly less: equal items keep
+        // their order.
+        let next = match compare(CmpOp::Lt, r, l, span)? {
+            true => right.next(),
+            false => left.next(),
+        };
+        out.extend(next);
+    }
+    out.extend(left);
+    out.extend(right);
+    Ok(out)
+}
+
 /// `set()` or `set(xs)`: a new set of what `xs` iterates over.
 fn new_set<'m>(from: Option<&Value<'m>>, span: Span) -> Result<Value<'m>> {
     let mut set = Table::default();
@@ -207,6 +243,7 @@ fn new_set<'m>(from: Option<&Value<'m>>, span: Span) -> Result<Value<'m>> {
     Ok(Value::set(set))
 }
 
+/// `range(stop)`, `range(start, stop)`, `range(start, stop, step)`.
 fn range<'m>(args: &[Value<'m>], span: Span) -> Result<Value<'m>> {
     arity(Builtin::Range, args, 1, 3, span)?;
     let ints = args

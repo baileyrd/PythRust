@@ -18,3 +18,8 @@ none one
 6
 first second
 {'a': 3, 'b': 2, 'c': 1}
+dict_keys(['b', 'a']) dict_values([2, 1]) dict_items([('b', 2), ('a', 1)])
+2 True True True
+False ['b', 'a'] ['a', 'b'] [1, 2] [('b', 2), ('a', 1)]
+{'b': 0, 'a': 0}
+{1: 'true'} true true True

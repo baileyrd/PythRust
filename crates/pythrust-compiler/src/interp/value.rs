@@ -13,6 +13,7 @@ use super::table::{Key, Table, TableRef};
 use crate::ast::{CmpOp, FuncDef};
 use crate::diag::Result;
 use crate::exc::ExcKind;
+use crate::infer::View;
 use crate::span::Span;
 
 /// A shared, mutable list. Python lists alias, so lists are reference counted.
@@ -33,6 +34,9 @@ pub(super) enum Value<'m> {
     /// A set: its table maps elements to `None`.
     Set(TableRef<'m>),
     Tuple(Rc<[Value<'m>]>),
+    /// `d.keys()`, `d.values()` or `d.items()`: a snapshot of the dict's
+    /// keys, values or pairs when it was made (grammar.md, Deviations).
+    View(View, Rc<[Value<'m>]>),
     Range(Range),
     Func(Rc<Func<'m>>),
     Builtin(Builtin),
@@ -145,7 +149,7 @@ impl<'m> Value<'m> {
             Value::Str(s) => !s.is_empty(),
             Value::List(l) => !l.borrow().is_empty(),
             Value::Dict(t) | Value::Set(t) => !t.borrow().is_empty(),
-            Value::Tuple(t) => !t.is_empty(),
+            Value::Tuple(t) | Value::View(_, t) => !t.is_empty(),
             Value::Range(r) => r.len() != 0,
             Value::Func(_) | Value::Builtin(_) | Value::Method(_) | Value::Exc(_) => true,
         }
@@ -163,6 +167,7 @@ impl<'m> Value<'m> {
             Value::Dict(_) => "dict",
             Value::Set(_) => "set",
             Value::Tuple(_) => "tuple",
+            Value::View(view, _) => view.name(),
             Value::Range(_) => "range",
             Value::Func(_) => "function",
             Value::Builtin(b) if b.exception().is_some() => "type",
@@ -201,7 +206,7 @@ impl<'m> Value<'m> {
                 len: t.borrow().len(),
                 changed: false,
             })),
-            Value::Tuple(t) => Ok(Iter::Tuple(Rc::clone(t), 0)),
+            Value::Tuple(t) | Value::View(_, t) => Ok(Iter::Tuple(Rc::clone(t), 0)),
             Value::Str(s) => Ok(Iter::Chars(s.chars().collect(), 0)),
             Value::Range(r) => Ok(Iter::Range(*r, Some(r.start))),
             other => Err(rt_err(
@@ -499,7 +504,7 @@ fn contains<'m>(container: &Value<'m>, item: &Value<'m>, span: Span) -> Result<b
     match (container, item) {
         (Value::List(l), _) => any_eq(&l.borrow(), item, span),
         (Value::Dict(t) | Value::Set(t), _) => Ok(t.borrow().contains(&Key::of(item, span)?)),
-        (Value::Tuple(t), _) => any_eq(t, item, span),
+        (Value::Tuple(t) | Value::View(_, t), _) => any_eq(t, item, span),
         (Value::Str(s), Value::Str(sub)) => Ok(s.contains(&**sub)),
         (Value::Str(_), _) => Err(rt_err(
             span,
@@ -577,6 +582,14 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
             return write_items(t, id, ("(", close), active, out, span);
         }
         Value::Dict(t) | Value::Set(t) => return write_table(v, t, active, out, span),
+        Value::View(view, items) => {
+            out.push_str(view.name());
+            out.push('(');
+            let id = Rc::as_ptr(items).cast::<()>();
+            write_items(items, id, ("[", "]"), active, out, span)?;
+            out.push(')');
+            return Ok(());
+        }
         Value::Exc(e) => {
             enter_repr(active, Rc::as_ptr(e).cast::<()>(), span)?;
             out.push_str(e.kind.name());

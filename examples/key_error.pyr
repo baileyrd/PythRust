@@ -13,5 +13,10 @@ try:
     raise KeyError("raised")
 except Exception as e:
     print("exception", e)
-print(KeyError(), KeyError("k"), KeyError(3))
+for probe in [[1], []]:
+    try:
+        print(probe[0], d["q"])
+    except LookupError as e:
+        print("lookup caught", e)
+print(KeyError(), KeyError("k"), KeyError(3), str(KeyError("a")) == "'a'")
 print(d["z"])

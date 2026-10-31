@@ -6,7 +6,7 @@ use crate::span::Span;
 
 use super::scope;
 use super::solve::{Access, Binary, Need};
-use super::ty::{FuncType, Type};
+use super::ty::{FuncType, Type, View};
 use super::{builtins, error, Checker, Func, TruthUse};
 
 /// Why `errs = (ValueError, IndexError)` and `except errs:` are errors.
@@ -250,10 +250,15 @@ impl Checker {
             CmpOp::In | CmpOp::NotIn => {
                 let elem = self.subst.fresh();
                 let iter = Need::Iter {
-                    iterable: right,
+                    iterable: right.clone(),
                     elem: elem.clone(),
                 };
                 self.need(iter, span);
+                let probe = Need::Probe {
+                    container: right,
+                    item: left.clone(),
+                };
+                self.need(probe, span);
                 Need::Equal { left, right: elem }
             }
         };
@@ -394,7 +399,7 @@ impl Checker {
         let dict = Type::Dict(Box::new(key.clone()), Box::new(value.clone()));
         self.expect(at, &dict, receiver, "`get` needs a dict")?;
         let k = self.checked(&args[0].value, &key)?;
-        self.expect(args[0].value.span, &key, &k, "dict key")?;
+        self.need(Need::Key { key, index: k }, args[0].value.span);
         if let Some(default) = args.get(1) {
             let d = self.checked(&default.value, &value)?;
             let what = "the default of `get` must match the dict's values";
@@ -410,19 +415,19 @@ impl Checker {
         Ok(out)
     }
 
-    /// `d.keys()`, `d.values()` or `d.items()`: a new list of the keys,
+    /// `d.keys()`, `d.values()` or `d.items()`: a view of the keys,
     /// values or `(key, value)` pairs, in insertion order.
     fn view(&mut self, name: &str, at: Span, receiver: &Type) -> Result<Type> {
         let (key, value) = (self.subst.fresh(), self.subst.fresh());
         let dict = Type::Dict(Box::new(key.clone()), Box::new(value.clone()));
         let needs = format!("`{name}` needs a dict");
         self.expect(at, &dict, receiver, &needs)?;
-        let elem = match name {
-            "keys" => key,
-            "values" => value,
-            _ => Type::Tuple(vec![key, value]),
+        let (view, item) = match name {
+            "keys" => (View::Keys, key),
+            "values" => (View::Values, value),
+            _ => (View::Items, Type::Tuple(vec![key, value])),
         };
-        Ok(Type::List(Box::new(elem)))
+        Ok(Type::View(view, Box::new(item)))
     }
 
     /// Infers `e` against a known `expected` type, so list and tuple

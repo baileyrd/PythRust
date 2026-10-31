@@ -1,3 +1,5 @@
-# deviation: keys(), values() and items() return new lists, not views (docs/grammar.md#deviations-from-python)
+# deviation: a dict view is a snapshot, so a held view does not see later changes to its dict (docs/grammar.md#deviations-from-python)
 d = {"a": 1}
-print(d.keys(), d.values(), d.items())
+ks = d.keys()
+d["b"] = 2
+print(ks, len(ks), "b" in ks)

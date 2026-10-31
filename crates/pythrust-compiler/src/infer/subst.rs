@@ -43,6 +43,7 @@ impl Subst {
             Type::List(elem) => Type::List(Box::new(self.zonk(&elem))),
             Type::Dict(k, v) => Type::Dict(Box::new(self.zonk(&k)), Box::new(self.zonk(&v))),
             Type::Set(elem) => Type::Set(Box::new(self.zonk(&elem))),
+            Type::View(view, item) => Type::View(view, Box::new(self.zonk(&item))),
             Type::Optional(inner) => Type::Optional(Box::new(self.zonk(&inner))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.zonk(t)).collect()),
             other => other,
@@ -61,6 +62,7 @@ impl Subst {
             (Type::List(x), Type::List(y))
             | (Type::Set(x), Type::Set(y))
             | (Type::Optional(x), Type::Optional(y)) => self.unify(x, y),
+            (Type::View(v, x), Type::View(w, y)) if v == w => self.unify(x, y),
             (Type::Dict(k1, v1), Type::Dict(k2, v2)) => {
                 self.unify(k1, k2)?;
                 self.unify(v1, v2)
@@ -109,7 +111,9 @@ impl Subst {
             Type::Var(v) => {
                 out.insert(v);
             }
-            Type::List(elem) | Type::Set(elem) | Type::Optional(elem) => self.free_vars(&elem, out),
+            Type::List(elem) | Type::Set(elem) | Type::Optional(elem) | Type::View(_, elem) => {
+                self.free_vars(&elem, out)
+            }
             Type::Dict(k, v) => {
                 self.free_vars(&k, out);
                 self.free_vars(&v, out);
@@ -129,6 +133,7 @@ impl Subst {
                 Box::new(self.rename(&v, map)),
             ),
             Type::Set(elem) => Type::Set(Box::new(self.rename(&elem, map))),
+            Type::View(view, item) => Type::View(view, Box::new(self.rename(&item, map))),
             Type::Optional(inner) => Type::Optional(Box::new(self.rename(&inner, map))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.rename(t, map)).collect()),
             other => other,

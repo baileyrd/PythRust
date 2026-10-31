@@ -22,6 +22,10 @@ pub enum Type {
     Dict(Box<Type>, Box<Type>),
     /// `set[T]`: insertion-ordered, of a hashable `T`.
     Set(Box<Type>),
+    /// What `d.keys()`, `d.values()` or `d.items()` returns, with the
+    /// type its iteration yields: the key, the value, or a `(key,
+    /// value)` tuple for `items`.
+    View(View, Box<Type>),
     /// Fixed length, positionally typed.
     Tuple(Vec<Type>),
     /// `T | None`. `T` is never `None` or itself optional.
@@ -31,6 +35,25 @@ pub enum Type {
     /// as e` can share `e`.
     Exception,
     Var(TypeVar),
+}
+
+/// Which view of a dict a [`Type::View`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum View {
+    Keys,
+    Values,
+    Items,
+}
+
+impl View {
+    /// Python's type name: `dict_keys`, `dict_values`, `dict_items`.
+    pub fn name(self) -> &'static str {
+        match self {
+            View::Keys => "dict_keys",
+            View::Values => "dict_values",
+            View::Items => "dict_items",
+        }
+    }
 }
 
 /// One parameter of a function signature.
@@ -56,16 +79,20 @@ impl Type {
     /// while it depends on a generic type.
     pub fn holds_heap(&self) -> Option<bool> {
         match self {
-            Type::Str | Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::Exception => {
-                Some(true)
-            }
+            Type::Str
+            | Type::List(_)
+            | Type::Dict(..)
+            | Type::Set(_)
+            | Type::View(..)
+            | Type::Exception => Some(true),
             _ => self.any_part(Type::holds_heap),
         }
     }
 
     /// Whether the type's own operations reach a mutable heap value, so
     /// a value of it can change in place (D2 `mut`): a list, dict or
-    /// set, or a tuple or optional holding one. Not an exception: no operation reaches
+    /// set, or a tuple, optional or dict view holding one (a view itself
+    /// cannot change). Not an exception: no operation reaches
     /// its argument. `None` while it depends on a generic type.
     pub fn reaches_mutable(&self) -> Option<bool> {
         match self {
@@ -74,12 +101,12 @@ impl Type {
         }
     }
 
-    /// Whether `pred` holds of a tuple field or an optional's value;
-    /// false for any other type.
+    /// Whether `pred` holds of a tuple field, an optional's value or a
+    /// view's items; false for any other type.
     fn any_part(&self, pred: fn(&Type) -> Option<bool>) -> Option<bool> {
         let parts: Vec<Option<bool>> = match self {
             Type::Tuple(fields) => fields.iter().map(pred).collect(),
-            Type::Optional(present) => vec![pred(present)],
+            Type::Optional(present) | Type::View(_, present) => vec![pred(present)],
             Type::Var(_) => vec![None],
             _ => Vec::new(),
         };
@@ -116,6 +143,10 @@ impl fmt::Display for Type {
             Type::List(elem) => write!(f, "list[{elem}]"),
             Type::Dict(key, value) => write!(f, "dict[{key}, {value}]"),
             Type::Set(elem) => write!(f, "set[{elem}]"),
+            Type::View(view, item) => match (view, &**item) {
+                (View::Items, Type::Tuple(pair)) => write!(f, "dict_items[{}]", join(pair)),
+                _ => write!(f, "{}[{item}]", view.name()),
+            },
             Type::Tuple(elems) if elems.is_empty() => f.write_str("tuple[()]"),
             Type::Tuple(elems) => write!(f, "tuple[{}]", join(elems)),
             Type::Optional(inner) => write!(f, "{inner} | None"),

@@ -69,10 +69,11 @@ fn suggest(prefix: &str, inferred: Option<&Type>) -> String {
 }
 
 /// Whether `t` can be written as an annotation: no inference variables
-/// (generic or unconstrained), no `range` and no empty tuple.
+/// (generic or unconstrained), no `range`, no dict view and no empty
+/// tuple.
 fn spellable(t: &Type) -> bool {
     match t {
-        Type::Var(_) | Type::Range => false,
+        Type::Var(_) | Type::Range | Type::View(..) => false,
         Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => spellable(inner),
         Type::Dict(key, value) => spellable(key) && spellable(value),
         Type::Tuple(items) => !items.is_empty() && items.iter().all(spellable),

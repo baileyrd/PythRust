@@ -1,4 +1,6 @@
 caught 'b'
 lookup 'c'
 exception 'raised'
- 'k' 3
+lookup caught 'q'
+lookup caught list index out of range
+ 'k' 3 True
