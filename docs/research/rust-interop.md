@@ -12,7 +12,7 @@
 2. **`run` refuses for now.** The interpreter cannot call Rust: loading a library at run time needs `unsafe` in the compiler. `run` of a program that imports a binding is the named gap "run cannot call Rust bindings yet; use build". Revisit when an app needs `run` for interop programs.
 3. **Naming a binding: `--rust name=path`** on `check` and `build` (and on `run`, which then refuses). Interim: M6d's manifest supersedes it.
 4. **Driver:** fclone-lite hashing with xxh3 through a `fastfs` binding (below).
-5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/` next to the program's `.pyr` file, ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
+5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/<stem>/` next to the program's `.pyr` file (one directory per program, so two programs side by side never share a build), ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
 
 ## Alternatives considered
 
@@ -43,9 +43,9 @@ The program writes `import fastfs` and calls `fastfs.file_xxh3(p)`. Imports keep
 
 ### Resolution
 
-- `--rust name=path` comes before the file and may repeat. `path` is the binding's directory, and the stub is `path/name.pyr`.
+- `--rust name=path` comes before the file and may repeat. `path` is the binding's directory, and the stub is `path/name.pyr`. `build` makes `path` absolute and writes it into the generated manifest as a TOML literal string, so a relative path, a Windows path or a space works.
 - `name` is the binding crate's library name, a Rust identifier, and the shim calls `name::function`: stub functions live at the crate root.
-- A name that is a standard module (`sys`, `os`, `hashlib`) or repeats is an error. So is a missing directory or stub, and an `import` of a name no `--rust` gives.
+- A name that is a standard module (`sys`, `os`, `hashlib`), a builtin (`len`, `print`), an exception class or a reserved word (`pause`, `shared`), or that repeats, is an error. So is a missing directory or stub, and an `import` of a name no `--rust` gives.
 
 ### Front end
 
@@ -55,12 +55,12 @@ The driver passes the parsed stubs to the parser (`parser::parse` gains the bind
 
 1. `check` reads the stubs and checks calls against them. No cargo.
 2. `build` writes a generated crate into `.pythrust/`: one `extern "C"` shim per stub function, which converts the arguments, calls the binding, and converts the result. It depends on every binding and on `pythrust-rt` by path, and cargo builds it as the one staticlib the program links in place of the plain runtime.
-3. **Reproducible dependencies.** The binding's committed `Cargo.lock` decides every crates.io version. `cargo build --locked` cannot be used: the generated crate is the root, so its lockfile must also list the generated package and `pythrust-rt`, which the binding's lock lacks, and cargo refuses to add them under `--locked` (checked with cargo 1.99.1 on a scratch binding). Instead `build`:
-    1. copies the binding's `Cargo.lock` into `.pythrust/` as the seed;
+3. **Reproducible dependencies.** The bindings' committed `Cargo.lock` files decide every crates.io version. `cargo build --locked` cannot be used: the generated crate is the root, so its lockfile must also list the generated package and `pythrust-rt`, which a binding's lock lacks, and cargo refuses to add them under `--locked` (checked with cargo 1.99.1 on a scratch binding). Instead `build`:
+    1. seeds `.pythrust/<stem>/Cargo.lock` with the union of the bindings' registry entries; two locks pinning the same crate at different versions is the named drift error below, since cargo would unify them and one pin would change;
     2. runs `cargo build` without `--locked`; cargo keeps every version the seed pins and adds only the path packages (also checked: a seeded `itoa 1.0.1` stayed `1.0.1`);
-    3. compares the registry entries (name, version, checksum) of the resulting lock with the binding's, and fails with a named error if any was added, removed or changed ("binding `fastfs`: dependencies differ from its Cargo.lock; update and commit the binding's lockfile"). `pythrust-rt` has no dependencies, so any registry difference comes from the binding.
+    3. checks one direction: every registry entry (name, version, checksum) of the resulting lock must appear in the union with the same version and checksum, and an added or changed entry fails with a named error ("binding `fastfs`: dependencies differ from its Cargo.lock; update and commit the binding's lockfile"). Entries the build did not need, such as a binding's dev-dependencies or optional dependencies behind features left off, drop out of the generated lock and are fine. Drift never counts as a successful build. `pythrust-rt` has no dependencies, so any registry entry comes from a binding.
 
-    A binding without a `Cargo.lock` is a named error ("binding `fastfs` has no Cargo.lock; run `cargo generate-lockfile` in it and commit the file"). The regression test is a clean first build from an ordinary binding lock, not only a warm rebuild.
+    A binding without a `Cargo.lock` is a named error ("binding `fastfs` has no Cargo.lock; run `cargo generate-lockfile` in it and commit the file"). Regression tests (plumbing PR): a clean first build from an ordinary binding lock, not only a warm rebuild; a binding with a registry dev-dependency builds clean; a lock pinning an older version than the manifest allows keeps it; a dependency missing from the lock fails with the named error; two bindings with different registry dependencies build together.
 4. rustc compiles the shims against the real signatures, so a stub saying `bytes` where Rust takes `&str` fails the build. Each shim carries a comment naming its stub line, so Pythrust reports "`fastfs.pyr:1`: the stub for `file_xxh3` does not match the Rust function" and then rustc's output, as Rust's output, not as a Pythrust diagnostic. An error outside the shims (in the binding, or fetching a crate) is reported as "binding `fastfs` failed to build" with cargo's output.
 5. The link reuses `link_in` with the generated staticlib in place of `runtime_lib()`, and with the native libraries cargo reports for it (`--print native-static-libs`) in place of the fixed `NATIVE_LIBS` list, since a binding's dependencies may need more.
 
@@ -73,7 +73,7 @@ The driver passes the parsed stubs to the parser (`parser::parse` gains the bind
 | Generated manifest | edition 2021, an empty `[workspace]`, crate `pythrust_bindings` |
 | Profile | the profile `pythrust` itself was built with, so the debug leak check stays on in tests; `panic = "unwind"` always |
 | Target | `--target` set to the host triple `pythrust` targets, so a `windows-gnu` default cannot meet MSVC's `link.exe` |
-| Directories | `--target-dir .pythrust/target`; generated sources written to a temporary file and renamed. The object file and final link still use the private build directory (`private_dir`) |
+| Directories | `--target-dir .pythrust/<stem>/target`; generated sources written to a temporary file and renamed. The object file and final link still use the private build directory (`private_dir`) |
 | Minimum toolchain | Rust 1.82 (`#[unsafe(no_mangle)]`); a missing `cargo` or an older rustc is a named error |
 
 ### The shim
@@ -93,11 +93,11 @@ pub unsafe extern "C" fn pt_rs_6fastfs_9file_xxh3(
 }
 ```
 
-The symbol length-prefixes each part, so no two binding and function names collide. `abi` is a new, safe public module of `pythrust-rt` holding everything else: `arg_*` conversions in (a `bool` arrives as a `u8`), the `IntoResult` trait out (implemented for each result type in the table, and for `Result<T, std::io::Error>`, which raises), and `call`, which flushes the runtime's buffered stdout, runs the function under `catch_unwind`, and converts the result or the panic. A stub saying `-> str` over a Rust function returning `i64`, or declaring no `raises` over a function returning `Result`, fails rustc because no `IntoResult` matches.
+The symbol length-prefixes each part, so no two binding and function names collide. `abi` is a new public module of `pythrust-rt` holding everything else, and part of its audited C ABI surface: `arg_*` conversions in (a `bool` arrives as a `u8`) and `site` take raw pointers, so they are `unsafe fn`s with a `# Safety` section, like `str::borrow` and `os::site` today; the `IntoResult` trait out (implemented for each result type in the table, and for `Result<T, std::io::Error>`, which raises), and the safe `call`, which flushes the runtime's buffered stdout, runs the function under `catch_unwind`, and converts the result or the panic. A stub saying `-> str` over a Rust function returning `i64`, or declaring no `raises` over a function returning `Result`, fails rustc because no `IntoResult` matches.
 
 ## Unsafe
 
-The compiler stays `forbid(unsafe_code)`. The generated shims are the only new `unsafe` Pythrust writes, all from the one fixed template above, audited like `pythrust-rt`'s C surface. A test generates the shims for the probe binding's stub and checks each holds exactly one `#[unsafe(no_mangle)]`, one `unsafe extern "C" fn` and one `unsafe {}` block, and nothing else marked `unsafe`. The template's names avoid the words the vocabulary test (`tests/vocabulary.rs`) bans. [CLAUDE.md](../../CLAUDE.md)'s `unsafe` exception names the generated shims. The binding's own dependencies may use `unsafe`; trusting them is the same as trusting any crate the app depends on.
+The compiler stays `forbid(unsafe_code)`. The new `unsafe` is the generated shims, all from the one fixed template above, and the `unsafe fn`s of `pythrust_rt::abi` they call (`arg_*`, `site`), which join `pythrust-rt`'s audited C ABI surface; `call` and `IntoResult` are safe. A test generates the shims for the probe binding's stub and checks each holds exactly one `#[unsafe(no_mangle)]`, one `unsafe extern "C" fn` and one `unsafe {}` block, and nothing else marked `unsafe`; `abi.rs` is audited by hand with the rest of the runtime's C surface. The template's names avoid the words the vocabulary test (`tests/vocabulary.rs`) bans. [CLAUDE.md](../../CLAUDE.md)'s `unsafe` exception names the generated shims. The binding's own dependencies may use `unsafe`; trusting them is the same as trusting any crate the app depends on.
 
 ## Types across the boundary
 
@@ -122,7 +122,7 @@ A function returning `Result<T, std::io::Error>` raises on `Err`, and its stub m
 
 ### Panics
 
-`call` catches a panic, which would otherwise abort across `extern "C"`, and stops the program as a fault does: it flushes stdout, prints Pythrust's fault diagnostic at the call site with the panic's message (a non-string payload reads "Rust panic"), and exits 1. A panic hook installed at startup keeps Rust's own "thread panicked" line from also printing. A panic is never catchable, like overflow.
+`call` catches a panic, which would otherwise abort across `extern "C"`, and stops the program as a fault does: it flushes stdout, prints Pythrust's fault diagnostic at the call site with the panic's message (a non-string payload reads "Rust panic"), and exits 1. A panic hook keeps Rust's own "thread panicked" line from also printing, but only while `call` runs on the calling thread (a thread-local flag); any other panic, such as one in a thread a binding detaches, falls through to the default hook and prints as usual. The conversions PR tests both: a panic inside `call` prints only Pythrust's fault diagnostic, and a detached thread's panic still prints its message. A panic is never catchable, like overflow.
 
 ### Ownership
 
