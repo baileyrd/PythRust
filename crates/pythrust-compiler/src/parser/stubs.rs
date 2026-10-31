@@ -32,6 +32,12 @@ impl<'a> Parser<'a> {
             }
             funcs.push(f);
         }
+        // An import is known by its functions (`Module::stubs`), so a
+        // binding without any could slip past `run` and `build`.
+        if funcs.is_empty() {
+            let msg = format!("the stub for `{name}` declares no functions");
+            return Err(error(self.tok(0).span, msg));
+        }
         Ok(Binding {
             name: name.to_string(),
             funcs,

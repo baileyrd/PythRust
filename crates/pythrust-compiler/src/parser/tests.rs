@@ -1438,7 +1438,12 @@ fn stub_signatures_get_dotted_names() {
     assert_eq!(xxh3.returns.name.name, "str");
     assert_eq!(xxh3.raises[0].name, "OSError");
     assert!(b.funcs[1].raises.is_empty());
-    assert!(stub("").is_ok_and(|b| b.funcs.is_empty()));
+    for empty in ["", "# only a comment\n"] {
+        assert_eq!(
+            stub_err(empty),
+            "the stub for `fastfs` declares no functions"
+        );
+    }
 }
 
 #[test]
