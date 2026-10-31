@@ -833,6 +833,19 @@ fn calls_into_what_may_fault_are_tested_after() {
 }
 
 #[test]
+fn a_call_into_a_file_read_is_tested_after_though_its_raises_is_empty() {
+    // `read` of a closed file raises an untracked `ValueError` (D7), so a
+    // helper that catches the tracked `OSError` may still leave it
+    // pending; `via` reaches it through `inner`; `other` reads nothing.
+    let src = "def inner(f):\n    try:\n        f.read()\n    except OSError:\n        pass\n\
+               def via(f):\n    inner(f)\ndef other(n):\n    return n\n\
+               f = open(\"p\", \"rb\")\nvia(f)\nother(1)\n";
+    let p = lowered(src);
+    // `open` (it raises OSError) and `via`, not `other`.
+    assert_eq!(assigns(&p, |r| matches!(r, Rvalue::Raised)), 2);
+}
+
+#[test]
 fn handlers_test_their_kinds_in_order() {
     let src = "try:\n    raise IndexError\nexcept ValueError:\n    pass\nexcept IndexError as e:\n    print(e)\n";
     let p = lowered(src);

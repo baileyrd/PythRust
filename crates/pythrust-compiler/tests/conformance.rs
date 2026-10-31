@@ -1238,7 +1238,25 @@ fn files_match_cpython() -> Res<()> {
          try:\n\
          \x20   f.read()\n\
          except ValueError as err:\n\
-         \x20   print('ValueError', err)\n",
+         \x20   print('ValueError', err)\n\
+         def read_catching_os(f):\n\
+         \x20   try:\n\
+         \x20       f.read()\n\
+         \x20   except OSError:\n\
+         \x20       pass\n\
+         def via(f):\n\
+         \x20   read_catching_os(f)\n\
+         \x20   print('continued in via')\n\
+         try:\n\
+         \x20   read_catching_os(f)\n\
+         \x20   print('continued')\n\
+         except ValueError:\n\
+         \x20   print('caught')\n\
+         try:\n\
+         \x20   via(f)\n\
+         \x20   print('continued')\n\
+         except ValueError:\n\
+         \x20   print('caught via')\n",
         a = at("data.bin"),
         b = at("same.bin"),
         e = at("empty.bin"),
@@ -1262,6 +1280,13 @@ fn files_match_cpython() -> Res<()> {
     assert_eq!(want.status, 0, "{}", want.stdout);
     assert!(
         want.stdout.contains("read of closed file"),
+        "{}",
+        want.stdout
+    );
+    // A closed file's read escapes a helper that catches only OSError,
+    // directly and through another call (D7: untracked, still caught).
+    assert!(
+        want.stdout.contains("caught\ncaught via\n") && !want.stdout.contains("continued"),
         "{}",
         want.stdout
     );
