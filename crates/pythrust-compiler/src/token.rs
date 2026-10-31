@@ -50,6 +50,8 @@ pub enum TokenKind {
     Raise,
     /// `as`, only in `except Name as e`.
     As,
+    /// `import`, only at module top level (M6a).
+    Import,
 
     // Arithmetic operators.
     Plus,

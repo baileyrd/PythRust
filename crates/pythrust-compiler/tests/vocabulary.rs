@@ -77,7 +77,7 @@ fn diagnostics(src: &str) -> Vec<String> {
     };
     let mut out: Vec<String> = types.warnings().iter().map(|w| w.message.clone()).collect();
     let ran = own::check(&module, &own::analyze(&module, &types))
-        .and_then(|()| interp::run(&module, &types, &mut io::sink()));
+        .and_then(|()| interp::run(&module, &types, &[], &mut io::sink()));
     out.extend(ran.err().map(|d| d.message));
     out
 }

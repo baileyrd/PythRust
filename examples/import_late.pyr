@@ -1,0 +1,7 @@
+# expect-exit: 1
+# deviation: `import` must come before other statements, so module names resolve statically; Python allows it anywhere
+# expect-error: `import` must come at module top level, before other statements
+print("first")
+import sys
+
+print(len(sys.argv))

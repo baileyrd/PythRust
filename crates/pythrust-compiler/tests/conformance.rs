@@ -427,6 +427,7 @@ const NATIVE: &[&str] = &[
     "str_loop_exits",
     "str_repeat_error",
     "strings",
+    "sys_argv",
     "tempered",
     "tuple_loops",
     "tuples",

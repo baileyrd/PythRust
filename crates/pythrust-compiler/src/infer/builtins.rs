@@ -7,6 +7,7 @@ use crate::ast::Arg;
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::span::Span;
+use crate::stdlib::StdFn;
 
 use super::solve::Need;
 use super::ty::Type;
@@ -24,7 +25,7 @@ pub(super) fn is_builtin(name: &str) -> bool {
         name,
         "print" | "len" | "list" | "set" | "sorted" | "range" | "str" | "int" | "float" | "bool"
     );
-    function || is_exception(name)
+    function || is_exception(name) || StdFn::from_name(name).is_some()
 }
 
 pub(super) fn is_exception(name: &str) -> bool {
@@ -53,11 +54,28 @@ impl Checker {
             "int" => self.number("int", Type::Int, args, span),
             "float" => self.number("float", Type::Float, args, span),
             // Any one value as the message, as `str(x)` takes.
+            _ if StdFn::from_name(name).is_some() => self.std(name, args, span),
             _ if is_exception(name) => {
                 self.positional(name, args, 0, 1, span)?;
                 Ok(Type::Exception)
             }
             _ => Err(error(span, format!("internal: `{name}` is not a builtin"))),
+        }
+    }
+
+    /// A call to a [`StdFn`] by its builtin name.
+    fn std(&mut self, name: &str, args: &[Arg], span: Span) -> Result<Type> {
+        let Some(f) = StdFn::from_name(name) else {
+            return Err(error(
+                span,
+                format!("internal: `{name}` is not a module function"),
+            ));
+        };
+        match f {
+            StdFn::Argv => {
+                self.positional(name, args, 0, 0, span)?;
+                Ok(Type::List(Box::new(Type::Str)))
+            }
         }
     }
 

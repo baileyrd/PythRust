@@ -48,6 +48,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diag::Diagnostic;
 use crate::exc::ExcKind;
 use crate::span::Span;
+use crate::stdlib::StdFn;
 
 /// A value type. Every local and operand has exactly one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -266,6 +267,9 @@ pub enum Rvalue {
     Call(FuncId, Vec<Operand>),
     /// A new `Str` holding the literal.
     StrLit(String),
+    /// A module function's result (M6a), a new value of the
+    /// destination's type; the operands are its arguments, borrowed.
+    Std(StdFn, Vec<Operand>),
     /// `a + b` on two `Str`s.
     Concat(Operand, Operand),
     /// `s * n`, a `Str` and an `Int`. Fails when too large to allocate.

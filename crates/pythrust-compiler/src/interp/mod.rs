@@ -11,6 +11,7 @@
 mod builtins;
 mod methods;
 mod ops;
+mod stdlib;
 mod table;
 mod value;
 
@@ -49,18 +50,24 @@ pub(crate) fn is_builtin(name: &str) -> bool {
 /// committed, so the unused part costs nothing.
 const STACK_BYTES: usize = 256 << 20;
 
-/// Runs `module`, writing everything it prints to `out`.
+/// Runs `module` with `argv` as `sys.argv`, writing everything it
+/// prints to `out`.
 ///
 /// Output written before a runtime error stays written, as in CPython.
 /// The error is returned as a `DiagKind::Runtime` diagnostic; the caller
 /// reports it and exits with status 1. Runs on a dedicated thread with a
 /// large stack, so hitting the recursion limit is an error, not a crash.
-pub fn run(module: &Module, types: &Types, out: &mut (dyn Write + Send)) -> Result<()> {
+pub fn run(
+    module: &Module,
+    types: &Types,
+    argv: &[String],
+    out: &mut (dyn Write + Send),
+) -> Result<()> {
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .name("pythrust-interp".to_string())
             .stack_size(STACK_BYTES)
-            .spawn_scoped(scope, || run_here(module, types, out))
+            .spawn_scoped(scope, || run_here(module, types, argv, out))
             .map_err(|e| {
                 rt_err(
                     module.span,
@@ -74,11 +81,17 @@ pub fn run(module: &Module, types: &Types, out: &mut (dyn Write + Send)) -> Resu
     })
 }
 
-fn run_here<'m>(module: &'m Module, types: &'m Types, out: &mut dyn Write) -> Result<()> {
+fn run_here<'m>(
+    module: &'m Module,
+    types: &'m Types,
+    argv: &[String],
+    out: &mut dyn Write,
+) -> Result<()> {
     let mut interp = Interp {
         globals: HashMap::new(),
         frames: Vec::new(),
         types,
+        argv,
         out,
     };
     let flow = match interp.exec_block(&module.body) {
@@ -136,6 +149,8 @@ struct Interp<'m, 'o> {
     types: &'m Types,
     /// One per active call; empty at module level.
     frames: Vec<Frame<'m>>,
+    /// `sys.argv`'s value.
+    argv: &'o [String],
     out: &'o mut dyn Write,
 }
 
@@ -621,6 +636,7 @@ impl<'m> Interp<'m, '_> {
         }
         let out = match callee {
             Value::Func(f) => self.call_func(f, evaluated)?,
+            Value::Builtin(Builtin::Std(f)) => self.std(f, &evaluated)?,
             Value::Builtin(b) => builtins::call(b, evaluated, self.out)?,
             Value::Method(m) => methods::call(&m, evaluated)?,
             other => {

@@ -1283,3 +1283,83 @@ fn source_for_target_narrows_before_its_element_type_is_settled() {
     let src = "def f(xs: list[int | None]):\n    for x in xs:\n        if x is None:\n            return 0\n        return x\n    return 1\n";
     types(src);
 }
+
+// Imports (M6a): source level, so `import` and dots lex as written.
+
+fn src_parse(src: &str) -> diag::Result<Module> {
+    parse(&lex(src)?)
+}
+
+fn src_err(src: &str) -> String {
+    match src_parse(src) {
+        Ok(m) => panic!("{src:?} parsed: {}", sx_module(&m)),
+        Err(d) => d.message,
+    }
+}
+
+#[test]
+fn import_binds_each_module_variable_from_its_initializer() {
+    let m = src_parse("import sys, sys\nprint(sys.argv)\n").unwrap();
+    let names: Vec<String> = m.body.iter().map(sx_stmt).collect();
+    let bind = "(= sys.argv (call sys.__argv__))";
+    assert_eq!(names[..2], [bind, bind]);
+    assert_eq!(names[2], "(call print sys.argv)");
+}
+
+#[test]
+fn a_module_name_spans_its_attributes() {
+    let src = "import sys\nn = len(sys.argv)\n";
+    let m = src_parse(src).unwrap();
+    let StmtKind::Assign { value, .. } = &m.body[1].kind else {
+        panic!("an assignment")
+    };
+    let ExprKind::Call { args, .. } = &value.kind else {
+        panic!("a call")
+    };
+    assert_eq!(text(src, args[0].value.span), "sys.argv");
+    assert_eq!(text(src, m.body[0].span), "import sys");
+}
+
+#[test]
+fn import_comes_first_at_module_level() {
+    let late = "`import` must come at module top level, before other statements";
+    assert_eq!(src_err("x = 1\nimport sys\n"), late);
+    assert_eq!(src_err("def f():\n    import sys\n"), late);
+    assert_eq!(
+        src_err("import json\n"),
+        "no module named `json`; the modules are: sys"
+    );
+    assert!(src_err("import sys.argv\n").contains("import the top-level module"));
+    assert_eq!(
+        src_err("import sys as s\n"),
+        "`import ... as` is not supported yet"
+    );
+}
+
+#[test]
+fn a_module_is_not_a_value_and_exposes_only_its_names() {
+    assert_eq!(
+        src_err("import sys\nx = sys\n"),
+        "`sys` is a module, not a value; use one of its names: sys.argv"
+    );
+    assert_eq!(
+        src_err("import sys\nprint(sys.path)\n"),
+        "`sys.path` is not supported; the `sys` names are: sys.argv"
+    );
+    // Without the import, `sys` is an ordinary name.
+    assert_eq!(ok("sys = 1 NL"), "(= sys 1)");
+}
+
+#[test]
+fn a_module_name_cannot_be_rebound_or_assigned_through() {
+    let taken = "`sys` names an imported module; choose another name";
+    assert_eq!(src_err("import sys\ndef sys():\n    pass\n"), taken);
+    assert_eq!(src_err("import sys\ndef f(sys):\n    pass\n"), taken);
+    let handler = "import sys\ntry:\n    pass\nexcept ValueError as sys:\n    pass\n";
+    assert_eq!(src_err(handler), taken);
+    assert!(src_err("import sys\nsys = 1\n").contains("is a module, not a value"));
+    assert_eq!(
+        src_err("import sys\nsys.argv = []\n"),
+        "assigning to a module's name (`sys.argv`) is not supported yet"
+    );
+}

@@ -6,6 +6,7 @@ use crate::exc::ExcKind;
 use crate::infer::Type;
 use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty, View};
 use crate::span::Span;
+use crate::stdlib::StdFn;
 
 use super::vars::runtime;
 use super::{unsupported, FnBuilder};
@@ -657,10 +658,16 @@ impl<'a> FnBuilder<'_, 'a> {
                 let items = vec![start, stop, step];
                 Ok(self.temp(Ty::Range, Rvalue::NewSeq(items), span))
             }
-            other => match ExcKind::from_name(other) {
-                Some(kind) => self.new_exc(kind, &ops, span),
-                None => Err(unsupported(span, &format!("`{other}`"))),
-            },
+            other => {
+                if let Some(f) = StdFn::from_name(other) {
+                    let ty = self.ty_at(span)?;
+                    return Ok(self.temp(ty, Rvalue::Std(f, ops), span));
+                }
+                match ExcKind::from_name(other) {
+                    Some(kind) => self.new_exc(kind, &ops, span),
+                    None => Err(unsupported(span, &format!("`{other}`"))),
+                }
+            }
         }
     }
 

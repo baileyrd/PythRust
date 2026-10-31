@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: no module named `nosuchmodule`
+import nosuchmodule
+
+print("unreachable")

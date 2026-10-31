@@ -311,7 +311,11 @@ impl<'a> Flow<'a> {
         }
         let allocates = matches!(
             value,
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) | Rvalue::Call(..)
+            Rvalue::NewSeq(_)
+                | Rvalue::CopyList(_)
+                | Rvalue::View(_)
+                | Rvalue::Call(..)
+                | Rvalue::Std(..)
         );
         if self.sensitive && allocates {
             self.age(dest.0);
@@ -347,7 +351,7 @@ impl<'a> Flow<'a> {
             Rvalue::Index(a, _) | Rvalue::Field(a, _) | Rvalue::Entry(a, ..) => {
                 self.contents(&self.of(*a))
             }
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) => {
+            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) | Rvalue::Std(..) => {
                 Objs::from([Obj::Fresh(dest.0, Age::Latest)])
             }
             Rvalue::Global(_) => Objs::from([Obj::World]),
