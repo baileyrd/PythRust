@@ -1,13 +1,13 @@
-//! Methods: `list.append`, `set.add`, and `dict.get`, `.keys`,
-//! `.values`, `.items`. `x.name` binds the method to `x`; calling the
-//! bound method runs it.
+//! Methods: `list.append`, `set.add`, `dict.get`, `.keys`, `.values`,
+//! `.items`, and a file's `.read` and `.close`. `x.name` binds the
+//! method to `x`; calling the bound method runs it.
 
 use std::rc::Rc;
 
 use super::builtins::Args;
 use super::table::{Key, TableRef};
-use super::value::{ListRef, Value};
-use super::{rt_err, Exec};
+use super::value::{File, ListRef, Value};
+use super::{rt_err, stdlib, Exec};
 use crate::ast::Ident;
 use crate::diag::Result;
 use crate::infer::View;
@@ -21,6 +21,8 @@ pub(super) enum Name {
     Keys,
     Values,
     Items,
+    Read,
+    Close,
 }
 
 impl Name {
@@ -32,6 +34,8 @@ impl Name {
             Name::Keys => "keys",
             Name::Values => "values",
             Name::Items => "items",
+            Name::Read => "read",
+            Name::Close => "close",
         }
     }
 }
@@ -42,12 +46,13 @@ pub(super) enum Method<'m> {
     List(Name, ListRef<'m>),
     /// A dict's or a set's method; which one the receiver tells.
     Table(Name, Value<'m>, TableRef<'m>),
+    File(Name, Rc<File>),
 }
 
 impl<'m> Method<'m> {
     pub fn name(&self) -> Name {
         match self {
-            Method::List(name, _) | Method::Table(name, _, _) => *name,
+            Method::List(name, _) | Method::Table(name, _, _) | Method::File(name, _) => *name,
         }
     }
 
@@ -56,6 +61,7 @@ impl<'m> Method<'m> {
         match self {
             Method::List(..) => "list",
             Method::Table(_, on, _) => on.type_name(),
+            Method::File(..) => "_io.BufferedReader",
         }
     }
 
@@ -64,6 +70,7 @@ impl<'m> Method<'m> {
         match (self, other) {
             (Method::List(a, x), Method::List(b, y)) => a == b && Rc::ptr_eq(x, y),
             (Method::Table(a, _, x), Method::Table(b, _, y)) => a == b && Rc::ptr_eq(x, y),
+            (Method::File(a, x), Method::File(b, y)) => a == b && Rc::ptr_eq(x, y),
             _ => false,
         }
     }
@@ -78,6 +85,8 @@ pub(super) fn bind<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
         "keys" => Some(Name::Keys),
         "values" => Some(Name::Values),
         "items" => Some(Name::Items),
+        "read" => Some(Name::Read),
+        "close" => Some(Name::Close),
         _ => None,
     };
     let method = match (name, &v) {
@@ -85,6 +94,9 @@ pub(super) fn bind<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
         (Some(Name::Add), Value::Set(t)) => Some(Method::Table(Name::Add, v.clone(), Rc::clone(t))),
         (Some(n @ (Name::Get | Name::Keys | Name::Values | Name::Items)), Value::Dict(t)) => {
             Some(Method::Table(n, v.clone(), Rc::clone(t)))
+        }
+        (Some(n @ (Name::Read | Name::Close)), Value::File(f)) => {
+            Some(Method::File(n, Rc::clone(f)))
         }
         _ => None,
     };
@@ -112,7 +124,7 @@ pub(super) fn call<'m>(m: &Method<'m>, args: Args<'m>) -> Exec<'m, Value<'m>> {
     let (min, max) = match m.name() {
         Name::Append | Name::Add => (1, 1),
         Name::Get => (1, 2),
-        Name::Keys | Name::Values | Name::Items => (0, 0),
+        Name::Keys | Name::Values | Name::Items | Name::Read | Name::Close => (0, 0),
     };
     if pos.len() < min || pos.len() > max {
         let msg = match (min, max) {
@@ -138,6 +150,11 @@ pub(super) fn call<'m>(m: &Method<'m>, args: Args<'m>) -> Exec<'m, Value<'m>> {
     let mut pos = pos.into_iter();
     let mut arg = || pos.next().unwrap_or(Value::None);
     match m {
+        Method::File(Name::Read, f) => stdlib::read(f, span),
+        Method::File(_, f) => {
+            f.file.borrow_mut().take();
+            Ok(Value::None)
+        }
         Method::List(_, list) => {
             list.borrow_mut().push(arg());
             Ok(Value::None)

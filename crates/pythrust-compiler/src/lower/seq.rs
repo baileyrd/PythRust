@@ -7,6 +7,7 @@ use crate::exc::ExcKind;
 use crate::infer::Type;
 use crate::ir::{CmpOp, Inst, Operand, Rvalue, Ty};
 use crate::span::Span;
+use crate::stdlib::StdFn;
 
 use super::{internal, unsupported, FnBuilder};
 
@@ -152,7 +153,8 @@ impl FnBuilder<'_, '_> {
         Ok(self.temp(ty, Rvalue::Field(t, k), span))
     }
 
-    /// `list.append(v)`, the one method in the subset.
+    /// `list.append(v)`, a dict's or set's method, or a file's `read`
+    /// or `close`.
     pub(super) fn method(
         &mut self,
         value: &Expr,
@@ -164,6 +166,9 @@ impl FnBuilder<'_, '_> {
         let ty = self.ty(list);
         if let Ty::Dict(_) | Ty::Set(_) = ty {
             return self.table_method(list, attr, args, span);
+        }
+        if let (Ty::File, Some(f), []) = (ty, StdFn::method(attr), args) {
+            return self.std(f, vec![list], span);
         }
         let ([arg], "append", Ty::List(_)) = (args, attr, ty) else {
             return Err(unsupported(span, "methods other than `list.append(x)`"));

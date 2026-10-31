@@ -1,11 +1,11 @@
 //! Pythrust runtime: what compiled programs call that is not worth
 //! generating inline. Output buffering, `print` formatting, runtime
 //! error exits, strings ([`str`]), lists and tuples ([`seq`]), dicts and sets ([`table`]), ranges
-//! ([`range`]), numbers ([`num`]), exceptions ([`exc`]), and the `sys`
-//! and `os` modules ([`sys`], [`os`]).
+//! ([`range`]), numbers ([`num`]), exceptions ([`exc`]), bytes and files
+//! ([`obj`]), and the `sys` and `os` modules ([`sys`], [`os`]).
 //!
 //! The C ABI surface is the only `unsafe` in the project. Each exported
-//! item (or module, for [`str`], [`seq`], [`table`], [`range`], [`num`], [`exc`], [`sys`] and [`os`]) carries `allow(unsafe_code)` and a
+//! item (or module, for [`str`], [`seq`], [`table`], [`range`], [`num`], [`exc`], [`obj`], [`sys`] and [`os`]) carries `allow(unsafe_code)` and a
 //! `# Safety` note on what the caller guarantees, so the audit is
 //! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
 //! tested.
@@ -14,9 +14,11 @@
 
 pub mod exc;
 pub mod num;
+pub mod obj;
 pub mod os;
 pub mod range;
 pub mod seq;
+mod sha256;
 pub mod str;
 pub mod sys;
 pub mod table;

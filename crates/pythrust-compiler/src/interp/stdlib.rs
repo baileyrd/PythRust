@@ -1,21 +1,31 @@
 //! Module functions ([`crate::stdlib`]): `sys.argv` from the
-//! interpreter's state, `os` and `os.path` over `std::fs`.
+//! interpreter's state, `os` and `os.path` over `std::fs`, and `open`
+//! with its file's `read` (`close` is in [`super::methods`]), and
+//! `hashlib.sha256(data).hexdigest()`.
 
+use std::cell::RefCell;
+use std::io::Read;
+use std::rc::Rc;
 use std::{fs, io};
 
 use super::builtins::Args;
-use std::rc::Rc;
-
-use super::value::{str_repr, Exc, ExcArg, Value};
-use super::{rt_err, Exec, Interp};
+use super::value::{str_repr, Exc, ExcArg, File, Value};
+use super::{raised, rt_err, Exec, Interp};
 use crate::exc::ExcKind;
 use crate::span::Span;
 use crate::stdlib::StdFn;
+
+/// The runtime's SHA-256, one source for both backends.
+#[path = "../../../pythrust-rt/src/sha256.rs"]
+mod sha256;
 
 impl<'m> Interp<'m, '_> {
     /// Calls `f`; inference checked the arguments' count and types.
     pub(super) fn std(&mut self, f: StdFn, args: &Args<'m>) -> Exec<'m, Value<'m>> {
         let span = args.span;
+        if let (StdFn::Sha256, [Value::Bytes(data)]) = (f, args.positional.as_slice()) {
+            return Ok(Value::str(&sha256::hex(&sha256::digest(data))));
+        }
         let named = args.keywords.iter().map(|(kw, v)| (kw.name.as_str(), v));
         let keywords = named.map(|(kw, v)| match f.keyword() == Some(kw) {
             true => Ok(v),
@@ -42,8 +52,11 @@ impl<'m> Interp<'m, '_> {
                 let link = fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
                 Value::Bool(link)
             }
+            (StdFn::Open, [p, _]) => open(p, span)?,
             (StdFn::Getsize, [p]) => {
-                let len = fs::metadata(p).map_err(|e| os_error(&e, p, span))?.len();
+                let len = fs::metadata(p)
+                    .map_err(|e| os_error(&e, Some(p), span))?
+                    .len();
                 let len = i64::try_from(len)
                     .map_err(|_| rt_err(span, "OverflowError: file size beyond i64".into()))?;
                 Value::Int(len)
@@ -54,6 +67,54 @@ impl<'m> Interp<'m, '_> {
             }
         })
     }
+}
+
+/// `open(p, "rb")`. A directory fails as CPython's does, though Unix
+/// opens one for reading; a NUL in `p` is CPython's untracked
+/// `ValueError`, before any file system call.
+fn open<'m>(p: &str, span: Span) -> Exec<'m, Value<'m>> {
+    if p.contains('\0') {
+        return Err(raised(ExcKind::Value, NUL.to_string(), span));
+    }
+    let opened = fs::File::open(p).and_then(|file| match file.metadata()?.is_dir() {
+        true => Err(is_a_directory()),
+        false => Ok(file),
+    });
+    let file = opened.map_err(|e| os_error(&e, Some(p), span))?;
+    let file = RefCell::new(Some(file));
+    let name = p.to_string();
+    Ok(Value::File(Rc::new(File { name, file })))
+}
+
+/// CPython's message for a path holding a NUL: Windows converts the
+/// path to wide characters, POSIX to bytes.
+const NUL: &str = if cfg!(windows) {
+    "embedded null character"
+} else {
+    "embedded null byte"
+};
+
+#[cfg(unix)]
+fn is_a_directory() -> io::Error {
+    io::Error::from_raw_os_error(21) // EISDIR on Linux and macOS.
+}
+
+#[cfg(not(unix))]
+fn is_a_directory() -> io::Error {
+    io::Error::from(io::ErrorKind::IsADirectory)
+}
+
+/// `f.read()`: the rest of the file; a `ValueError` once closed.
+pub(super) fn read<'m>(f: &File, span: Span) -> Exec<'m, Value<'m>> {
+    let mut file = f.file.borrow_mut();
+    let Some(file) = file.as_mut() else {
+        let msg = "read of closed file".to_string();
+        return Err(raised(ExcKind::Value, msg, span));
+    };
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)
+        .map_err(|e| os_error(&e, None, span))?;
+    Ok(Value::Bytes(Rc::from(data)))
 }
 
 /// A path argument: inference made it a `str`.
@@ -71,10 +132,10 @@ fn path<'v, 'm>(v: &'v Value<'m>, span: Span) -> Exec<'m, &'v str> {
 /// CPython's. A name that is not UTF-8 is decoded lossily (a listed
 /// deviation).
 fn listdir<'m>(p: &str, span: Span) -> Exec<'m, Value<'m>> {
-    let entries = fs::read_dir(p).map_err(|e| os_error(&e, p, span))?;
+    let entries = fs::read_dir(p).map_err(|e| os_error(&e, Some(p), span))?;
     let mut names = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| os_error(&e, p, span))?;
+        let entry = entry.map_err(|e| os_error(&e, Some(p), span))?;
         names.push(Value::str(&entry.file_name().to_string_lossy()));
     }
     Ok(Value::list(names))
@@ -98,15 +159,18 @@ fn join(first: &str, rest: &[&str]) -> String {
 /// The `OSError` CPython raises for `e` on `p`: the subclass its kind
 /// names, holding `errno`, `strerror` and `filename` when the system
 /// gave an errno, else a message alone (`text: 'p'`).
-fn os_error<'m>(e: &io::Error, p: &str, span: Span) -> super::Unwind<'m> {
+fn os_error<'m>(e: &io::Error, p: Option<&str>, span: Span) -> super::Unwind<'m> {
     let (kind, errno, strerror) = os_parts(e);
     let arg = match errno {
         Some(errno) => ExcArg::Errno {
             errno,
             strerror,
-            filename: Some(p.to_string()),
+            filename: p.map(str::to_string),
         },
-        None => ExcArg::One(Value::str(&format!("{strerror}: {}", str_repr(p)))),
+        None => ExcArg::One(Value::str(&match p {
+            Some(p) => format!("{strerror}: {}", str_repr(p)),
+            None => strerror,
+        })),
     };
     super::Unwind::Raise(Rc::new(Exc { kind, arg }), span)
 }

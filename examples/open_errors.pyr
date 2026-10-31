@@ -1,0 +1,23 @@
+# `open` without real files: a missing path raises FileNotFoundError and
+# a directory an OSError (IsADirectoryError on POSIX, PermissionError on
+# Windows), caught by class since the messages differ by platform. A
+# `try` around `open` alone; `read` and `close` are in the conformance
+# test, which makes real files.
+import os
+
+
+temper def opened(path: str) -> bool raises OSError:
+    f = open(path, "rb")
+    f.close()
+    return True
+
+
+try:
+    opened(os.path.join("no", "such", "file"))
+except FileNotFoundError:
+    print("FileNotFoundError")
+try:
+    opened(".")
+except OSError:
+    print("OSError")
+print("done")

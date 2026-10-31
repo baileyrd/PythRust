@@ -508,13 +508,18 @@ impl<'a> Cx<'_, 'a> {
     }
 
     /// Adds what evaluating `e` may raise: calls to functions that raise,
-    /// and `int(s)`/`float(s)` of a string.
+    /// `int(s)`/`float(s)` of a string, and a file's `read`.
     fn expr(&self, e: &Expr, out: &mut Raises) {
         match &e.kind {
             ExprKind::Call { func, args } => {
                 args.iter().for_each(|a| self.expr(&a.value, out));
                 match &func.kind {
                     ExprKind::Name(name) => self.call(name, args.first(), e.span, out),
+                    ExprKind::Attr { value, attr } => {
+                        self.expr(value, out);
+                        let method = StdFn::method(&attr.name).and_then(StdFn::raises);
+                        method.into_iter().for_each(|k| out.add(k, e.span));
+                    }
                     _ => self.expr(func, out),
                 }
             }
@@ -741,6 +746,14 @@ def g(xs: list[int]) -> int raises Exception:
         assert_eq!(raises(src, "at"), "");
         let fix = "remove the `raises` clause";
         assert_eq!(warnings(src), vec![vacuous("g", "nothing", fix)]);
+    }
+
+    #[test]
+    fn opening_and_reading_a_file_raise_os_error_but_closing_does_not() {
+        assert_eq!(raises("def r(f):\n    return f.read()\n", "r"), "OSError");
+        assert_eq!(raises("def c(f):\n    f.close()\n", "c"), "");
+        let open = "def o(p: str):\n    return open(p, \"rb\")\n";
+        assert_eq!(raises(open, "o"), "OSError");
     }
 
     #[test]

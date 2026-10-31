@@ -43,6 +43,10 @@ pub(super) enum Value<'m> {
     /// A method bound to its receiver: `xs.append`, `d.get`.
     Method(Rc<Method<'m>>),
     Exc(Rc<Exc<'m>>),
+    /// Immutable bytes, as `f.read()` returns.
+    Bytes(Rc<[u8]>),
+    /// A file `open(p, "rb")` returned.
+    File(Rc<File>),
 }
 
 /// An exception value: its kind and the argument it was built with.
@@ -132,6 +136,14 @@ pub(super) struct Func<'m> {
     pub locals: HashSet<&'m str>,
 }
 
+/// A file open for reading bytes: the path it was opened by, and the
+/// open file until `close`. Dropping the last reference closes it.
+#[derive(Debug)]
+pub(super) struct File {
+    pub name: String,
+    pub file: RefCell<Option<std::fs::File>>,
+}
+
 /// An `int` or `float` operand. `bool` counts as `int`, as in Python.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Num {
@@ -184,7 +196,12 @@ impl<'m> Value<'m> {
             Value::Dict(t) | Value::Set(t) => !t.borrow().is_empty(),
             Value::Tuple(t) | Value::View(_, t) => !t.is_empty(),
             Value::Range(r) => r.len() != 0,
-            Value::Func(_) | Value::Builtin(_) | Value::Method(_) | Value::Exc(_) => true,
+            Value::Bytes(b) => !b.is_empty(),
+            Value::Func(_)
+            | Value::Builtin(_)
+            | Value::Method(_)
+            | Value::Exc(_)
+            | Value::File(_) => true,
         }
     }
 
@@ -206,6 +223,8 @@ impl<'m> Value<'m> {
             Value::Builtin(b) if b.exception().is_some() => "type",
             Value::Builtin(_) | Value::Method(_) => "builtin_function_or_method",
             Value::Exc(e) => e.kind.name(),
+            Value::Bytes(_) => "bytes",
+            Value::File(_) => "_io.BufferedReader",
         }
     }
 
@@ -422,6 +441,8 @@ fn eq_at<'m>(a: &Value<'m>, b: &Value<'m>, depth: usize, span: Span) -> Result<b
         (Value::Builtin(x), Value::Builtin(y)) => x == y,
         (Value::Method(x), Value::Method(y)) => x.same(y),
         (Value::Exc(x), Value::Exc(y)) => Rc::ptr_eq(x, y),
+        (Value::Bytes(x), Value::Bytes(y)) => x == y,
+        (Value::File(x), Value::File(y)) => Rc::ptr_eq(x, y),
         _ => false,
     })
 }
@@ -671,6 +692,8 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
         Value::Int(i) => i.to_string(),
         Value::Float(f) => float_repr(*f),
         Value::Str(s) => str_repr(s),
+        Value::Bytes(b) => bytes_repr(b),
+        Value::File(f) => format!("<_io.BufferedReader name={}>", str_repr(&f.name)),
         Value::Range(r) if r.step == 1 => format!("range({}, {})", r.start, r.stop),
         Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
         Value::Func(f) => format!("<function {}>", f.def.name.name),
@@ -783,6 +806,34 @@ pub(super) fn str_repr(s: &str) -> String {
         }
     }
     out.push(quote);
+    out
+}
+
+/// Python's `repr` of `bytes`: quoted as `str` is, with `\t`, `\n`,
+/// `\r`, `\\` and the quote escaped and other bytes outside printable
+/// ASCII as `\xhh`.
+pub(super) fn bytes_repr(data: &[u8]) -> String {
+    let quote = if data.contains(&b'\'') && !data.contains(&b'"') {
+        b'"'
+    } else {
+        b'\''
+    };
+    let mut out = format!("b{}", char::from(quote));
+    for &b in data {
+        match b {
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            _ if b == quote => {
+                out.push('\\');
+                out.push(char::from(b));
+            }
+            0x20..=0x7e => out.push(char::from(b)),
+            _ => out.push_str(&format!("\\x{b:02x}")),
+        }
+    }
+    out.push(char::from(quote));
     out
 }
 

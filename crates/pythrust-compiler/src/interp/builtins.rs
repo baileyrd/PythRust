@@ -181,6 +181,7 @@ fn len<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
         Value::Dict(t) | Value::Set(t) => t.borrow().len() as i128,
         Value::Tuple(t) | Value::View(_, t) => t.len() as i128,
         Value::Range(r) => r.len(),
+        Value::Bytes(b) => b.len() as i128,
         other => {
             return Err(rt_err(
                 span,

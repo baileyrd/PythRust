@@ -1,0 +1,11 @@
+# expect-exit: 1
+# deviation: a tempered function must declare the OSError `open` and a file's `read` may raise (D8)
+# expect-error: OSError
+temper def size(path: str) -> int:
+    return len(open(path, "rb").read())
+
+
+try:
+    print(size("no-such-file.bin"))
+except OSError:
+    print("missing")

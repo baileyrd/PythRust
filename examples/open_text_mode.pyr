@@ -1,0 +1,7 @@
+# expect-exit: 1
+# deviation: only `open(path, "rb")` is supported yet; text mode and writing come later
+# expect-error: only binary reading is supported yet
+try:
+    print(open("no-such-file.txt").read())
+except OSError:
+    print("missing")

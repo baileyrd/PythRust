@@ -205,6 +205,7 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::Str => 's',
         Ty::Range => 'r',
         Ty::Exc => 'x',
+        Ty::Bytes | Ty::File => 'y',
         Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id) => {
             let compound = types
                 .get(id.0)

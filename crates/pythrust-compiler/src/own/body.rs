@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{holds_list, strs, CallSite, Heap, Mode, Param, Peer, Strs, Summary};
 use crate::ir::{Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term};
+use crate::stdlib::StdFn;
 
 /// An abstract list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -434,6 +435,7 @@ impl<'a> Flow<'a> {
             ) {
                 (true, _) => Mode::Owned,
                 (false, true) => Mode::Mut,
+                (false, false) if self.reads_file(i) => Mode::Mut,
                 (false, false) => Mode::Read,
             };
             let inside = self.reachable(&Objs::from([Obj::Param(i)]));
@@ -448,6 +450,24 @@ impl<'a> Flow<'a> {
             params: params.collect(),
             result_global: meets(&returned, &world),
         }
+    }
+
+    /// Whether the body calls `read` or `close` on parameter `i`, a
+    /// file: a syntactic `mut` (reading moves the file, closing ends it),
+    /// since files have no points-to sets. A copy of the parameter
+    /// (`g = f`) is not followed.
+    fn reads_file(&self, i: usize) -> bool {
+        let Some(&param) = self.func.params.get(i) else {
+            return false;
+        };
+        let insts = self.func.blocks.iter().flat_map(|b| &b.insts);
+        insts.into_iter().any(|inst| match inst {
+            Inst::Assign {
+                value: Rvalue::Std(StdFn::Read | StdFn::Close, args),
+                ..
+            } => args.first() == Some(&Operand::Local(param)),
+            _ => false,
+        })
     }
 
     /// `root` and what is stored in it, transitively, short of another

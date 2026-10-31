@@ -406,6 +406,7 @@ const NATIVE: &[&str] = &[
     "optional_shapes",
     "optional_short_circuit",
     "os_error_uncaught",
+    "open_errors",
     "os_path",
     "overflow_add",
     "overflow_factorial",
@@ -1200,6 +1201,174 @@ fn os_matches_cpython_on_a_tree() -> Res<()> {
     assert!(want.stdout.contains("FileNotFoundError"), "{}", want.stdout);
     assert_eq!(run_pythrust(&source)?, want);
     assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
+    cleanup(&dir)?;
+    Ok(())
+}
+
+/// `open`, `read` and `close` on real files, with bytes that need every
+/// `repr` escape, agree with CPython in both backends. Not a corpus
+/// program: the files are made here.
+#[test]
+fn files_match_cpython() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("files")?;
+    let data: &[u8] = b"ab\x00\xff\"'\n\t\\";
+    fs::write(dir.join("data.bin"), data).map_err(|e| e.to_string())?;
+    fs::write(dir.join("same.bin"), data).map_err(|e| e.to_string())?;
+    fs::write(dir.join("empty.bin"), b"").map_err(|e| e.to_string())?;
+    let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let src = format!(
+        "import hashlib\n\
+         def digest(path: str) -> bytes:\n\
+         \x20   f = open(path, 'rb')\n\
+         \x20   data = f.read()\n\
+         \x20   f.close()\n\
+         \x20   return data\n\
+         a = digest({a:?})\n\
+         b = digest({b:?})\n\
+         e = digest({e:?})\n\
+         print(a, len(a), a == b, a != b, a == e, str(e), len(e))\n\
+         print([a, e], (a, 1), [a] == [b])\n\
+         print('a' if a else '-', 'e' if e else '-')\n\
+         print(hashlib.sha256(a).hexdigest(), hashlib.sha256(e).hexdigest())\n\
+         f = open({a_path:?}, 'rb')\n\
+         print(f.read() == a, f.read(), len(f.read()))\n\
+         f.close()\n\
+         f.close()\n\
+         try:\n\
+         \x20   f.read()\n\
+         except ValueError as err:\n\
+         \x20   print('ValueError', err)\n\
+         def read_catching_os(f):\n\
+         \x20   try:\n\
+         \x20       f.read()\n\
+         \x20   except OSError:\n\
+         \x20       pass\n\
+         def via(f):\n\
+         \x20   read_catching_os(f)\n\
+         \x20   print('continued in via')\n\
+         try:\n\
+         \x20   read_catching_os(f)\n\
+         \x20   print('continued')\n\
+         except ValueError:\n\
+         \x20   print('caught')\n\
+         try:\n\
+         \x20   via(f)\n\
+         \x20   print('continued')\n\
+         except ValueError:\n\
+         \x20   print('caught via')\n\
+         def read_or(f, fallback):\n\
+         \x20   try:\n\
+         \x20       return f.read()\n\
+         \x20   except OSError:\n\
+         \x20       return fallback\n\
+         try:\n\
+         \x20   print(len(read_or(f, e)))\n\
+         except ValueError:\n\
+         \x20   print('caught before len')\n\
+         def open_or(p):\n\
+         \x20   try:\n\
+         \x20       return open(p, 'rb')\n\
+         \x20   except OSError:\n\
+         \x20       return open({a_path:?}, 'rb')\n\
+         for p in ['a\\x00b', {missing:?}]:\n\
+         \x20   try:\n\
+         \x20       open(p, 'rb')\n\
+         \x20   except ValueError as err:\n\
+         \x20       print('ValueError', err)\n\
+         \x20   except OSError:\n\
+         \x20       print('OSError')\n\
+         \x20   try:\n\
+         \x20       print(len(open_or(p).read()))\n\
+         \x20   except ValueError as err:\n\
+         \x20       print('ValueError via helper', err)\n",
+        a = at("data.bin"),
+        b = at("same.bin"),
+        e = at("empty.bin"),
+        a_path = at("data.bin"),
+        missing = at("missing.bin"),
+    );
+    // Windows names a directory's error differently (PermissionError, a
+    // listed deviation), so only POSIX checks the errors' str and repr.
+    let errors = format!(
+        "for p in [{missing:?}, {dir:?}]:\n\
+         \x20   try:\n\
+         \x20       open(p, 'rb')\n\
+         \x20   except OSError as err:\n\
+         \x20       print(err, [err])\n",
+        missing = at("missing.bin"),
+        dir = at(""),
+    );
+    let src = if cfg!(unix) { src + &errors } else { src };
+    let exe = native_case(&dir, "files", &src)?;
+    let source = exe.with_extension("pyr");
+    let want = run_cpython(&source)?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert!(
+        want.stdout.contains("read of closed file"),
+        "{}",
+        want.stdout
+    );
+    // A closed file's read escapes a helper that catches only OSError,
+    // directly and through another call (D7: untracked, still caught).
+    assert!(
+        want.stdout
+            .contains("caught\ncaught via\ncaught before len\n")
+            && !want.stdout.contains("continued"),
+        "{}",
+        want.stdout
+    );
+    // A NUL in `open`'s path is CPython's ValueError, not an OSError,
+    // and escapes a helper that catches only OSError.
+    let null = if cfg!(windows) { "character" } else { "byte" };
+    let nul = format!(
+        "ValueError embedded null {null}\nValueError via helper embedded null {null}\nOSError\n9\n"
+    );
+    assert!(want.stdout.contains(&nul), "{}", want.stdout);
+    let repr = "[IsADirectoryError(21, 'Is a directory')]";
+    assert!(!cfg!(unix) || want.stdout.contains(repr), "{}", want.stdout);
+    assert_eq!(run_pythrust(&source)?, want);
+    assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
+    cleanup(&dir)?;
+    Ok(())
+}
+
+/// fclone-lite, the M6 driver (`apps/fclone-lite`), prints the same
+/// groups of identical files under CPython, `run` and a built program.
+/// Unix only: it prints joined paths, which CPython on Windows joins
+/// with `\\` (a listed deviation).
+#[cfg(unix)]
+#[test]
+fn fclone_lite_matches_cpython() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("fclone")?;
+    let root = dir.join("tree");
+    fs::create_dir_all(root.join("a").join("b")).map_err(|e| e.to_string())?;
+    let files = [
+        ("one", "x"),
+        ("a/two", "x"),
+        ("a/b/three", "yy"),
+        ("four", "yy"),
+        ("five", "zz"),
+        ("a/six", "zy"),
+        ("empty", ""),
+        ("a/b/empty", ""),
+    ];
+    for (name, text) in files {
+        write(&root.join(name), text)?;
+    }
+    std::os::unix::fs::symlink(root.join("one"), root.join("link")).map_err(|e| e.to_string())?;
+    let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/fclone-lite/fclone_lite.py");
+    let exe = native_case(&dir, "fclone", &read(&app)?)?;
+    let mut cpython = Command::new(python());
+    cpython.args(["-I", "-X", "utf8"]).arg(&app).arg(&root);
+    let want = run(&mut cpython, TIMEOUT)?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
+    let mut interp = Command::new(pythrust_bin()?);
+    interp.arg("run").arg(&app).arg(&root);
+    assert_eq!(run(&mut interp, TIMEOUT)?, want);
+    assert_eq!(run(Command::new(&exe).arg(&root), TIMEOUT)?, want);
     cleanup(&dir)?;
     Ok(())
 }

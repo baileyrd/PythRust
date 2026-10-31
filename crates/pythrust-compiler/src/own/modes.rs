@@ -95,13 +95,15 @@ fn plural(ty: &Type) -> String {
         Type::Range => "ranges",
         Type::Str => "strings",
         Type::Exception => "exceptions",
+        Type::Bytes => "bytes values",
+        Type::File => "files",
         _ => return format!("`{ty}` values"),
     };
     word.to_string()
 }
 
 /// Rejects the first parameter of `def` whose written mode its body outgrows.
-fn func(def: &FuncDef, summary: &Summary) -> Result<()> {
+pub(super) fn func(def: &FuncDef, summary: &Summary) -> Result<()> {
     for (p, inferred) in def.params.iter().zip(&summary.params) {
         if def.mode == Temper::Loose && p.mode == ParamMode::Read {
             continue;

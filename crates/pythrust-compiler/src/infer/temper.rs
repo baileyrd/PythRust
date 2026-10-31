@@ -70,14 +70,20 @@ fn suggest(prefix: &str, inferred: Option<&Type>) -> String {
 
 /// Whether `t` can be written as an annotation: no inference variables
 /// (generic or unconstrained), no `range`, no dict view and no empty
-/// tuple.
+/// tuple, and no file (`BufferedReader` lives in `io`, not importable).
 fn spellable(t: &Type) -> bool {
     match t {
-        Type::Var(_) | Type::Range | Type::View(..) => false,
+        Type::Var(_) | Type::Range | Type::View(..) | Type::File => false,
         Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => spellable(inner),
         Type::Dict(key, value) => spellable(key) && spellable(value),
         Type::Tuple(items) => !items.is_empty() && items.iter().all(spellable),
-        Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Exception => true,
+        Type::Int
+        | Type::Float
+        | Type::Str
+        | Type::Bool
+        | Type::None
+        | Type::Exception
+        | Type::Bytes => true,
     }
 }
 

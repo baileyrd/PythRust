@@ -344,6 +344,8 @@ fn source(program: &Program, ty: Ty) -> Type {
         Ty::Str => Type::Str,
         Ty::Range => Type::Range,
         Ty::Exc => Type::Exception,
+        Ty::Bytes => Type::Bytes,
+        Ty::File => Type::File,
         Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_) => {
             compound_source(program, ty)
         }

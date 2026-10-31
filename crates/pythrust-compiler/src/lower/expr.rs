@@ -476,8 +476,9 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
-            Ty::Exc => Operand::Bool(true),
-            Ty::Str
+            Ty::Exc | Ty::File => Operand::Bool(true),
+            Ty::Bytes
+            | Ty::Str
             | Ty::List(_)
             | Ty::Tuple(_)
             | Ty::Range
@@ -678,15 +679,17 @@ impl<'a> FnBuilder<'_, 'a> {
         }
     }
 
-    /// A module function's call: `os.listdir()` lists `"."`, and
-    /// `os.path.join(a)` is `a`. One that may raise is followed by the
+    /// A module function's call: `os.listdir()` lists `"."`,
+    /// `os.path.join(a)` is `a`, and `open` drops its mode, which
+    /// inference proved is `"rb"`. One that may raise is followed by the
     /// test for it.
-    fn std(&mut self, f: StdFn, mut ops: Vec<Operand>, span: Span) -> Result<Operand> {
+    pub(super) fn std(&mut self, f: StdFn, mut ops: Vec<Operand>, span: Span) -> Result<Operand> {
         match (f, ops.as_slice()) {
             (StdFn::Join, [a]) => return Ok(*a),
             (StdFn::Listdir, []) => {
                 ops.push(self.temp(Ty::Str, Rvalue::StrLit(".".to_string()), span));
             }
+            (StdFn::Open, [_, _]) => ops.truncate(1),
             _ => {}
         }
         let ty = self.ty_at(span)?;
@@ -768,7 +771,13 @@ impl<'a> FnBuilder<'_, 'a> {
             ("len", Ty::Range) => return Ok(self.range_len(arg, span)),
             (
                 "len",
-                Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_),
+                Ty::Str
+                | Ty::List(_)
+                | Ty::Tuple(_)
+                | Ty::Dict(_)
+                | Ty::Set(_)
+                | Ty::View(_)
+                | Ty::Bytes,
             ) => (Ty::Int, Rvalue::Len(arg)),
             ("list", ty @ Ty::List(_)) => (ty, Rvalue::CopyList(arg)),
             ("list", Ty::Dict(_) | Ty::Set(_) | Ty::View(_)) => {
@@ -812,6 +821,8 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Dict(_) => "dict",
         Ty::Set(_) => "set",
         Ty::View(_) => "dict view",
+        Ty::Bytes => "bytes",
+        Ty::File => "_io.BufferedReader",
         // Exceptions print by kind, which only the run time knows.
         Ty::Exc => "exception",
     }

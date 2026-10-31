@@ -130,10 +130,20 @@ enum Rt {
     OsPathJoin,
     OsPathIs,
     OsPathGetsize,
+    ObjInc,
+    ObjDec,
+    ObjLen,
+    ObjEq,
+    ObjStr,
+    WriteObj,
+    Open,
+    FileRead,
+    FileClose,
+    Sha256Hex,
 }
 
 impl Rt {
-    const ALL: [Rt; 66] = [
+    const ALL: [Rt; 76] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -200,6 +210,16 @@ impl Rt {
         Rt::OsPathJoin,
         Rt::OsPathIs,
         Rt::OsPathGetsize,
+        Rt::ObjInc,
+        Rt::ObjDec,
+        Rt::ObjLen,
+        Rt::ObjEq,
+        Rt::ObjStr,
+        Rt::WriteObj,
+        Rt::Open,
+        Rt::FileRead,
+        Rt::FileClose,
+        Rt::Sha256Hex,
     ];
 
     fn symbol(self) -> &'static str {
@@ -270,6 +290,16 @@ impl Rt {
             Rt::OsPathJoin => "pt_os_path_join",
             Rt::OsPathIs => "pt_os_path_is",
             Rt::OsPathGetsize => "pt_os_path_getsize",
+            Rt::ObjInc => "pt_obj_inc",
+            Rt::ObjDec => "pt_obj_dec",
+            Rt::ObjLen => "pt_obj_len",
+            Rt::ObjEq => "pt_obj_eq",
+            Rt::ObjStr => "pt_obj_str",
+            Rt::WriteObj => "pt_write_obj",
+            Rt::Open => "pt_open",
+            Rt::FileRead => "pt_file_read",
+            Rt::FileClose => "pt_file_close",
+            Rt::Sha256Hex => "pt_sha256_hex",
         }
     }
 
@@ -333,6 +363,11 @@ impl Rt {
             Rt::OsPathJoin => (vec![ptr, ptr], Some(ptr)),
             Rt::OsPathIs => (vec![ptr, I8], Some(I8)),
             Rt::OsPathGetsize => (vec![ptr; 5], Some(I64)),
+            Rt::ObjInc | Rt::ObjDec | Rt::WriteObj | Rt::FileClose => (vec![ptr], None),
+            Rt::ObjLen => (vec![ptr], Some(I64)),
+            Rt::ObjEq => (vec![ptr, ptr], Some(I8)),
+            Rt::ObjStr | Rt::Sha256Hex => (vec![ptr], Some(ptr)),
+            Rt::Open | Rt::FileRead => (vec![ptr; 5], Some(ptr)),
         }
     }
 }
@@ -457,7 +492,9 @@ impl<'r> Codegen<'r> {
             | Ty::Exc
             | Ty::Dict(_)
             | Ty::Set(_)
-            | Ty::View(_) => self.ptr,
+            | Ty::View(_)
+            | Ty::Bytes
+            | Ty::File => self.ptr,
         }
     }
 
@@ -755,6 +792,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::Dict(_)
             | Ty::Set(_)
             | Ty::View(_) => Rt::WriteSeq,
+            Ty::Bytes | Ty::File => Rt::WriteObj,
         };
         self.call_rt(rt, &[v]);
         Ok(())
@@ -846,6 +884,14 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             {
                 self.seq_cmp(*op, *a, *b)
             }
+            Rvalue::Cmp(op, a, b) if self.func.ty(*a) == Ty::Bytes => {
+                let eq = self.rt_on(Rt::ObjEq, &[*a, *b])?;
+                match op {
+                    CmpOp::Eq => Ok(eq),
+                    CmpOp::Ne => Ok(self.b.ins().icmp_imm_s(IntCC::Equal, eq, 0)),
+                    _ => Err(backend("ordering bytes".to_string())),
+                }
+            }
             Rvalue::Cmp(op, a, b) if self.func.ty(*a) == Ty::Float => {
                 let (a, b) = (self.operand(*a), self.operand(*b));
                 Ok(self.b.ins().fcmp(num::float_cc(*op), a, b))
@@ -877,6 +923,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 self.call_rt_value(Rt::TableContains, &[s, v])
             }
             Rvalue::Len(s) if self.func.ty(*s) == Ty::Range => self.rt_on(Rt::RangeLen, &[*s]),
+            Rvalue::Len(s) if self.func.ty(*s) == Ty::Bytes => self.rt_on(Rt::ObjLen, &[*s]),
             Rvalue::Len(s) => self.rt_on(Rt::StrLen, &[*s]),
             Rvalue::Contains { hay, needle } if is_seq(self.func.ty(*hay)) => {
                 let (s, v) = (self.operand(*hay), self.slot(*needle));
@@ -950,6 +997,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::Dict(_)
             | Ty::Set(_)
             | Ty::View(_) => Rt::StrFromSeq,
+            Ty::Bytes | Ty::File => Rt::ObjStr,
             Ty::Exc => Rt::ExcStr,
             Ty::Str => {
                 self.call_rt(Rt::StrInc, &[v]);
@@ -1234,6 +1282,7 @@ fn rc_fns(types: &[Compound], ty: Ty) -> (Rt, Rt) {
     };
     match ty {
         Ty::Str => (Rt::StrInc, Rt::StrDec),
+        Ty::Bytes | Ty::File => (Rt::ObjInc, Rt::ObjDec),
         _ => (Rt::SeqInc, Rt::SeqDec),
     }
 }
