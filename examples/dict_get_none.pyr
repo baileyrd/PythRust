@@ -1,0 +1,6 @@
+# deviation: `get` without a default is `V | None`, so binding it to an int is a compile error and nothing runs; CPython prints, then raises TypeError.
+# expect-exit: 1
+# expect-error: `get` without a default may return None, but int is expected
+print("before")
+x: int = {}.get(1)
+print(x + 1)

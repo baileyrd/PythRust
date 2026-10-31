@@ -1,0 +1,6 @@
+# deviation: a float probed against a dict or set is a compile error, so nothing runs; CPython prints, then True and False.
+# expect-exit: 1
+# expect-error: float dict keys and set elements are not supported yet
+print("before")
+print(1.0 in {1})
+print(1.0 not in {1: 2})

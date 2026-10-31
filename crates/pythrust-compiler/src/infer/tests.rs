@@ -2167,3 +2167,14 @@ fn get_without_a_default_never_drops_its_none() {
     );
     assert_eq!(src_err("d = {}\nprint(d.get(1))\n"), "no error");
 }
+
+#[test]
+fn get_keeps_its_none_through_generic_and_typed_returns() {
+    let msg = "`get` without a default may return None, but int is expected";
+    let typed = "def f(d) -> int:\n    return d.get(1)\nprint(f({}))\n";
+    assert!(src_err(typed).contains(msg), "{}", src_err(typed));
+    let generic = "def f(d):\n    return d.get(1)\nx: int = f({})\n";
+    assert!(src_err(generic).contains(msg), "{}", src_err(generic));
+    let optional = "def f(d) -> int | None:\n    return d.get(1)\nprint(f({}))\n";
+    assert_eq!(src_err(optional), "no error");
+}
