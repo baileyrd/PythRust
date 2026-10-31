@@ -549,8 +549,10 @@ impl<'m> Interp<'m, '_> {
     }
 
     /// Marks `v` `int`-keyed if it is a dict or set the expression at
-    /// `span` types so. Where generic code leaves the type open, the
-    /// table learns it from the first `int` stored.
+    /// `span` types so, turning any `bool` key it holds into its int.
+    /// Generic code leaves the type open, so a table it makes is tagged
+    /// where a caller passes or receives it with a concrete type, or
+    /// when it stores an `int`.
     fn tag(&self, v: &Value<'m>, span: Span) {
         if let (Value::Dict(t) | Value::Set(t), true) = (v, self.int_keyed(span)) {
             t.borrow_mut().int_keyed();
@@ -606,6 +608,7 @@ impl<'m> Interp<'m, '_> {
         };
         for arg in args {
             let v = self.eval(&arg.value)?;
+            self.tag(&v, arg.value.span);
             match &arg.name {
                 Some(name) => evaluated.keywords.push((name, v)),
                 None => evaluated.positional.push(v),
@@ -616,21 +619,17 @@ impl<'m> Interp<'m, '_> {
                 self.tag(on, value.span);
             }
         }
-        match callee {
-            Value::Func(f) => self.call_func(f, evaluated),
-            Value::Builtin(Builtin::Set) => {
-                let set = builtins::call(Builtin::Set, evaluated, self.out)?;
-                self.tag(&set, span);
-                Ok(set)
+        let out = match callee {
+            Value::Func(f) => self.call_func(f, evaluated)?,
+            Value::Builtin(b) => builtins::call(b, evaluated, self.out)?,
+            Value::Method(m) => methods::call(&m, evaluated)?,
+            other => {
+                let msg = format!("TypeError: '{}' object is not callable", other.type_name());
+                return Err(rt_err(span, msg).into());
             }
-            Value::Builtin(b) => builtins::call(b, evaluated, self.out),
-            Value::Method(m) => methods::call(&m, evaluated),
-            other => Err(rt_err(
-                span,
-                format!("TypeError: '{}' object is not callable", other.type_name()),
-            )
-            .into()),
-        }
+        };
+        self.tag(&out, span);
+        Ok(out)
     }
 
     fn call_func(&mut self, func: Rc<Func<'m>>, args: Args<'m>) -> Exec<'m, Value<'m>> {

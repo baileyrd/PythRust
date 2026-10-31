@@ -14,9 +14,23 @@ def new():
 def put(d, k):
     d[k] = "p"
 made: dict[int, str] = new()
+put(made, True)
 made[True] = "m"
 put(made, False)
 print(made)
+def new_set():
+    return set()
+def add(s, x):
+    s.add(x)
+nums: set[int] = new_set()
+add(nums, False)
+print(nums)
+def build(k):
+    d = {}
+    d[k] = 1
+    return d
+built: dict[int, int] = build(True)
+print(built)
 def pair(k):
     return {k: "x"}
 held = pair(5)
