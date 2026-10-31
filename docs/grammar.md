@@ -159,6 +159,8 @@ A warning (a lint) is a note on a valid program. `run`, `check` and `build` prin
 
 This is the canonical documented deviations-from-CPython list. Thread E treats these as expected differences, not bugs, and links deviation fixtures here. The [Decided](#decided) section supplies rationale; other docs should reference this list rather than maintain another one.
 
+- **`...` bodies (M6b, Nano 2026-10-31):** a function body of `...` is legal only in a Rust binding's stub; elsewhere it is a named error ("stub bodies only; use pass"), where CPython accepts it. A deliberate omission, to revisit when Protocol or trait support lands.
+- **`OSError` from a Rust binding (M6b):** an `io::Error` maps to the four known subclasses (`FileNotFoundError`, `PermissionError`, `IsADirectoryError`, `NotADirectoryError`); any other becomes a plain `OSError` where CPython raises a further subclass such as `FileExistsError`, and its `str` lacks the file name.
 - **Rust bindings (M6b) are a Pythrust extension:** CPython cannot import one, so such a program has no CPython oracle; its tests compare it with a pure-Pythrust program doing the same work ([research/rust-interop.md](research/rust-interop.md#oracle)).
 - Spaces only: a tab outside a string or comment is an error, not just in indentation.
 - An unknown string escape (`'\q'`) is an error; CPython keeps the backslash and warns.
