@@ -10,6 +10,6 @@ Python's surface, Rust's guarantees. Code starts loose (inferred, Python-feeling
 - [Roadmap](docs/roadmap.md)
 - [Loose syntax grammar](docs/grammar.md)
 - [Claude Code handoff](docs/handoff.md)
-- Research (decided 2026-10-25): [backend](docs/research/backend.md), [ownership](docs/research/ownership.md), [pause and shared syntax](docs/research/concurrency-syntax.md), [IR](docs/research/ir.md)
+- Research (decided 2026-10-25): [backend](docs/research/backend.md), [ownership](docs/research/ownership.md), [pause and shared syntax](docs/research/concurrency-syntax.md), [IR](docs/research/ir.md); M6b (decided 2026-10-31): [Rust interop](docs/research/rust-interop.md)
 
 Layout: `crates/pythrust-compiler` (compiler, written in Rust), `crates/pythrust-rt` (runtime linked into native programs), `docs/` (design and roadmap).

@@ -53,7 +53,7 @@ Tools load on demand. If remind_me_* tools are not visible, run a tool search fo
 - Explicit over implicit. Types everywhere. Flat control flow: guard clauses, early returns, at most 3 levels of nesting. Short single-purpose functions.
 - `Result` and `?`. No `unwrap()`/`expect()` outside tests. Never swallow errors; propagate with context.
 - Domain logic free of I/O. Immutable data; make illegal states unrepresentable.
-- Zero dependencies unless justified in the PR (the `cranelift-*` crates are accepted). No `unsafe` (`forbid(unsafe_code)`), except the audited C ABI surface of `pythrust-rt`.
+- Zero dependencies unless justified in the PR (the `cranelift-*` crates are accepted). No `unsafe` (`forbid(unsafe_code)`), except the audited C ABI surface of `pythrust-rt` and the generated Rust binding shims (M6b), which come only from the compiler's one fixed, audited template; a test checks the generated source for exactly the expected `unsafe` items, and conversions live in `pythrust-rt::abi`, part of its audited C ABI surface.
 - Tests for all non-trivial logic: happy path plus failure and boundary cases.
 - Ask before large or hard-to-reverse changes (public API, dependency bumps, deletions). Keep diffs focused. State the why for non-obvious choices.
 - One branch and one PR per thread. Commit small.
@@ -68,7 +68,7 @@ The single CPython-deviations list is `docs/grammar.md#deviations-from-python`; 
 
 ## Open decisions (do not decide silently; propose and ask)
 
-None. Source file extension: `.pyr`. Do not silently infer new widening rules. Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate.
+None. Source file extension: `.pyr`. Do not silently infer new widening rules. Decided in `docs/research/`: Cranelift backend, `pause <expr>`, `shared[T]` builtin type, ownership vocabulary, CFG IR, `pythrust-rt` runtime crate, Rust binding interop (M6b).
 
 ## Checks
 
