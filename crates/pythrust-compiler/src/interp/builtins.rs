@@ -6,7 +6,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use super::table::{Key, Table};
-use super::value::{compare, str_repr, Exc, Num, Range, Value};
+use super::value::{compare, str_repr, Exc, ExcArg, Num, Range, Value};
 use super::{raised, rt_err, Exec};
 use crate::ast::{CmpOp, Ident};
 use crate::diag::Result;
@@ -109,7 +109,7 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
         Builtin::Bool => Value::Bool(opt(b, pos, span)?.is_some_and(Value::truthy)),
         Builtin::Print => print(&args, out)?,
         Builtin::Exception(kind) => {
-            let arg = opt(b, pos, span)?.cloned();
+            let arg = ExcArg::of(opt(b, pos, span)?.cloned());
             Value::Exc(Rc::new(Exc { kind, arg }))
         }
         Builtin::Std(f) => {

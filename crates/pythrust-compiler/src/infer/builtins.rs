@@ -81,7 +81,8 @@ impl Checker {
             StdFn::Getsize => (1, 1, Type::Int),
         };
         let what = format!("argument of `{name}`");
-        for (t, at) in self.positional(name, args, min, max, span)? {
+        let args = by_position(f, args)?;
+        for (t, at) in self.positional(name, &args, min, max, span)? {
             self.expect(at, &Type::Str, &t, &what)?;
         }
         Ok(result)
@@ -198,4 +199,28 @@ impl Checker {
             .map(|a| Ok((self.expr(&a.value)?, a.value.span)))
             .collect()
     }
+}
+
+/// `args` with a keyword argument naming `f`'s [`StdFn::keyword`]
+/// parameter made positional; any other keyword is an error. Since that
+/// parameter is a function's only one, a second argument is an arity
+/// error after this.
+fn by_position(f: StdFn, args: &[Arg]) -> Result<Vec<Arg>> {
+    args.iter()
+        .map(|a| match &a.name {
+            None => Ok(a.clone()),
+            Some(kw) if Some(kw.name.as_str()) == f.keyword() => Ok(Arg {
+                name: None,
+                ..a.clone()
+            }),
+            Some(kw) => {
+                let msg = format!(
+                    "`{}` got an unexpected keyword argument `{}`",
+                    f.name(),
+                    kw.name
+                );
+                Err(error(kw.span, msg))
+            }
+        })
+        .collect()
 }

@@ -4,8 +4,10 @@
 use std::{fs, io};
 
 use super::builtins::Args;
-use super::value::{str_repr, Value};
-use super::{raised, rt_err, Exec, Interp};
+use std::rc::Rc;
+
+use super::value::{str_repr, Exc, ExcArg, Value};
+use super::{rt_err, Exec, Interp};
 use crate::exc::ExcKind;
 use crate::span::Span;
 use crate::stdlib::StdFn;
@@ -14,14 +16,20 @@ impl<'m> Interp<'m, '_> {
     /// Calls `f`; inference checked the arguments' count and types.
     pub(super) fn std(&mut self, f: StdFn, args: &Args<'m>) -> Exec<'m, Value<'m>> {
         let span = args.span;
-        if !args.keywords.is_empty() {
-            let msg = format!("internal: `{}` takes no keyword arguments", f.name());
-            return Err(rt_err(span, msg).into());
-        }
+        let named = args.keywords.iter().map(|(kw, v)| (kw.name.as_str(), v));
+        let keywords = named.map(|(kw, v)| match f.keyword() == Some(kw) {
+            true => Ok(v),
+            false => {
+                let msg = format!("internal: `{}` got keyword `{kw}`", f.name());
+                Err(rt_err(span, msg).into())
+            }
+        });
         let paths = args
             .positional
             .iter()
-            .map(|v| path(v, span))
+            .map(Ok)
+            .chain(keywords)
+            .map(|v| v.and_then(|v| path(v, span)))
             .collect::<Exec<'m, Vec<&str>>>()?;
         Ok(match (f, paths.as_slice()) {
             (StdFn::Argv, []) => Value::list(self.argv.iter().map(|a| Value::str(a)).collect()),
@@ -88,13 +96,24 @@ fn join(first: &str, rest: &[&str]) -> String {
 }
 
 /// The `OSError` CPython raises for `e` on `p`: the subclass its kind
-/// names, and `[Errno N] text: 'p'`.
+/// names, holding `errno`, `strerror` and `filename` when the system
+/// gave an errno, else a message alone (`text: 'p'`).
 fn os_error<'m>(e: &io::Error, p: &str, span: Span) -> super::Unwind<'m> {
-    let (kind, message) = os_message(e, p);
-    raised(kind, message, span)
+    let (kind, errno, strerror) = os_parts(e);
+    let arg = match errno {
+        Some(errno) => ExcArg::Errno {
+            errno,
+            strerror,
+            filename: Some(p.to_string()),
+        },
+        None => ExcArg::One(Value::str(&format!("{strerror}: {}", str_repr(p)))),
+    };
+    super::Unwind::Raise(Rc::new(Exc { kind, arg }), span)
 }
 
-fn os_message(e: &io::Error, p: &str) -> (ExcKind, String) {
+/// The `OSError` subclass `e`'s kind names, its errno if the system gave
+/// one, and the system's text (`No such file or directory`).
+fn os_parts(e: &io::Error) -> (ExcKind, Option<i32>, String) {
     let kind = match e.kind() {
         io::ErrorKind::NotFound => ExcKind::FileNotFound,
         io::ErrorKind::PermissionDenied => ExcKind::Permission,
@@ -106,11 +125,7 @@ fn os_message(e: &io::Error, p: &str) -> (ExcKind, String) {
     let detail = text
         .rsplit_once(" (os error ")
         .map_or(text.as_str(), |(d, _)| d);
-    let message = match e.raw_os_error() {
-        Some(n) => format!("[Errno {n}] {detail}: {}", str_repr(p)),
-        None => format!("{detail}: {}", str_repr(p)),
-    };
-    (kind, message)
+    (kind, e.raw_os_error(), detail.to_string())
 }
 
 #[cfg(test)]
@@ -131,26 +146,18 @@ mod tests {
     #[test]
     fn os_errors_read_as_cpython_on_posix() {
         let missing = io::Error::from_raw_os_error(2);
-        assert_eq!(
-            os_message(&missing, "nope"),
-            (
-                ExcKind::FileNotFound,
-                "[Errno 2] No such file or directory: 'nope'".to_string()
-            )
-        );
-        let denied = io::Error::from_raw_os_error(13);
-        assert_eq!(
-            os_message(&denied, "it's"),
-            (
-                ExcKind::Permission,
-                "[Errno 13] Permission denied: \"it's\"".to_string()
-            )
-        );
-        let not_dir = io::Error::from_raw_os_error(20);
-        assert_eq!(os_message(&not_dir, "f").0, ExcKind::NotADirectory);
-        let is_dir = io::Error::from_raw_os_error(21);
-        assert_eq!(os_message(&is_dir, "d").0, ExcKind::IsADirectory);
-        let other = io::Error::from_raw_os_error(36);
-        assert_eq!(os_message(&other, "x").0, ExcKind::Os);
+        let text = "No such file or directory".to_string();
+        assert_eq!(os_parts(&missing), (ExcKind::FileNotFound, Some(2), text));
+        let kinds = [
+            (13, ExcKind::Permission),
+            (20, ExcKind::NotADirectory),
+            (21, ExcKind::IsADirectory),
+            (36, ExcKind::Os),
+        ];
+        for (errno, kind) in kinds {
+            assert_eq!(os_parts(&io::Error::from_raw_os_error(errno)).0, kind);
+        }
+        let synthetic = io::Error::from(io::ErrorKind::InvalidInput);
+        assert_eq!(os_parts(&synthetic).1, None);
     }
 }

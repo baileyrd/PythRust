@@ -95,6 +95,16 @@ impl StdFn {
         }
     }
 
+    /// The one parameter a call may pass by keyword, as CPython's
+    /// signature names it: `os.listdir(path='.')`. The others take
+    /// positional arguments only (grammar.md, omissions).
+    pub fn keyword(self) -> Option<&'static str> {
+        match self {
+            StdFn::Listdir => Some("path"),
+            _ => None,
+        }
+    }
+
     pub fn from_name(name: &str) -> Option<StdFn> {
         StdFn::ALL.into_iter().find(|f| f.name() == name)
     }

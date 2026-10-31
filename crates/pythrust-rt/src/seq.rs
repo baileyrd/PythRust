@@ -93,12 +93,17 @@ fn span(desc: &[u8]) -> usize {
 
 /// The descriptor of slot `k` of a sequence described by `desc`. An
 /// exception's own descriptor is `x`, its kind's code and the type of
-/// its one slot, if it has one.
+/// its one slot, if it has one; an `OSError` the runtime raised has `E`
+/// before it ([`errno_form`]).
 pub(crate) fn slot(desc: &'static [u8], k: usize) -> &'static [u8] {
     match kind(desc) {
         Kind::List | Kind::Set => return desc.get(1..).unwrap_or_default(),
         Kind::Range => return b"i",
-        Kind::Exc | Kind::View => return desc.get(2..).unwrap_or_default(),
+        Kind::Exc => {
+            let arg = desc.get(2..).unwrap_or_default();
+            return arg.strip_prefix(b"E").unwrap_or(arg);
+        }
+        Kind::View => return desc.get(2..).unwrap_or_default(),
         Kind::Dict if k.is_multiple_of(2) => return desc.get(1..).unwrap_or_default(),
         Kind::Dict => {
             let key = desc.get(1..).unwrap_or_default();
@@ -428,10 +433,57 @@ fn show_view(v: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
 fn show_exc(e: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
     out.push_str(crate::exc::name(exc_kind(e as *const PtSeq as u64)));
     out.push('(');
+    if let Some(os) = errno_form(e) {
+        out.push_str(&format!("{}, {})", os.errno, pstr::repr(os.strerror)));
+        return;
+    }
     todo.push(Step::Text(")"));
     if let Some(v) = e.items.borrow().first() {
         todo.push(Step::Show(slot(e.desc, 0), *v));
     }
+}
+
+/// The arguments of an `OSError` the runtime raised: CPython's
+/// `errno`, `strerror` and `filename`.
+pub(crate) struct Errno<'a> {
+    pub errno: i64,
+    pub strerror: &'a str,
+    pub filename: Option<&'a str>,
+}
+
+impl Errno<'_> {
+    /// `str(e)`: `[Errno 2] No such file or directory: 'p'`.
+    fn message(&self) -> String {
+        let path = self.filename.map(|p| format!(": {}", pstr::repr(p)));
+        let path = path.unwrap_or_default();
+        format!("[Errno {}] {}{path}", self.errno, self.strerror)
+    }
+}
+
+/// `e`'s [`Errno`] arguments, if the runtime raised it from an OS error:
+/// its descriptor has `E` before its slot, a tuple `(int, str, str |
+/// None)`, which no program can build.
+pub(crate) fn errno_form(e: &PtSeq) -> Option<Errno<'_>> {
+    if e.desc.get(2) != Some(&b'E') {
+        return None;
+    }
+    let p = e.items.borrow().first().copied()?;
+    // SAFETY: an errno exception's slot holds a live `(int, str, str |
+    // None)` tuple, which it keeps alive while `e` is borrowed.
+    let fields = unsafe { seq(p) }.items.borrow().clone();
+    let [errno, strerror, filename] = fields.as_slice() else {
+        return None;
+    };
+    // SAFETY: as above: a live string, and a live string or null.
+    let (strerror, filename) = unsafe {
+        let filename = (*filename != 0).then(|| text(*filename));
+        (text(*strerror), filename)
+    };
+    Some(Errno {
+        errno: *errno as i64,
+        strerror,
+        filename,
+    })
 }
 
 /// The kind code of exception `e`, a live exception.
@@ -451,6 +503,9 @@ pub(crate) fn exc_message(mut e: u64) -> Result<String, TooDeep> {
         // SAFETY: guaranteed by the caller, and exception slots hold live
         // exceptions.
         let s = unsafe { seq(e) };
+        if let Some(os) = errno_form(s) {
+            return Ok(os.message());
+        }
         let Some(mut v) = s.items.borrow().first().copied() else {
             return Ok(String::new());
         };

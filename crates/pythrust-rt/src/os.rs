@@ -8,14 +8,15 @@
 use std::{fs, io};
 
 use crate::exc::{
-    raise_text, FILE_NOT_FOUND, IS_A_DIRECTORY, NOT_A_DIRECTORY, OS_ERROR, PERMISSION,
+    raise_errno, raise_text, FILE_NOT_FOUND, IS_A_DIRECTORY, NOT_A_DIRECTORY, OS_ERROR, PERMISSION,
 };
 use crate::seq::{new_seq, PtSeq};
 use crate::str::{borrow, into_ptr, repr, PtStr};
 
-/// The `OSError` subclass code and `str(e)` CPython gives `e` on `p`:
-/// `[Errno N] text: 'p'`.
-fn os_message(e: &io::Error, p: &str) -> (u8, String) {
+/// What CPython raises for `e` on path `p`: the `OSError` subclass
+/// code its kind names, its errno if the system gave one, and the
+/// system's text (`No such file or directory`).
+fn os_error(e: &io::Error) -> (u8, Option<i32>, String) {
     let code = match e.kind() {
         io::ErrorKind::NotFound => FILE_NOT_FOUND,
         io::ErrorKind::PermissionDenied => PERMISSION,
@@ -27,11 +28,7 @@ fn os_message(e: &io::Error, p: &str) -> (u8, String) {
     let detail = text
         .rsplit_once(" (os error ")
         .map_or(text.as_str(), |(d, _)| d);
-    let message = match e.raw_os_error() {
-        Some(n) => format!("[Errno {n}] {detail}: {}", repr(p)),
-        None => format!("{detail}: {}", repr(p)),
-    };
-    (code, message)
+    (code, e.raw_os_error(), detail.to_string())
 }
 
 /// Where a failing call raises: the rendered diagnostic around its
@@ -43,9 +40,18 @@ struct Site {
 }
 
 impl Site {
+    /// Raises CPython's `OSError` for `e` on `p`: with `errno`,
+    /// `strerror` and `filename` when the system gave an errno, else a
+    /// message alone (`text: 'p'`).
     fn raise(self, e: &io::Error, p: &str) {
-        let (code, message) = os_message(e, p);
-        raise_text(code, message, self.head, self.tail);
+        let (code, errno, detail) = os_error(e);
+        match errno {
+            Some(n) => raise_errno(code, n, &detail, Some(p), self.head, self.tail),
+            None => {
+                let message = format!("{detail}: {}", repr(p));
+                raise_text(code, message, self.head, self.tail);
+            }
+        }
     }
 }
 
@@ -201,23 +207,19 @@ mod tests {
     #[test]
     fn os_errors_read_as_cpython_on_posix() {
         let missing = io::Error::from_raw_os_error(2);
-        let message = "[Errno 2] No such file or directory: 'nope'".to_string();
-        assert_eq!(os_message(&missing, "nope"), (FILE_NOT_FOUND, message));
+        let text = "No such file or directory".to_string();
+        assert_eq!(os_error(&missing), (FILE_NOT_FOUND, Some(2), text));
         let codes = [
             (13, PERMISSION),
             (20, NOT_A_DIRECTORY),
             (21, IS_A_DIRECTORY),
+            (36, OS_ERROR),
         ];
         for (errno, code) in codes {
-            assert_eq!(
-                os_message(&io::Error::from_raw_os_error(errno), "p").0,
-                code
-            );
+            assert_eq!(os_error(&io::Error::from_raw_os_error(errno)).0, code);
         }
-        assert_eq!(
-            os_message(&io::Error::from_raw_os_error(36), "p").0,
-            OS_ERROR
-        );
+        let synthetic = io::Error::from(io::ErrorKind::InvalidInput);
+        assert_eq!(os_error(&synthetic).1, None);
     }
 
     #[test]

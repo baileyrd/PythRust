@@ -40,4 +40,8 @@ try:
     os.listdir(missing)
 except OSError as e:
     print("OSError caught", str(e) != "")
-print(len(os.listdir()) > 0)
+print(len(os.listdir()) > 0, os.listdir(path=".") == os.listdir("."))
+try:
+    os.listdir(path=missing)
+except FileNotFoundError as e:
+    print("FileNotFoundError by keyword")

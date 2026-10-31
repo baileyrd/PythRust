@@ -1155,7 +1155,7 @@ fn os_matches_cpython_on_a_tree() -> Res<()> {
     #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("a.txt"), root.join("link")).map_err(|e| e.to_string())?;
     let show = if cfg!(unix) {
-        "print(type_name, e)"
+        "print(type_name, e, [e], (e,))"
     } else {
         "print(type_name)"
     };
@@ -1180,6 +1180,12 @@ fn os_matches_cpython_on_a_tree() -> Res<()> {
          \x20   except FileNotFoundError as e:\n\
          \x20       type_name = 'FileNotFoundError'\n\
          \x20       {show}\n\
+         print(len(os.listdir(path=root)), os.listdir(path=root) == os.listdir(root))\n\
+         try:\n\
+         \x20   os.listdir(path=os.path.join(root, 'missing'))\n\
+         except FileNotFoundError as e:\n\
+         \x20   type_name = 'FileNotFoundError'\n\
+         \x20   {show}\n\
          try:\n\
          \x20   print(os.path.getsize(os.path.join(root, 'missing')))\n\
          except OSError as e:\n\

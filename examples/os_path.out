@@ -8,4 +8,5 @@ FileNotFoundError
 not found
 []
 OSError caught True
-True
+True True
+FileNotFoundError by keyword

@@ -644,7 +644,15 @@ impl<'a> FnBuilder<'_, 'a> {
         if name == "print" {
             return self.print(args, ops, span);
         }
-        if args.iter().any(|a| a.name.is_some()) {
+        // A module function's one keyword parameter is its only one, so
+        // its operand is already in place (`os.listdir(path=p)`).
+        let positional = StdFn::from_name(name).and_then(StdFn::keyword);
+        let keyword = |a: &Arg| {
+            a.name
+                .as_ref()
+                .is_some_and(|k| Some(k.name.as_str()) != positional)
+        };
+        if args.iter().any(keyword) {
             return Err(unsupported(span, "keyword arguments"));
         }
         match name {

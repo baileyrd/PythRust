@@ -59,6 +59,17 @@ const WITH_MESSAGE: [&[u8]; 15] = [
     b"x<s", b"x=s", b"x>s",
 ];
 
+/// The descriptors of an `OSError` the runtime raised, by kind code
+/// less [`OS_ERROR`]: `E` and its `(errno, strerror, filename)` tuple
+/// ([`seq::errno_form`]).
+const WITH_ERRNO: [&[u8]; 5] = [
+    b"x:Et\x03isos",
+    b"x;Et\x03isos",
+    b"x<Et\x03isos",
+    b"x=Et\x03isos",
+    b"x>Et\x03isos",
+];
+
 /// A raised exception not yet caught.
 struct Pending {
     /// The exception, whose reference this holds.
@@ -219,6 +230,36 @@ pub(crate) fn raise_text(code: u8, text: String, head: &'static [u8], tail: &'st
     }
 }
 
+/// Makes pending a new `OSError` of kind `code` (one of the family)
+/// holding CPython's `errno`, `strerror` and `filename`, raised where
+/// `head` and `tail` point (see [`pt_raise`]). `str(e)` is
+/// `[Errno 2] No such file or directory: 'p'`, its `repr`
+/// `FileNotFoundError(2, 'No such file or directory')`.
+pub(crate) fn raise_errno(
+    code: u8,
+    errno: i32,
+    strerror: &str,
+    filename: Option<&str>,
+    head: &'static [u8],
+    tail: &'static [u8],
+) {
+    let desc = WITH_ERRNO
+        .get(usize::from(code.wrapping_sub(OS_ERROR)))
+        .copied()
+        .unwrap_or(WITH_ERRNO[0]);
+    let tuple_desc = desc.get(3..).unwrap_or_default();
+    let strerror = pstr::into_ptr(PtStr::new(strerror.into()));
+    let filename = filename.map_or(std::ptr::null_mut(), |p| {
+        pstr::into_ptr(PtStr::new(p.into()))
+    });
+    // The new tuple and exception take the strings' and the tuple's
+    // references.
+    let fields = vec![i64::from(errno) as u64, strerror as u64, filename as u64];
+    let args = seq::new_seq(tuple_desc, fields);
+    let exc = seq::new_seq(desc, vec![args as u64]);
+    set_pending(exc, head, tail);
+}
+
 /// Whether the pending exception's kind is in `codes`, a bit per kind
 /// code (the compiler sets a class's bit and those of the classes derived
 /// from it): 1 or 0.
@@ -353,6 +394,37 @@ mod tests {
                 "IndexError: list index out of range"
             );
             seq::pt_seq_dec(e);
+        }
+    }
+
+    #[test]
+    fn an_os_error_keeps_errno_strerror_and_filename() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+        let strerror = "No such file or directory";
+        raise_errno(FILE_NOT_FOUND, 2, strerror, Some("it's"), b"", b"");
+        let e = pt_catch();
+        let line = "FileNotFoundError: [Errno 2] No such file or directory: \"it's\"";
+        assert_eq!(uncaught_line(e as u64), line);
+        raise_errno(OS_ERROR, 5, "Input/output error", None, b"", b"");
+        let bare = pt_catch();
+        assert_eq!(
+            uncaught_line(bare as u64),
+            "OSError: [Errno 5] Input/output error"
+        );
+        // SAFETY: each object is live until its last dec; the descriptor
+        // is static.
+        unsafe {
+            let list = seq::pt_seq_new(b"lx".as_ptr(), 2, 2);
+            seq::pt_seq_push(list, e as u64);
+            seq::pt_seq_push(list, bare as u64);
+            seq::pt_seq_dec(e);
+            seq::pt_seq_dec(bare);
+            let shown = seq::pt_str_from_seq(list);
+            let want = "[FileNotFoundError(2, 'No such file or directory'), \
+                        OSError(5, 'Input/output error')]";
+            assert_eq!(pstr::borrow(shown).text(), want);
+            pstr::pt_str_dec(shown);
+            seq::pt_seq_dec(list);
         }
     }
 
