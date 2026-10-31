@@ -68,6 +68,9 @@ impl<'m> Table<'m> {
 
     /// Makes the table `int`-keyed, turning any `bool` key into its int.
     pub fn int_keyed(&mut self) {
+        if self.ints {
+            return;
+        }
         self.ints = true;
         for (k, _) in &mut self.entries {
             if let Value::Bool(b) = k {
