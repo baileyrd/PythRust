@@ -311,7 +311,7 @@ impl<'a> Flow<'a> {
         }
         let allocates = matches!(
             value,
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::Call(..)
+            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) | Rvalue::Call(..)
         );
         if self.sensitive && allocates {
             self.age(dest.0);
@@ -323,7 +323,7 @@ impl<'a> Flow<'a> {
                 changed |= self.store(fresh, &items);
             }
             // A shallow copy shares the elements, not the list.
-            Rvalue::CopyList(a) if self.elements_hold_list(dest) => {
+            Rvalue::CopyList(a) | Rvalue::View(a) if self.elements_hold_list(dest) => {
                 let elements = self.contents(&self.of(*a));
                 changed |= self.store(fresh, &elements);
             }
@@ -344,8 +344,10 @@ impl<'a> Flow<'a> {
     fn value(&self, dest: LocalId, rv: &Rvalue) -> Objs {
         match rv {
             Rvalue::Use(a) | Rvalue::Wrap(a) | Rvalue::Unwrap(a) => self.of(*a),
-            Rvalue::Index(a, _) | Rvalue::Field(a, _) => self.contents(&self.of(*a)),
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) => {
+            Rvalue::Index(a, _) | Rvalue::Field(a, _) | Rvalue::Entry(a, ..) => {
+                self.contents(&self.of(*a))
+            }
+            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) => {
                 Objs::from([Obj::Fresh(dest.0, Age::Latest)])
             }
             Rvalue::Global(_) => Objs::from([Obj::World]),
@@ -541,10 +543,11 @@ impl<'a> Flow<'a> {
         out
     }
 
-    /// Whether the list `dest` holds elements that can hold a list.
+    /// Whether the list or view `dest` holds elements that can hold a
+    /// list: a view shares its dict's, as a shallow copy does.
     fn elements_hold_list(&self, dest: LocalId) -> bool {
         match self.program.compound(self.func.locals[dest.0]) {
-            Some(Compound::List(elem)) => holds_list(self.program, *elem),
+            Some(Compound::List(elem) | Compound::View(_, elem)) => holds_list(self.program, *elem),
             _ => false,
         }
     }

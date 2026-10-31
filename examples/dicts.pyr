@@ -56,5 +56,5 @@ for key in views.keys():
 print(views)
 
 by_int = {1: "one"}
-by_int[True] = "true"
-print(by_int, by_int[1], by_int.get(True), True in by_int)
+by_int[1] = "uno"
+print(by_int, by_int[True], by_int.get(True), True in by_int, False in by_int)

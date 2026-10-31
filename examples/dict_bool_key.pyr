@@ -1,0 +1,32 @@
+# deviation: a bool stored as a key of an int-keyed dict or set is stored as its int; CPython keeps the first key object stored, so it prints True (docs/grammar.md#deviations-from-python)
+by_int: dict[int, str] = {True: "a"}
+by_int[1] = "b"
+print(by_int, by_int[1], by_int[True])
+fresh: dict[int, str] = {}
+fresh[True] = "t"
+print(fresh, list(fresh.keys()), 1 in fresh)
+s: set[int] = {True, 2}
+s.add(False)
+s.add(0)
+print(s, len(s))
+def pair(k):
+    return {k: "x"}
+held = pair(5)
+held[True] = "h"
+print(held)
+# An earlier call with an open result does not make the code after it generic.
+def empty():
+    return {}
+print(empty())
+late: dict[int, int] = {}
+late[True] = 1
+print(late)
+def concrete(x: int) -> dict[int, int]:
+    print(empty())
+    e: dict[int, int] = {}
+    e[True] = x
+    t: set[int] = set()
+    t.add(False)
+    print(t)
+    return e
+print(concrete(3))

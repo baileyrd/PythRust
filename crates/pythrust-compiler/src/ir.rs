@@ -6,7 +6,8 @@
 //! of its `Inst`, and a `Term::Fail` ends the program with a diagnostic.
 //!
 //! Covers ints, floats, bools, `None`, strings, lists, tuples,
-//! optionals (`T | None`) and exceptions. List, tuple and optional types are interned
+//! optionals (`T | None`), exceptions, dicts, sets and dict views.
+//! List, tuple, optional, dict, set and view types are interned
 //! in [`Program::types`], so [`Ty`] stays `Copy`.
 //!
 //! Locals other than parameters start zeroed. A local of a
@@ -76,6 +77,16 @@ pub enum Ty {
     /// at most one argument. The native backend rejects one holding a
     /// list that may hold an exception (`codegen`); the analyses see it.
     Exc,
+    /// A mutable, reference-counted dict in insertion order; `types[id]`
+    /// is a [`Compound::Dict`].
+    Dict(TypeId),
+    /// A mutable, reference-counted set in insertion order; `types[id]`
+    /// is a [`Compound::Set`].
+    Set(TypeId),
+    /// An immutable, reference-counted snapshot of a dict's keys, values
+    /// or items; `types[id]` is a [`Compound::View`]. It indexes like a
+    /// list, for `for` (the language has no view subscripts).
+    View(TypeId),
 }
 
 impl Ty {
@@ -83,7 +94,15 @@ impl Ty {
     pub fn is_rc(self) -> bool {
         matches!(
             self,
-            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range | Ty::Exc
+            Ty::Str
+                | Ty::List(_)
+                | Ty::Tuple(_)
+                | Ty::Opt(_)
+                | Ty::Range
+                | Ty::Exc
+                | Ty::Dict(_)
+                | Ty::Set(_)
+                | Ty::View(_)
         )
     }
 }
@@ -99,6 +118,20 @@ pub enum Compound {
     Tuple(Vec<Ty>),
     /// The present type: never `None` or itself optional.
     Opt(Ty),
+    /// Key and value types.
+    Dict(Ty, Ty),
+    Set(Ty),
+    /// Which view, and its item type (a key, a value, or a `(key,
+    /// value)` tuple).
+    View(View, Ty),
+}
+
+/// What a dict view holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum View {
+    Keys,
+    Values,
+    Items,
 }
 
 /// Index into [`Program::funcs`].
@@ -192,13 +225,16 @@ pub enum Inst {
     /// end of the module's code.
     DropGlobal(GlobalId),
     /// `list[index] = value`; raises `IndexError` at `span`, changing
-    /// nothing, when out of range.
+    /// nothing, when out of range. On a dict, `dict[key] = value`, which
+    /// adds or replaces and never raises. On a set, `Append` adds.
     SetItem {
         list: Operand,
         index: Operand,
         value: Operand,
         span: Span,
     },
+    /// Sorts a list in place by `<`, stably.
+    Sort(Operand),
     /// `raise exc`: makes the `Exc` pending, with its own reference, as
     /// raised at `span`. Nothing may be pending.
     Raise { exc: Operand, span: Span },
@@ -234,23 +270,33 @@ pub enum Rvalue {
     Concat(Operand, Operand),
     /// `s * n`, a `Str` and an `Int`. Fails when too large to allocate.
     Repeat(Operand, Operand),
-    /// `s[i]` on a `Str` (a one-char `Str`) or a list (an element).
-    /// Raises `IndexError` when `i` is out of range, giving null or 0.
+    /// `s[i]` on a `Str` (a one-char `Str`) or a list or view (an
+    /// element). Raises `IndexError` when `i` is out of range, giving
+    /// null or 0. On a dict, the value of key `i`, which lowering proved
+    /// present.
     Index(Operand, Operand),
-    /// `len(s)` of a `Str` (in chars), list, tuple or range: an `Int`.
-    /// For a range whose length does not fit in one, -1.
+    /// `len(s)` of a `Str` (in chars), list, tuple, range, dict, set or
+    /// view: an `Int`. For a range whose length does not fit in one, -1.
     Len(Operand),
-    /// `needle in hay`: a substring of a `Str`, or an element of a list.
-    /// Gives a `Bool`.
+    /// Part `k` (0 the key, 1 the value) of entry `i` of a dict or set,
+    /// in insertion order; lowering keeps `i` below the length.
+    Entry(Operand, Operand, usize),
+    /// A new view of a dict, of the destination's type.
+    View(Operand),
+    /// `needle in hay`: a substring of a `Str`, an element of a list or
+    /// view, or a key of a dict or set. Gives a `Bool`.
     Contains {
         hay: Operand,
         needle: Operand,
     },
     /// `str(x)` for anything but a `Str`.
     ToStr(Operand),
-    /// `list(xs)`: a new list holding a list's elements (a shallow copy).
+    /// `list(xs)`: a new list holding a list's elements (a shallow copy),
+    /// or a dict's keys, a set's elements or a view's items, of the
+    /// destination's type.
     CopyList(Operand),
-    /// A new list or tuple, of the destination's type, holding `items`.
+    /// A new list, tuple, set or dict, of the destination's type,
+    /// holding `items`: for a dict, keys and values alternating.
     NewSeq(Vec<Operand>),
     /// Field `k` of a tuple.
     Field(Operand, usize),
@@ -356,11 +402,16 @@ pub fn holds(types: &[Compound], ty: Ty, leaf: fn(Ty) -> bool) -> bool {
         return true;
     }
     let inner = match ty {
-        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => types.get(id.0),
+        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id) => {
+            types.get(id.0)
+        }
         _ => None,
     };
     match inner {
-        Some(Compound::List(t) | Compound::Opt(t)) => holds(types, *t, leaf),
+        Some(Compound::List(t) | Compound::Opt(t) | Compound::Set(t) | Compound::View(_, t)) => {
+            holds(types, *t, leaf)
+        }
+        Some(Compound::Dict(k, v)) => holds(types, *k, leaf) || holds(types, *v, leaf),
         Some(Compound::Tuple(fields)) => fields.iter().any(|t| holds(types, *t, leaf)),
         None => false,
     }
@@ -391,11 +442,16 @@ pub fn operand_ty(locals: &[Ty], op: Operand) -> Ty {
 }
 
 impl Program {
-    /// What list, tuple or optional type `ty` holds; `None` for other
-    /// types.
+    /// What list, tuple, optional, dict, set or view type `ty` holds;
+    /// `None` for other types.
     pub fn compound(&self, ty: Ty) -> Option<&Compound> {
         match ty {
-            Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => self.types.get(id.0),
+            Ty::List(id)
+            | Ty::Tuple(id)
+            | Ty::Opt(id)
+            | Ty::Dict(id)
+            | Ty::Set(id)
+            | Ty::View(id) => self.types.get(id.0),
             _ => None,
         }
     }

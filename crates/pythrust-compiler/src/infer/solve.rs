@@ -572,7 +572,10 @@ fn dict_key(s: &mut Subst, c: &Constraint, key: &Type, index: &Type) -> Result<S
     match s.assign(key, index) {
         Ok(deferred) => Ok(Step::Done(assigns(deferred, "dict key"))),
         Err(clash) => {
-            let msg = format!("dict key: {}", mismatch(s, clash, key, index));
+            let msg = format!(
+                "dict key or set element: {}",
+                mismatch(s, clash, key, index)
+            );
             Err(error(c, msg))
         }
     }

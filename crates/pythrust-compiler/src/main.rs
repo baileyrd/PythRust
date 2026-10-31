@@ -127,16 +127,16 @@ fn main() -> ExitCode {
     match command {
         Command::Check => ExitCode::SUCCESS,
         Command::Build => build(path, &src, &module, &types),
-        Command::Run => run(path, &src, &module),
+        Command::Run => run(path, &src, &module, &types),
     }
 }
 
 /// `pythrust run`: interprets the checked `module`.
-fn run(path: &str, src: &str, module: &Module) -> ExitCode {
+fn run(path: &str, src: &str, module: &Module, types: &Types) -> ExitCode {
     // Buffered for speed; flushed before any diagnostic so output already
     // printed precedes the error, as in CPython.
     let mut out = BufWriter::new(std::io::stdout());
-    let result = interp::run(module, &mut out).and_then(|()| flush(&mut out));
+    let result = interp::run(module, types, &mut out).and_then(|()| flush(&mut out));
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(diag) => {
@@ -503,8 +503,8 @@ mod tests {
     /// then the program for `run`.
     fn exec(command: Command, src: &str) -> (pythrust_compiler::Result<()>, String) {
         let mut out = Vec::new();
-        let result = front(src).and_then(|(module, _)| match command {
-            Command::Run => interp::run(&module, &mut out),
+        let result = front(src).and_then(|(module, types)| match command {
+            Command::Run => interp::run(&module, &types, &mut out),
             Command::Check | Command::Build => Ok(()),
         });
         (result, String::from_utf8_lossy(&out).into_owned())

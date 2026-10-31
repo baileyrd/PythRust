@@ -323,12 +323,13 @@ fn conservative(module: &Module) -> BTreeMap<String, Summary> {
         .collect()
 }
 
-/// Whether a value of type `ty` is, or may hold, a list.
+/// Whether a value of type `ty` is, or may hold, a list. A dict or set
+/// is a list here: a container that changes in place.
 fn holds_list(program: &Program, ty: Ty) -> bool {
     match program.compound(ty) {
-        Some(Compound::List(_)) => true,
+        Some(Compound::List(_) | Compound::Dict(..) | Compound::Set(_)) => true,
         Some(Compound::Tuple(fields)) => fields.iter().any(|f| holds_list(program, *f)),
-        Some(Compound::Opt(present)) => holds_list(program, *present),
+        Some(Compound::Opt(present) | Compound::View(_, present)) => holds_list(program, *present),
         None => false,
     }
 }
@@ -343,13 +344,31 @@ fn source(program: &Program, ty: Ty) -> Type {
         Ty::Str => Type::Str,
         Ty::Range => Type::Range,
         Ty::Exc => Type::Exception,
-        Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) => match program.compound(ty) {
-            Some(Compound::List(elem)) => Type::List(Box::new(source(program, *elem))),
-            Some(Compound::Tuple(fields)) => {
-                Type::Tuple(fields.iter().map(|f| source(program, *f)).collect())
-            }
-            Some(Compound::Opt(present)) => Type::Optional(Box::new(source(program, *present))),
-            None => Type::None,
-        },
+        Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_) => {
+            compound_source(program, ty)
+        }
+    }
+}
+
+fn compound_source(program: &Program, ty: Ty) -> Type {
+    let part = |t: &Ty| Box::new(source(program, *t));
+    match program.compound(ty) {
+        Some(Compound::List(elem)) => Type::List(part(elem)),
+        Some(Compound::Tuple(fields)) => {
+            Type::Tuple(fields.iter().map(|f| source(program, *f)).collect())
+        }
+        Some(Compound::Opt(present)) => Type::Optional(part(present)),
+        Some(Compound::Dict(k, v)) => Type::Dict(part(k), part(v)),
+        Some(Compound::Set(t)) => Type::Set(part(t)),
+        Some(Compound::View(view, item)) => Type::View(view_source(*view), part(item)),
+        None => Type::None,
+    }
+}
+
+fn view_source(view: crate::ir::View) -> crate::infer::View {
+    match view {
+        crate::ir::View::Keys => crate::infer::View::Keys,
+        crate::ir::View::Values => crate::infer::View::Values,
+        crate::ir::View::Items => crate::infer::View::Items,
     }
 }

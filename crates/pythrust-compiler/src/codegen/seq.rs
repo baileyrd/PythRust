@@ -8,7 +8,7 @@ use cranelift_codegen::ir::{types, InstBuilder, MemFlagsData, Value};
 use super::{backend, FnGen, Rt};
 use crate::diag::Result;
 use crate::exc::ExcKind;
-use crate::ir::{CmpOp, Compound, LocalId, Operand, Ty};
+use crate::ir::{CmpOp, Compound, LocalId, Operand, Ty, View};
 use crate::span::Span;
 
 const LIST_INDEX: &str = "list index out of range";
@@ -19,16 +19,67 @@ const STR_INDEX: &str = "string index out of range";
 impl FnGen<'_, '_, '_> {
     /// A new sequence of type `ty` holding `items`.
     pub(super) fn new_seq(&mut self, ty: Ty, items: &[Operand]) -> Result<Value> {
-        let mut text = String::new();
-        descriptor(self.types, ty, &mut text)?;
-        let (desc, len) = self.data(text)?;
+        let (desc, len) = self.descriptor(ty)?;
         let cap = self.b.ins().iconst(types::I64, items.len() as i64);
         let s = self.call_rt_value(Rt::SeqNew, &[desc, len, cap])?;
+        if let Ty::Dict(_) = ty {
+            for pair in items.chunks(2) {
+                let slots: Vec<Value> = pair.iter().map(|op| self.slot(*op)).collect();
+                self.call_rt(Rt::DictSet, &[&[s], &slots[..]].concat());
+            }
+            return Ok(s);
+        }
+        let push = match ty {
+            Ty::Set(_) => Rt::SetAdd,
+            _ => Rt::SeqPush,
+        };
         for item in items {
             let v = self.slot(*item);
-            self.call_rt(Rt::SeqPush, &[s, v]);
+            self.call_rt(push, &[s, v]);
         }
         Ok(s)
+    }
+
+    /// The descriptor of `ty` as read-only data: its address and length.
+    fn descriptor(&mut self, ty: Ty) -> Result<(Value, Value)> {
+        let mut text = String::new();
+        descriptor(self.types, ty, &mut text)?;
+        self.data(text)
+    }
+
+    /// `d[k]` of a dict holding `k`, into `dest`.
+    pub(super) fn dict_get(&mut self, d: Operand, k: Operand, dest: LocalId) -> Result<Value> {
+        let (d, k) = (self.operand(d), self.slot(k));
+        let (v, _) = self.with_status(Rt::DictGet, &[d, k])?;
+        Ok(self.unslot(v, self.func.locals[dest.0]))
+    }
+
+    /// Part `part` of entry `i` of dict or set `t`, into `dest`.
+    pub(super) fn entry(
+        &mut self,
+        t: Operand,
+        i: Operand,
+        part: usize,
+        dest: LocalId,
+    ) -> Result<Value> {
+        let (t, i) = (self.operand(t), self.operand(i));
+        let part = self.b.ins().iconst(types::I64, part as i64);
+        let v = self.call_rt_value(Rt::TableEntry, &[t, i, part])?;
+        Ok(self.unslot(v, self.func.locals[dest.0]))
+    }
+
+    /// A new view of type `ty` of dict `d`.
+    pub(super) fn view(&mut self, d: Operand, ty: Ty) -> Result<Value> {
+        let d = self.operand(d);
+        let (desc, len) = self.descriptor(ty)?;
+        self.call_rt_value(Rt::ViewNew, &[d, desc, len])
+    }
+
+    /// `list(x)` of a dict, set or view: a new list of type `ty`.
+    pub(super) fn list_of(&mut self, x: Operand, ty: Ty) -> Result<Value> {
+        let x = self.operand(x);
+        let (desc, len) = self.descriptor(ty)?;
+        self.call_rt_value(Rt::ListOf, &[x, desc, len])
     }
 
     /// `op` as a slot.
@@ -154,7 +205,7 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::Str => 's',
         Ty::Range => 'r',
         Ty::Exc => 'x',
-        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => {
+        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id) => {
             let compound = types
                 .get(id.0)
                 .ok_or_else(|| backend("an unknown sequence type".to_string()))?;
@@ -184,6 +235,24 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
         Compound::Opt(present) => {
             out.push('o');
             descriptor(types, *present, out)
+        }
+        Compound::Dict(key, value) => {
+            out.push('d');
+            descriptor(types, *key, out)?;
+            descriptor(types, *value, out)
+        }
+        Compound::Set(elem) => {
+            out.push('e');
+            descriptor(types, *elem, out)
+        }
+        Compound::View(view, item) => {
+            out.push('v');
+            out.push(match view {
+                View::Keys => 'k',
+                View::Values => 'v',
+                View::Items => 'i',
+            });
+            descriptor(types, *item, out)
         }
     }
 }

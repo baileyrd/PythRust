@@ -428,11 +428,34 @@ fn changing_a_list_a_loop_runs_over_is_an_error() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes `xs` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "tempered `f` changes `xs` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(xs)`".into(),
             "xs.append(x)".into()
         ))
     );
     assert_eq!(checked(&src.replace("in xs", "in list(xs)")), Ok(()));
+}
+
+#[test]
+fn changing_a_dict_or_set_a_loop_runs_over_is_an_error() {
+    let src = "temper def f(mut d: dict[str, int]) -> int:\n    for k in d:\n        d[k + \"x\"] = 1\n    return 0\nprint(f({\"a\": 1}))\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes `d` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(d)`".into(),
+            "d[k + \"x\"]".into()
+        ))
+    );
+    assert_eq!(checked(&src.replace("in d:", "in list(d):")), Ok(()));
+    // A view loop runs over the dict itself.
+    let keys = src.replace("in d:", "in d.keys():");
+    assert_eq!(alias_err(&keys).map(|e| e.1), Some("d[k + \"x\"]".into()));
+    // Like an item store in a list loop, a store at the loop's own key
+    // is a change: the analysis does not track which keys exist.
+    let same = src.replace("d[k + \"x\"] = 1", "d[k] = d[k] + 1");
+    assert_eq!(alias_err(&same).map(|e| e.1), Some("d[k]".into()));
+    let set = "temper def f(mut s: set[int]) -> int:\n    for k in s:\n        s.add(k + 1)\n    return 0\nprint(f({1}))\n";
+    assert_eq!(alias_err(set).map(|e| e.1), Some("s.add(k + 1)".into()));
+    assert_eq!(checked(&set.replace("in s:", "in list(s):")), Ok(()));
 }
 
 #[test]
@@ -677,7 +700,7 @@ fn a_callee_changing_a_module_list_is_a_change() {
     assert_eq!(
         alias_err(looped),
         Some((
-            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(...)`".into(),
             "touch()".into()
         ))
     );
@@ -704,7 +727,7 @@ fn a_callee_may_change_a_list_the_body_stored_in_a_module_list() {
     assert_eq!(
         alias_err(&looped),
         Some((
-            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(...)`".into(),
             "touch()".into()
         ))
     );
@@ -1241,8 +1264,62 @@ fn dicts_and_sets_are_mutable_heap_types() {
     assert_eq!(checked(modes), Ok(()));
     let tuple = "def f(mut t: tuple[dict[int, int], int]):\n    t[0][1] = 2\nf(({}, 0))\n";
     assert_eq!(checked(tuple), Ok(()));
-    // Native code has no dicts or sets yet, so their bodies' modes are
-    // checked once it does.
-    conservative("def f(d):\n    d[1] = 2\nf({})\n");
-    conservative("def f(s: set[int]) -> int:\n    return len(s)\nprint(f({1}))\n");
+}
+
+#[test]
+fn dict_stores_and_set_adds_are_mut_and_keep_what_they_store() {
+    let src = "\
+def put(d, k, v):
+    d[k] = v
+def add(s):
+    s.add(1)
+def size(s, d):
+    return len(s) + len(d)
+names: dict[str, list[int]] = {}
+put(names, \"a\", [1])
+nums = {0}
+add(nums)
+print(size(nums, names))
+";
+    assert_eq!(modes(src, "put"), (vec![MUT, READ, OWNED], vec![false; 3]));
+    assert_eq!(modes(src, "add"), (vec![MUT], vec![false]));
+    assert_eq!(modes(src, "size"), (vec![READ, READ], vec![false; 2]));
+    assert_eq!(strs(src, "put")[1], (true, false));
+    let undeclared = "temper def put(d: dict[str, int], k: str) -> None:\n    d[k] = 1\n";
+    assert_eq!(
+        mode_err(undeclared).0,
+        "tempered `put` changes `d` in place; write `mut d`"
+    );
+    let key_kept = "temper def put(mut d: dict[str, int], k: str) -> None:\n    d[k] = 1\n";
+    assert_eq!(mode_err(key_kept).1, "k");
+    let ok = "temper def put(mut d: dict[str, int], owned k: str) -> None:\n    d[k] = 1\n";
+    assert_eq!(checked(ok), Ok(()));
+}
+
+/// A values or items view shares the dict's values, as a shallow copy
+/// does: changing one is changing the dict's, and returning one shares it.
+#[test]
+fn a_view_shares_the_lists_its_dict_holds() {
+    let returned =
+        "temper def f(d: dict[int, list[int]]) -> list[list[int]]:\n    return list(d.values())\n";
+    assert!(
+        alias_err(returned).is_some_and(|e| e.0.contains("sharing a list with its parameter `d`")),
+        "{:?}",
+        alias_err(returned)
+    );
+    for body in [
+        "    rows = list(d.values())\n    rows[0].append(2)\n",
+        "    vs = d.values()\n    for v in vs:\n        v.append(1)\n",
+        "    for v in d.values():\n        v.append(1)\n",
+        "    for k, v in d.items():\n        v.append(k)\n",
+        "    for p in list(d.items()):\n        p[1].append(1)\n",
+    ] {
+        let src = format!("temper def f(d: dict[int, list[int]]) -> None:\n{body}");
+        assert_eq!(
+            mode_err(&src).0,
+            "tempered `f` changes `d` in place; write `mut d`",
+            "{body}"
+        );
+        assert_eq!(checked(&src.replace("(d:", "(mut d:")), Ok(()), "{body}");
+    }
 }

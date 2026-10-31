@@ -110,7 +110,7 @@ impl FnBuilder<'_, '_> {
     /// dispatch, after releasing the temporaries of the statements left
     /// and unbinding the handler names left, else the unwind block, whose
     /// exit releases everything (or the program ends).
-    fn raise_path(&mut self) -> Result<()> {
+    pub(super) fn raise_path(&mut self) -> Result<()> {
         let Some(t) = self.tries.last().copied() else {
             let unwind = self.unwind_block();
             self.jump_away(Term::Goto(unwind));
