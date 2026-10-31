@@ -79,7 +79,7 @@ The driver passes the parsed stubs to the parser (`parser::parse` gains the bind
 
 ### The shim
 
-Shims follow the M6a functions that raise (`pt_os_path_getsize` in `os.rs`): scalars and pointers in, the call site's rendered diagnostic as `head`/`tail` pointers, and on an error the runtime's pending exception (`exc.rs`) is set and a placeholder returned; after a stub that declares `raises OSError`, lowering tests the pending flag (`check_raised`), as for any call that may raise, and after any other stub it does not. There is no per-call status return, and the C ABI is unchanged. The whole template for `file_xxh3`:
+Shims follow the M6a functions that raise (`pt_os_path_getsize` in `os.rs`): scalars and pointers in, the call site's rendered diagnostic as `head`/`tail` pointers, and on an error the runtime's pending exception (`exc.rs`) is set and a placeholder returned; after a stub that declares `raises OSError` or `raises Exception` (the stubs that use `call_raising` below), lowering tests the pending flag (`check_raised`), as for any call that may raise, and after any other stub it does not. There is no per-call status return, and the C ABI is unchanged. The whole template for `file_xxh3`:
 
 ```rust
 // fastfs.pyr:1
