@@ -13,12 +13,6 @@ cranelift-module = "0.137"
 cranelift-object = "0.137"
 target-lexicon = "0.13"
 
-# SHA-256 for `hashlib.sha256` (Nano, 2026-10-31): RustCrypto's audited
-# implementation, which uses the CPU's SHA instructions where present
-# (x86 SHA-NI, ARMv8) and plain Rust elsewhere. The interpreter includes
-# the runtime's `sha256.rs`, so both backends share one source.
-sha2 = { version = "0.11", default-features = false }
-
 # Locates MSVC's link.exe and its library paths the way rustc does. From
 # the cc-rs project; no dependencies of its own.
 [target.'cfg(windows)'.dependencies]

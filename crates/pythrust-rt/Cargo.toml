@@ -9,10 +9,3 @@ repository.workspace = true
 [lib]
 # Linked into every program `pythrust build` compiles.
 crate-type = ["staticlib"]
-
-[dependencies]
-# SHA-256 for `hashlib.sha256` (Nano, 2026-10-31): RustCrypto's audited
-# implementation, which uses the CPU's SHA instructions where present
-# (x86 SHA-NI, ARMv8) and plain Rust elsewhere. The interpreter includes
-# the runtime's `sha256.rs`, so both backends share one source.
-sha2 = { version = "0.11", default-features = false }

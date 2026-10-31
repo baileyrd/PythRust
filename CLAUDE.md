@@ -53,7 +53,7 @@ Tools load on demand. If remind_me_* tools are not visible, run a tool search fo
 - Explicit over implicit. Types everywhere. Flat control flow: guard clauses, early returns, at most 3 levels of nesting. Short single-purpose functions.
 - `Result` and `?`. No `unwrap()`/`expect()` outside tests. Never swallow errors; propagate with context.
 - Domain logic free of I/O. Immutable data; make illegal states unrepresentable.
-- Zero dependencies unless justified in the PR (the `cranelift-*` crates and `sha2` are accepted). No `unsafe` (`forbid(unsafe_code)`), except the audited C ABI surface of `pythrust-rt`.
+- Zero dependencies unless justified in the PR (the `cranelift-*` crates are accepted). No `unsafe` (`forbid(unsafe_code)`), except the audited C ABI surface of `pythrust-rt`.
 - Tests for all non-trivial logic: happy path plus failure and boundary cases.
 - Ask before large or hard-to-reverse changes (public API, dependency bumps, deletions). Keep diffs focused. State the why for non-obvious choices.
 - One branch and one PR per thread. Commit small.
