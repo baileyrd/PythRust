@@ -139,10 +139,11 @@ enum Rt {
     Open,
     FileRead,
     FileClose,
+    Sha256Hex,
 }
 
 impl Rt {
-    const ALL: [Rt; 75] = [
+    const ALL: [Rt; 76] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -218,6 +219,7 @@ impl Rt {
         Rt::Open,
         Rt::FileRead,
         Rt::FileClose,
+        Rt::Sha256Hex,
     ];
 
     fn symbol(self) -> &'static str {
@@ -297,6 +299,7 @@ impl Rt {
             Rt::Open => "pt_open",
             Rt::FileRead => "pt_file_read",
             Rt::FileClose => "pt_file_close",
+            Rt::Sha256Hex => "pt_sha256_hex",
         }
     }
 
@@ -363,7 +366,7 @@ impl Rt {
             Rt::ObjInc | Rt::ObjDec | Rt::WriteObj | Rt::FileClose => (vec![ptr], None),
             Rt::ObjLen => (vec![ptr], Some(I64)),
             Rt::ObjEq => (vec![ptr, ptr], Some(I8)),
-            Rt::ObjStr => (vec![ptr], Some(ptr)),
+            Rt::ObjStr | Rt::Sha256Hex => (vec![ptr], Some(ptr)),
             Rt::Open | Rt::FileRead => (vec![ptr; 5], Some(ptr)),
         }
     }

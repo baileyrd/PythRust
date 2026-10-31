@@ -1327,7 +1327,7 @@ fn import_comes_first_at_module_level() {
     assert_eq!(src_err("def f():\n    import sys\n"), late);
     assert_eq!(
         src_err("import json\n"),
-        "no module named `json`; the modules are: os, sys"
+        "no module named `json`; the modules are: hashlib, os, sys"
     );
     assert!(src_err("import sys.argv\n").contains("import the top-level module"));
     assert_eq!(
@@ -1368,4 +1368,30 @@ fn a_module_name_cannot_be_rebound_or_assigned_through() {
         src_err("import sys\nfor sys.argv in [[]]:\n    pass\n"),
         assign
     );
+}
+
+#[test]
+fn sha256_is_one_call_with_its_hexdigest() {
+    let src = "import hashlib\nh = hashlib.sha256(d).hexdigest()\nprint(h)\n";
+    let m = src_parse(src).unwrap_or_else(|d| panic!("{d}"));
+    let StmtKind::Assign { value, .. } = &m.body[0].kind else {
+        panic!("an assignment")
+    };
+    let ExprKind::Call { func, args } = &value.kind else {
+        panic!("a call")
+    };
+    assert!(matches!(&func.kind, ExprKind::Name(n) if n == "hashlib.sha256"));
+    assert_eq!(args.len(), 1);
+    assert_eq!(text(src, value.span), "hashlib.sha256(d).hexdigest()");
+    let only = "`hashlib.sha256(...)` is supported only as `hashlib.sha256(...).hexdigest()` yet; \
+                its object is not a value";
+    for bad in [
+        "h = hashlib.sha256\n",
+        "h = hashlib.sha256(d)\n",
+        "h = hashlib.sha256(d).digest()\n",
+        "h = hashlib.sha256(d).hexdigest\n",
+        "h = hashlib.sha256(d).hexdigest(1)\n",
+    ] {
+        assert_eq!(src_err(&format!("import hashlib\n{bad}")), only, "{bad}");
+    }
 }

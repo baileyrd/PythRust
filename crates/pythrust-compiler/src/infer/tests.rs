@@ -2304,6 +2304,10 @@ fn files_read_bytes_that_size_and_compare() {
             "unsupported operand types for +",
         ),
         ("x: bytes = \"a\"\n", "expected bytes, found str"),
+        (
+            "import hashlib\nprint(hashlib.sha256(\"a\").hexdigest())\n",
+            "argument of `hashlib.sha256`",
+        ),
     ];
     for (src, want) in cases {
         let got = src_err(src);

@@ -1218,7 +1218,8 @@ fn files_match_cpython() -> Res<()> {
     fs::write(dir.join("empty.bin"), b"").map_err(|e| e.to_string())?;
     let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
     let src = format!(
-        "def digest(path: str) -> bytes:\n\
+        "import hashlib\n\
+         def digest(path: str) -> bytes:\n\
          \x20   f = open(path, 'rb')\n\
          \x20   data = f.read()\n\
          \x20   f.close()\n\
@@ -1229,6 +1230,7 @@ fn files_match_cpython() -> Res<()> {
          print(a, len(a), a == b, a != b, a == e, str(e), len(e))\n\
          print([a, e], (a, 1), [a] == [b])\n\
          print('a' if a else '-', 'e' if e else '-')\n\
+         print(hashlib.sha256(a).hexdigest(), hashlib.sha256(e).hexdigest())\n\
          f = open({a_path:?}, 'rb')\n\
          print(f.read() == a, f.read(), len(f.read()))\n\
          f.close()\n\
@@ -1267,6 +1269,46 @@ fn files_match_cpython() -> Res<()> {
     assert!(!cfg!(unix) || want.stdout.contains(repr), "{}", want.stdout);
     assert_eq!(run_pythrust(&source)?, want);
     assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
+    cleanup(&dir)?;
+    Ok(())
+}
+
+/// fclone-lite, the M6 driver (`apps/fclone-lite`), prints the same
+/// groups of identical files under CPython, `run` and a built program.
+/// Unix only: it prints joined paths, which CPython on Windows joins
+/// with `\\` (a listed deviation).
+#[cfg(unix)]
+#[test]
+fn fclone_lite_matches_cpython() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("fclone")?;
+    let root = dir.join("tree");
+    fs::create_dir_all(root.join("a").join("b")).map_err(|e| e.to_string())?;
+    let files = [
+        ("one", "x"),
+        ("a/two", "x"),
+        ("a/b/three", "yy"),
+        ("four", "yy"),
+        ("five", "zz"),
+        ("a/six", "zy"),
+        ("empty", ""),
+        ("a/b/empty", ""),
+    ];
+    for (name, text) in files {
+        write(&root.join(name), text)?;
+    }
+    std::os::unix::fs::symlink(root.join("one"), root.join("link")).map_err(|e| e.to_string())?;
+    let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/fclone-lite/fclone_lite.py");
+    let exe = native_case(&dir, "fclone", &read(&app)?)?;
+    let mut cpython = Command::new(python());
+    cpython.args(["-I", "-X", "utf8"]).arg(&app).arg(&root);
+    let want = run(&mut cpython, TIMEOUT)?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
+    let mut interp = Command::new(pythrust_bin()?);
+    interp.arg("run").arg(&app).arg(&root);
+    assert_eq!(run(&mut interp, TIMEOUT)?, want);
+    assert_eq!(run(Command::new(&exe).arg(&root), TIMEOUT)?, want);
     cleanup(&dir)?;
     Ok(())
 }

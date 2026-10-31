@@ -43,6 +43,7 @@ impl FnGen<'_, '_, '_> {
                 let site = self.site(span)?;
                 self.call_rt_value(Rt::FileRead, &[[*f].as_slice(), &site].concat())
             }
+            (StdFn::Sha256, [b]) => self.call_rt_value(Rt::Sha256Hex, &[*b]),
             (StdFn::Close, [f]) => {
                 self.call_rt(Rt::FileClose, &[*f]);
                 Ok(self.b.ins().iconst(types::I8, 0))

@@ -1,6 +1,7 @@
 //! Module functions ([`crate::stdlib`]): `sys.argv` from the
 //! interpreter's state, `os` and `os.path` over `std::fs`, and `open`
-//! with its file's `read` (`close` is in [`super::methods`]).
+//! with its file's `read` (`close` is in [`super::methods`]), and
+//! `hashlib.sha256(data).hexdigest()`.
 
 use std::cell::RefCell;
 use std::io::Read;
@@ -14,10 +15,17 @@ use crate::exc::ExcKind;
 use crate::span::Span;
 use crate::stdlib::StdFn;
 
+/// The runtime's SHA-256, one source for both backends.
+#[path = "../../../pythrust-rt/src/sha256.rs"]
+mod sha256;
+
 impl<'m> Interp<'m, '_> {
     /// Calls `f`; inference checked the arguments' count and types.
     pub(super) fn std(&mut self, f: StdFn, args: &Args<'m>) -> Exec<'m, Value<'m>> {
         let span = args.span;
+        if let (StdFn::Sha256, [Value::Bytes(data)]) = (f, args.positional.as_slice()) {
+            return Ok(Value::str(&sha256::hex(&sha256::digest(data))));
+        }
         let named = args.keywords.iter().map(|(kw, v)| (kw.name.as_str(), v));
         let keywords = named.map(|(kw, v)| match f.keyword() == Some(kw) {
             true => Ok(v),

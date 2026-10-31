@@ -80,6 +80,7 @@ impl Checker {
             StdFn::Isdir | StdFn::Isfile | StdFn::Islink => (1, 1, Type::Bool),
             StdFn::Getsize => (1, 1, Type::Int),
             StdFn::Open => return self.open(args, span),
+            StdFn::Sha256 => return self.sha256(args, span),
             StdFn::Read | StdFn::Close => {
                 let msg = format!("internal: `{name}` is a method");
                 return Err(error(span, msg));
@@ -109,6 +110,15 @@ impl Checker {
             return Err(error(at, msg.to_string()));
         }
         Ok(Type::File)
+    }
+
+    /// `hashlib.sha256(data).hexdigest()`, which the parser made one
+    /// call: the hex digest of `bytes`.
+    fn sha256(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        for (t, at) in self.positional("hashlib.sha256", args, 1, 1, span)? {
+            self.expect(at, &Type::Bytes, &t, "argument of `hashlib.sha256`")?;
+        }
+        Ok(Type::Str)
     }
 
     /// Any positional values; `sep` and `end` must be `str`.

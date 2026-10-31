@@ -86,7 +86,10 @@ impl Parser<'_> {
             path = format!("{path}.{}", attr.name);
             span = span.merge(attr.span);
             if module.exposes(&path) {
-                return Ok(name_expr(&path, span));
+                return match StdFn::from_name(&path).and_then(StdFn::chain) {
+                    Some(method) => self.chained(&path, span, method),
+                    None => Ok(name_expr(&path, span)),
+                };
             }
             if !module.continues(&path) {
                 let msg = format!(
@@ -97,6 +100,35 @@ impl Parser<'_> {
                 return Err(error(span, msg));
             }
         }
+    }
+
+    /// `f(args).method()`, which the call to `f` alone stands for: the
+    /// object `f` returns is not a value yet.
+    fn chained(&mut self, name: &str, span: Span, method: &str) -> Result<Expr> {
+        let missing = || {
+            format!(
+                "`{name}(...)` is supported only as `{name}(...).{method}()` yet; \
+                 its object is not a value"
+            )
+        };
+        if !self.at(&TokenKind::LParen) {
+            return Err(error(span, missing()));
+        }
+        let call = self.call(name_expr(name, span))?;
+        let follows = self.eat(&TokenKind::Dot)
+            && matches!(self.peek(), TokenKind::Name(n) if n == method)
+            && self.tok(1).kind == TokenKind::LParen
+            && self.tok(2).kind == TokenKind::RParen;
+        if !follows {
+            return Err(error(call.span, missing()));
+        }
+        for _ in 0..3 {
+            self.bump();
+        }
+        Ok(Expr {
+            span: self.span_from(call.span),
+            ..call
+        })
     }
 
     /// A name a statement binds: not an imported module's.

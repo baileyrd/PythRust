@@ -18,6 +18,7 @@ pub mod obj;
 pub mod os;
 pub mod range;
 pub mod seq;
+mod sha256;
 pub mod str;
 pub mod sys;
 pub mod table;

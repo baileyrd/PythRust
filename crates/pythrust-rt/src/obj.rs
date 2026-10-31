@@ -1,4 +1,5 @@
-//! Bytes and files (M6a): `open(p, "rb")`, `f.read()`, `f.close()`.
+//! Bytes and files (M6a): `open(p, "rb")`, `f.read()`, `f.close()`,
+//! and `hashlib.sha256(b).hexdigest()` of bytes.
 //!
 //! One reference-counted object type, [`PtObj`], holds either immutable
 //! bytes or a file open for reading; generated code holds a `*mut PtObj`
@@ -16,6 +17,7 @@ use std::sync::atomic::Ordering::Relaxed;
 
 use crate::exc::VALUE_ERROR;
 use crate::os::{site, Site};
+use crate::sha256;
 use crate::str::{self as pstr, PtStr};
 use crate::LIVE;
 
@@ -296,6 +298,22 @@ pub unsafe extern "C" fn pt_file_close(f: *const PtObj) {
     if let Obj::File { file, .. } = &unsafe { borrow(f) }.obj {
         file.borrow_mut().take();
     }
+}
+
+/// `hashlib.sha256(b).hexdigest()` of bytes `b`: a new string.
+///
+/// # Safety
+///
+/// `b` is live bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_sha256_hex(b: *const PtObj) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller.
+    let data: &[u8] = match &unsafe { borrow(b) }.obj {
+        Obj::Bytes(data) => data,
+        Obj::File { .. } => &[],
+    };
+    let hex = sha256::hex(&sha256::digest(data));
+    pstr::into_ptr(PtStr::new(hex.into_boxed_str()))
 }
 
 #[cfg(test)]

@@ -40,6 +40,11 @@ pub const MODULES: &[ModuleDef] = &[
             StdFn::Getsize,
         ],
     },
+    ModuleDef {
+        name: "hashlib",
+        vars: &[],
+        funcs: &[StdFn::Sha256],
+    },
 ];
 
 /// A runtime function behind a module name.
@@ -65,10 +70,13 @@ pub enum StdFn {
     Read,
     /// `f.close()` of a file; closing it again does nothing.
     Close,
+    /// `hashlib.sha256(data).hexdigest()` of `bytes`, one call: the hash
+    /// object is not a value yet ([`StdFn::chain`]).
+    Sha256,
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 10] = [
+    pub const ALL: [StdFn; 11] = [
         StdFn::Argv,
         StdFn::Listdir,
         StdFn::Join,
@@ -79,6 +87,7 @@ impl StdFn {
         StdFn::Open,
         StdFn::Read,
         StdFn::Close,
+        StdFn::Sha256,
     ];
 
     /// The builtin name stages call it by: the dotted name a program
@@ -96,6 +105,16 @@ impl StdFn {
             StdFn::Open => "open",
             StdFn::Read => "BufferedReader.read",
             StdFn::Close => "BufferedReader.close",
+            StdFn::Sha256 => "hashlib.sha256",
+        }
+    }
+
+    /// The method a call to this function must be followed by, which
+    /// the call stands for with it: `hexdigest` after `hashlib.sha256`.
+    pub fn chain(self) -> Option<&'static str> {
+        match self {
+            StdFn::Sha256 => Some("hexdigest"),
+            _ => None,
         }
     }
 
@@ -121,7 +140,8 @@ impl StdFn {
             | StdFn::Isdir
             | StdFn::Isfile
             | StdFn::Islink
-            | StdFn::Close => None,
+            | StdFn::Close
+            | StdFn::Sha256 => None,
         }
     }
 
