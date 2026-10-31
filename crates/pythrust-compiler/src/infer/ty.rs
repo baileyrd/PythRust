@@ -18,6 +18,10 @@ pub enum Type {
     /// What `range(...)` returns: iterates, indexes and sizes as ints.
     Range,
     List(Box<Type>),
+    /// `dict[K, V]`: insertion-ordered, keyed by a hashable `K`.
+    Dict(Box<Type>, Box<Type>),
+    /// `set[T]`: insertion-ordered, of a hashable `T`.
+    Set(Box<Type>),
     /// Fixed length, positionally typed.
     Tuple(Vec<Type>),
     /// `T | None`. `T` is never `None` or itself optional.
@@ -45,25 +49,27 @@ pub struct FuncType {
 }
 
 impl Type {
-    /// Whether values of this type are heap values (D2): a `str`, list
-    /// or exception, or a tuple or optional holding one. The rest are
+    /// Whether values of this type are heap values (D2): a `str`, list,
+    /// dict, set or exception, or a tuple or optional holding one. The rest are
     /// copied. Defined on the language-level type, so no backend's
     /// representation changes which modes a program may write. `None`
     /// while it depends on a generic type.
     pub fn holds_heap(&self) -> Option<bool> {
         match self {
-            Type::Str | Type::List(_) | Type::Exception => Some(true),
+            Type::Str | Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::Exception => {
+                Some(true)
+            }
             _ => self.any_part(Type::holds_heap),
         }
     }
 
     /// Whether the type's own operations reach a mutable heap value, so
-    /// a value of it can change in place (D2 `mut`): a list, or a tuple
-    /// or optional holding one. Not an exception: no operation reaches
+    /// a value of it can change in place (D2 `mut`): a list, dict or
+    /// set, or a tuple or optional holding one. Not an exception: no operation reaches
     /// its argument. `None` while it depends on a generic type.
     pub fn reaches_mutable(&self) -> Option<bool> {
         match self {
-            Type::List(_) => Some(true),
+            Type::List(_) | Type::Dict(..) | Type::Set(_) => Some(true),
             _ => self.any_part(Type::reaches_mutable),
         }
     }
@@ -108,6 +114,8 @@ impl fmt::Display for Type {
             Type::Range => f.write_str("range"),
             Type::Exception => f.write_str("Exception"),
             Type::List(elem) => write!(f, "list[{elem}]"),
+            Type::Dict(key, value) => write!(f, "dict[{key}, {value}]"),
+            Type::Set(elem) => write!(f, "set[{elem}]"),
             Type::Tuple(elems) if elems.is_empty() => f.write_str("tuple[()]"),
             Type::Tuple(elems) => write!(f, "tuple[{}]", join(elems)),
             Type::Optional(inner) => write!(f, "{inner} | None"),

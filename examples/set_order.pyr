@@ -1,0 +1,5 @@
+# deviation: a set iterates and prints in insertion order; CPython's order follows hashes (docs/grammar.md#deviations-from-python)
+s = {3, 1, 2}
+print(s)
+for n in s:
+    print(n)

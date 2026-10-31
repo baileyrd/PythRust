@@ -1,0 +1,48 @@
+# Dicts keep insertion order; a repeated key keeps its place and takes the new value.
+ages = {"ann": 31, "bob": 27}
+ages["cid"] = 40
+ages["ann"] += 1
+print(ages, len(ages))
+print("bob" in ages, "dan" in ages, "dan" not in ages)
+for name in ages:
+    print(name, ages[name])
+for name, age in ages.items():
+    print(name, "is", age)
+print(list(ages.keys()), list(ages.values()))
+print(ages.get("bob"), ages.get("dan"), ages.get("dan", 0))
+print({1: "a", 2: "b", 1: "c"})
+print({} == {}, {1: 2} == {1: 2}, {1: 2, 3: 4} == {3: 4, 1: 2}, {1: 2} != {1: 3})
+print(bool({}), bool({0: 0}))
+
+maybe = ages.get("eve")
+if maybe is None:
+    print("no eve")
+
+pairs: dict[tuple[int, int], str] = {(0, 0): "origin"}
+pairs[(1, 2)] = "p"
+print(pairs[(0, 0)], pairs[(1, 2)], (2, 1) in pairs)
+
+nested: dict[str, dict[str, int]] = {"x": {}}
+nested["x"]["y"] = 1
+inner = nested["x"]
+inner["z"] = 2
+print(nested)
+
+optional: dict[int | None, str] = {None: "none", 1: "one"}
+print(optional[None], optional[1])
+
+total = 0
+for v in {"a": 1, "b": 2, "c": 3}.values():
+    total += v
+print(total)
+
+a, b = {"first": 1, "second": 2}
+print(a, b)
+
+def count(words: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for w in words:
+        counts[w] = counts.get(w, 0) + 1
+    return counts
+
+print(count(["a", "b", "a", "c", "b", "a"]))

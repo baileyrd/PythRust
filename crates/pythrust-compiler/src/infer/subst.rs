@@ -41,6 +41,8 @@ impl Subst {
     pub(super) fn zonk(&self, ty: &Type) -> Type {
         match self.resolve(ty) {
             Type::List(elem) => Type::List(Box::new(self.zonk(&elem))),
+            Type::Dict(k, v) => Type::Dict(Box::new(self.zonk(&k)), Box::new(self.zonk(&v))),
+            Type::Set(elem) => Type::Set(Box::new(self.zonk(&elem))),
             Type::Optional(inner) => Type::Optional(Box::new(self.zonk(&inner))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.zonk(t)).collect()),
             other => other,
@@ -56,8 +58,12 @@ impl Subst {
         match (&a, &b) {
             (Type::Var(x), Type::Var(y)) if x == y => Ok(()),
             (Type::Var(v), other) | (other, Type::Var(v)) => self.bind(*v, other),
-            (Type::List(x), Type::List(y)) | (Type::Optional(x), Type::Optional(y)) => {
-                self.unify(x, y)
+            (Type::List(x), Type::List(y))
+            | (Type::Set(x), Type::Set(y))
+            | (Type::Optional(x), Type::Optional(y)) => self.unify(x, y),
+            (Type::Dict(k1, v1), Type::Dict(k2, v2)) => {
+                self.unify(k1, k2)?;
+                self.unify(v1, v2)
             }
             (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => {
                 xs.iter().zip(ys).try_for_each(|(x, y)| self.unify(x, y))
@@ -69,7 +75,8 @@ impl Subst {
 
     /// Like `unify`, but a value may flow into a wider target: `T` and
     /// `None` into `T | None`, and tuples element-wise (they are
-    /// immutable). Lists stay invariant, since they are mutable.
+    /// immutable). Lists, dicts and sets stay invariant, since they are
+    /// mutable.
     ///
     /// A value still unknown under a `T | None` target could be `T`,
     /// `None` or `T | None`, so that pair is returned unsolved rather than
@@ -102,7 +109,11 @@ impl Subst {
             Type::Var(v) => {
                 out.insert(v);
             }
-            Type::List(elem) | Type::Optional(elem) => self.free_vars(&elem, out),
+            Type::List(elem) | Type::Set(elem) | Type::Optional(elem) => self.free_vars(&elem, out),
+            Type::Dict(k, v) => {
+                self.free_vars(&k, out);
+                self.free_vars(&v, out);
+            }
             Type::Tuple(elems) => elems.iter().for_each(|t| self.free_vars(t, out)),
             _ => {}
         }
@@ -113,6 +124,11 @@ impl Subst {
         match self.resolve(ty) {
             Type::Var(v) => map.get(&v).cloned().unwrap_or(Type::Var(v)),
             Type::List(elem) => Type::List(Box::new(self.rename(&elem, map))),
+            Type::Dict(k, v) => Type::Dict(
+                Box::new(self.rename(&k, map)),
+                Box::new(self.rename(&v, map)),
+            ),
+            Type::Set(elem) => Type::Set(Box::new(self.rename(&elem, map))),
             Type::Optional(inner) => Type::Optional(Box::new(self.rename(&inner, map))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.rename(t, map)).collect()),
             other => other,

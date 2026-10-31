@@ -7,7 +7,9 @@
 //! Runtime errors).
 
 mod builtins;
+mod methods;
 mod ops;
+mod table;
 mod value;
 
 #[cfg(test)]
@@ -26,6 +28,7 @@ use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
 use crate::span::Span;
 use builtins::{Args, Builtin};
+use table::{Key, Table};
 use value::{Exc, Func, Value};
 
 /// Python's default recursion limit.
@@ -317,11 +320,15 @@ impl<'m> Interp<'m, '_> {
         body: &'m Block,
         orelse: &'m Block,
     ) -> Exec<'m, Flow<'m>> {
-        for v in self.eval(iter)?.iter(iter.span)? {
+        let mut items = self.eval(iter)?.iter(iter.span)?;
+        for v in items.by_ref() {
             self.assign(target, v)?;
             if let Some(flow) = loop_exit(self.exec_block(body)?) {
                 return Ok(flow);
             }
+        }
+        if let Some(message) = items.changed_size() {
+            return Err(rt_err(iter.span, format!("RuntimeError: {message}")).into());
         }
         self.exec_block(orelse)
     }
@@ -455,6 +462,14 @@ impl<'m> Interp<'m, '_> {
             ExprKind::None => Ok(Value::None),
             ExprKind::Tuple(items) => Ok(Value::Tuple(self.eval_all(items)?.into())),
             ExprKind::List(items) => Ok(Value::list(self.eval_all(items)?)),
+            ExprKind::Dict(items) => self.eval_dict(items),
+            ExprKind::Set(items) => {
+                let mut set = Table::default();
+                for v in self.eval_all(items)? {
+                    set.insert(Key::of(&v, e.span)?, v, Value::None);
+                }
+                Ok(Value::set(set))
+            }
             ExprKind::Unary { op, operand } => Ok(ops::unary(*op, &self.eval(operand)?, e.span)?),
             ExprKind::Binary { op, left, right } => {
                 let l = self.eval(left)?;
@@ -487,12 +502,24 @@ impl<'m> Interp<'m, '_> {
                 let index = self.eval(index)?;
                 get_item(&container, &index, e.span)
             }
-            ExprKind::Attr { value, attr } => Ok(get_attr(self.eval(value)?, attr)?),
+            ExprKind::Attr { value, attr } => Ok(methods::bind(self.eval(value)?, attr)?),
         }
     }
 
     fn eval_all(&mut self, items: &'m [Expr]) -> Exec<'m, Vec<Value<'m>>> {
         items.iter().map(|e| self.eval(e)).collect()
+    }
+
+    /// `{k: v, ...}`: each key, then its value, left to right; a repeated
+    /// key keeps its first place and takes the last value.
+    fn eval_dict(&mut self, items: &'m [(Expr, Expr)]) -> Exec<'m, Value<'m>> {
+        let mut dict = Table::default();
+        for (k, v) in items {
+            let key = self.eval(k)?;
+            let value = self.eval(v)?;
+            dict.insert(Key::of(&key, k.span)?, key, value);
+        }
+        Ok(Value::dict(dict))
     }
 
     /// `a < b < c`: each operand is evaluated once, and evaluation stops at
@@ -527,7 +554,7 @@ impl<'m> Interp<'m, '_> {
         match callee {
             Value::Func(f) => self.call_func(f, evaluated),
             Value::Builtin(b) => builtins::call(b, evaluated, self.out),
-            Value::Append(list) => Ok(builtins::append(&list, evaluated)?),
+            Value::Method(m) => methods::call(&m, evaluated),
             other => Err(rt_err(
                 span,
                 format!("TypeError: '{}' object is not callable", other.type_name()),
@@ -712,20 +739,6 @@ fn in_place<'m>(op: BinOp, current: Value<'m>, rhs: &Value<'m>, span: Span) -> E
     Ok(current)
 }
 
-fn get_attr<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
-    match v {
-        Value::List(list) if attr.name == "append" => Ok(Value::Append(list)),
-        other => Err(rt_err(
-            attr.span,
-            format!(
-                "AttributeError: '{}' object has no attribute '{}'",
-                other.type_name(),
-                attr.name
-            ),
-        )),
-    }
-}
-
 fn get_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Exec<'m, Value<'m>> {
     match container {
         Value::List(list) => {
@@ -733,6 +746,10 @@ fn get_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Exec<'m
             Ok(list[position(index, list.len(), "list", span)?].clone())
         }
         Value::Tuple(items) => Ok(items[position(index, items.len(), "tuple", span)?].clone()),
+        Value::Dict(dict) => match dict.borrow().get(&Key::of(index, span)?) {
+            Some(v) => Ok(v.clone()),
+            None => Err(missing_key(index, span)),
+        },
         Value::Str(s) => {
             let i = position(index, s.chars().count(), "string", span)?;
             let c: String = s.chars().skip(i).take(1).collect();
@@ -765,6 +782,11 @@ fn set_item<'m>(
     v: Value<'m>,
     span: Span,
 ) -> Exec<'m, ()> {
+    if let Value::Dict(dict) = container {
+        let key = Key::of(index, span)?;
+        dict.borrow_mut().insert(key, index.clone(), v);
+        return Ok(());
+    }
     let Value::List(list) = container else {
         return Err(rt_err(
             span,
@@ -806,6 +828,19 @@ fn resolve(index: &Value, len: usize, kind: &str, span: Span) -> Result<Option<u
         i128::from(i)
     };
     Ok(usize::try_from(resolved).ok().filter(|&r| r < len))
+}
+
+/// The catchable `KeyError` of `d[k]` for a missing `k`: its argument is
+/// the key itself, as in Python.
+fn missing_key<'m>(key: &Value<'m>, span: Span) -> Unwind<'m> {
+    let arg = Some(key.clone());
+    Unwind::Raise(
+        Rc::new(Exc {
+            kind: ExcKind::Key,
+            arg,
+        }),
+        span,
+    )
 }
 
 fn out_of_range<'m>(kind: &str, span: Span) -> Unwind<'m> {

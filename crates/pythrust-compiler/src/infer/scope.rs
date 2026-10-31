@@ -220,9 +220,13 @@ fn target_exprs(target: &Target) -> Vec<&Expr> {
 fn expr_names<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span)>) {
     match &expr.kind {
         ExprKind::Name(name) => out.push((name, expr.span)),
-        ExprKind::Tuple(items) | ExprKind::List(items) => {
+        ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
             items.iter().for_each(|x| expr_names(x, out))
         }
+        ExprKind::Dict(items) => items
+            .iter()
+            .flat_map(|(k, v)| [k, v])
+            .for_each(|x| expr_names(x, out)),
         ExprKind::Unary { operand, .. } => expr_names(operand, out),
         ExprKind::Binary { left, right, .. } | ExprKind::Logical { left, right, .. } => {
             expr_names(left, out);

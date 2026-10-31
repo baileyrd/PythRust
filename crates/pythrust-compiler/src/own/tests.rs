@@ -1234,3 +1234,15 @@ fn an_exception_in_a_returned_container_is_returned() {
         Ok(())
     );
 }
+
+#[test]
+fn dicts_and_sets_are_mutable_heap_types() {
+    let modes = "def f(mut d: dict[str, int], owned s: set[int], mut o: set[str] | None):\n    d[\"a\"] = len(s)\nf({}, {1}, None)\n";
+    assert_eq!(checked(modes), Ok(()));
+    let tuple = "def f(mut t: tuple[dict[int, int], int]):\n    t[0][1] = 2\nf(({}, 0))\n";
+    assert_eq!(checked(tuple), Ok(()));
+    // Native code has no dicts or sets yet, so their bodies' modes are
+    // checked once it does.
+    conservative("def f(d):\n    d[1] = 2\nf({})\n");
+    conservative("def f(s: set[int]) -> int:\n    return len(s)\nprint(f({1}))\n");
+}

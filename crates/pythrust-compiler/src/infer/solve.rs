@@ -55,6 +55,15 @@ pub(super) enum Need {
         value: Type,
         elems: Vec<Type>,
     },
+    /// A dict key or set element type: `int`, `str`, `bool`, `None`, or
+    /// a tuple or optional of them.
+    Hashable(Type),
+    /// `out` is `value | None` (`d.get(k)`), or `value` when that already
+    /// admits `None`.
+    OrNone {
+        value: Type,
+        out: Type,
+    },
     /// `int(x)` / `float(x)`, named by `func`.
     ToNumber {
         func: &'static str,
@@ -186,6 +195,11 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             value: r(value),
             elems: elems.iter().map(r).collect(),
         },
+        Need::Hashable(t) => Need::Hashable(r(t)),
+        Need::OrNone { value, out } => Need::OrNone {
+            value: r(value),
+            out: r(out),
+        },
         Need::ToNumber { func, arg } => Need::ToNumber { func, arg: r(arg) },
         Need::Assign {
             target,
@@ -204,7 +218,8 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Binary(b) => vec![&b.left, &b.right, &b.out],
         Need::Negate { operand, out } => vec![operand, out],
         Need::Equal { left, right } | Need::Order { left, right } => vec![left, right],
-        Need::Len(t) | Need::ToNumber { arg: t, .. } => vec![t],
+        Need::Len(t) | Need::Hashable(t) | Need::ToNumber { arg: t, .. } => vec![t],
+        Need::OrNone { value, out } => vec![value, out],
         Need::Iter { iterable, elem } => vec![iterable, elem],
         Need::Assign { target, value, .. } => vec![target, value],
         Need::Index {
@@ -230,6 +245,8 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
             access,
         } => index_of(s, c, value, index, *literal, out, *access),
         Need::Unpack { value, elems } => unpack(s, c, value, elems),
+        Need::Hashable(t) => hashable(s, c, t),
+        Need::OrNone { value, out } => or_none(s, c, value, out),
         Need::ToNumber { func, arg } => to_number(s, c, func, arg),
         Need::Assign {
             target,
@@ -386,7 +403,11 @@ fn len(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
     let Some(t) = known(s, t) else {
         return Ok(Step::Waiting);
     };
-    if matches!(t, Type::Str | Type::List(_) | Type::Tuple(_) | Type::Range) {
+    let sized = matches!(
+        t,
+        Type::Str | Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::Tuple(_) | Type::Range
+    );
+    if sized {
         return Ok(Step::Done(vec![]));
     }
     let msg = format!("object of type {} has no len()", s.zonk(&t));
@@ -398,7 +419,7 @@ fn iter(s: &mut Subst, c: &Constraint, iterable: &Type, elem: &Type) -> Result<S
         return Ok(Step::Waiting);
     };
     match &t {
-        Type::List(item) => expect(s, c, elem, item)?,
+        Type::List(item) | Type::Set(item) | Type::Dict(item, _) => expect(s, c, elem, item)?,
         Type::Str => expect(s, c, elem, &Type::Str)?,
         Type::Range => expect(s, c, elem, &Type::Int)?,
         Type::Tuple(items) => items.iter().try_for_each(|item| expect(s, c, elem, item))?,
@@ -434,6 +455,11 @@ fn index_of(
     if let Type::Tuple(items) = &t {
         return tuple_index(s, c, items, literal, out);
     }
+    if let Type::Dict(key, item) = &t {
+        let mut deferred = dict_key(s, c, key, index)?;
+        deferred.extend(element(s, c, &t, item, out, access)?);
+        return Ok(Step::Done(deferred));
+    }
     let item = match &t {
         Type::List(item) => (**item).clone(),
         Type::Str => Type::Str,
@@ -446,15 +472,40 @@ fn index_of(
     if !s.resolve(index).is_intlike() {
         expect(s, c, &Type::Int, index)?;
     }
-    if access != Access::Write {
-        expect(s, c, out, &item)?;
-        return Ok(Step::Done(vec![]));
+    element(s, c, &t, &item, out, access).map(Step::Done)
+}
+
+/// The key of `d[k]` flows into the dict's key type, as an argument
+/// does into a parameter; what cannot be decided yet comes back.
+fn dict_key(s: &mut Subst, c: &Constraint, key: &Type, index: &Type) -> Result<Vec<Need>> {
+    match s.assign(key, index) {
+        Ok(deferred) => Ok(assigns(deferred, "dict key")),
+        Err(clash) => {
+            let msg = format!("dict key: {}", mismatch(s, clash, key, index));
+            Err(error(c, msg))
+        }
     }
-    let what = format!("cannot assign into {}", s.zonk(&t));
-    match s.assign(&item, out) {
-        Ok(deferred) => Ok(Step::Done(assigns(deferred, &what))),
+}
+
+/// Reads `item`, the element of container `t`, into `out`, or writes
+/// `out` into it. Returns the assignments left to decide.
+fn element(
+    s: &mut Subst,
+    c: &Constraint,
+    t: &Type,
+    item: &Type,
+    out: &Type,
+    access: Access,
+) -> Result<Vec<Need>> {
+    if access != Access::Write {
+        expect(s, c, out, item)?;
+        return Ok(vec![]);
+    }
+    let what = format!("cannot assign into {}", s.zonk(t));
+    match s.assign(item, out) {
+        Ok(deferred) => Ok(assigns(deferred, &what)),
         Err(_) => {
-            let msg = format!("cannot assign {} into {}", s.zonk(out), s.zonk(&t));
+            let msg = format!("cannot assign {} into {}", s.zonk(out), s.zonk(t));
             Err(error(c, msg))
         }
     }
@@ -505,7 +556,7 @@ fn unpack(s: &mut Subst, c: &Constraint, value: &Type, elems: &[Type]) -> Result
             }
             return Ok(Step::Done(vec![]));
         }
-        Type::List(item) => (**item).clone(),
+        Type::List(item) | Type::Set(item) | Type::Dict(item, _) => (**item).clone(),
         Type::Str => Type::Str,
         Type::Range => Type::Int,
         other => {
@@ -516,6 +567,37 @@ fn unpack(s: &mut Subst, c: &Constraint, value: &Type, elems: &[Type]) -> Result
     elems
         .iter()
         .try_for_each(|target| expect(s, c, target, &item))?;
+    Ok(Step::Done(vec![]))
+}
+
+fn hashable(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
+    let Some(t) = known(s, t) else {
+        return Ok(Step::Waiting);
+    };
+    match t {
+        Type::Int | Type::Bool | Type::Str | Type::None => Ok(Step::Done(vec![])),
+        Type::Tuple(items) => Ok(Step::Done(items.into_iter().map(Need::Hashable).collect())),
+        Type::Optional(present) => Ok(Step::Done(vec![Need::Hashable(*present)])),
+        other => {
+            let msg = format!(
+                "{} cannot be a dict key or set element; use int, str, bool, None \
+                 or a tuple of them",
+                s.zonk(&other)
+            );
+            Err(error(c, msg))
+        }
+    }
+}
+
+fn or_none(s: &mut Subst, c: &Constraint, value: &Type, out: &Type) -> Result<Step> {
+    let Some(t) = known(s, value) else {
+        return Ok(Step::Waiting);
+    };
+    let result = match t {
+        Type::None | Type::Optional(_) => t,
+        present => Type::Optional(Box::new(present)),
+    };
+    expect(s, c, out, &result)?;
     Ok(Step::Done(vec![]))
 }
 

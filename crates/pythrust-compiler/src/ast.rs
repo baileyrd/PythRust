@@ -196,6 +196,11 @@ pub enum ExprKind {
     /// `expr_list` with a comma, `()` or a parenthesized tuple.
     Tuple(Vec<Expr>),
     List(Vec<Expr>),
+    /// `'{' [expr ':' expr (',' expr ':' expr)* [',']] '}'`; `{}` is an
+    /// empty dict.
+    Dict(Vec<(Expr, Expr)>),
+    /// `'{' expr (',' expr)* [','] '}'`: never empty (`{}` is a dict).
+    Set(Vec<Expr>),
     /// `'-' factor`, `'+' factor` or `'not' not_expr`.
     Unary {
         op: UnaryOp,

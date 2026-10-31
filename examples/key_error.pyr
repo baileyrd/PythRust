@@ -1,0 +1,17 @@
+# expect-exit: 1
+# A missing key raises a catchable KeyError, a LookupError; uncaught, it ends the program.
+d = {"a": 1}
+try:
+    print(d["b"])
+except KeyError as e:
+    print("caught", e)
+try:
+    print(d["c"])
+except LookupError as e:
+    print("lookup", e)
+try:
+    raise KeyError("raised")
+except Exception as e:
+    print("exception", e)
+print(KeyError(), KeyError("k"), KeyError(3))
+print(d["z"])

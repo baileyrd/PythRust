@@ -1,9 +1,10 @@
-//! The closed set of builtins: `print len list range str int float bool`,
+//! The closed set of builtins: `print len list set range str int float bool`,
 //! and the builtin exceptions, which build an exception value when called.
 
 use std::io::Write;
 use std::rc::Rc;
 
+use super::table::{Key, Table};
 use super::value::{str_repr, Exc, Num, Range, Value};
 use super::{raised, rt_err, Exec};
 use crate::ast::Ident;
@@ -16,6 +17,7 @@ pub(super) enum Builtin {
     Print,
     Len,
     List,
+    Set,
     Range,
     Str,
     Int,
@@ -37,6 +39,7 @@ impl Builtin {
             "print" => Builtin::Print,
             "len" => Builtin::Len,
             "list" => Builtin::List,
+            "set" => Builtin::Set,
             "range" => Builtin::Range,
             "str" => Builtin::Str,
             "int" => Builtin::Int,
@@ -51,6 +54,7 @@ impl Builtin {
             Builtin::Print => "print",
             Builtin::Len => "len",
             Builtin::List => "list",
+            Builtin::Set => "set",
             Builtin::Range => "range",
             Builtin::Str => "str",
             Builtin::Int => "int",
@@ -79,6 +83,7 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
     Ok(match b {
         Builtin::Len => len(one(b, pos, span)?, span)?,
         Builtin::List => copy_list(one(b, pos, span)?, span)?,
+        Builtin::Set => new_set(opt(b, pos, span)?, span)?,
         Builtin::Range => range(pos, span)?,
         Builtin::Str => {
             Value::str(&opt(b, pos, span)?.map_or(Ok(String::new()), |v| v.to_str(span))?)
@@ -94,22 +99,6 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
             Value::Exc(Rc::new(Exc { kind, arg }))
         }
     })
-}
-
-/// `xs.append(v)`.
-pub(super) fn append<'m>(list: &super::value::ListRef<'m>, args: Args<'m>) -> Result<Value<'m>> {
-    reject_keywords("append", &args)?;
-    let [v] = <[Value; 1]>::try_from(args.positional).map_err(|vs| {
-        rt_err(
-            args.span,
-            format!(
-                "TypeError: append() takes exactly one argument ({} given)",
-                vs.len()
-            ),
-        )
-    })?;
-    list.borrow_mut().push(v);
-    Ok(Value::None)
 }
 
 fn reject_keywords(func: &str, args: &Args) -> Result<()> {
@@ -171,6 +160,7 @@ fn len<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
     let n = match v {
         Value::Str(s) => s.chars().count() as i128,
         Value::List(l) => l.borrow().len() as i128,
+        Value::Dict(t) | Value::Set(t) => t.borrow().len() as i128,
         Value::Tuple(t) => t.len() as i128,
         Value::Range(r) => r.len(),
         other => {
@@ -203,6 +193,20 @@ fn copy_list<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
 }
 
 /// `range(stop)`, `range(start, stop)`, `range(start, stop, step)`.
+/// `set()` or `set(xs)`: a new set of what `xs` iterates over.
+fn new_set<'m>(from: Option<&Value<'m>>, span: Span) -> Result<Value<'m>> {
+    let mut set = Table::default();
+    for v in from
+        .map(|x| x.iter(span))
+        .transpose()?
+        .into_iter()
+        .flatten()
+    {
+        set.insert(Key::of(&v, span)?, v, Value::None);
+    }
+    Ok(Value::set(set))
+}
+
 fn range<'m>(args: &[Value<'m>], span: Span) -> Result<Value<'m>> {
     arity(Builtin::Range, args, 1, 3, span)?;
     let ints = args

@@ -24,7 +24,7 @@ use crate::str::{self as pstr, PtStr};
 
 /// The builtin exception classes, by kind code (the compiler's
 /// `ExcKind::ALL`).
-const NAMES: [&str; 9] = [
+const NAMES: [&str; 10] = [
     "ValueError",
     "IndexError",
     "ZeroDivisionError",
@@ -34,11 +34,15 @@ const NAMES: [&str; 9] = [
     "LookupError",
     "RuntimeError",
     "Exception",
+    "KeyError",
 ];
 
+/// The kind code of `KeyError`, whose message is its argument's `repr`.
+pub(crate) const KEY_ERROR: u8 = 9;
+
 /// The descriptors of an exception holding a string, by kind code.
-const WITH_MESSAGE: [&[u8]; 9] = [
-    b"x0s", b"x1s", b"x2s", b"x3s", b"x4s", b"x5s", b"x6s", b"x7s", b"x8s",
+const WITH_MESSAGE: [&[u8]; 10] = [
+    b"x0s", b"x1s", b"x2s", b"x3s", b"x4s", b"x5s", b"x6s", b"x7s", b"x8s", b"x9s",
 ];
 
 /// A raised exception not yet caught.
@@ -333,6 +337,25 @@ mod tests {
                 "IndexError: list index out of range"
             );
             seq::pt_seq_dec(e);
+        }
+    }
+
+    #[test]
+    fn a_key_error_message_is_its_arguments_repr() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+        // SAFETY: as above; each object is live until its last dec.
+        unsafe {
+            let s = pstr::into_ptr(PtStr::new("k".into()));
+            let e = seq::pt_seq_new(WITH_MESSAGE[9].as_ptr(), 3, 1);
+            seq::pt_seq_push(e, s as u64);
+            assert_eq!(uncaught_line(e as u64), "KeyError: 'k'");
+            let text = pt_exc_str(e);
+            assert_eq!(pstr::borrow(text).text(), "'k'");
+            pstr::pt_str_dec(text);
+            seq::pt_seq_dec(e);
+            let empty = seq::pt_seq_new(b"x9".as_ptr(), 2, 0);
+            assert_eq!(uncaught_line(empty as u64), "KeyError");
+            seq::pt_seq_dec(empty);
         }
     }
 }

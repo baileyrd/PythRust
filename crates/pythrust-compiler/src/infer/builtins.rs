@@ -1,4 +1,4 @@
-//! The closed builtin functions: `print len list range str int float bool`,
+//! The closed builtin functions: `print len list set range str int float bool`,
 //! and the builtin exception classes (D6, B4), which build an `Exception`
 //! when called.
 
@@ -21,7 +21,7 @@ pub(super) fn exception_names() -> String {
 pub(super) fn is_builtin(name: &str) -> bool {
     let function = matches!(
         name,
-        "print" | "len" | "list" | "range" | "str" | "int" | "float" | "bool"
+        "print" | "len" | "list" | "set" | "range" | "str" | "int" | "float" | "bool"
     );
     function || is_exception(name)
 }
@@ -42,6 +42,7 @@ impl Checker {
                 Ok(Type::Int)
             }
             "list" => self.copy_list(args, span),
+            "set" => self.new_set(args, span),
             "range" => self.range(args, span),
             "str" | "bool" => {
                 self.positional(name, args, 0, 1, span)?;
@@ -82,6 +83,20 @@ impl Checker {
             self.expect(at, &list, &t, "`list` copies a list")?;
         }
         Ok(list)
+    }
+
+    /// `set()` or `set(xs)`: a new set of what `xs` iterates over.
+    fn new_set(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        let elem = self.subst.fresh();
+        for (iterable, _) in self.positional("set", args, 0, 1, span)? {
+            let need = Need::Iter {
+                iterable,
+                elem: elem.clone(),
+            };
+            self.need(need, span);
+        }
+        self.need(Need::Hashable(elem.clone()), span);
+        Ok(Type::Set(Box::new(elem)))
     }
 
     fn range(&mut self, args: &[Arg], span: Span) -> Result<Type> {

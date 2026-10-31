@@ -366,7 +366,8 @@ pub(crate) fn exc_kind(e: u64) -> u8 {
 /// `str(e)` of a live exception `e`: its argument as a string, or empty
 /// without one. An exception argument, optional or not, gives its own
 /// message, followed in a loop, as `run` does, so chains of any length
-/// cannot exhaust the stack.
+/// cannot exhaust the stack. A `KeyError`'s message is its argument's
+/// `repr`, as in Python.
 pub(crate) fn exc_message(mut e: u64) -> Result<String, TooDeep> {
     loop {
         // SAFETY: guaranteed by the caller, and exception slots hold live
@@ -379,10 +380,11 @@ pub(crate) fn exc_message(mut e: u64) -> Result<String, TooDeep> {
         if kind(desc) == Kind::Opt && v != 0 {
             (desc, v) = (opt(desc).0, present(desc, v));
         }
+        let key_error = exc_kind(e) == crate::exc::KEY_ERROR;
         match kind(desc) {
-            Kind::Exc => e = v,
+            Kind::Exc if !key_error => e = v,
             // SAFETY: a string slot holds a live string.
-            Kind::Str => return Ok(unsafe { text(v) }.to_string()),
+            Kind::Str if !key_error => return Ok(unsafe { text(v) }.to_string()),
             _ => {
                 let mut out = String::new();
                 repr(desc, v, &mut out)?;

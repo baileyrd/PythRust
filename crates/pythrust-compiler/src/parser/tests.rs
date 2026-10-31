@@ -69,6 +69,8 @@ fn kind_of(word: &str) -> TokenKind {
         ")" => T::RParen,
         "[" => T::LBracket,
         "]" => T::RBracket,
+        "{" => T::LBrace,
+        "}" => T::RBrace,
         "," => T::Comma,
         ":" => T::Colon,
         "." => T::Dot,
@@ -293,6 +295,11 @@ fn sx(e: &Expr) -> String {
         ExprKind::None => "None".to_string(),
         ExprKind::Tuple(items) => format!("(tuple{})", spaced(items)),
         ExprKind::List(items) => format!("(list{})", spaced(items)),
+        ExprKind::Dict(items) => {
+            let pairs = items.iter().map(|(k, v)| format!(" ({} {})", sx(k), sx(v)));
+            format!("(dict{})", pairs.collect::<String>())
+        }
+        ExprKind::Set(items) => format!("(set{})", spaced(items)),
         ExprKind::Unary { op, operand } => {
             let op = match op {
                 UnaryOp::Neg => "neg",
@@ -585,6 +592,29 @@ fn lists() {
     assert_eq!(ok("[ 1 , 2 , ] NL"), "(list 1 2)");
     assert_eq!(ok("[ ( 1 , 2 ) ] NL"), "(list (tuple 1 2))");
     assert_eq!(err("[ 1 2 ] NL"), "expected `]`, found integer `2`");
+}
+
+#[test]
+fn dict_and_set_displays() {
+    assert_eq!(ok("{ } NL"), "(dict)");
+    assert_eq!(ok("{ 'a' : 1 } NL"), "(dict ('a' 1))");
+    assert_eq!(
+        ok("{ 1 : x , k : f ( y ) , } NL"),
+        "(dict (1 x) (k (call f y)))"
+    );
+    assert_eq!(ok("{ 1 } NL"), "(set 1)");
+    assert_eq!(ok("{ 1 , ( 2 , 3 ) , } NL"), "(set 1 (tuple 2 3))");
+    assert_eq!(
+        ok("{ { 1 : 2 } : { 3 } } NL"),
+        "(dict ((dict (1 2)) (set 3)))"
+    );
+    assert_eq!(err("{ 1 : 2 , 3 } NL"), "expected `:`, found `}`");
+    assert_eq!(err("{ 1 , 2 : 3 } NL"), "expected `}`, found `:`");
+    assert_eq!(err("{ 1 : } NL"), "expected an expression, found `}`");
+    assert_eq!(err("{ , } NL"), "expected an expression, found `,`");
+    assert_eq!(err("{ 1 2 } NL"), "expected `}`, found integer `2`");
+    assert_eq!(err("{ } = 1 NL"), "cannot assign to a dict display");
+    assert_eq!(err("{ 1 } = 1 NL"), "cannot assign to a set display");
 }
 
 #[test]

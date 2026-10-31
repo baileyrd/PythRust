@@ -1,0 +1,24 @@
+# Sets: membership, size, equality. Printed sets hold ints added in rising order, where CPython's order agrees.
+seen = set()
+for n in [1, 2, 1, 3, 2, 1]:
+    if n in seen:
+        print("again", n)
+    seen.add(n)
+print(seen, len(seen), 3 in seen, 4 not in seen)
+print(set(), {5}, set([1, 2, 2]), set(range(3)), len(set("abca")))
+print({1, 2} == {2, 1}, {1} != {1, 2}, set() == set())
+print(bool(set()), bool({0}))
+words = {"x", "y"}
+words.add("x")
+print(len(words), "y" in words)
+coords = {(0, 1), (1, 0)}
+print((0, 1) in coords, (1, 1) in coords)
+total = 0
+for n in {4, 5, 6}:
+    total += n
+print(total)
+
+def unique(xs: list[int]) -> int:
+    return len(set(xs))
+
+print(unique([3, 3, 4]))

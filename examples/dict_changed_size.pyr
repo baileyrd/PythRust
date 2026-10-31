@@ -1,0 +1,7 @@
+# expect-exit: 1
+# Adding a key while a for loop runs over the dict stops the program with a RuntimeError.
+d = {1: "a", 2: "b"}
+for k in d:
+    print(k)
+    d[k + 10] = "new"
+print("not reached")

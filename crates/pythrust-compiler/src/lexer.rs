@@ -476,12 +476,13 @@ impl<'a> Lexer<'a> {
     /// Keeps the bracket stack balanced; `b` is the token's first byte.
     fn track_bracket(&mut self, b: u8, span: Span) -> Result<()> {
         let open = match b {
-            b'(' | b'[' => {
+            b'(' | b'[' | b'{' => {
                 self.brackets.push((b, span));
                 return Ok(());
             }
             b')' => b'(',
             b']' => b'[',
+            b'}' => b'{',
             _ => return Ok(()),
         };
         let close = b as char;
@@ -622,6 +623,8 @@ fn operator(rest: &[u8]) -> Option<(TokenKind, usize)> {
         [b')', ..] => (RParen, 1),
         [b'[', ..] => (LBracket, 1),
         [b']', ..] => (RBracket, 1),
+        [b'{', ..] => (LBrace, 1),
+        [b'}', ..] => (RBrace, 1),
         [b',', ..] => (Comma, 1),
         [b':', ..] => (Colon, 1),
         [b'.', ..] => (Dot, 1),
@@ -962,6 +965,32 @@ mod tests {
         assert_err("f(1\n", 1, 2, "never closed");
         assert_err("x)\n", 1, 2, "unmatched ')'");
         assert_err("[1)\n", 2, 3, "')' does not match '['");
+        assert_err("{1: 2\n", 0, 1, "'{' was never closed");
+        assert_err("x}\n", 1, 2, "unmatched '}'");
+        assert_err("{1]\n", 2, 3, "']' does not match '{'");
+    }
+
+    #[test]
+    fn braces_join_lines() {
+        let k = kinds("d = {1: 2,\n     3: 4}\n");
+        assert_eq!(
+            k,
+            vec![
+                name("d"),
+                Assign,
+                LBrace,
+                Int(1),
+                Colon,
+                Int(2),
+                Comma,
+                Int(3),
+                Colon,
+                Int(4),
+                RBrace,
+                Newline,
+                EndMarker
+            ]
+        );
     }
 
     #[test]
@@ -1190,13 +1219,7 @@ mod tests {
 
     #[test]
     fn characters_outside_the_grammar() {
-        for (src, c) in [
-            ("a ; b", ';'),
-            ("a & b", '&'),
-            ("{}", '{'),
-            ("!x", '!'),
-            ("@d", '@'),
-        ] {
+        for (src, c) in [("a ; b", ';'), ("a & b", '&'), ("!x", '!'), ("@d", '@')] {
             let d = lex_err(src);
             assert!(d.message.contains(&format!("{c:?}")), "{d}");
         }

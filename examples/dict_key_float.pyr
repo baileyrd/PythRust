@@ -1,0 +1,6 @@
+# deviation: a dict key or set element must be int, str, bool, None or a tuple of them; CPython also accepts floats.
+# expect-exit: 1
+# expect-error: float cannot be a dict key or set element
+print("before")
+prices = {1.5: "a"}
+print(prices)

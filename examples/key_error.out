@@ -1,0 +1,4 @@
+caught 'b'
+lookup 'c'
+exception 'raised'
+ 'k' 3

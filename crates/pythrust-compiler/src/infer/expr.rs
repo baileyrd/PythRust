@@ -34,6 +34,8 @@ impl Checker {
                 Ok(Type::Tuple(types))
             }
             ExprKind::List(items) => self.list(items),
+            ExprKind::Dict(items) => self.dict(items, e.span),
+            ExprKind::Set(items) => self.set(items, e.span),
             ExprKind::Unary { op, operand } => self.unary(*op, operand, e.span),
             ExprKind::Binary { op, left, right } => {
                 let (l, r) = (self.expr(left)?, self.expr(right)?);
@@ -94,10 +96,11 @@ impl Checker {
         }
     }
 
-    /// The element type of `container` when it is a known list.
+    /// The element type of `container` when it is a known list, or the
+    /// value type when it is a known dict.
     pub(super) fn element_of(&self, container: &Expr) -> Option<Type> {
         match self.subst.resolve(&self.known_type(container)?) {
-            Type::List(elem) => Some(*elem),
+            Type::List(elem) | Type::Dict(_, elem) => Some(*elem),
             _ => None,
         }
     }
@@ -136,6 +139,30 @@ impl Checker {
             self.expect(x.span, &elem, &t, "list elements must share one type")?;
         }
         Ok(Type::List(Box::new(elem)))
+    }
+
+    /// `{k: v, ...}`: keys share one hashable type, values another.
+    fn dict(&mut self, items: &[(Expr, Expr)], span: Span) -> Result<Type> {
+        let (key, value) = (self.subst.fresh(), self.subst.fresh());
+        for (k, v) in items {
+            let t = self.expr(k)?;
+            self.expect(k.span, &key, &t, "dict keys must share one type")?;
+            let t = self.expr(v)?;
+            self.expect(v.span, &value, &t, "dict values must share one type")?;
+        }
+        self.need(Need::Hashable(key.clone()), span);
+        Ok(Type::Dict(Box::new(key), Box::new(value)))
+    }
+
+    /// `{a, ...}`: elements share one hashable type.
+    fn set(&mut self, items: &[Expr], span: Span) -> Result<Type> {
+        let elem = self.subst.fresh();
+        for x in items {
+            let t = self.expr(x)?;
+            self.expect(x.span, &elem, &t, "set elements must share one type")?;
+        }
+        self.need(Need::Hashable(elem.clone()), span);
+        Ok(Type::Set(Box::new(elem)))
     }
 
     fn unary(&mut self, op: UnaryOp, operand: &Expr, span: Span) -> Result<Type> {
@@ -321,33 +348,81 @@ impl Checker {
         }
     }
 
-    /// `xs.append(v)`, the one phase-2 method.
+    /// A method call: `list.append`, `set.add`, and `dict.get`,
+    /// `.keys`, `.values`, `.items`. Each name belongs to one type, so
+    /// the name alone fixes the receiver's.
     fn method(&mut self, value: &Expr, attr: &Ident, args: &[Arg]) -> Result<Type> {
-        if attr.name != "append" {
-            let msg = format!(
-                "unknown method `.{}`; phase 2 has only `list.append`",
-                attr.name
-            );
-            return Err(error(attr.span, msg));
-        }
-        let receiver = self.expr(value)?;
-        let [arg] = args else {
-            let msg = format!("`append` takes 1 argument but {} were given", args.len());
-            return Err(error(attr.span, msg));
+        let name = attr.name.as_str();
+        let (min, max) = match name {
+            "append" | "add" => (1, 1),
+            "get" => (1, 2),
+            "keys" | "values" | "items" => (0, 0),
+            _ => {
+                let msg = format!(
+                    "unknown method `.{name}`; the methods are `list.append`, `set.add`, \
+                     and `dict.get`, `.keys`, `.values` and `.items`"
+                );
+                return Err(error(attr.span, msg));
+            }
         };
-        if arg.name.is_some() {
-            return Err(error(
-                arg.span,
-                "`append` takes no keyword arguments".to_string(),
-            ));
+        let receiver = self.expr(value)?;
+        method_arity(name, args, min, max, attr.span)?;
+        match name {
+            "append" | "add" => self.insert(name, value.span, &receiver, &args[0]),
+            "get" => self.get(value.span, &receiver, args, attr.span),
+            _ => self.view(name, value.span, &receiver),
         }
+    }
+
+    /// `xs.append(v)` or `s.add(v)`: `v` flows into the element type.
+    fn insert(&mut self, name: &str, at: Span, receiver: &Type, arg: &Arg) -> Result<Type> {
         let elem = self.subst.fresh();
-        let list = Type::List(Box::new(elem.clone()));
-        self.expect(value.span, &list, &receiver, "`append` needs a list")?;
+        let (container, needs) = match name {
+            "append" => (Type::List(Box::new(elem.clone())), "`append` needs a list"),
+            _ => (Type::Set(Box::new(elem.clone())), "`add` needs a set"),
+        };
+        self.expect(at, &container, receiver, needs)?;
         let item = self.checked(&arg.value, &elem)?;
-        let what = "appended value does not match the list";
-        self.expect(arg.value.span, &elem, &item, what)?;
+        let what = format!("{} value does not match the {}", past(name), noun(name));
+        self.expect(arg.value.span, &elem, &item, &what)?;
         Ok(Type::None)
+    }
+
+    /// `d.get(k)` is `V | None`; `d.get(k, default)` is `V`.
+    fn get(&mut self, at: Span, receiver: &Type, args: &[Arg], span: Span) -> Result<Type> {
+        let (key, value) = (self.subst.fresh(), self.subst.fresh());
+        let dict = Type::Dict(Box::new(key.clone()), Box::new(value.clone()));
+        self.expect(at, &dict, receiver, "`get` needs a dict")?;
+        let k = self.checked(&args[0].value, &key)?;
+        self.expect(args[0].value.span, &key, &k, "dict key")?;
+        if let Some(default) = args.get(1) {
+            let d = self.checked(&default.value, &value)?;
+            let what = "the default of `get` must match the dict's values";
+            self.expect(default.value.span, &value, &d, what)?;
+            return Ok(value);
+        }
+        let out = self.subst.fresh();
+        let need = Need::OrNone {
+            value,
+            out: out.clone(),
+        };
+        self.need(need, span);
+        Ok(out)
+    }
+
+    /// `d.keys()`, `d.values()` or `d.items()`: a new list of the keys,
+    /// values or `(key, value)` pairs, in insertion order.
+    fn view(&mut self, name: &str, at: Span, receiver: &Type) -> Result<Type> {
+        let (key, value) = (self.subst.fresh(), self.subst.fresh());
+        let dict = Type::Dict(Box::new(key.clone()), Box::new(value.clone()));
+        let needs = format!("`{name}` needs a dict");
+        self.expect(at, &dict, receiver, &needs)?;
+        let elem = match name {
+            "keys" => key,
+            "values" => value,
+            _ => Type::Tuple(vec![key, value]),
+        };
+        Ok(Type::List(Box::new(elem)))
     }
 
     /// Infers `e` against a known `expected` type, so list and tuple
@@ -356,25 +431,37 @@ impl Checker {
     /// Under `T | None` a literal is checked against `T`, and keeps that
     /// type (it is not `None`).
     pub(super) fn checked(&mut self, e: &Expr, expected: &Type) -> Result<Type> {
-        let items = match &e.kind {
-            ExprKind::List(items) | ExprKind::Tuple(items) => items,
-            _ => return self.expr(e),
-        };
-        let slots: Vec<Type> = match (&e.kind, self.subst.resolve(expected)) {
-            (_, Type::Optional(inner)) => return self.checked(e, &inner),
-            (ExprKind::List(_), Type::List(elem)) => vec![*elem; items.len()],
-            (ExprKind::Tuple(_), Type::Tuple(elems)) if elems.len() == items.len() => elems,
+        let resolved = self.subst.resolve(expected);
+        let slots: Vec<(&Expr, Type)> = match (&e.kind, &resolved) {
+            (ExprKind::List(_) | ExprKind::Tuple(_), Type::Optional(inner))
+            | (ExprKind::Dict(_) | ExprKind::Set(_), Type::Optional(inner)) => {
+                return self.checked(e, inner)
+            }
+            (ExprKind::List(items), Type::List(elem)) | (ExprKind::Set(items), Type::Set(elem)) => {
+                items.iter().map(|x| (x, (**elem).clone())).collect()
+            }
+            (ExprKind::Dict(items), Type::Dict(key, value)) => items
+                .iter()
+                .flat_map(|(k, v)| [(k, (**key).clone()), (v, (**value).clone())])
+                .collect(),
+            (ExprKind::Tuple(items), Type::Tuple(elems)) if elems.len() == items.len() => {
+                items.iter().zip(elems.iter().cloned()).collect()
+            }
             _ => return self.expr(e),
         };
         let mut found = Vec::new();
-        for (x, slot) in items.iter().zip(&slots) {
-            let t = self.checked(x, slot)?;
-            self.expect(x.span, slot, &t, "element does not match the annotation")?;
+        for (x, slot) in slots {
+            let t = self.checked(x, &slot)?;
+            self.expect(x.span, &slot, &t, "element does not match the annotation")?;
             found.push(t);
         }
-        let t = match &e.kind {
-            ExprKind::List(_) => expected.clone(),
-            _ => Type::Tuple(found),
+        let t = match (&e.kind, resolved) {
+            (ExprKind::Tuple(_), _) => Type::Tuple(found),
+            (ExprKind::Dict(_), Type::Dict(key, _)) | (ExprKind::Set(_), Type::Set(key)) => {
+                self.need(Need::Hashable(*key), e.span);
+                expected.clone()
+            }
+            _ => expected.clone(),
         };
         self.nodes.insert(e.span, t.clone());
         Ok(t)
@@ -407,6 +494,7 @@ impl Checker {
             "None" => Type::None,
             "Exception" => Type::Exception,
             "list" => return self.list_annotation(args, t.span),
+            "dict" | "set" => return self.container_annotation(name, args, t.span),
             "tuple" if args.is_empty() => {
                 let msg = "`tuple` needs its element types, as in `tuple[int, str]`";
                 return Err(error(t.span, msg.to_string()));
@@ -420,6 +508,29 @@ impl Checker {
         Ok(scalar)
     }
 
+    /// `dict[K, V]` or `set[T]`, or bare `dict` / `set` with fresh
+    /// arguments. The key or element must be hashable.
+    fn container_annotation(&mut self, name: &str, args: Vec<Type>, span: Span) -> Result<Type> {
+        let arity = if name == "dict" { 2 } else { 1 };
+        let mut args = match args.len() {
+            0 => (0..arity).map(|_| self.subst.fresh()).collect(),
+            n if n == arity => args,
+            _ => {
+                let msg = match name {
+                    "dict" => "`dict` takes two type arguments, as in `dict[str, int]`",
+                    _ => "`set` takes one type argument",
+                };
+                return Err(error(span, msg.to_string()));
+            }
+        };
+        let key = args.remove(0);
+        self.need(Need::Hashable(key.clone()), span);
+        Ok(match args.pop() {
+            Some(value) => Type::Dict(Box::new(key), Box::new(value)),
+            None => Type::Set(Box::new(key)),
+        })
+    }
+
     fn list_annotation(&mut self, args: Vec<Type>, span: Span) -> Result<Type> {
         let mut args = args.into_iter();
         match (args.next(), args.next()) {
@@ -427,6 +538,40 @@ impl Checker {
             (Some(elem), None) => Ok(Type::List(Box::new(elem))),
             (Some(_), Some(_)) => Err(error(span, "`list` takes one type argument".to_string())),
         }
+    }
+}
+
+/// Checks a method call's argument count; methods take no keywords.
+fn method_arity(name: &str, args: &[Arg], min: usize, max: usize, span: Span) -> Result<()> {
+    if let Some(arg) = args.iter().find(|a| a.name.is_some()) {
+        let msg = format!("`{name}` takes no keyword arguments");
+        return Err(error(arg.span, msg));
+    }
+    if (min..=max).contains(&args.len()) {
+        return Ok(());
+    }
+    let expected = match (min, max) {
+        (0, 0) => "no arguments".to_string(),
+        (1, 1) => "1 argument".to_string(),
+        _ => format!("{min} or {max} arguments"),
+    };
+    let msg = format!("`{name}` takes {expected} but {} were given", args.len());
+    Err(error(span, msg))
+}
+
+/// What `append` / `add` does, for messages.
+fn past(method: &str) -> &'static str {
+    match method {
+        "append" => "appended",
+        _ => "added",
+    }
+}
+
+/// The container `append` / `add` changes, for messages.
+fn noun(method: &str) -> &'static str {
+    match method {
+        "append" => "list",
+        _ => "set",
     }
 }
 

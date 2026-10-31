@@ -517,9 +517,13 @@ impl<'a> Cx<'_, 'a> {
                     _ => self.expr(func, out),
                 }
             }
-            ExprKind::Tuple(items) | ExprKind::List(items) => {
+            ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
                 items.iter().for_each(|x| self.expr(x, out));
             }
+            ExprKind::Dict(items) => items
+                .iter()
+                .flat_map(|(k, v)| [k, v])
+                .for_each(|x| self.expr(x, out)),
             ExprKind::Unary { operand, .. } => self.expr(operand, out),
             ExprKind::Binary { left, right, .. } | ExprKind::Logical { left, right, .. } => {
                 self.expr(left, out);
@@ -1042,11 +1046,11 @@ temper def f(s: str) -> int:
 
     #[test]
     fn clause_names_are_builtin_exceptions_listed_once() {
-        let unknown = "temper def f() -> None raises KeyError:\n    pass\n";
+        let unknown = "temper def f() -> None raises TypeError:\n    pass\n";
         assert_eq!(
             err(unknown),
-            "`KeyError` is not an exception; `raises` lists one of ArithmeticError, \
-             Exception, IndexError, LookupError, OverflowError, RecursionError, \
+            "`TypeError` is not an exception; `raises` lists one of ArithmeticError, \
+             Exception, IndexError, KeyError, LookupError, OverflowError, RecursionError, \
              RuntimeError, ValueError, ZeroDivisionError"
         );
         let twice = "temper def f() -> None raises ValueError, ValueError:\n    pass\n";

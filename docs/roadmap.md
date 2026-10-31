@@ -108,7 +108,9 @@ Nano, 2026-10-31. A real program drives M6, so the gaps it hits decide the order
 
 Cards, in order (one PR or more each):
 
-- [ ] **`dict` and `set`.** Prerequisite for the driver. Extends the `mut`/`owned` predicates (`infer::Type::holds_heap`, `reaches_mutable`) and B3b's refusal of an exception that may close a reference cycle to the new container types.
+- [ ] **`dict` and `set`.** Prerequisite for the driver. Extends the `mut`/`owned` predicates (`infer::Type::holds_heap`, `reaches_mutable`) and B3b's refusal of an exception that may close a reference cycle to the new container types. Two PRs:
+  - [x] *Front end and interpreter:* displays, `dict[K, V]`/`set[T]` with hashable keys, subscripts, `in`, `len`, `for`, `set()`, `set.add`, `dict.get/keys/values/items`, a catchable `KeyError` (a `LookupError`, native too), the mode predicates, and the [deviations](grammar.md#deviations-from-python) (set order, key types, views as lists, size change fatal). `build` reports dicts and sets as a named backend gap, so the `own` analysis stays conservative for them.
+  - [ ] *Native:* runtime tables in `pythrust-rt`, lowering and codegen, corpus parity (`dicts`, `sets`, `key_error` in `NATIVE`), the `own` and `rc` facts for dict stores and `set.add` (a store keeps its key and value, like `append`), and `codegen::may_cycle` counting a dict whose values, or a set whose elements, may hold an exception.
 - [ ] **M6a. Stdlib core:** what fclone-lite needs, Python-compatible as above.
 - [ ] **M6b. Rust binary-level interop.**
 - [ ] **M6c. Concurrency:** uncolored tasks, channels and `shared[T]`.
