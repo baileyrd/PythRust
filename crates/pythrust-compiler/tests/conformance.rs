@@ -405,6 +405,8 @@ const NATIVE: &[&str] = &[
     "optional_ownership",
     "optional_shapes",
     "optional_short_circuit",
+    "os_error_uncaught",
+    "os_path",
     "overflow_add",
     "overflow_factorial",
     "overflow_min_floordiv",
@@ -1136,6 +1138,64 @@ fn pythrust(command: &str, source: &Path) -> Res<std::process::Output> {
         .arg(source)
         .output()
         .map_err(|e| format!("cannot run pythrust {command}: {e}"))
+}
+
+/// `os` and `os.path` on a real tree agree across CPython, `run` and a
+/// built program: entries, tests, sizes and the `OSError` subclasses,
+/// with their messages on Unix (Windows words them differently, a listed
+/// deviation). Not a corpus program: it needs files made for it.
+#[test]
+fn os_matches_cpython_on_a_tree() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("os-tree")?;
+    let root = dir.join("tree");
+    fs::create_dir_all(root.join("sub").join("deeper")).map_err(|e| e.to_string())?;
+    write(&root.join("a.txt"), "hello")?;
+    write(&root.join("sub").join("b.txt"), "")?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("a.txt"), root.join("link")).map_err(|e| e.to_string())?;
+    let show = if cfg!(unix) {
+        "print(type_name, e)"
+    } else {
+        "print(type_name)"
+    };
+    let src = format!(
+        "import os\n\
+         root = {root:?}\n\
+         def walk(path: str, depth: int) -> None:\n\
+         \x20   for name in sorted(os.listdir(path)):\n\
+         \x20       p = os.path.join(path, name)\n\
+         \x20       kinds = (os.path.isdir(p), os.path.isfile(p), os.path.islink(p))\n\
+         \x20       print(depth, name, kinds, os.path.getsize(p) if os.path.isfile(p) else -1)\n\
+         \x20       if os.path.isdir(p) and not os.path.islink(p):\n\
+         \x20           walk(p, depth + 1)\n\
+         walk(root, 0)\n\
+         for bad in [os.path.join(root, 'a.txt'), os.path.join(root, 'missing')]:\n\
+         \x20   type_name = 'none'\n\
+         \x20   try:\n\
+         \x20       os.listdir(bad)\n\
+         \x20   except NotADirectoryError as e:\n\
+         \x20       type_name = 'NotADirectoryError'\n\
+         \x20       {show}\n\
+         \x20   except FileNotFoundError as e:\n\
+         \x20       type_name = 'FileNotFoundError'\n\
+         \x20       {show}\n\
+         try:\n\
+         \x20   print(os.path.getsize(os.path.join(root, 'missing')))\n\
+         except OSError as e:\n\
+         \x20   type_name = 'OSError'\n\
+         \x20   {show}\n",
+        root = root.to_string_lossy()
+    );
+    let exe = native_case(&dir, "walk", &src)?;
+    let source = exe.with_extension("pyr");
+    let want = run_cpython(&source)?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert!(want.stdout.contains("FileNotFoundError"), "{}", want.stdout);
+    assert_eq!(run_pythrust(&source)?, want);
+    assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
+    cleanup(&dir)?;
+    Ok(())
 }
 
 /// A built program sees its own arguments in `sys.argv`, as `run` sees

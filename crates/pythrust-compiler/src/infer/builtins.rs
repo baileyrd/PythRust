@@ -63,7 +63,8 @@ impl Checker {
         }
     }
 
-    /// A call to a [`StdFn`] by its builtin name.
+    /// A call to a [`StdFn`] by its builtin name. Every argument is a
+    /// `str` (a path).
     fn std(&mut self, name: &str, args: &[Arg], span: Span) -> Result<Type> {
         let Some(f) = StdFn::from_name(name) else {
             return Err(error(
@@ -71,12 +72,19 @@ impl Checker {
                 format!("internal: `{name}` is not a module function"),
             ));
         };
-        match f {
-            StdFn::Argv => {
-                self.positional(name, args, 0, 0, span)?;
-                Ok(Type::List(Box::new(Type::Str)))
-            }
+        let strs = || Type::List(Box::new(Type::Str));
+        let (min, max, result) = match f {
+            StdFn::Argv => (0, 0, strs()),
+            StdFn::Listdir => (0, 1, strs()),
+            StdFn::Join => (1, usize::MAX, Type::Str),
+            StdFn::Isdir | StdFn::Isfile | StdFn::Islink => (1, 1, Type::Bool),
+            StdFn::Getsize => (1, 1, Type::Int),
+        };
+        let what = format!("argument of `{name}`");
+        for (t, at) in self.positional(name, args, min, max, span)? {
+            self.expect(at, &Type::Str, &t, &what)?;
         }
+        Ok(result)
     }
 
     /// Any positional values; `sep` and `end` must be `str`.

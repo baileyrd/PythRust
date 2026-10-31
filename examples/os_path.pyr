@@ -1,0 +1,34 @@
+# `os` and `os.path` without touching real files: joining, tests on a
+# missing path, and the `OSError` subclasses a missing path raises,
+# caught by class (their messages differ on Windows).
+import os
+
+print(os.path.join("a"), os.path.join("a", "b", "c"), os.path.join("a/", "b"))
+print(os.path.join("a", "/b", "c"), os.path.join("", "b"), os.path.join("a", ""))
+missing = os.path.join("no", "such", "path")
+print(os.path.isdir(missing), os.path.isfile(missing), os.path.islink(missing))
+print(os.path.isdir("."), os.path.isfile("."))
+
+
+temper def size(path: str) -> int raises OSError:
+    return os.path.getsize(path)
+
+
+def names(path: str) -> list[str]:
+    try:
+        return os.listdir(path)
+    except FileNotFoundError:
+        print("not found:", path)
+        return []
+
+
+try:
+    print(size(missing))
+except FileNotFoundError:
+    print("FileNotFoundError")
+print(names(missing))
+try:
+    os.listdir(missing)
+except OSError as e:
+    print("OSError caught", str(e) != "")
+print(len(os.listdir()) > 0)

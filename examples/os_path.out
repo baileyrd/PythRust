@@ -1,0 +1,9 @@
+a a/b/c a/b
+/b/c b a/
+False False False
+True False
+FileNotFoundError
+not found: no/such/path
+[]
+OSError caught True
+True

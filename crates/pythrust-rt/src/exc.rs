@@ -1,8 +1,9 @@
 //! Exceptions (D6): the one pending exception, raised and caught.
 //!
 //! An exception is a sequence object ([`crate::seq`]) whose descriptor
-//! is `x`, its kind's code as an ASCII digit (the order of [`NAMES`],
-//! which is the compiler's `ExcKind::ALL`), and its argument's type, if
+//! is `x`, its kind's code as one byte, `'0'` plus the code (the order
+//! of [`NAMES`], which is the compiler's `ExcKind::ALL`), and its
+//! argument's type, if
 //! it has one, which its one slot holds.
 //!
 //! Raising makes an exception *pending*, with the diagnostic of the
@@ -24,7 +25,7 @@ use crate::str::{self as pstr, PtStr};
 
 /// The builtin exception classes, by kind code (the compiler's
 /// `ExcKind::ALL`).
-const NAMES: [&str; 10] = [
+const NAMES: [&str; 15] = [
     "ValueError",
     "IndexError",
     "ZeroDivisionError",
@@ -35,14 +36,27 @@ const NAMES: [&str; 10] = [
     "RuntimeError",
     "Exception",
     "KeyError",
+    "OSError",
+    "FileNotFoundError",
+    "PermissionError",
+    "IsADirectoryError",
+    "NotADirectoryError",
 ];
 
 /// The kind code of `KeyError`, whose message is its argument's `repr`.
 pub(crate) const KEY_ERROR: u8 = 9;
 
+/// The kind codes of `OSError` and its subclasses.
+pub(crate) const OS_ERROR: u8 = 10;
+pub(crate) const FILE_NOT_FOUND: u8 = 11;
+pub(crate) const PERMISSION: u8 = 12;
+pub(crate) const IS_A_DIRECTORY: u8 = 13;
+pub(crate) const NOT_A_DIRECTORY: u8 = 14;
+
 /// The descriptors of an exception holding a string, by kind code.
-const WITH_MESSAGE: [&[u8]; 10] = [
-    b"x0s", b"x1s", b"x2s", b"x3s", b"x4s", b"x5s", b"x6s", b"x7s", b"x8s", b"x9s",
+const WITH_MESSAGE: [&[u8]; 15] = [
+    b"x0s", b"x1s", b"x2s", b"x3s", b"x4s", b"x5s", b"x6s", b"x7s", b"x8s", b"x9s", b"x:s", b"x;s",
+    b"x<s", b"x=s", b"x>s",
 ];
 
 /// A raised exception not yet caught.
@@ -157,16 +171,9 @@ pub unsafe extern "C" fn pt_raise_value(
     // SAFETY: guaranteed by the caller.
     let (prefix, text) = unsafe { (part(prefix, prefix_len), pstr::borrow(s).text()) };
     let message = format!("{}{}", String::from_utf8_lossy(prefix), pstr::repr(text));
-    let arg = pstr::into_ptr(PtStr::new(message.into()));
-    // SAFETY: the descriptor is static and the slot a live string, whose
-    // reference the exception adds before this one is dropped.
-    unsafe {
-        let desc = WITH_MESSAGE[0]; // ValueError
-        let exc = seq::pt_seq_new(desc.as_ptr(), desc.len(), 1);
-        seq::pt_seq_push(exc, arg as u64);
-        pstr::pt_str_dec(arg);
-        set_pending(exc, part(head, head_len), part(tail, tail_len));
-    }
+    // SAFETY: guaranteed by the caller.
+    let (head, tail) = unsafe { (part(head, head_len), part(tail, tail_len)) };
+    raise_text(0, message, head, tail); // ValueError
 }
 
 /// An exception of kind `code` that no `raise` wrote, holding the
@@ -188,18 +195,27 @@ pub unsafe extern "C" fn pt_raise_msg(
     tail_len: usize,
 ) {
     // SAFETY: guaranteed by the caller.
-    let text = String::from_utf8_lossy(unsafe { part(msg, msg_len) });
+    let text = String::from_utf8_lossy(unsafe { part(msg, msg_len) }).into_owned();
+    // SAFETY: guaranteed by the caller.
+    let (head, tail) = unsafe { (part(head, head_len), part(tail, tail_len)) };
+    raise_text(code, text, head, tail);
+}
+
+/// Makes pending a new exception of kind `code` holding the string
+/// `text`, raised where `head` and `tail` point (see [`pt_raise`]).
+pub(crate) fn raise_text(code: u8, text: String, head: &'static [u8], tail: &'static [u8]) {
     let arg = pstr::into_ptr(PtStr::new(text.into()));
     let desc = WITH_MESSAGE
         .get(usize::from(code))
         .copied()
         .unwrap_or(b"x8s");
-    // SAFETY: as in `pt_raise_value`.
+    // SAFETY: the descriptor is static and the slot a live string, whose
+    // reference the exception adds before this one is dropped.
     unsafe {
         let exc = seq::pt_seq_new(desc.as_ptr(), desc.len(), 1);
         seq::pt_seq_push(exc, arg as u64);
         pstr::pt_str_dec(arg);
-        set_pending(exc, part(head, head_len), part(tail, tail_len));
+        set_pending(exc, head, tail);
     }
 }
 

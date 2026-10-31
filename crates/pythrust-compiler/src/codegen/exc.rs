@@ -15,9 +15,9 @@ use crate::span::Span;
 
 impl FnGen<'_, '_, '_> {
     /// A new exception of `kind`, holding `arg` if there is one. Its
-    /// descriptor is `x`, the kind's code as a digit, and `arg`'s type.
+    /// descriptor is `x`, the kind's [`ExcKind::code_char`], and `arg`'s type.
     pub(super) fn new_exc(&mut self, kind: ExcKind, arg: Option<Operand>) -> Result<Value> {
-        let mut text = format!("x{}", kind.code());
+        let mut text = format!("x{}", kind.code_char());
         if let Some(a) = arg {
             descriptor(self.types, self.func.ty(a), &mut text)?;
         }
@@ -101,7 +101,7 @@ impl FnGen<'_, '_, '_> {
 
     /// The diagnostic of an exception raised at `span` and never caught,
     /// rendered before and after its line: address and length of each.
-    fn site(&mut self, span: Span) -> Result<[Value; 4]> {
+    pub(super) fn site(&mut self, span: Span) -> Result<[Value; 4]> {
         let text = (self.cg.render)(&runtime(span, &MID.to_string()));
         let Some((head, tail)) = text.split_once(MID) else {
             return Err(backend(

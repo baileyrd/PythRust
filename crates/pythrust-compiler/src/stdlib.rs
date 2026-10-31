@@ -9,34 +9,89 @@
 //! module function a builtin. `import m` assigns each of `m`'s variables
 //! from its initializer, a call to a [`StdFn`] only the parser can write.
 
+use crate::exc::ExcKind;
+
 /// A module and the dotted names it exposes.
 pub struct ModuleDef {
     pub name: &'static str,
     /// Variables, each with the function that makes its value.
     pub vars: &'static [(&'static str, StdFn)],
+    /// Functions, called by their [`StdFn::name`].
+    pub funcs: &'static [StdFn],
 }
 
 /// The importable modules.
-pub const MODULES: &[ModuleDef] = &[ModuleDef {
-    name: "sys",
-    vars: &[("sys.argv", StdFn::Argv)],
-}];
+pub const MODULES: &[ModuleDef] = &[
+    ModuleDef {
+        name: "sys",
+        vars: &[("sys.argv", StdFn::Argv)],
+        funcs: &[],
+    },
+    ModuleDef {
+        name: "os",
+        vars: &[],
+        funcs: &[
+            StdFn::Listdir,
+            StdFn::Join,
+            StdFn::Isdir,
+            StdFn::Isfile,
+            StdFn::Islink,
+            StdFn::Getsize,
+        ],
+    },
+];
 
 /// A runtime function behind a module name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StdFn {
     /// `sys.argv`'s value: a new `list[str]` of the program's arguments.
     Argv,
+    /// `os.listdir(path='.')`: a new `list[str]` of the entry names.
+    Listdir,
+    /// `os.path.join(a, *p)`: POSIX rules (a listed deviation on Windows).
+    Join,
+    /// `os.path.isdir(p)`, following links; `False` on any error.
+    Isdir,
+    /// `os.path.isfile(p)`, following links; `False` on any error.
+    Isfile,
+    /// `os.path.islink(p)`; `False` on any error.
+    Islink,
+    /// `os.path.getsize(p)`, following links.
+    Getsize,
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 1] = [StdFn::Argv];
+    pub const ALL: [StdFn; 7] = [
+        StdFn::Argv,
+        StdFn::Listdir,
+        StdFn::Join,
+        StdFn::Isdir,
+        StdFn::Isfile,
+        StdFn::Islink,
+        StdFn::Getsize,
+    ];
 
-    /// The builtin name stages call it by. An initializer's name has a
-    /// `__` part, so no program can write it.
+    /// The builtin name stages call it by: the dotted name a program
+    /// writes. An initializer's name has a `__` part, so no program can
+    /// write it.
     pub fn name(self) -> &'static str {
         match self {
             StdFn::Argv => "sys.__argv__",
+            StdFn::Listdir => "os.listdir",
+            StdFn::Join => "os.path.join",
+            StdFn::Isdir => "os.path.isdir",
+            StdFn::Isfile => "os.path.isfile",
+            StdFn::Islink => "os.path.islink",
+            StdFn::Getsize => "os.path.getsize",
+        }
+    }
+
+    /// The class of what it may raise, tracked in `raises` (D8). An
+    /// `OSError` is raised as the subclass the error's kind names.
+    pub fn raises(self) -> Option<ExcKind> {
+        match self {
+            StdFn::Listdir | StdFn::Getsize => Some(ExcKind::Os),
+            StdFn::Argv | StdFn::Join | StdFn::Isdir | StdFn::Isfile | StdFn::Islink => None,
         }
     }
 
@@ -53,7 +108,8 @@ pub fn module(name: &str) -> Option<&'static ModuleDef> {
 impl ModuleDef {
     /// Every dotted name a program may write, sorted, for messages.
     pub fn names(&self) -> Vec<&'static str> {
-        let mut names: Vec<&str> = self.vars.iter().map(|(n, _)| *n).collect();
+        let vars = self.vars.iter().map(|(n, _)| *n);
+        let mut names: Vec<&str> = vars.chain(self.funcs.iter().map(|f| f.name())).collect();
         names.sort_unstable();
         names
     }
@@ -94,6 +150,22 @@ mod tests {
                 assert!(!m.exposes(init.name()));
             }
         }
+    }
+
+    #[test]
+    fn functions_belong_to_their_module() {
+        for m in MODULES {
+            for f in m.funcs {
+                assert!(f.name().starts_with(&format!("{}.", m.name)), "{f:?}");
+                assert!(m.exposes(f.name()));
+            }
+        }
+        let Some(os) = module("os") else {
+            panic!("os is importable")
+        };
+        assert!(os.continues("os.path"));
+        assert!(!os.exposes("os.path"));
+        assert!(os.exposes("os.path.getsize"));
     }
 
     #[test]

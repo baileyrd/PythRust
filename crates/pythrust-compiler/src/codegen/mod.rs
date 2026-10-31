@@ -126,10 +126,14 @@ enum Rt {
     ListOf,
     ListSort,
     Argv,
+    OsListdir,
+    OsPathJoin,
+    OsPathIs,
+    OsPathGetsize,
 }
 
 impl Rt {
-    const ALL: [Rt; 62] = [
+    const ALL: [Rt; 66] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -192,6 +196,10 @@ impl Rt {
         Rt::ListOf,
         Rt::ListSort,
         Rt::Argv,
+        Rt::OsListdir,
+        Rt::OsPathJoin,
+        Rt::OsPathIs,
+        Rt::OsPathGetsize,
     ];
 
     fn symbol(self) -> &'static str {
@@ -258,6 +266,10 @@ impl Rt {
             Rt::ListOf => "pt_list_of",
             Rt::ListSort => "pt_list_sort",
             Rt::Argv => "pt_argv",
+            Rt::OsListdir => "pt_os_listdir",
+            Rt::OsPathJoin => "pt_os_path_join",
+            Rt::OsPathIs => "pt_os_path_is",
+            Rt::OsPathGetsize => "pt_os_path_getsize",
         }
     }
 
@@ -317,6 +329,10 @@ impl Rt {
             Rt::ViewNew | Rt::ListOf => (vec![ptr, ptr, ptr], Some(ptr)),
             Rt::ListSort => (vec![ptr], None),
             Rt::Argv => (vec![ptr, ptr], Some(ptr)),
+            Rt::OsListdir => (vec![ptr; 7], Some(ptr)),
+            Rt::OsPathJoin => (vec![ptr, ptr], Some(ptr)),
+            Rt::OsPathIs => (vec![ptr, I8], Some(I8)),
+            Rt::OsPathGetsize => (vec![ptr; 5], Some(I64)),
         }
     }
 }
@@ -844,7 +860,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             }
             Rvalue::Call(callee, args) => self.call(*callee, args, dest, span),
             Rvalue::StrLit(text) => self.str_lit(text),
-            Rvalue::Std(f, args) => self.std(*f, args, self.func.locals[dest.0]),
+            Rvalue::Std(f, args) => self.std(*f, args, self.func.locals[dest.0], span),
             Rvalue::Concat(a, b) => self.rt_on(Rt::StrConcat, &[*a, *b]),
             Rvalue::Repeat(s, n) => self.rt_nonnull(Rt::StrRepeat, &[*s, *n], span, TOO_LARGE),
             Rvalue::Index(d, k) if is_table(self.func.ty(*d)) => self.dict_get(*d, *k, dest),
