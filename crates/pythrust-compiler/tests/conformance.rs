@@ -334,6 +334,7 @@ const NATIVE: &[&str] = &[
     "collatz",
     "conditional_expr",
     "default_eval_error",
+    "dict_bool_key",
     "dict_changed_size",
     "dict_view_changed_size",
     "dict_views",

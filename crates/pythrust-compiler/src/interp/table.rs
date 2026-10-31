@@ -53,9 +53,29 @@ impl Key {
 pub(super) struct Table<'m> {
     entries: Vec<(Value<'m>, Value<'m>)>,
     index: HashMap<Key, usize>,
+    /// An `int`-keyed table: a `bool` stored as a key is stored as its int.
+    ints: bool,
 }
 
 impl<'m> Table<'m> {
+    /// An empty table, `int`-keyed if `ints`.
+    pub fn keyed(ints: bool) -> Self {
+        Table {
+            ints,
+            ..Table::default()
+        }
+    }
+
+    /// Makes the table `int`-keyed, turning any `bool` key into its int.
+    pub fn int_keyed(&mut self) {
+        self.ints = true;
+        for (k, _) in &mut self.entries {
+            if let Value::Bool(b) = k {
+                *k = Value::Int(i64::from(*b));
+            }
+        }
+    }
+
     pub fn new_ref(table: Table<'m>) -> TableRef<'m> {
         Rc::new(RefCell::new(table))
     }
@@ -88,14 +108,24 @@ impl<'m> Table<'m> {
     }
 
     /// Stores `value` under `key`, whose value is `k`. A key already
-    /// present keeps its place and its first key value, as in Python.
+    /// present keeps its place and its first key value, as in Python; a
+    /// `bool` key of an `int`-keyed table is stored as its int.
+    /// Only an `int`-keyed table can hold an `int`, so storing one makes
+    /// the table `int`-keyed.
     pub fn insert(&mut self, key: Key, k: Value<'m>, value: Value<'m>) {
+        if matches!(k, Value::Int(_)) && !self.ints {
+            self.int_keyed();
+        }
         if let Some(&i) = self.index.get(&key) {
             if let Some(entry) = self.entries.get_mut(i) {
                 entry.1 = value;
             }
             return;
         }
+        let k = match k {
+            Value::Bool(b) if self.ints => Value::Int(i64::from(b)),
+            k => k,
+        };
         self.index.insert(key, self.entries.len());
         self.entries.push((k, value));
     }

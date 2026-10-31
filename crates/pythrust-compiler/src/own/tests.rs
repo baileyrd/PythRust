@@ -428,7 +428,7 @@ fn changing_a_list_a_loop_runs_over_is_an_error() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes `xs` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "tempered `f` changes `xs` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(xs)`".into(),
             "xs.append(x)".into()
         ))
     );
@@ -441,7 +441,7 @@ fn changing_a_dict_or_set_a_loop_runs_over_is_an_error() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes `d` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "tempered `f` changes `d` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(d)`".into(),
             "d[k + \"x\"]".into()
         ))
     );
@@ -700,7 +700,7 @@ fn a_callee_changing_a_module_list_is_a_change() {
     assert_eq!(
         alias_err(looped),
         Some((
-            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(...)`".into(),
             "touch()".into()
         ))
     );
@@ -727,7 +727,7 @@ fn a_callee_may_change_a_list_the_body_stored_in_a_module_list() {
     assert_eq!(
         alias_err(&looped),
         Some((
-            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(...)`".into(),
             "touch()".into()
         ))
     );

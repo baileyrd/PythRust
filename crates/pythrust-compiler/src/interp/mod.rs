@@ -1,7 +1,9 @@
 //! Tree-walking interpreter: `ast::Module` to program output. Thread D.
 //!
 //! The semantic reference, not the fast path. Runs untyped AST, so every
-//! type error the checker would catch is also a runtime error here.
+//! type error the checker would catch is also a runtime error here. The
+//! one type it reads is whether a new dict or set is int-keyed, so that a
+//! `bool` stored there becomes its int.
 //! A fault (overflow, a bad index, ...) stops the program; `try` catches
 //! only what `raise` and `int(s)`/`float(s)` raise (`docs/grammar.md`,
 //! Runtime errors).
@@ -26,9 +28,10 @@ use crate::ast::{
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
-use crate::infer::View;
+use crate::infer::{Type, Types, View};
 use crate::span::Span;
 use builtins::{Args, Builtin};
+use methods::Method;
 use table::{Key, Table};
 use value::{Exc, Func, Value};
 
@@ -52,12 +55,12 @@ const STACK_BYTES: usize = 256 << 20;
 /// The error is returned as a `DiagKind::Runtime` diagnostic; the caller
 /// reports it and exits with status 1. Runs on a dedicated thread with a
 /// large stack, so hitting the recursion limit is an error, not a crash.
-pub fn run(module: &Module, out: &mut (dyn Write + Send)) -> Result<()> {
+pub fn run(module: &Module, types: &Types, out: &mut (dyn Write + Send)) -> Result<()> {
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .name("pythrust-interp".to_string())
             .stack_size(STACK_BYTES)
-            .spawn_scoped(scope, || run_here(module, out))
+            .spawn_scoped(scope, || run_here(module, types, out))
             .map_err(|e| {
                 rt_err(
                     module.span,
@@ -71,10 +74,11 @@ pub fn run(module: &Module, out: &mut (dyn Write + Send)) -> Result<()> {
     })
 }
 
-fn run_here(module: &Module, out: &mut dyn Write) -> Result<()> {
+fn run_here<'m>(module: &'m Module, types: &'m Types, out: &mut dyn Write) -> Result<()> {
     let mut interp = Interp {
         globals: HashMap::new(),
         frames: Vec::new(),
+        types,
         out,
     };
     let flow = match interp.exec_block(&module.body) {
@@ -129,6 +133,7 @@ fn raised<'m>(kind: ExcKind, message: String, span: Span) -> Unwind<'m> {
 
 struct Interp<'m, 'o> {
     globals: HashMap<&'m str, Value<'m>>,
+    types: &'m Types,
     /// One per active call; empty at module level.
     frames: Vec<Frame<'m>>,
     out: &'o mut dyn Write,
@@ -400,6 +405,7 @@ impl<'m> Interp<'m, '_> {
             }
             TargetKind::Subscript { value, index } => {
                 let container = self.eval(value)?;
+                self.tag(&container, value.span);
                 let index = self.eval(index)?;
                 set_item(&container, &index, v, target.span)
             }
@@ -498,9 +504,9 @@ impl<'m> Interp<'m, '_> {
             ExprKind::None => Ok(Value::None),
             ExprKind::Tuple(items) => Ok(Value::Tuple(self.eval_all(items)?.into())),
             ExprKind::List(items) => Ok(Value::list(self.eval_all(items)?)),
-            ExprKind::Dict(items) => self.eval_dict(items),
+            ExprKind::Dict(items) => self.eval_dict(items, e.span),
             ExprKind::Set(items) => {
-                let mut set = Table::default();
+                let mut set = Table::keyed(self.int_keyed(e.span));
                 for v in self.eval_all(items)? {
                     set.insert(Key::of(&v, e.span)?, v, Value::None);
                 }
@@ -542,14 +548,32 @@ impl<'m> Interp<'m, '_> {
         }
     }
 
+    /// Marks `v` `int`-keyed if it is a dict or set the expression at
+    /// `span` types so. Where generic code leaves the type open, the
+    /// table learns it from the first `int` stored.
+    fn tag(&self, v: &Value<'m>, span: Span) {
+        if let (Value::Dict(t) | Value::Set(t), true) = (v, self.int_keyed(span)) {
+            t.borrow_mut().int_keyed();
+        }
+    }
+
+    /// Whether the dict or set at `span` has `int` keys, so that a
+    /// `bool` stored in it becomes its int (grammar.md, Deviations).
+    fn int_keyed(&self, span: Span) -> bool {
+        match self.types.at(span) {
+            Some(Type::Dict(k, _) | Type::Set(k)) => **k == Type::Int,
+            _ => false,
+        }
+    }
+
     fn eval_all(&mut self, items: &'m [Expr]) -> Exec<'m, Vec<Value<'m>>> {
         items.iter().map(|e| self.eval(e)).collect()
     }
 
     /// `{k: v, ...}`: each key, then its value, left to right; a repeated
     /// key keeps its first place and takes the last value.
-    fn eval_dict(&mut self, items: &'m [(Expr, Expr)]) -> Exec<'m, Value<'m>> {
-        let mut dict = Table::default();
+    fn eval_dict(&mut self, items: &'m [(Expr, Expr)], span: Span) -> Exec<'m, Value<'m>> {
+        let mut dict = Table::keyed(self.int_keyed(span));
         for (k, v) in items {
             let key = self.eval(k)?;
             let value = self.eval(v)?;
@@ -587,8 +611,18 @@ impl<'m> Interp<'m, '_> {
                 None => evaluated.positional.push(v),
             }
         }
+        if let (Value::Method(m), ExprKind::Attr { value, .. }) = (&callee, &func.kind) {
+            if let Method::Table(_, on, _) = m.as_ref() {
+                self.tag(on, value.span);
+            }
+        }
         match callee {
             Value::Func(f) => self.call_func(f, evaluated),
+            Value::Builtin(Builtin::Set) => {
+                let set = builtins::call(Builtin::Set, evaluated, self.out)?;
+                self.tag(&set, span);
+                Ok(set)
+            }
             Value::Builtin(b) => builtins::call(b, evaluated, self.out),
             Value::Method(m) => methods::call(&m, evaluated),
             other => Err(rt_err(

@@ -1,7 +1,24 @@
-# A bool stored as a key of an int-keyed dict is the entry its int names; the first key stored stays.
-by_int = {1: "one"}
-by_int[True] = "true"
-print(by_int, by_int[1])
+# deviation: a bool stored as a key of an int-keyed dict or set is stored as its int; CPython keeps the first key object stored, so it prints True (docs/grammar.md#deviations-from-python)
+by_int: dict[int, str] = {True: "a"}
+by_int[1] = "b"
+print(by_int, by_int[1], by_int[True])
 fresh: dict[int, str] = {}
 fresh[True] = "t"
-print(fresh, fresh[1])
+print(fresh, list(fresh.keys()), 1 in fresh)
+s: set[int] = {True, 2}
+s.add(False)
+s.add(0)
+print(s, len(s))
+def new():
+    return {}
+def put(d, k):
+    d[k] = "p"
+made: dict[int, str] = new()
+made[True] = "m"
+put(made, False)
+print(made)
+def pair(k):
+    return {k: "x"}
+held = pair(5)
+held[True] = "h"
+print(held)

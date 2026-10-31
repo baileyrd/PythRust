@@ -14,7 +14,8 @@ pub(super) const CLASS_NOT_A_VALUE: &str = "exception classes can't be held in v
      name them where they are used, as in `except (ValueError, IndexError):`";
 
 /// How `checked` matches a part of a display against its slot: a dict
-/// key as a key (a `bool` fits an `int` key), anything else as a value.
+/// key or set element as a key (a `bool` fits an `int` key), anything
+/// else as a value.
 #[derive(Clone, Copy)]
 enum Slot {
     Key,
@@ -396,8 +397,16 @@ impl Checker {
         };
         self.expect(at, &container, receiver, needs)?;
         let item = self.checked(&arg.value, &elem)?;
-        let what = format!("{} value does not match the {}", past(name), noun(name));
-        self.expect(arg.value.span, &elem, &item, &what)?;
+        if name == "add" {
+            let need = Need::Key {
+                key: elem,
+                index: item,
+            };
+            self.need(need, arg.value.span);
+            return Ok(Type::None);
+        }
+        let what = "appended value does not match the list";
+        self.expect(arg.value.span, &elem, &item, what)?;
         Ok(Type::None)
     }
 
@@ -450,12 +459,14 @@ impl Checker {
             | (ExprKind::Dict(_) | ExprKind::Set(_), Type::Optional(inner)) => {
                 return self.checked(e, inner)
             }
-            (ExprKind::List(items), Type::List(elem)) | (ExprKind::Set(items), Type::Set(elem)) => {
-                items
-                    .iter()
-                    .map(|x| (x, (**elem).clone(), Slot::Element))
-                    .collect()
-            }
+            (ExprKind::List(items), Type::List(elem)) => items
+                .iter()
+                .map(|x| (x, (**elem).clone(), Slot::Element))
+                .collect(),
+            (ExprKind::Set(items), Type::Set(elem)) => items
+                .iter()
+                .map(|x| (x, (**elem).clone(), Slot::Key))
+                .collect(),
             (ExprKind::Dict(items), Type::Dict(key, value)) => items
                 .iter()
                 .flat_map(|(k, v)| {
@@ -591,22 +602,6 @@ fn method_arity(name: &str, args: &[Arg], min: usize, max: usize, span: Span) ->
     };
     let msg = format!("`{name}` takes {expected} but {} were given", args.len());
     Err(error(span, msg))
-}
-
-/// What `append` / `add` does, for messages.
-fn past(method: &str) -> &'static str {
-    match method {
-        "append" => "appended",
-        _ => "added",
-    }
-}
-
-/// The container `append` / `add` changes, for messages.
-fn noun(method: &str) -> &'static str {
-    match method {
-        "append" => "list",
-        _ => "set",
-    }
 }
 
 /// The parameter a positional argument binds to. `next` is `None` once a

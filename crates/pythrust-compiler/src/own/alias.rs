@@ -647,9 +647,10 @@ impl<'a> Body<'a> {
         let message = match (other, loops.first()) {
             (Some(a), _) => self.aliased(writer, *a),
             (None, Some(_)) => format!(
-                "tempered `{}` changes {} while a `for` loop over it is running; loop over a copy: `for ... in list(...)`",
+                "tempered `{}` changes {} while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list({})`",
                 self.func.name,
-                self.subject(writer)
+                self.subject(writer),
+                self.writer_name(writer).unwrap_or("...")
             ),
             (None, None) => return Ok(()),
         };
@@ -659,12 +660,18 @@ impl<'a> Body<'a> {
     /// What `writer` changes, for a message: `` `b` ``, or a list.
     fn subject(&self, writer: Writer) -> String {
         match writer {
-            Writer::Local(w) => self
-                .func
-                .names
-                .get(&w)
+            Writer::Local(_) => self
+                .writer_name(writer)
                 .map_or("a list".into(), |b| format!("`{b}`")),
             Writer::Callee(f, _) => format!("a list through `{}`", self.program.funcs[f.0].name),
+        }
+    }
+
+    /// The variable `writer` changes through, if it is one.
+    fn writer_name(&self, writer: Writer) -> Option<&str> {
+        match writer {
+            Writer::Local(w) => self.func.names.get(&w).map(String::as_str),
+            Writer::Callee(..) => None,
         }
     }
 

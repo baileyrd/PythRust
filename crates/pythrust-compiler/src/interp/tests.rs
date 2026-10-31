@@ -4,6 +4,7 @@
 use super::run;
 use crate::ast::*;
 use crate::diag::{DiagKind, Diagnostic};
+use crate::infer::Types;
 use crate::span::Span;
 
 // ---- AST builders -------------------------------------------------------
@@ -259,7 +260,7 @@ fn module(body: Vec<Stmt>) -> Module {
 /// Runs and returns stdout and the error, if any.
 fn exec(body: Vec<Stmt>) -> (String, Option<Diagnostic>) {
     let mut out = Vec::new();
-    let result = run(&module(body), &mut out);
+    let result = run(&module(body), &Types::default(), &mut out);
     (String::from_utf8(out).expect("utf-8 output"), result.err())
 }
 
@@ -385,7 +386,12 @@ fn write_failure_is_a_runtime_error() {
             Ok(())
         }
     }
-    let err = run(&module(vec![print(vec![int(1)])]), &mut Broken).expect_err("write fails");
+    let err = run(
+        &module(vec![print(vec![int(1)])]),
+        &Types::default(),
+        &mut Broken,
+    )
+    .expect_err("write fails");
     assert!(err.message.contains("OSError: cannot write output: closed"));
 }
 
@@ -1177,7 +1183,7 @@ fn exec_src(src: &str) -> (String, Option<Diagnostic>) {
     let tokens = crate::lexer::lex(src).expect("lexes");
     let parsed = crate::parser::parse(&tokens).expect("parses");
     let mut out = Vec::new();
-    let result = run(&parsed, &mut out);
+    let result = run(&parsed, &Types::default(), &mut out);
     (String::from_utf8(out).expect("utf-8 output"), result.err())
 }
 
@@ -1419,7 +1425,7 @@ fn run_src(src: &str) -> (String, Option<String>) {
     let tokens = crate::lexer::lex(src).expect("lexes");
     let parsed = crate::parser::parse(&tokens).expect("parses");
     let mut out = Vec::new();
-    let result = run(&parsed, &mut out);
+    let result = run(&parsed, &Types::default(), &mut out);
     let out = String::from_utf8(out).expect("utf-8 output");
     (out, result.err().map(|d| d.message))
 }

@@ -45,7 +45,7 @@ impl FnBuilder<'_, '_> {
             let (Some(kop), Some(vop)) = (pair.first(), pair.get(1)) else {
                 return Err(internal(span, "a dict display of odd length"));
             };
-            slots.push(self.stored_key(*kop, key, k.span)?);
+            slots.push(self.probe(*kop, key, k.span)?);
             slots.push(self.expect(*vop, value, v.span)?);
         }
         Ok(self.temp(ty, Rvalue::NewSeq(slots), span))
@@ -62,7 +62,7 @@ impl FnBuilder<'_, '_> {
         let elem = self.elem_of(ty, span)?;
         let mut slots = Vec::new();
         for (op, item) in ops.into_iter().zip(items) {
-            slots.push(self.expect(op, elem, item.span)?);
+            slots.push(self.probe(op, elem, item.span)?);
         }
         Ok(self.temp(ty, Rvalue::NewSeq(slots), span))
     }
@@ -102,23 +102,14 @@ impl FnBuilder<'_, '_> {
             .ok_or_else(|| internal(span, "a set or view of no item type"))
     }
 
-    /// `k` as a key of type `key` to look up: a `bool` meets an `int`
-    /// key as the int it is, as in Python.
+    /// `k` as a key of type `key`, to look up or store: a `bool` meets
+    /// an `int` key as the int it is, and is stored as it (grammar.md,
+    /// Deviations).
     fn probe(&mut self, k: Operand, key: Ty, span: Span) -> Result<Operand> {
         let k = match (self.ty(k), key) {
             (Ty::Bool, Ty::Int) => self.as_int(k, span),
             _ => k,
         };
-        self.expect(k, key, span)
-    }
-
-    /// `k` as a key of type `key` to store. A native int key cannot
-    /// remember that it was stored as `True`, which a dict's `repr` and
-    /// its keys show in Python, so storing a `bool` there is refused.
-    fn stored_key(&mut self, k: Operand, key: Ty, span: Span) -> Result<Operand> {
-        if (self.ty(k), key) == (Ty::Bool, Ty::Int) {
-            return Err(unsupported(span, "a bool key stored in an int-keyed dict"));
-        }
         self.expect(k, key, span)
     }
 
@@ -150,7 +141,7 @@ impl FnBuilder<'_, '_> {
         span: Span,
     ) -> Result<()> {
         let (key, value) = self.key_value(self.ty(d), span)?;
-        let index = self.stored_key(k, key, span)?;
+        let index = self.probe(k, key, span)?;
         let value = self.expect(v, value, span)?;
         self.emit(Inst::SetItem {
             list: d,
@@ -177,7 +168,7 @@ impl FnBuilder<'_, '_> {
             (Ty::Set(_), "add", [arg]) => {
                 let v = self.expr(&arg.value)?;
                 let elem = self.elem_of(ty, span)?;
-                let value = self.expect(v, elem, arg.span)?;
+                let value = self.probe(v, elem, arg.span)?;
                 self.emit(Inst::Append {
                     list: t,
                     value,

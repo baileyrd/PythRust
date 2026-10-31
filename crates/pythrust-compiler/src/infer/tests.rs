@@ -2046,11 +2046,11 @@ fn dict_and_set_misuse_is_an_error() {
         ("s = {1, \"a\"}\n", "set elements must share one type"),
         (
             "d = {1: 2}\nd[\"a\"] = 3\n",
-            "dict key: expected int, found str",
+            "dict key or set element: expected int, found str",
         ),
         (
             "d = {1: 2}\nprint(d[\"a\"])\n",
-            "dict key: expected int, found str",
+            "dict key or set element: expected int, found str",
         ),
         (
             "d = {1: 2}\nd[1] = \"x\"\n",
@@ -2063,7 +2063,7 @@ fn dict_and_set_misuse_is_an_error() {
         ("s = [1]\ns.keys()\n", "`keys` needs a dict"),
         (
             "s = {1}\ns.add(\"a\")\n",
-            "added value does not match the set",
+            "dict key or set element: expected int, found str",
         ),
         (
             "d = {1: 2}\nd.get()\n",
@@ -2128,7 +2128,7 @@ fn dict_and_set_misuse_is_an_error() {
         ),
         (
             "d = {1: \"a\"}\nprint(d.get(\"x\"))\n",
-            "dict key: expected int, found str",
+            "dict key or set element: expected int, found str",
         ),
     ];
     for (src, want) in cases {
@@ -2199,6 +2199,21 @@ fn a_bool_key_fits_an_int_key_in_displays_and_generic_helpers() {
     assert!(src_err(typed).contains("dict key"), "{}", src_err(typed));
     let wrong = "d: dict[str, int] = {True: 7}\n";
     assert!(src_err(wrong).contains("dict key"), "{}", src_err(wrong));
+    // A set element is a key too (Nano, 2026-10-31); an int never fits a
+    // bool key.
+    let set = "s: set[int] = {True, 2}\ns.add(False)\nt = {1}\nt.add(True)\nprint(s, t)\n";
+    assert_eq!(src_err(set), "no error");
+    for narrow in [
+        "d = {True: 1}\nd[1] = 2\n",
+        "s = {True}\ns.add(1)\n",
+        "s: set[bool] = {1}\n",
+    ] {
+        assert!(
+            src_err(narrow).contains("expected bool, found int"),
+            "{narrow}: {}",
+            src_err(narrow)
+        );
+    }
 }
 
 #[test]

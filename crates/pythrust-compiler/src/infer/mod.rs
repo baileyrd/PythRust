@@ -38,8 +38,9 @@ use solve::{Constraint, Need};
 use subst::Subst;
 pub use ty::{FuncType, ParamType, Type, TypeVar, View};
 
-/// The typed view of a module: what the backend consumes.
-#[derive(Debug, Clone, PartialEq)]
+/// The typed view of a module: what the backend consumes. The default
+/// knows no types, for running a module built by hand.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Types {
     nodes: HashMap<Span, Type>,
     funcs: HashMap<String, FuncType>,
