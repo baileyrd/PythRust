@@ -264,6 +264,7 @@ impl B {
 fn module(body: Vec<Stmt>) -> Module {
     Module {
         body,
+        stubs: Vec::new(),
         span: Span { start: 0, end: 0 },
     }
 }
@@ -2313,4 +2314,78 @@ fn files_read_bytes_that_size_and_compare() {
         let got = src_err(src);
         assert!(got.contains(want), "{src:?}: {got}");
     }
+}
+
+// ---- Rust binding stubs (M6b) ----------------------------------------------
+
+const FASTFS: &str = "\
+temper def file_xxh3(path: str) -> str raises OSError: ...
+temper def add(a: int, b: int) -> int: ...
+temper def any_error() -> None raises Exception: ...
+";
+
+/// Infers `src` with the binding `fastfs` of [`FASTFS`].
+fn with_fastfs(src: &str) -> Result<Types, String> {
+    let binding = crate::parser::test_binding("fastfs", FASTFS);
+    let parsed = crate::lexer::lex(src).and_then(|t| crate::parser::parse_with(&t, &[binding]));
+    let module = parsed.map_err(|e| format!("does not parse: {}", e.message))?;
+    infer(&module).map_err(|e| e.message)
+}
+
+#[test]
+fn calls_check_against_the_stub() {
+    let src = "import fastfs\nh = fastfs.file_xxh3(\"p\")\nn = fastfs.add(b=2, a=1)\n";
+    let types = with_fastfs(src).unwrap_or_else(|e| panic!("{e}"));
+    let sig = types
+        .func("fastfs.add")
+        .map(|f| (f.params.len(), f.ret.clone()));
+    assert_eq!(sig, Some((2, Type::Int)));
+    assert_eq!(
+        types.func("fastfs.file_xxh3").map(|f| f.ret.clone()),
+        Some(Type::Str)
+    );
+    let err = |src: &str| with_fastfs(src).err().unwrap_or_default();
+    assert_eq!(
+        err("import fastfs\nfastfs.add(1, \"a\")\n"),
+        "argument `b` of `fastfs.add`: expected int, found str"
+    );
+    assert_eq!(
+        err("import fastfs\nfastfs.add(1)\n"),
+        "`fastfs.add` is missing argument `b`"
+    );
+    assert!(err("import fastfs\nx: str = fastfs.add(1, 2)\n").contains("expected str, found int"));
+}
+
+#[test]
+fn a_stub_raises_what_it_declares() {
+    let types = with_fastfs("import fastfs\nfastfs.add(1, 2)\n").unwrap_or_else(|e| panic!("{e}"));
+    let escapes = |n: &str| {
+        types
+            .raises(n)
+            .map(|r| r.escapes().map(|e| e.name()).collect::<Vec<_>>())
+    };
+    assert_eq!(escapes("fastfs.file_xxh3"), Some(vec!["OSError"]));
+    assert_eq!(escapes("fastfs.add"), Some(vec![]));
+    assert_eq!(escapes("fastfs.any_error"), Some(vec!["Exception"]));
+    // A tempered caller must declare what a stub raises, and need not
+    // declare what one does not.
+    let quiet = "import fastfs\ntemper def f() -> int:\n    return fastfs.add(1, 2)\n";
+    assert!(with_fastfs(quiet).is_ok());
+    let loud = "import fastfs\ntemper def f() -> str:\n    return fastfs.file_xxh3(\"p\")\n";
+    let err = with_fastfs(loud).err().unwrap_or_default();
+    assert!(
+        err.contains("must declare it; write `-> str raises OSError`"),
+        "{err}"
+    );
+    let caught = "import fastfs\ntemper def f() -> str:\n    try:\n        return fastfs.file_xxh3(\"p\")\n    except OSError:\n        return \"\"\n";
+    assert!(with_fastfs(caught).is_ok());
+    // A loose caller's inferred set includes it.
+    let loose = with_fastfs("import fastfs\ndef g():\n    fastfs.any_error()\n");
+    let set = loose.map(|t| t.raises("g").map(|r| r.escapes().count()));
+    assert_eq!(set, Ok(Some(1)));
+    // A stub's `raises` cannot name a redefined class.
+    let shadow = with_fastfs("import fastfs\nOSError = 1\n")
+        .err()
+        .unwrap_or_default();
+    assert!(shadow.contains("`OSError` is redefined"), "{shadow}");
 }

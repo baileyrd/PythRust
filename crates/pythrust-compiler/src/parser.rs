@@ -11,8 +11,8 @@
 //! keyword argument.
 
 use crate::ast::{
-    Arg, BinOp, Block, Branch, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp, Mode,
-    Module, Param, ParamMode, Stmt, StmtKind, Target, TargetKind, TypeExpr, UnaryOp,
+    Arg, BinOp, Binding, Block, Branch, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp,
+    Mode, Module, Param, ParamMode, Stmt, StmtKind, StubDef, Target, TargetKind, TypeExpr, UnaryOp,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
@@ -25,7 +25,18 @@ const MAX_DEPTH: usize = 100;
 
 /// Parses a token stream that ends in exactly one `EndMarker`.
 pub fn parse(tokens: &[Token]) -> Result<Module> {
-    Parser::new(tokens)?.module()
+    parse_with(tokens, &[])
+}
+
+/// [`parse`], where `import` may also name one of `bindings` (M6b).
+pub fn parse_with(tokens: &[Token], bindings: &[Binding]) -> Result<Module> {
+    Parser::new(tokens, bindings)?.module()
+}
+
+/// Parses the stub of the Rust binding `name`: only `temper def`
+/// signatures whose bodies are `...` (M6b).
+pub fn parse_stub(tokens: &[Token], name: &str) -> Result<Binding> {
+    Parser::new(tokens, &[])?.stub(name)
 }
 
 type Rule<'a, T> = fn(&mut Parser<'a>) -> Result<T>;
@@ -42,10 +53,15 @@ struct Parser<'a> {
     in_loop: bool,
     /// Modules imported so far.
     modules: Vec<&'static ModuleDef>,
+    /// The Rust bindings `import` may name, and those it has.
+    bindings: &'a [Binding],
+    imported_bindings: Vec<&'a Binding>,
+    /// The functions of the imported bindings.
+    stubs: Vec<StubDef>,
 }
 
 impl<'a> Parser<'a> {
-    fn new(tokens: &'a [Token]) -> Result<Self> {
+    fn new(tokens: &'a [Token], bindings: &'a [Binding]) -> Result<Self> {
         let first_end = tokens.iter().position(|t| t.kind == TokenKind::EndMarker);
         let eof = match (first_end, tokens.last()) {
             (Some(i), Some(eof)) if i + 1 == tokens.len() => eof,
@@ -63,6 +79,9 @@ impl<'a> Parser<'a> {
             in_func: false,
             in_loop: false,
             modules: Vec::new(),
+            bindings,
+            imported_bindings: Vec::new(),
+            stubs: Vec::new(),
         })
     }
 
@@ -120,6 +139,9 @@ impl<'a> Parser<'a> {
 
     fn unexpected(&self, expected: &str) -> Diagnostic {
         let tok = self.tok(0);
+        if tok.kind == TokenKind::Ellipsis {
+            return error(tok.span, "`...` is for stub bodies only; use pass");
+        }
         if tok.kind == TokenKind::As {
             return error(tok.span, "'as' is reserved outside `except Name as e`");
         }
@@ -178,6 +200,7 @@ impl<'a> Parser<'a> {
         }
         Ok(Module {
             body,
+            stubs: std::mem::take(&mut self.stubs),
             span: start.merge(self.eof.span),
         })
     }
@@ -875,13 +898,19 @@ impl<'a> Parser<'a> {
     fn atom(&mut self) -> Result<Expr> {
         let tok = self.tok(0);
         let kind = match &tok.kind {
-            TokenKind::Name(name) => match self.imported(name) {
-                Some(module) => {
+            TokenKind::Name(name) => {
+                if let Some(binding) = self.imported_binding(name) {
                     self.bump();
-                    return self.module_name(module, tok.span);
+                    return self.binding_func(binding, tok.span);
                 }
-                None => ExprKind::Name(name.clone()),
-            },
+                match self.imported(name) {
+                    Some(module) => {
+                        self.bump();
+                        return self.module_name(module, tok.span);
+                    }
+                    None => ExprKind::Name(name.clone()),
+                }
+            }
             TokenKind::Int(value) => ExprKind::Int(int_literal(*value, tok.span)?),
             TokenKind::Float(value) => ExprKind::Float(*value),
             TokenKind::Str(value) => ExprKind::Str(value.clone()),
@@ -1271,11 +1300,28 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Colon => ":",
         TokenKind::Dot => ".",
         TokenKind::Arrow => "->",
+        TokenKind::Ellipsis => "...",
     };
     format!("`{text}`")
 }
 
 mod imports;
+mod stubs;
+
+/// The binding `name` from stub source `src`, its spans moved past any
+/// test program's, as `pythrust` places each stub's.
+#[cfg(test)]
+pub(crate) fn test_binding(name: &str, src: &str) -> Binding {
+    const BASE: usize = 1 << 20;
+    let mut tokens = crate::lexer::lex(src).unwrap_or_else(|d| panic!("{d}"));
+    for t in &mut tokens {
+        t.span = Span {
+            start: t.span.start + BASE,
+            end: t.span.end + BASE,
+        };
+    }
+    parse_stub(&tokens, name).unwrap_or_else(|d| panic!("{d}"))
+}
 
 #[cfg(test)]
 mod tests;

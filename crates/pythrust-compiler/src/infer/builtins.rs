@@ -20,7 +20,9 @@ pub(super) fn exception_names() -> String {
     names.join(", ")
 }
 
-pub(super) fn is_builtin(name: &str) -> bool {
+/// Whether `name` is a builtin function, exception class or module
+/// function, when nothing shadows it.
+pub fn is_builtin(name: &str) -> bool {
     let function = matches!(
         name,
         "print" | "len" | "list" | "set" | "sorted" | "range" | "str" | "int" | "float" | "bool"

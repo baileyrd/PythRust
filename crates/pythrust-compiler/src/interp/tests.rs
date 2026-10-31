@@ -252,7 +252,11 @@ fn def(n: &str, params: Vec<(&str, Option<Expr>)>, body: Vec<Stmt>) -> Stmt {
 }
 
 fn module(body: Vec<Stmt>) -> Module {
-    Module { body, span: Z }
+    Module {
+        body,
+        stubs: Vec::new(),
+        span: Z,
+    }
 }
 
 // ---- runners ------------------------------------------------------------
@@ -1589,4 +1593,19 @@ fn sys_argv_is_the_arguments_given_to_run() {
     let mut out = Vec::new();
     run(&parsed, &types, &argv, &mut out).expect("runs");
     assert_eq!(String::from_utf8(out).unwrap(), "['f.pyr', 'x y']\n3\n");
+}
+
+/// The interpreter cannot call Rust: a module importing a binding is
+/// refused before anything runs (M6b).
+#[test]
+fn a_module_with_rust_stubs_runs_nothing() {
+    let binding = crate::parser::test_binding("fastfs", "temper def f() -> int: ...\n");
+    let tokens =
+        crate::lexer::lex("import fastfs\nprint(fastfs.f())\n").unwrap_or_else(|d| panic!("{d}"));
+    let module = crate::parser::parse_with(&tokens, &[binding]).unwrap_or_else(|d| panic!("{d}"));
+    let mut out = Vec::new();
+    let err = run(&module, &Types::default(), &[], &mut out).map_err(|d| (d.kind, d.message));
+    let gap = crate::stdlib::RUST_RUN_GAP.to_string();
+    assert_eq!(err, Err((DiagKind::Runtime, gap)));
+    assert!(out.is_empty());
 }

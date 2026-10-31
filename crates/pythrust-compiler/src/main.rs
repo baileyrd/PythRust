@@ -9,17 +9,22 @@
 
 #![forbid(unsafe_code)]
 
+mod bindings;
+
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use pythrust_compiler::ast::Module;
+use bindings::Sources;
+use pythrust_compiler::ast::{Binding, Module};
 use pythrust_compiler::infer::Types;
 use pythrust_compiler::{
-    codegen, infer, interp, lexer, lower, own, parser, rc, DiagKind, Diagnostic, Span, Warning,
+    codegen, infer, interp, lexer, lower, own, parser, rc, stdlib, DiagKind, Diagnostic, Span,
+    Warning,
 };
 
-const USAGE: &str = "usage: pythrust <check|build> <file> | pythrust run <file> [arg ...]";
+const USAGE: &str = "usage: pythrust <check|build> [--rust name=path ...] <file> \
+                     | pythrust run [--rust name=path ...] <file> [arg ...]";
 
 /// The runtime library every native program links against. Found next
 /// to this executable, where `cargo build` puts it, unless overridden.
@@ -91,6 +96,17 @@ enum Command {
     Build,
 }
 
+/// A parsed command line.
+#[derive(Debug, PartialEq, Eq)]
+struct Invocation<'a> {
+    command: Command,
+    /// Each `--rust name=path` (M6b, interim until M6d), in order.
+    rust: Vec<(&'a str, &'a str)>,
+    path: &'a str,
+    /// The program's arguments, after the file: `run` only.
+    rest: &'a [String],
+}
+
 /// A 1-based source position. `col` counts chars, not bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LineCol {
@@ -104,13 +120,14 @@ fn main() -> ExitCode {
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    let (command, path, rest) = match parse_args(&args) {
+    let inv = match parse_args(&args) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("{message}\n{USAGE}");
             return ExitCode::from(2);
         }
     };
+    let path = inv.path;
     let src = match std::fs::read_to_string(path) {
         Ok(src) => src,
         Err(err) => {
@@ -118,31 +135,43 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (module, types) = match front(&src) {
+    let mut sources = Sources::new(path, &src);
+    let rust = match bindings::load(&inv.rust, &mut sources) {
+        Ok(rust) => rust,
+        Err(message) => {
+            eprint!("{message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (module, types) = match front(&src, &rust) {
         Ok(checked) => checked,
         Err(diag) => {
-            eprint!("{}", render(path, &src, &diag));
+            eprint!("{}", sources.render(&diag));
             return ExitCode::FAILURE;
         }
     };
     for w in types.warnings() {
-        eprint!("{}", render_warning(path, &src, w));
+        eprint!("{}", sources.render_warning(w));
     }
-    match command {
+    match inv.command {
         Command::Check => ExitCode::SUCCESS,
-        Command::Build => build(path, &src, &module, &types),
+        Command::Build => build(&sources, &module, &types),
+        Command::Run if !module.stubs.is_empty() => {
+            eprintln!("pythrust: {}", stdlib::RUST_RUN_GAP);
+            ExitCode::FAILURE
+        }
         Command::Run => {
             let argv: Vec<String> = std::iter::once(path.to_string())
-                .chain(rest.iter().cloned())
+                .chain(inv.rest.iter().cloned())
                 .collect();
-            run(path, &src, &module, &types, &argv)
+            run(&sources, &module, &types, &argv)
         }
     }
 }
 
 /// `pythrust run`: interprets the checked `module` with `argv` as
 /// `sys.argv`.
-fn run(path: &str, src: &str, module: &Module, types: &Types, argv: &[String]) -> ExitCode {
+fn run(sources: &Sources, module: &Module, types: &Types, argv: &[String]) -> ExitCode {
     // Buffered for speed; flushed before any diagnostic so output already
     // printed precedes the error, as in CPython.
     let mut out = BufWriter::new(std::io::stdout());
@@ -153,17 +182,19 @@ fn run(path: &str, src: &str, module: &Module, types: &Types, argv: &[String]) -
             // The diagnostic is the error worth reporting; a flush failure
             // here would only repeat a broken stdout.
             let _ = out.flush();
-            eprint!("{}", render(path, src, &diag));
+            eprint!("{}", sources.render(&diag));
             ExitCode::FAILURE
         }
     }
 }
 
-/// Parses `<check|build> <file>` or `run <file> [arg ...]`: the command,
-/// the file, and the program's arguments after it, as `python` takes them.
-fn parse_args(args: &[String]) -> Result<(Command, &str, &[String]), String> {
-    let [command, path, rest @ ..] = args else {
-        return Err(format!("expected at least 2 arguments, got {}", args.len()));
+/// Parses `<check|build> [--rust name=path ...] <file>` or
+/// `run [--rust name=path ...] <file> [arg ...]`: the command, the
+/// bindings, the file, and the program's arguments after it, as
+/// `python` takes them.
+fn parse_args(args: &[String]) -> Result<Invocation<'_>, String> {
+    let [command, more @ ..] = args else {
+        return Err("expected a command".to_string());
     };
     let command = match command.as_str() {
         "run" => Command::Run,
@@ -171,17 +202,38 @@ fn parse_args(args: &[String]) -> Result<(Command, &str, &[String]), String> {
         "build" => Command::Build,
         other => return Err(format!("unknown command `{other}`")),
     };
-    if command != Command::Run && !rest.is_empty() {
-        return Err(format!("expected 2 arguments, got {}", args.len()));
+    let mut rust = Vec::new();
+    let mut more = more;
+    while let [flag, value, after @ ..] = more {
+        if flag != "--rust" {
+            break;
+        }
+        rust.push(bindings::split(value)?);
+        more = after;
     }
-    Ok((command, path.as_str(), rest))
+    let [path, rest @ ..] = more else {
+        return Err("expected a file".to_string());
+    };
+    if path == "--rust" {
+        return Err("`--rust` takes `name=path`".to_string());
+    }
+    if command != Command::Run && !rest.is_empty() {
+        return Err(format!("expected one file, got {}", rest.len() + 1));
+    }
+    Ok(Invocation {
+        command,
+        rust,
+        path: path.as_str(),
+        rest,
+    })
 }
 
 /// The checks `run`, `check` and `build` share: lex, parse, infer, and
 /// check ownership over every function. All finish before anything runs.
-fn front(src: &str) -> pythrust_compiler::Result<(Module, Types)> {
+/// `import` may name one of `rust`.
+fn front(src: &str, rust: &[Binding]) -> pythrust_compiler::Result<(Module, Types)> {
     let tokens = lexer::lex(src)?;
-    let module = parser::parse(&tokens)?;
+    let module = parser::parse_with(&tokens, rust)?;
     let types = infer::infer(&module)?;
     own::check(&module, &own::analyze(&module, &types))?;
     Ok((module, types))
@@ -198,10 +250,10 @@ fn flush(out: &mut impl Write) -> pythrust_compiler::Result<()> {
 
 /// `pythrust build`: compiles the checked `module` and links it,
 /// reporting any failure.
-fn build(path: &str, src: &str, module: &Module, types: &Types) -> ExitCode {
-    let built = compile(path, src, module, types)
-        .map_err(|diag| render(path, src, &diag))
-        .and_then(|object| link(path, &object));
+fn build(sources: &Sources, module: &Module, types: &Types) -> ExitCode {
+    let built = compile(sources, module, types)
+        .map_err(|diag| sources.render(&diag))
+        .and_then(|object| link(sources.path(), &object));
     match built {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -211,17 +263,16 @@ fn build(path: &str, src: &str, module: &Module, types: &Types) -> ExitCode {
     }
 }
 
-/// Compiles the checked `module` of `src` to an object file, lowering
-/// only what runs. Runtime errors in it are rendered now, against `path`,
-/// so the binary prints what `run` would.
+/// Compiles the checked `module` to an object file, lowering only what
+/// runs. Runtime errors in it are rendered now, against their source
+/// file, so the binary prints what `run` would.
 fn compile(
-    path: &str,
-    src: &str,
+    sources: &Sources,
     module: &Module,
     types: &Types,
 ) -> pythrust_compiler::Result<Vec<u8>> {
     let program = rc::elide(lower::lower(module, types)?);
-    codegen::emit(&program, &|diag| render(path, src, diag))
+    codegen::emit(&program, &|diag| sources.render(diag))
 }
 
 /// Links `object` with the runtime into the executable for `path`.
@@ -495,22 +546,62 @@ mod tests {
         }
     }
 
+    fn invocation<'a>(command: Command, path: &'a str, rest: &'a [String]) -> Invocation<'a> {
+        Invocation {
+            command,
+            rust: Vec::new(),
+            path,
+            rest,
+        }
+    }
+
     #[test]
     fn parse_args_accepts_each_command() {
         let run = args(&["run", "a.pyr"]);
         let check = args(&["check", "b.pyr"]);
         let none: &[String] = &[];
-        assert_eq!(parse_args(&run), Ok((Command::Run, "a.pyr", none)));
-        assert_eq!(parse_args(&check), Ok((Command::Check, "b.pyr", none)));
+        assert_eq!(
+            parse_args(&run),
+            Ok(invocation(Command::Run, "a.pyr", none))
+        );
+        assert_eq!(
+            parse_args(&check),
+            Ok(invocation(Command::Check, "b.pyr", none))
+        );
         let build = args(&["build", "c.pyr"]);
-        assert_eq!(parse_args(&build), Ok((Command::Build, "c.pyr", none)));
+        assert_eq!(
+            parse_args(&build),
+            Ok(invocation(Command::Build, "c.pyr", none))
+        );
     }
 
     #[test]
     fn parse_args_passes_what_follows_the_file_to_run() {
         let run = args(&["run", "a.pyr", "x", "--y"]);
         let rest = args(&["x", "--y"]);
-        assert_eq!(parse_args(&run), Ok((Command::Run, "a.pyr", &rest[..])));
+        assert_eq!(
+            parse_args(&run),
+            Ok(invocation(Command::Run, "a.pyr", &rest))
+        );
+    }
+
+    #[test]
+    fn parse_args_takes_rust_bindings_before_the_file() {
+        let given = args(&["check", "--rust", "a=x", "--rust", "b=../y z", "f.pyr"]);
+        let none: &[String] = &[];
+        let want = Invocation {
+            rust: vec![("a", "x"), ("b", "../y z")],
+            ..invocation(Command::Check, "f.pyr", none)
+        };
+        assert_eq!(parse_args(&given), Ok(want));
+        let run = args(&["run", "--rust", "a=x", "f.pyr", "--rust", "b=y"]);
+        let rest = args(&["--rust", "b=y"]);
+        let got = parse_args(&run).map(|i| (i.rust, i.rest.to_vec()));
+        assert_eq!(got, Ok((vec![("a", "x")], rest)));
+        assert!(parse_args(&args(&["check", "--rust", "f.pyr"])).is_err());
+        assert!(parse_args(&args(&["check", "--rust"])).is_err());
+        assert!(parse_args(&args(&["check", "--rust", "=x", "f.pyr"])).is_err());
+        assert!(parse_args(&args(&["check", "f.pyr", "--rust", "a=x"])).is_err());
     }
 
     #[test]
@@ -526,7 +617,7 @@ mod tests {
     /// then the program for `run`.
     fn exec(command: Command, src: &str) -> (pythrust_compiler::Result<()>, String) {
         let mut out = Vec::new();
-        let result = front(src).and_then(|(module, types)| match command {
+        let result = front(src, &[]).and_then(|(module, types)| match command {
             Command::Run => interp::run(&module, &types, &["f.pyr".to_string()], &mut out),
             Command::Check | Command::Build => Ok(()),
         });
@@ -534,8 +625,8 @@ mod tests {
     }
 
     fn compiled(src: &str) -> pythrust_compiler::Result<Vec<u8>> {
-        let (module, types) = front(src)?;
-        compile("f.pyr", src, &module, &types)
+        let (module, types) = front(src, &[])?;
+        compile(&Sources::new("f.pyr", src), &module, &types)
     }
 
     #[test]
@@ -583,7 +674,7 @@ mod tests {
     #[test]
     fn checks_pass_with_warnings_and_render_them_at_the_clause() {
         let src = "def f(n: int) -> int raises Exception:\n    return n\n";
-        let (_, types) = front(src).unwrap();
+        let (_, types) = front(src, &[]).unwrap();
         let [w] = types.warnings() else {
             panic!("{:?}", types.warnings());
         };

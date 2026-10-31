@@ -132,6 +132,7 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::AddOverflows(..)
         | Rvalue::StrLit(_)
         | Rvalue::Std(..)
+        | Rvalue::Rust(..)
         | Rvalue::Concat(..)
         | Rvalue::Repeat(..)
         | Rvalue::Index(..)
@@ -548,7 +549,10 @@ fn operands(value: &Rvalue) -> Vec<Operand> {
         | Rvalue::Float(_, a, b)
         | Rvalue::IntPow(a, b) => vec![*a, *b],
         Rvalue::Contains { hay, needle } => vec![*hay, *needle],
-        Rvalue::Call(_, args) | Rvalue::NewSeq(args) | Rvalue::Std(_, args) => args.clone(),
+        Rvalue::Call(_, args)
+        | Rvalue::NewSeq(args)
+        | Rvalue::Std(_, args)
+        | Rvalue::Rust(_, args) => args.clone(),
         Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
         Rvalue::StrLit(_)
         | Rvalue::Global(_)

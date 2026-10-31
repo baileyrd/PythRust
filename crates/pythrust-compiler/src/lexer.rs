@@ -612,6 +612,7 @@ fn operator(rest: &[u8]) -> Option<(TokenKind, usize)> {
         [b'/', b'=', ..] => (SlashEq, 2),
         [b'%', b'=', ..] => (PercentEq, 2),
         [b'-', b'>', ..] => (Arrow, 2),
+        [b'.', b'.', b'.', ..] => (Ellipsis, 3),
         [b'+', ..] => (Plus, 1),
         [b'-', ..] => (Minus, 1),
         [b'*', ..] => (Star, 1),
@@ -1091,6 +1092,13 @@ mod tests {
         assert_err("1_.5\n", 0, 2, "between digits");
         assert_err("1._5\n", 0, 2, "invalid number");
         assert_err("1.5j\n", 0, 3, "invalid number");
+    }
+
+    #[test]
+    fn three_dots_are_one_ellipsis() {
+        assert_eq!(line("..."), vec![Ellipsis]);
+        assert_eq!(line("...."), vec![Ellipsis, Dot]);
+        assert_eq!(line("a.b"), vec![name("a"), Dot, name("b")]);
     }
 
     #[test]

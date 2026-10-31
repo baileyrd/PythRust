@@ -906,3 +906,52 @@ fn a_parameter_a_handler_rebinds_is_checked_after_it() {
     // Both reads: a name a handler unbinds is never assumed bound.
     assert_eq!(f.into_iter().flatten().filter(|b| unbound(b)).count(), 2);
 }
+
+// ---- Rust binding stubs (M6b) ----------------------------------------------
+
+const FASTFS: &str = "\
+temper def file_xxh3(path: str) -> str raises OSError: ...
+temper def add(a: int, b: int) -> int: ...
+";
+
+fn with_fastfs(src: &str) -> (crate::ast::Module, crate::infer::Types) {
+    let binding = parser::test_binding("fastfs", FASTFS);
+    let tokens = lexer::lex(src).unwrap_or_else(|d| panic!("{d}"));
+    let module = parser::parse_with(&tokens, &[binding]).unwrap_or_else(|d| panic!("{d}"));
+    let types = infer::infer(&module).unwrap_or_else(|d| panic!("{d}"));
+    (module, types)
+}
+
+#[test]
+fn a_stub_call_is_a_rust_rvalue_tested_only_when_it_raises() {
+    let src = "import fastfs\nn = fastfs.add(b=2, a=1)\nh = fastfs.file_xxh3(\"p\")\n";
+    let (module, types) = with_fastfs(src);
+    let p = super::lower(&module, &types).unwrap_or_else(|d| panic!("{d}"));
+    let add = |r: &Rvalue| {
+        matches!(r, Rvalue::Rust(n, args)
+            if n == "fastfs.add" && args[..] == [Operand::Int(1), Operand::Int(2)])
+    };
+    assert_eq!(assigns(&p, add), 1);
+    let xxh3 = |r: &Rvalue| matches!(r, Rvalue::Rust(n, args) if n == "fastfs.file_xxh3" && args.len() == 1);
+    assert_eq!(assigns(&p, xxh3), 1);
+    // Only `file_xxh3` says `raises`, so only it is followed by the test.
+    assert_eq!(assigns(&p, |r| matches!(r, Rvalue::Raised)), 1);
+}
+
+#[test]
+fn ownership_stays_precise_around_stub_calls() {
+    let src = "import fastfs\ntemper def f(mut xs: list[int]) -> None:\n    xs.append(fastfs.add(1, 2))\n";
+    let (module, types) = with_fastfs(src);
+    let a = crate::own::analyze(&module, &types);
+    assert_eq!(a.precision, crate::own::Precision::Precise);
+    assert_eq!(crate::own::check(&module, &a), Ok(()));
+    let loose =
+        "import fastfs\ntemper def f(xs: list[int]) -> None:\n    xs.append(fastfs.add(1, 2))\n";
+    let (module, types) = with_fastfs(loose);
+    let a = crate::own::analyze(&module, &types);
+    let err = crate::own::check(&module, &a)
+        .err()
+        .map(|d| d.message)
+        .unwrap_or_default();
+    assert!(err.contains("write `mut xs`"), "{err}");
+}

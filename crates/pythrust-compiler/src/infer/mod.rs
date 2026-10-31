@@ -29,10 +29,11 @@ mod tests;
 use std::collections::{BTreeSet, HashMap};
 use std::mem;
 
-use crate::ast::{Block, FuncDef, Module, StmtKind, TypeExpr};
+use crate::ast::{Block, FuncDef, Module, StmtKind, StubDef, TypeExpr};
 use crate::diag::{DiagKind, Diagnostic, Result, Warning};
 use crate::span::Span;
 
+pub use builtins::is_builtin;
 pub use raises::Raises;
 use solve::{Constraint, Need};
 use subst::Subst;
@@ -77,6 +78,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     let defs = top_level_defs(module)?;
     let mut c = Checker::default();
     c.declare_globals(module, &defs)?;
+    c.declare_stubs(&module.stubs)?;
     for group in scope::groups(&defs) {
         c.infer_group(&group)?;
     }
@@ -189,6 +191,27 @@ impl Checker {
             )),
             None => Ok(()),
         }
+    }
+
+    /// Gives each Rust binding function its stub's signature (M6b). A
+    /// stub has no body to check, and its dotted name no program can
+    /// bind, so it is never generic or shadowed.
+    fn declare_stubs(&mut self, stubs: &[StubDef]) -> Result<()> {
+        for f in stubs {
+            let mut params = Vec::new();
+            for p in &f.params {
+                let ty = self.annotation(&p.annotation)?;
+                params.push(ParamType {
+                    name: p.name.name.clone(),
+                    ty,
+                    has_default: false,
+                });
+            }
+            let ret = self.annotation(&f.returns)?;
+            let sig = FuncType { params, ret };
+            self.funcs.insert(f.name.name.clone(), Func::Mono(sig));
+        }
+        Ok(())
     }
 
     /// Gives each annotated variable in `block` its annotated type up

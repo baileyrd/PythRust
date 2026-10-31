@@ -317,6 +317,7 @@ impl<'a> Flow<'a> {
                 | Rvalue::View(_)
                 | Rvalue::Call(..)
                 | Rvalue::Std(..)
+                | Rvalue::Rust(..)
         );
         if self.sensitive && allocates {
             self.age(dest.0);
@@ -352,9 +353,11 @@ impl<'a> Flow<'a> {
             Rvalue::Index(a, _) | Rvalue::Field(a, _) | Rvalue::Entry(a, ..) => {
                 self.contents(&self.of(*a))
             }
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) | Rvalue::Std(..) => {
-                Objs::from([Obj::Fresh(dest.0, Age::Latest)])
-            }
+            Rvalue::NewSeq(_)
+            | Rvalue::CopyList(_)
+            | Rvalue::View(_)
+            | Rvalue::Std(..)
+            | Rvalue::Rust(..) => Objs::from([Obj::Fresh(dest.0, Age::Latest)]),
             Rvalue::Global(_) => Objs::from([Obj::World]),
             Rvalue::Call(f, args) => self.call_result(*f, args, dest),
             _ => Objs::new(),

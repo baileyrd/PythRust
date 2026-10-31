@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::{
-    Arg, Expr, ExprKind, FuncDef, Ident, Mode, Module, Stmt, StmtKind, Target, TargetKind,
+    Arg, Expr, ExprKind, FuncDef, Ident, Mode, Module, Stmt, StmtKind, StubDef, Target, TargetKind,
 };
 use crate::diag::{Result, Warning};
 use crate::exc::ExcKind;
@@ -94,6 +94,9 @@ pub(super) fn check(
             declared.insert(f.name.name.as_str(), set);
         }
     }
+    for f in &module.stubs {
+        declared.insert(f.name.name.as_str(), stub_declaration(f, defs, &globals)?);
+    }
     let early = early(module);
     let late_shadow = defs
         .iter()
@@ -155,6 +158,16 @@ fn declaration(f: &FuncDef, defs: &[&FuncDef], globals: &Bindings) -> Result<Opt
         set.add(e, name.span);
     }
     Ok(Some(set))
+}
+
+/// A Rust binding function's declared set: its stub's `raises`, whose
+/// names the parser limited to `OSError` and `Exception`.
+fn stub_declaration(f: &StubDef, defs: &[&FuncDef], globals: &Bindings) -> Result<Raises> {
+    let mut set = Raises::default();
+    for name in &f.raises {
+        set.add(declared_escape(name, defs, globals)?, name.span);
+    }
+    Ok(set)
 }
 
 /// A name in a `raises` clause: a builtin exception class nothing
@@ -558,17 +571,16 @@ impl<'a> Cx<'_, 'a> {
         }
     }
 
-    /// A call by name: a top-level function lets its set escape here;
+    /// A call by name: a top-level function or a Rust binding function
+    /// lets its set escape here;
     /// `int(s)` and `float(s)` raise `ValueError` unless `s` is surely a
     /// number; a module function raises what [`StdFn::raises`] says.
     /// A call may reach a builtin that a `def` shadows when the `def` may
     /// not have run yet, so both count.
     fn call(&self, name: &str, first: Option<&Arg>, at: Span, out: &mut Raises) {
-        if self.a.defs.contains_key(name) {
-            let set = self.a.sets.get(name);
-            set.into_iter()
-                .flat_map(Raises::escapes)
-                .for_each(|e| out.add(e, at));
+        // Only a `def` or a stub has a set; a stub's is declared.
+        if let Some(set) = self.a.sets.get(name) {
+            set.escapes().for_each(|e| out.add(e, at));
         }
         if self.a.early.contains(name) {
             return;

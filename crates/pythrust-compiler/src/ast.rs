@@ -9,7 +9,38 @@ use crate::span::Span;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     pub body: Vec<Stmt>,
+    /// The functions of the Rust bindings the module imports (M6b).
+    pub stubs: Vec<StubDef>,
     pub span: Span,
+}
+
+/// A Rust binding (M6b): the name `import` brings in and the functions
+/// its stub declares (`docs/research/rust-interop.md`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Binding {
+    pub name: String,
+    pub funcs: Vec<StubDef>,
+}
+
+/// A stub's `'temper' 'def' NAME '(' [params] ')' '->' type [raises] ':'
+/// '...'`: a signature with no body, implemented in Rust. Every type is
+/// one that crosses the boundary, checked by the parser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StubDef {
+    /// The dotted name calls resolve to: `fastfs.file_xxh3`.
+    pub name: Ident,
+    pub params: Vec<StubParam>,
+    pub returns: TypeExpr,
+    /// `OSError` or `Exception`, at most once each; empty when none.
+    pub raises: Vec<Ident>,
+    pub span: Span,
+}
+
+/// A stub parameter: always `read`, annotated, and without a default.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StubParam {
+    pub name: Ident,
+    pub annotation: TypeExpr,
 }
 
 /// `block = NEWLINE INDENT stmt+ DEDENT`. Never empty when it comes from

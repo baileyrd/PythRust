@@ -63,6 +63,10 @@ pub fn run(
     argv: &[String],
     out: &mut (dyn Write + Send),
 ) -> Result<()> {
+    // Refused before anything runs: no output, then a failure midway.
+    if !module.stubs.is_empty() {
+        return Err(rt_err(module.span, crate::stdlib::RUST_RUN_GAP.to_string()));
+    }
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .name("pythrust-interp".to_string())

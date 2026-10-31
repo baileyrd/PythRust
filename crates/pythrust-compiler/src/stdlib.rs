@@ -21,6 +21,15 @@ pub struct ModuleDef {
     pub funcs: &'static [StdFn],
 }
 
+/// Why `build` stops at a call into a Rust binding (M6b): the native
+/// plumbing that links bindings in is a later PR.
+pub const RUST_BUILD_GAP: &str =
+    "build cannot call Rust bindings yet; native support is the next M6b step";
+
+/// Why `run` refuses a program that imports a Rust binding (M6b): the
+/// interpreter cannot call Rust.
+pub const RUST_RUN_GAP: &str = "run cannot call Rust bindings yet; use build";
+
 /// The importable modules.
 pub const MODULES: &[ModuleDef] = &[
     ModuleDef {
