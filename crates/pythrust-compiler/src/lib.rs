@@ -1,8 +1,8 @@
 //! Pythrust compiler.
 //!
 //! Contract types shared by every stage: [`span`], [`diag`], [`token`],
-//! [`ast`], [`exc`] (the builtin exception classes), and [`ir`] for the
-//! backend. Stages: [`lexer`], [`parser`],
+//! [`ast`], [`exc`] (the builtin exception classes), [`stdlib`] (the
+//! importable modules), and [`ir`] for the backend. Stages: [`lexer`], [`parser`],
 //! [`infer`], [`interp`]; and for native code [`lower`], [`rc`] (refcount
 //! elision), [`codegen`].
 //! [`own`] summarizes how functions use their parameters, on the IR.
@@ -15,6 +15,7 @@ pub mod diag;
 pub mod exc;
 pub mod ir;
 pub mod span;
+pub mod stdlib;
 pub mod token;
 
 pub mod codegen;

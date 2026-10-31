@@ -336,7 +336,11 @@ impl<'a> Body<'a> {
             Inst::Assign { dest, value, .. } if self.lists(*dest) => {
                 if matches!(
                     value,
-                    Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) | Rvalue::Call(..)
+                    Rvalue::NewSeq(_)
+                        | Rvalue::CopyList(_)
+                        | Rvalue::View(_)
+                        | Rvalue::Call(..)
+                        | Rvalue::Std(..)
                 ) {
                     age(state, *dest);
                 }
@@ -362,7 +366,7 @@ impl<'a> Body<'a> {
                 };
             }
             Rvalue::Index(a, _) | Rvalue::Entry(a, ..) => self.step(&of(state, *a), ty),
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) => fresh,
+            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) | Rvalue::Std(..) => fresh,
             Rvalue::Global(_) => Locs::from([root(Obj::World, ty)]),
             Rvalue::Call(f, args) => self.call(*f, args, dest, state),
             _ => Locs::new(),
@@ -975,7 +979,7 @@ fn rvalue_operands(rv: &Rvalue) -> Vec<Operand> {
         | Rvalue::Float(_, a, b)
         | Rvalue::IntPow(a, b)
         | Rvalue::Contains { hay: a, needle: b } => vec![*a, *b],
-        Rvalue::Call(_, args) | Rvalue::NewSeq(args) => args.clone(),
+        Rvalue::Call(_, args) | Rvalue::NewSeq(args) | Rvalue::Std(_, args) => args.clone(),
         Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
         Rvalue::StrLit(_)
         | Rvalue::Global(_)

@@ -1,0 +1,16 @@
+# `import sys` and `sys.argv`, a module-level list: read from a function,
+# changed like any list. The harness passes no arguments, and argv[0]
+# differs between `python3 f.pyr`, `pythrust run` and a built program,
+# so only its length shows.
+import sys
+
+
+def first_arg() -> str:
+    return sys.argv[1] if len(sys.argv) > 1 else "none"
+
+
+print(len(sys.argv))
+print(first_arg())
+sys.argv.append("extra")
+print(sys.argv[-1], len(sys.argv))
+print(first_arg())

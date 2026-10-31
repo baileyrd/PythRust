@@ -1,0 +1,6 @@
+# expect-exit: 1
+# deviation: a module exposes only the names Pythrust supports (`sys.argv`); CPython has `sys.platform`
+# expect-error: `sys.platform` is not supported; the `sys` names are: sys.argv
+import sys
+
+print(sys.platform != "")

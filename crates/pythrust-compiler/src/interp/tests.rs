@@ -260,7 +260,7 @@ fn module(body: Vec<Stmt>) -> Module {
 /// Runs and returns stdout and the error, if any.
 fn exec(body: Vec<Stmt>) -> (String, Option<Diagnostic>) {
     let mut out = Vec::new();
-    let result = run(&module(body), &Types::default(), &mut out);
+    let result = run(&module(body), &Types::default(), &[], &mut out);
     (String::from_utf8(out).expect("utf-8 output"), result.err())
 }
 
@@ -389,6 +389,7 @@ fn write_failure_is_a_runtime_error() {
     let err = run(
         &module(vec![print(vec![int(1)])]),
         &Types::default(),
+        &[],
         &mut Broken,
     )
     .expect_err("write fails");
@@ -1183,7 +1184,7 @@ fn exec_src(src: &str) -> (String, Option<Diagnostic>) {
     let tokens = crate::lexer::lex(src).expect("lexes");
     let parsed = crate::parser::parse(&tokens).expect("parses");
     let mut out = Vec::new();
-    let result = run(&parsed, &Types::default(), &mut out);
+    let result = run(&parsed, &Types::default(), &[], &mut out);
     (String::from_utf8(out).expect("utf-8 output"), result.err())
 }
 
@@ -1425,7 +1426,7 @@ fn run_src(src: &str) -> (String, Option<String>) {
     let tokens = crate::lexer::lex(src).expect("lexes");
     let parsed = crate::parser::parse(&tokens).expect("parses");
     let mut out = Vec::new();
-    let result = run(&parsed, &Types::default(), &mut out);
+    let result = run(&parsed, &Types::default(), &[], &mut out);
     let out = String::from_utf8(out).expect("utf-8 output");
     (out, result.err().map(|d| d.message))
 }
@@ -1576,4 +1577,16 @@ fn sorted_is_stable_and_uses_less_than() {
 fn a_bool_key_is_the_int_it_equals() {
     let out = src_ok("d = {1: 'one'}\nd[True] = 'true'\nprint(d, d[True], d.get(True), True in {1}, 0 in {False})\n");
     assert_eq!(out, "{1: 'true'} true true True True\n");
+}
+
+#[test]
+fn sys_argv_is_the_arguments_given_to_run() {
+    let src = "import sys\nprint(sys.argv)\nsys.argv.append('z')\nprint(len(sys.argv))\n";
+    let tokens = crate::lexer::lex(src).expect("lexes");
+    let parsed = crate::parser::parse(&tokens).expect("parses");
+    let types = crate::infer::infer(&parsed).expect("checks");
+    let argv = ["f.pyr".to_string(), "x y".to_string()];
+    let mut out = Vec::new();
+    run(&parsed, &types, &argv, &mut out).expect("runs");
+    assert_eq!(String::from_utf8(out).unwrap(), "['f.pyr', 'x y']\n3\n");
 }

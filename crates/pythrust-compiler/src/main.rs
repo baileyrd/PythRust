@@ -19,7 +19,7 @@ use pythrust_compiler::{
     codegen, infer, interp, lexer, lower, own, parser, rc, DiagKind, Diagnostic, Span, Warning,
 };
 
-const USAGE: &str = "usage: pythrust <run|check|build> <file>";
+const USAGE: &str = "usage: pythrust <check|build> <file> | pythrust run <file> [arg ...]";
 
 /// The runtime library every native program links against. Found next
 /// to this executable, where `cargo build` puts it, unless overridden.
@@ -99,8 +99,12 @@ struct LineCol {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let (command, path) = match parse_args(&args) {
+    // Lossy, as a built program's `sys.argv` is (a listed deviation).
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let (command, path, rest) = match parse_args(&args) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("{message}\n{USAGE}");
@@ -127,16 +131,22 @@ fn main() -> ExitCode {
     match command {
         Command::Check => ExitCode::SUCCESS,
         Command::Build => build(path, &src, &module, &types),
-        Command::Run => run(path, &src, &module, &types),
+        Command::Run => {
+            let argv: Vec<String> = std::iter::once(path.to_string())
+                .chain(rest.iter().cloned())
+                .collect();
+            run(path, &src, &module, &types, &argv)
+        }
     }
 }
 
-/// `pythrust run`: interprets the checked `module`.
-fn run(path: &str, src: &str, module: &Module, types: &Types) -> ExitCode {
+/// `pythrust run`: interprets the checked `module` with `argv` as
+/// `sys.argv`.
+fn run(path: &str, src: &str, module: &Module, types: &Types, argv: &[String]) -> ExitCode {
     // Buffered for speed; flushed before any diagnostic so output already
     // printed precedes the error, as in CPython.
     let mut out = BufWriter::new(std::io::stdout());
-    let result = interp::run(module, types, &mut out).and_then(|()| flush(&mut out));
+    let result = interp::run(module, types, argv, &mut out).and_then(|()| flush(&mut out));
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(diag) => {
@@ -149,10 +159,11 @@ fn run(path: &str, src: &str, module: &Module, types: &Types) -> ExitCode {
     }
 }
 
-/// Parses `<run|check|build> <file>`.
-fn parse_args(args: &[String]) -> Result<(Command, &str), String> {
-    let [command, path] = args else {
-        return Err(format!("expected 2 arguments, got {}", args.len()));
+/// Parses `<check|build> <file>` or `run <file> [arg ...]`: the command,
+/// the file, and the program's arguments after it, as `python` takes them.
+fn parse_args(args: &[String]) -> Result<(Command, &str, &[String]), String> {
+    let [command, path, rest @ ..] = args else {
+        return Err(format!("expected at least 2 arguments, got {}", args.len()));
     };
     let command = match command.as_str() {
         "run" => Command::Run,
@@ -160,7 +171,10 @@ fn parse_args(args: &[String]) -> Result<(Command, &str), String> {
         "build" => Command::Build,
         other => return Err(format!("unknown command `{other}`")),
     };
-    Ok((command, path.as_str()))
+    if command != Command::Run && !rest.is_empty() {
+        return Err(format!("expected 2 arguments, got {}", args.len()));
+    }
+    Ok((command, path.as_str(), rest))
 }
 
 /// The checks `run`, `check` and `build` share: lex, parse, infer, and
@@ -485,10 +499,18 @@ mod tests {
     fn parse_args_accepts_each_command() {
         let run = args(&["run", "a.pyr"]);
         let check = args(&["check", "b.pyr"]);
-        assert_eq!(parse_args(&run), Ok((Command::Run, "a.pyr")));
-        assert_eq!(parse_args(&check), Ok((Command::Check, "b.pyr")));
+        let none: &[String] = &[];
+        assert_eq!(parse_args(&run), Ok((Command::Run, "a.pyr", none)));
+        assert_eq!(parse_args(&check), Ok((Command::Check, "b.pyr", none)));
         let build = args(&["build", "c.pyr"]);
-        assert_eq!(parse_args(&build), Ok((Command::Build, "c.pyr")));
+        assert_eq!(parse_args(&build), Ok((Command::Build, "c.pyr", none)));
+    }
+
+    #[test]
+    fn parse_args_passes_what_follows_the_file_to_run() {
+        let run = args(&["run", "a.pyr", "x", "--y"]);
+        let rest = args(&["x", "--y"]);
+        assert_eq!(parse_args(&run), Ok((Command::Run, "a.pyr", &rest[..])));
     }
 
     #[test]
@@ -496,7 +518,8 @@ mod tests {
         assert!(parse_args(&args(&["bulid", "a"])).is_err());
         assert!(parse_args(&args(&[])).is_err());
         assert!(parse_args(&args(&["run"])).is_err());
-        assert!(parse_args(&args(&["run", "a", "b"])).is_err());
+        assert!(parse_args(&args(&["check", "a", "b"])).is_err());
+        assert!(parse_args(&args(&["build", "a", "b"])).is_err());
     }
 
     /// What `main` does for `command` short of rendering: the checks,
@@ -504,7 +527,7 @@ mod tests {
     fn exec(command: Command, src: &str) -> (pythrust_compiler::Result<()>, String) {
         let mut out = Vec::new();
         let result = front(src).and_then(|(module, types)| match command {
-            Command::Run => interp::run(&module, &types, &mut out),
+            Command::Run => interp::run(&module, &types, &["f.pyr".to_string()], &mut out),
             Command::Check | Command::Build => Ok(()),
         });
         (result, String::from_utf8_lossy(&out).into_owned())

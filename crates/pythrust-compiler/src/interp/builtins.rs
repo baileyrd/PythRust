@@ -12,6 +12,7 @@ use crate::ast::{CmpOp, Ident};
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::span::Span;
+use crate::stdlib::StdFn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Builtin {
@@ -26,6 +27,8 @@ pub(super) enum Builtin {
     Float,
     Bool,
     Exception(ExcKind),
+    /// A module function; the interpreter calls it (`Interp::std`).
+    Std(StdFn),
 }
 
 /// Evaluated call arguments, in source order within each kind.
@@ -48,7 +51,12 @@ impl Builtin {
             "int" => Builtin::Int,
             "float" => Builtin::Float,
             "bool" => Builtin::Bool,
-            _ => return ExcKind::from_name(name).map(Builtin::Exception),
+            _ => {
+                if let Some(f) = StdFn::from_name(name) {
+                    return Some(Builtin::Std(f));
+                }
+                return ExcKind::from_name(name).map(Builtin::Exception);
+            }
         })
     }
 
@@ -65,6 +73,7 @@ impl Builtin {
             Builtin::Float => "float",
             Builtin::Bool => "bool",
             Builtin::Exception(kind) => kind.name(),
+            Builtin::Std(f) => f.name(),
         }
     }
 
@@ -102,6 +111,10 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
         Builtin::Exception(kind) => {
             let arg = opt(b, pos, span)?.cloned();
             Value::Exc(Rc::new(Exc { kind, arg }))
+        }
+        Builtin::Std(f) => {
+            let msg = format!("internal: `{}` needs the interpreter", f.name());
+            return Err(rt_err(span, msg).into());
         }
     })
 }

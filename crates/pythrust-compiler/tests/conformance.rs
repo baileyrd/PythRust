@@ -427,6 +427,7 @@ const NATIVE: &[&str] = &[
     "str_loop_exits",
     "str_repeat_error",
     "strings",
+    "sys_argv",
     "tempered",
     "tuple_loops",
     "tuples",
@@ -1135,6 +1136,20 @@ fn pythrust(command: &str, source: &Path) -> Res<std::process::Output> {
         .arg(source)
         .output()
         .map_err(|e| format!("cannot run pythrust {command}: {e}"))
+}
+
+/// A built program sees its own arguments in `sys.argv`, as `run` sees
+/// those after the file. Not a corpus program: the harness passes none.
+#[test]
+fn a_built_program_reads_its_arguments() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("argv")?;
+    let src = "import sys\nprint(len(sys.argv))\ni = 1\nwhile i < len(sys.argv):\n    print(sys.argv[i])\n    i += 1\n";
+    let exe = native_case(&dir, "argv", src)?;
+    let got = run(Command::new(&exe).args(["a b", "-x"]), TIMEOUT)?;
+    assert_eq!((got.status, got.stdout.as_str()), (0, "3\na b\n-x\n"));
+    cleanup(&dir)?;
+    Ok(())
 }
 
 /// Exceptions nest to any depth (`e = ValueError(e)`), so a native

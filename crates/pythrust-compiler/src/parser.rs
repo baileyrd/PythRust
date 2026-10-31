@@ -16,6 +16,7 @@ use crate::ast::{
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
+use crate::stdlib::ModuleDef;
 use crate::token::{Token, TokenKind};
 
 /// Nesting limit for blocks, parentheses and unary chains. Hostile input
@@ -39,6 +40,8 @@ struct Parser<'a> {
     depth: usize,
     in_func: bool,
     in_loop: bool,
+    /// Modules imported so far.
+    modules: Vec<&'static ModuleDef>,
 }
 
 impl<'a> Parser<'a> {
@@ -59,6 +62,7 @@ impl<'a> Parser<'a> {
             depth: 0,
             in_func: false,
             in_loop: false,
+            modules: Vec::new(),
         })
     }
 
@@ -166,6 +170,9 @@ impl<'a> Parser<'a> {
     fn module(&mut self) -> Result<Module> {
         let start = self.tok(0).span;
         let mut body = Vec::new();
+        while self.at(&TokenKind::Import) {
+            body.extend(self.import_stmt()?);
+        }
         while !self.at(&TokenKind::EndMarker) {
             body.push(self.stmt()?);
         }
@@ -182,6 +189,10 @@ impl<'a> Parser<'a> {
             TokenKind::While => self.while_stmt(),
             TokenKind::For => self.for_stmt(),
             TokenKind::Try => self.try_stmt(),
+            TokenKind::Import => {
+                let msg = "`import` must come at module top level, before other statements";
+                Err(error(self.tok(0).span, msg))
+            }
             _ => {
                 let stmt = self.simple_stmt()?;
                 self.expect(&TokenKind::Newline)?;
@@ -290,6 +301,7 @@ impl<'a> Parser<'a> {
         let ExprKind::Name(name) = lhs.kind else {
             return Err(error(lhs.span, "only a single name can be annotated"));
         };
+        check_assignable(&name, lhs.span)?;
         let annotation = self.type_expr()?;
         self.expect(&TokenKind::Assign)?;
         let value = self.expr()?;
@@ -321,7 +333,7 @@ impl<'a> Parser<'a> {
             Mode::Loose
         };
         self.expect(&TokenKind::Def)?;
-        let name = self.expect_name("a function name")?;
+        let name = self.binding_name("a function name")?;
         self.expect(&TokenKind::LParen)?;
         let params = if self.at(&TokenKind::RParen) {
             Vec::new()
@@ -373,7 +385,7 @@ impl<'a> Parser<'a> {
     fn param(&mut self) -> Result<Param> {
         let start = self.tok(0).span;
         let mode = self.param_mode()?;
-        let name = self.expect_name("a parameter name")?;
+        let name = self.binding_name("a parameter name")?;
         let annotation = if self.eat(&TokenKind::Colon) {
             Some(self.type_expr()?)
         } else {
@@ -491,7 +503,7 @@ impl<'a> Parser<'a> {
         }
         let classes = self.handler_classes()?;
         let binding = if self.eat(&TokenKind::As) {
-            Some(self.expect_name("a name to bind the exception to")?)
+            Some(self.binding_name("a name to bind the exception to")?)
         } else {
             None
         };
@@ -863,7 +875,13 @@ impl<'a> Parser<'a> {
     fn atom(&mut self) -> Result<Expr> {
         let tok = self.tok(0);
         let kind = match &tok.kind {
-            TokenKind::Name(name) => ExprKind::Name(name.clone()),
+            TokenKind::Name(name) => match self.imported(name) {
+                Some(module) => {
+                    self.bump();
+                    return self.module_name(module, tok.span);
+                }
+                None => ExprKind::Name(name.clone()),
+            },
             TokenKind::Int(value) => ExprKind::Int(int_literal(*value, tok.span)?),
             TokenKind::Float(value) => ExprKind::Float(*value),
             TokenKind::Str(value) => ExprKind::Str(value.clone()),
@@ -965,7 +983,10 @@ impl<'a> Parser<'a> {
 fn to_target(expr: Expr) -> Result<Target> {
     let span = expr.span;
     let kind = match expr.kind {
-        ExprKind::Name(name) => TargetKind::Name(name),
+        ExprKind::Name(name) => {
+            check_assignable(&name, span)?;
+            TargetKind::Name(name)
+        }
         ExprKind::Subscript { value, index } => TargetKind::Subscript { value, index },
         ExprKind::Tuple(items) if !items.is_empty() => {
             let targets = items.into_iter().map(to_target);
@@ -980,6 +1001,16 @@ fn to_target(expr: Expr) -> Result<Target> {
         }
     };
     Ok(Target { kind, span })
+}
+
+/// A name an assignment may bind: not a module's (`sys.argv`), which
+/// the parser resolved to one dotted name.
+fn check_assignable(name: &str, span: Span) -> Result<()> {
+    if !name.contains('.') {
+        return Ok(());
+    }
+    let msg = format!("assigning to a module's name (`{name}`) is not supported yet");
+    Err(error(span, msg))
 }
 
 fn check_params(params: &[Param]) -> Result<()> {
@@ -1206,6 +1237,7 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Try => "try",
         TokenKind::Except => "except",
         TokenKind::Raise => "raise",
+        TokenKind::Import => "import",
         TokenKind::As => "as",
         TokenKind::Pipe => "|",
         TokenKind::Plus => "+",
@@ -1242,6 +1274,8 @@ fn describe(kind: &TokenKind) -> String {
     };
     format!("`{text}`")
 }
+
+mod imports;
 
 #[cfg(test)]
 mod tests;

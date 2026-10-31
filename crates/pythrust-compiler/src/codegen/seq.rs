@@ -41,7 +41,7 @@ impl FnGen<'_, '_, '_> {
     }
 
     /// The descriptor of `ty` as read-only data: its address and length.
-    fn descriptor(&mut self, ty: Ty) -> Result<(Value, Value)> {
+    pub(super) fn descriptor(&mut self, ty: Ty) -> Result<(Value, Value)> {
         let mut text = String::new();
         descriptor(self.types, ty, &mut text)?;
         self.data(text)

@@ -117,3 +117,39 @@ fn a_failed_final_flush_is_a_runtime_error() {
     assert_eq!(out.status.code(), Some(1), "{err}");
     assert!(err.contains("cannot write output"), "{err}");
 }
+
+/// Prints each of `sys.argv` but the first, which names the program
+/// differently under `run` (the file) and a built program (itself).
+const ARGS: &str = "import sys\nprint(len(sys.argv))\ni = 1\nwhile i < len(sys.argv):\n    print(sys.argv[i])\n    i += 1\n";
+
+/// `run <file> args...` passes the arguments after the file as
+/// `sys.argv[1:]`, as `python3 <file> args...` does; `sys.argv[0]` is
+/// the file.
+#[test]
+fn run_passes_the_arguments_after_the_file_to_sys_argv() {
+    let path = source("argv_run", "import sys\nprint(sys.argv[0])\n");
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .arg("run")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(text(&out.stdout), format!("{}\n", path.display()));
+
+    let path = source("argv_args", ARGS);
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .args([
+            "run".as_ref(),
+            path.as_os_str(),
+            "a b".as_ref(),
+            "-x".as_ref(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(text(&out.stdout), "3\na b\n-x\n", "{out:?}");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .args(["check".as_ref(), path.as_os_str(), "a".as_ref()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+}

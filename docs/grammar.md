@@ -13,13 +13,14 @@ Notation: EBNF. `A*` zero or more, `A+` one or more, `[A]` optional, `A | B` cho
   - `INT`: decimal digits, `_` separators allowed. Ints are `i64`; arithmetic overflow is a runtime error, never a silent wrap. An `INT` literal above `i64::MAX` is a compile error, except `9223372036854775808` directly under unary `-`, which the parser folds to `i64::MIN`. Arbitrary precision may be added later as an opt-in type.
   - `FLOAT`: digits with `.` or exponent.
   - `STRING`: single or double quoted, with Python's `\` escapes except `\N{...}`. An unknown escape is an error. No string prefixes (`f`, `r`, `b`, `u`) or triple quotes yet; the lexer rejects them by name.
-- Keywords: `def return if elif else while for in break continue pass and or not is True False None temper try except raise as` `as` is allowed only in a handler (`except Name as e`, `except (A, B) as e`); anywhere else it is an error saying it is reserved, until `with` lands.
-- Reserved for later (rejected by the lexer so programs stay forward-compatible): `finally assert class import from with lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
+- Keywords: `def return if elif else while for in break continue pass and or not is True False None temper try except raise as import` `as` is allowed only in a handler (`except Name as e`, `except (A, B) as e`); anywhere else it is an error saying it is reserved, until `with` lands.
+- Reserved for later (rejected by the lexer so programs stay forward-compatible): `finally assert class from with lambda yield async await global nonlocal del pause shared`. `match` is not reserved: it is a common Python name, and Python's own `match` is a soft keyword.
 
 ## Program
 
 ```ebnf
-module      = (stmt)* ENDMARKER ;
+module      = (import_stmt)* (stmt)* ENDMARKER ;
+import_stmt = 'import' NAME (',' NAME)* NEWLINE ;         # each NAME a standard module (M6a)
 stmt        = simple_stmt NEWLINE | compound_stmt ;
 block       = NEWLINE INDENT stmt+ DEDENT ;
 ```
@@ -56,6 +57,7 @@ classes     = NAME | '(' NAME (',' NAME)* [','] ')' ;     # each NAME is a built
 
 ### Notes
 
+- **Imports (M6a, Nano 2026-10-31):** `import sys` brings in a standard module, a Python-compatible surface over the Rust runtime (`stdlib.rs`; [roadmap](roadmap.md#phase-5-m6-plan)). Imports come first in a module, so a module name is known wherever it is used: `sys.argv` is one name, a module variable is a global and a module function a builtin. Modules: `sys` (`sys.argv`, a `list[str]`). `os` and `hashlib` follow as fclone-lite needs them. A module is not a value, its names cannot be assigned, and its name cannot be bound by a `def`, a parameter or `except ... as`. `from`, `import a.b` and `import a as b` are later. `pythrust run <file> [arg ...]` passes the arguments after the file, as `python3` does.
 - `temper def f(...)` marks a function *tempered*: the compiler requires more to be written explicitly, and the meaning never changes (see [design.md](design.md#core-idea-tempering)). Only function-level tempering exists here; module- and project-level tempering come later. The keyword is a prefix, not a decorator, so the compiler sees it without resolving names.
 - Annotations are optional everywhere. Loose code infers them; they are hints, never required.
 - Single-line bodies (`if x: y`) are not in phase 2. One way to write a block.
@@ -172,6 +174,8 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 - **Set order (M6):** a set iterates and prints in insertion order, as a dict does. CPython's set order follows hashes, so it differs for most sets and changes between runs for strings. Fixture `set_order`.
 - **Dict views (M6, Nano 2026-10-31):** a view is a snapshot taken when `keys()`, `values()` or `items()` is called, so a view held across a change to its dict does not see the change. CPython's views are live. A view used where it is made (`for k in d.keys():`, `list(d.items())`) behaves the same in both: a `for` over a view it makes runs over the dict itself, so growing the dict inside it fails as above. Fixture `dict_views`.
 - **Changing size during iteration (M6):** a `for` loop over a dict or set that grows stops the program with CPython's `RuntimeError` message, but as a fault: `try` does not catch it. In tempered code it is a compile error instead (D4), whose fix-it `for ... in list(d)` says it costs a copy; as for a list, any store into the container inside the loop counts, a store at an existing key included, since the check does not track which keys exist.
+- **Imports (M6a):** `import` must come before a module's other statements, and a module exposes only the names Pythrust supports; a late import or an unsupported name (`sys.platform`) is a compile error. A module is not a value (`m = sys`), and `sys.argv = [...]` is a compile error, "not supported yet". Fixtures `import_late` and `module_name_unsupported`.
+- **`sys.argv` (M6a):** a built program's `sys.argv[0]` is the path it was started by, where CPython's is the script's path; `pythrust run` gives the file's path as CPython does. An argument that is not UTF-8 is decoded lossily (U+FFFD), where CPython keeps its bytes as surrogate escapes.
 - An out-of-range tuple index (`(1, 2)[2]`) is a compile error, so nothing runs. Python raises an `IndexError` at that point.
 - Type errors are reported before the program runs, so a program with one prints nothing. Python raises the same mistakes as a `TypeError` at runtime, if it raises them at all.
 - `1 in "abc"`: a non-`str` left operand of `in` on a string is a compile error. Python raises a `TypeError`.
@@ -195,7 +199,7 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 
 ## Deliberate omissions (phase 2)
 
-Dict and set comprehensions, set operators (`|`, `&`, `-`, `^`, `<=`), removing entries (`del`, `pop`, `discard`, `remove`, `clear`), `dict(...)`, `update`, `setdefault` and `frozenset` (M6 adds them as programs need them), slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, imports, `try` `else`/`finally`, bare `raise`, exception chaining and user-defined exceptions, `with`, decorators, bitwise operators, chained assignment (`a = b = 1`), bare declarations (`x: int` with no value), `tuple[int, ...]`, general `A | B` unions (except phase-2 `T | None`). Each is additive: existing phase-2 programs keep their meaning.
+`from` imports, `import a.b`, `import a as b`, dict and set comprehensions, set operators (`|`, `&`, `-`, `^`, `<=`), removing entries (`del`, `pop`, `discard`, `remove`, `clear`), `dict(...)`, `update`, `setdefault` and `frozenset` (M6 adds them as programs need them), slicing, starred unpacking (`a, *b = ...`), multi-index subscripts (`a[1, 2]`), comprehensions, lambda, classes, `try` `else`/`finally`, bare `raise`, exception chaining and user-defined exceptions, `with`, decorators, bitwise operators, chained assignment (`a = b = 1`), bare declarations (`x: int` with no value), `tuple[int, ...]`, general `A | B` unions (except phase-2 `T | None`). Each is additive: existing phase-2 programs keep their meaning.
 
 ## Decided
 
