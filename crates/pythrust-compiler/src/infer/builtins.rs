@@ -63,7 +63,8 @@ impl Checker {
         }
     }
 
-    /// A call to a [`StdFn`] by its builtin name.
+    /// A call to a [`StdFn`] by its builtin name. Every argument is a
+    /// `str` (a path).
     fn std(&mut self, name: &str, args: &[Arg], span: Span) -> Result<Type> {
         let Some(f) = StdFn::from_name(name) else {
             return Err(error(
@@ -71,12 +72,20 @@ impl Checker {
                 format!("internal: `{name}` is not a module function"),
             ));
         };
-        match f {
-            StdFn::Argv => {
-                self.positional(name, args, 0, 0, span)?;
-                Ok(Type::List(Box::new(Type::Str)))
-            }
+        let strs = || Type::List(Box::new(Type::Str));
+        let (min, max, result) = match f {
+            StdFn::Argv => (0, 0, strs()),
+            StdFn::Listdir => (0, 1, strs()),
+            StdFn::Join => (1, usize::MAX, Type::Str),
+            StdFn::Isdir | StdFn::Isfile | StdFn::Islink => (1, 1, Type::Bool),
+            StdFn::Getsize => (1, 1, Type::Int),
+        };
+        let what = format!("argument of `{name}`");
+        let args = by_position(f, args)?;
+        for (t, at) in self.positional(name, &args, min, max, span)? {
+            self.expect(at, &Type::Str, &t, &what)?;
         }
+        Ok(result)
     }
 
     /// Any positional values; `sep` and `end` must be `str`.
@@ -190,4 +199,28 @@ impl Checker {
             .map(|a| Ok((self.expr(&a.value)?, a.value.span)))
             .collect()
     }
+}
+
+/// `args` with a keyword argument naming `f`'s [`StdFn::keyword`]
+/// parameter made positional; any other keyword is an error. Since that
+/// parameter is a function's only one, a second argument is an arity
+/// error after this.
+fn by_position(f: StdFn, args: &[Arg]) -> Result<Vec<Arg>> {
+    args.iter()
+        .map(|a| match &a.name {
+            None => Ok(a.clone()),
+            Some(kw) if Some(kw.name.as_str()) == f.keyword() => Ok(Arg {
+                name: None,
+                ..a.clone()
+            }),
+            Some(kw) => {
+                let msg = format!(
+                    "`{}` got an unexpected keyword argument `{}`",
+                    f.name(),
+                    kw.name
+                );
+                Err(error(kw.span, msg))
+            }
+        })
+        .collect()
 }

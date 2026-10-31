@@ -644,7 +644,15 @@ impl<'a> FnBuilder<'_, 'a> {
         if name == "print" {
             return self.print(args, ops, span);
         }
-        if args.iter().any(|a| a.name.is_some()) {
+        // A module function's one keyword parameter is its only one, so
+        // its operand is already in place (`os.listdir(path=p)`).
+        let positional = StdFn::from_name(name).and_then(StdFn::keyword);
+        let keyword = |a: &Arg| {
+            a.name
+                .as_ref()
+                .is_some_and(|k| Some(k.name.as_str()) != positional)
+        };
+        if args.iter().any(keyword) {
             return Err(unsupported(span, "keyword arguments"));
         }
         match name {
@@ -660,8 +668,7 @@ impl<'a> FnBuilder<'_, 'a> {
             }
             other => {
                 if let Some(f) = StdFn::from_name(other) {
-                    let ty = self.ty_at(span)?;
-                    return Ok(self.temp(ty, Rvalue::Std(f, ops), span));
+                    return self.std(f, ops, span);
                 }
                 match ExcKind::from_name(other) {
                     Some(kind) => self.new_exc(kind, &ops, span),
@@ -669,6 +676,25 @@ impl<'a> FnBuilder<'_, 'a> {
                 }
             }
         }
+    }
+
+    /// A module function's call: `os.listdir()` lists `"."`, and
+    /// `os.path.join(a)` is `a`. One that may raise is followed by the
+    /// test for it.
+    fn std(&mut self, f: StdFn, mut ops: Vec<Operand>, span: Span) -> Result<Operand> {
+        match (f, ops.as_slice()) {
+            (StdFn::Join, [a]) => return Ok(*a),
+            (StdFn::Listdir, []) => {
+                ops.push(self.temp(Ty::Str, Rvalue::StrLit(".".to_string()), span));
+            }
+            _ => {}
+        }
+        let ty = self.ty_at(span)?;
+        let v = self.temp(ty, Rvalue::Std(f, ops), span);
+        if f.raises().is_some() {
+            self.check_raised(span)?;
+        }
+        Ok(v)
     }
 
     /// `print`, its `sep` and `end` keywords split from the values.

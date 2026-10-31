@@ -1,0 +1,11 @@
+# expect-exit: 1
+# deviation: a tempered function must declare the OSError `os.listdir` may raise (D8)
+# expect-error: OSError
+import os
+
+
+temper def names(path: str) -> list[str]:
+    return os.listdir(path)
+
+
+print(names("."))

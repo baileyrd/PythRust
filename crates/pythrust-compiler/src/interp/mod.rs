@@ -34,7 +34,7 @@ use crate::span::Span;
 use builtins::{Args, Builtin};
 use methods::Method;
 use table::{Key, Table};
-use value::{Exc, Func, Value};
+use value::{Exc, ExcArg, Func, Value};
 
 /// Python's default recursion limit.
 pub(crate) const MAX_DEPTH: usize = 1000;
@@ -140,7 +140,7 @@ type Exec<'m, T> = std::result::Result<T, Unwind<'m>>;
 /// (docs/research/faults.md): division by zero, an index out of range, a
 /// wrong unpacking arity.
 fn raised<'m>(kind: ExcKind, message: String, span: Span) -> Unwind<'m> {
-    let arg = Some(Value::str(&message));
+    let arg = ExcArg::One(Value::str(&message));
     Unwind::Raise(Rc::new(Exc { kind, arg }), span)
 }
 
@@ -263,7 +263,10 @@ impl<'m> Interp<'m, '_> {
     fn exception(&mut self, value: &'m Expr) -> Exec<'m, Rc<Exc<'m>>> {
         match self.eval(value)? {
             Value::Exc(exc) => Ok(exc),
-            Value::Builtin(Builtin::Exception(kind)) => Ok(Rc::new(Exc { kind, arg: None })),
+            Value::Builtin(Builtin::Exception(kind)) => Ok(Rc::new(Exc {
+                kind,
+                arg: ExcArg::None,
+            })),
             _ => Err(rt_err(
                 value.span,
                 "TypeError: exceptions must derive from BaseException".to_string(),
@@ -918,7 +921,7 @@ fn resolve(index: &Value, len: usize, kind: &str, span: Span) -> Result<Option<u
 /// The catchable `KeyError` of `d[k]` for a missing `k`: its argument is
 /// the key itself, as in Python.
 fn missing_key<'m>(key: &Value<'m>, span: Span) -> Unwind<'m> {
-    let arg = Some(key.clone());
+    let arg = ExcArg::One(key.clone());
     Unwind::Raise(
         Rc::new(Exc {
             kind: ExcKind::Key,

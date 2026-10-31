@@ -27,6 +27,7 @@ use crate::ast::{
 use crate::diag::{Result, Warning};
 use crate::exc::ExcKind;
 use crate::span::Span;
+use crate::stdlib::StdFn;
 
 use super::builtins;
 use super::{error, scope, Type, Types};
@@ -554,7 +555,7 @@ impl<'a> Cx<'_, 'a> {
 
     /// A call by name: a top-level function lets its set escape here;
     /// `int(s)` and `float(s)` raise `ValueError` unless `s` is surely a
-    /// number.
+    /// number; a module function raises what [`StdFn::raises`] says.
     /// A call may reach a builtin that a `def` shadows when the `def` may
     /// not have run yet, so both count.
     fn call(&self, name: &str, first: Option<&Arg>, at: Span, out: &mut Raises) {
@@ -572,6 +573,9 @@ impl<'a> Cx<'_, 'a> {
                 .is_some_and(|arg| !self.a.typed || may_be_str(self.a.types.at(arg.value.span)));
         if parses {
             out.add(ExcKind::Value, at);
+        }
+        if let Some(kind) = StdFn::from_name(name).and_then(StdFn::raises) {
+            out.add(kind, at);
         }
     }
 
@@ -1050,8 +1054,9 @@ temper def f(s: str) -> int:
         assert_eq!(
             err(unknown),
             "`TypeError` is not an exception; `raises` lists one of ArithmeticError, \
-             Exception, IndexError, KeyError, LookupError, OverflowError, RecursionError, \
-             RuntimeError, ValueError, ZeroDivisionError"
+             Exception, FileNotFoundError, IndexError, IsADirectoryError, KeyError, \
+             LookupError, NotADirectoryError, OSError, OverflowError, PermissionError, \
+             RecursionError, RuntimeError, ValueError, ZeroDivisionError"
         );
         let twice = "temper def f() -> None raises ValueError, ValueError:\n    pass\n";
         assert_eq!(err(twice), "`ValueError` is listed twice in `raises`");

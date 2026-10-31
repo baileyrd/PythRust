@@ -49,7 +49,31 @@ pub(super) enum Value<'m> {
 #[derive(Debug)]
 pub(super) struct Exc<'m> {
     pub kind: ExcKind,
-    pub arg: Option<Value<'m>>,
+    pub arg: ExcArg<'m>,
+}
+
+/// What an exception was built with.
+#[derive(Debug)]
+pub(super) enum ExcArg<'m> {
+    None,
+    /// One argument, as `ValueError("bad")` takes.
+    One(Value<'m>),
+    /// An `OSError` the interpreter raised from an OS error: CPython's
+    /// `errno`, `strerror` and `filename`. `str(e)` is `[Errno 2] No such
+    /// file or directory: 'p'`, its `repr` `FileNotFoundError(2, 'No such
+    /// file or directory')`.
+    Errno {
+        errno: i32,
+        strerror: String,
+        filename: Option<String>,
+    },
+}
+
+impl<'m> ExcArg<'m> {
+    /// One argument, or none.
+    pub fn of(v: Option<Value<'m>>) -> Self {
+        v.map_or(ExcArg::None, ExcArg::One)
+    }
 }
 
 impl Exc<'_> {
@@ -62,10 +86,19 @@ impl Exc<'_> {
         let mut exc = self;
         loop {
             match &exc.arg {
-                None => return Ok(String::new()),
-                Some(v) if exc.kind == ExcKind::Key => return v.repr(span),
-                Some(Value::Exc(inner)) => exc = inner,
-                Some(v) => return v.to_str(span),
+                ExcArg::None => return Ok(String::new()),
+                ExcArg::Errno {
+                    errno,
+                    strerror,
+                    filename,
+                } => {
+                    let path = filename.as_ref().map(|p| format!(": {}", str_repr(p)));
+                    let path = path.unwrap_or_default();
+                    return Ok(format!("[Errno {errno}] {strerror}{path}"));
+                }
+                ExcArg::One(v) if exc.kind == ExcKind::Key => return v.repr(span),
+                ExcArg::One(Value::Exc(inner)) => exc = inner,
+                ExcArg::One(v) => return v.to_str(span),
             }
         }
     }
@@ -621,8 +654,12 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
             enter_repr(active, Rc::as_ptr(e).cast::<()>(), span)?;
             out.push_str(e.kind.name());
             out.push('(');
-            if let Some(arg) = &e.arg {
-                write_repr(arg, active, out, span)?;
+            match &e.arg {
+                ExcArg::None => {}
+                ExcArg::One(arg) => write_repr(arg, active, out, span)?,
+                ExcArg::Errno {
+                    errno, strerror, ..
+                } => out.push_str(&format!("{errno}, {}", str_repr(strerror))),
             }
             out.push(')');
             active.pop();

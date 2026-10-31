@@ -5,6 +5,8 @@
 //! Exception
 //! ├── ArithmeticError: OverflowError, ZeroDivisionError
 //! ├── LookupError: IndexError, KeyError
+//! ├── OSError: FileNotFoundError, IsADirectoryError, NotADirectoryError,
+//! │   PermissionError
 //! ├── RuntimeError: RecursionError
 //! └── ValueError
 //! ```
@@ -25,10 +27,15 @@ pub enum ExcKind {
     Runtime,
     Exception,
     Key,
+    Os,
+    FileNotFound,
+    Permission,
+    IsADirectory,
+    NotADirectory,
 }
 
 impl ExcKind {
-    pub const ALL: [ExcKind; 10] = [
+    pub const ALL: [ExcKind; 15] = [
         ExcKind::Value,
         ExcKind::Index,
         ExcKind::ZeroDivision,
@@ -39,6 +46,11 @@ impl ExcKind {
         ExcKind::Runtime,
         ExcKind::Exception,
         ExcKind::Key,
+        ExcKind::Os,
+        ExcKind::FileNotFound,
+        ExcKind::Permission,
+        ExcKind::IsADirectory,
+        ExcKind::NotADirectory,
     ];
 
     /// The builtin exception class named `name`.
@@ -58,6 +70,11 @@ impl ExcKind {
             ExcKind::Runtime => "RuntimeError",
             ExcKind::Exception => "Exception",
             ExcKind::Key => "KeyError",
+            ExcKind::Os => "OSError",
+            ExcKind::FileNotFound => "FileNotFoundError",
+            ExcKind::Permission => "PermissionError",
+            ExcKind::IsADirectory => "IsADirectoryError",
+            ExcKind::NotADirectory => "NotADirectoryError",
         }
     }
 
@@ -68,9 +85,15 @@ impl ExcKind {
             ExcKind::ZeroDivision | ExcKind::Overflow => Some(ExcKind::Arithmetic),
             ExcKind::Index | ExcKind::Key => Some(ExcKind::Lookup),
             ExcKind::Recursion => Some(ExcKind::Runtime),
-            ExcKind::Value | ExcKind::Arithmetic | ExcKind::Lookup | ExcKind::Runtime => {
-                Some(ExcKind::Exception)
-            }
+            ExcKind::FileNotFound
+            | ExcKind::Permission
+            | ExcKind::IsADirectory
+            | ExcKind::NotADirectory => Some(ExcKind::Os),
+            ExcKind::Value
+            | ExcKind::Arithmetic
+            | ExcKind::Lookup
+            | ExcKind::Runtime
+            | ExcKind::Os => Some(ExcKind::Exception),
         }
     }
 
@@ -83,6 +106,12 @@ impl ExcKind {
     /// The runtime's code for this class.
     pub fn code(self) -> u8 {
         self as u8
+    }
+
+    /// The code as one byte of a runtime descriptor: `'0'` plus the
+    /// code, so `KeyError` is `'9'` and `OSError` `':'`.
+    pub fn code_char(self) -> char {
+        char::from(b'0' + self.code())
     }
 }
 
@@ -130,5 +159,17 @@ mod tests {
         assert!(!ExcKind::Value.is_a(ExcKind::Arithmetic));
         assert!(!ExcKind::Arithmetic.is_a(ExcKind::ZeroDivision));
         assert!(!ExcKind::Exception.is_a(ExcKind::Value));
+        assert!(ExcKind::FileNotFound.is_a(ExcKind::Os));
+        assert!(ExcKind::Permission.is_a(ExcKind::Os));
+        assert!(ExcKind::NotADirectory.is_a(ExcKind::Os));
+        assert!(ExcKind::IsADirectory.is_a(ExcKind::Os));
+        assert!(!ExcKind::Os.is_a(ExcKind::FileNotFound));
+    }
+
+    #[test]
+    fn descriptor_codes_stay_ascii() {
+        for k in ExcKind::ALL {
+            assert!(k.code_char().is_ascii_graphic(), "{}", k.name());
+        }
     }
 }

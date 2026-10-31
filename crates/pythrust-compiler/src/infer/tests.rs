@@ -2233,3 +2233,31 @@ fn a_view_inside_a_compared_value_is_refused() {
     let fine = "print([[1]] == [[1]], ({1: 2}, 1) == ({1: 2}, 1), [1] in [[1]])\n";
     assert_eq!(src_err(fine), "no error");
 }
+
+#[test]
+fn listdir_takes_its_path_by_keyword_and_nothing_else_does() {
+    let ok = "import os\nprint(os.listdir(path=\".\"), os.listdir(\".\"), os.listdir())\n";
+    assert_eq!(src_err(ok), "no error");
+    let cases = [
+        (
+            "import os\nos.listdir(dir=\".\")\n",
+            "`os.listdir` got an unexpected keyword argument `dir`",
+        ),
+        (
+            "import os\nos.listdir(\".\", path=\".\")\n",
+            "`os.listdir` takes 0 to 1 arguments but 2 were given",
+        ),
+        (
+            "import os\nos.path.isdir(s=\".\")\n",
+            "`os.path.isdir` got an unexpected keyword argument `s`",
+        ),
+        (
+            "import os\nos.listdir(path=1)\n",
+            "argument of `os.listdir`",
+        ),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src:?}: {got}");
+    }
+}

@@ -1,0 +1,7 @@
+# expect-exit: 1
+# An uncaught OSError ends the program at the call, as in CPython.
+import os
+
+print("before")
+print(os.listdir(os.path.join("no", "such", "dir")))
+print("after")
