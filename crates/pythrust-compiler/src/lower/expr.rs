@@ -461,7 +461,13 @@ impl<'a> FnBuilder<'_, 'a> {
             }
             Ty::None => Operand::Bool(false),
             Ty::Exc => Operand::Bool(true),
-            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Range => {
+            Ty::Str
+            | Ty::List(_)
+            | Ty::Tuple(_)
+            | Ty::Range
+            | Ty::Dict(_)
+            | Ty::Set(_)
+            | Ty::View(_) => {
                 let n = self.temp(Ty::Int, Rvalue::Len(v), span);
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, n, Operand::Int(0)), span)
             }
@@ -747,6 +753,9 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Tuple(_) => "tuple",
         Ty::Opt(_) => "optional",
         Ty::Range => "range",
+        Ty::Dict(_) => "dict",
+        Ty::Set(_) => "set",
+        Ty::View(_) => "dict view",
         // Exceptions print by kind, which only the run time knows.
         Ty::Exc => "exception",
     }

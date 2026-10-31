@@ -116,10 +116,18 @@ enum Rt {
     PendingIs,
     Catch,
     Uncaught,
+    DictSet,
+    DictGet,
+    SetAdd,
+    TableContains,
+    TableEntry,
+    ViewNew,
+    ListOf,
+    ListSort,
 }
 
 impl Rt {
-    const ALL: [Rt; 53] = [
+    const ALL: [Rt; 61] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -173,6 +181,14 @@ impl Rt {
         Rt::PendingIs,
         Rt::Catch,
         Rt::Uncaught,
+        Rt::DictSet,
+        Rt::DictGet,
+        Rt::SetAdd,
+        Rt::TableContains,
+        Rt::TableEntry,
+        Rt::ViewNew,
+        Rt::ListOf,
+        Rt::ListSort,
     ];
 
     fn symbol(self) -> &'static str {
@@ -230,6 +246,14 @@ impl Rt {
             Rt::PendingIs => "pt_pending_is",
             Rt::Catch => "pt_catch",
             Rt::Uncaught => "pt_uncaught",
+            Rt::DictSet => "pt_dict_set",
+            Rt::DictGet => "pt_dict_get",
+            Rt::SetAdd => "pt_set_add",
+            Rt::TableContains => "pt_table_contains",
+            Rt::TableEntry => "pt_table_entry",
+            Rt::ViewNew => "pt_view_new",
+            Rt::ListOf => "pt_list_of",
+            Rt::ListSort => "pt_list_sort",
         }
     }
 
@@ -281,6 +305,13 @@ impl Rt {
             Rt::PendingIs => (vec![I32], Some(I8)),
             Rt::Catch => (vec![], Some(ptr)),
             Rt::Uncaught => (vec![], None),
+            Rt::DictSet => (vec![ptr, I64, I64], None),
+            Rt::DictGet => (vec![ptr, I64, ptr], Some(I64)),
+            Rt::SetAdd => (vec![ptr, I64], None),
+            Rt::TableContains => (vec![ptr, I64], Some(I8)),
+            Rt::TableEntry => (vec![ptr, I64, I64], Some(I64)),
+            Rt::ViewNew | Rt::ListOf => (vec![ptr, ptr, ptr], Some(ptr)),
+            Rt::ListSort => (vec![ptr], None),
         }
     }
 }
@@ -397,7 +428,15 @@ impl<'r> Codegen<'r> {
             Ty::Int => types::I64,
             Ty::Float => types::F64,
             Ty::Bool | Ty::None => types::I8,
-            Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range | Ty::Exc => self.ptr,
+            Ty::Str
+            | Ty::List(_)
+            | Ty::Tuple(_)
+            | Ty::Opt(_)
+            | Ty::Range
+            | Ty::Exc
+            | Ty::Dict(_)
+            | Ty::Set(_)
+            | Ty::View(_) => self.ptr,
         }
     }
 
@@ -591,8 +630,22 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             }
             Inst::Forget(l) => self.forget(*l),
             Inst::Append { list, value, .. } => {
+                let rt = match self.func.ty(*list) {
+                    Ty::Set(_) => Rt::SetAdd,
+                    _ => Rt::SeqPush,
+                };
                 let (s, v) = (self.operand(*list), self.slot(*value));
-                self.call_rt(Rt::SeqPush, &[s, v]);
+                self.call_rt(rt, &[s, v]);
+            }
+            Inst::SetItem {
+                list, index, value, ..
+            } if matches!(self.func.ty(*list), Ty::Dict(_)) => {
+                let (d, k, v) = (self.operand(*list), self.slot(*index), self.slot(*value));
+                self.call_rt(Rt::DictSet, &[d, k, v]);
+            }
+            Inst::Sort(list) => {
+                let s = self.operand(*list);
+                self.call_rt(Rt::ListSort, &[s]);
             }
             Inst::SetItem {
                 list,
@@ -674,7 +727,13 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::Exc => return Err(backend("printing an unrendered exception".to_string())),
             Ty::Str => Rt::WriteStr,
             Ty::Float => Rt::WriteFloat,
-            Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => Rt::WriteSeq,
+            Ty::List(_)
+            | Ty::Tuple(_)
+            | Ty::Opt(_)
+            | Ty::Range
+            | Ty::Dict(_)
+            | Ty::Set(_)
+            | Ty::View(_) => Rt::WriteSeq,
         };
         self.call_rt(rt, &[v]);
         Ok(())
@@ -759,7 +818,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let order = self.rt_on(Rt::StrCmp, &[*a, *b])?;
                 Ok(self.b.ins().icmp_imm_s(int_cc(*op), order, 0))
             }
-            Rvalue::Cmp(op, a, b) if is_seq(self.func.ty(*a)) || self.func.ty(*a) == Ty::Range => {
+            Rvalue::Cmp(op, a, b)
+                if is_seq(self.func.ty(*a))
+                    || is_table(self.func.ty(*a))
+                    || self.func.ty(*a) == Ty::Range =>
+            {
                 self.seq_cmp(*op, *a, *b)
             }
             Rvalue::Cmp(op, a, b) if self.func.ty(*a) == Ty::Float => {
@@ -778,10 +841,19 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::StrLit(text) => self.str_lit(text),
             Rvalue::Concat(a, b) => self.rt_on(Rt::StrConcat, &[*a, *b]),
             Rvalue::Repeat(s, n) => self.rt_nonnull(Rt::StrRepeat, &[*s, *n], span, TOO_LARGE),
+            Rvalue::Index(d, k) if is_table(self.func.ty(*d)) => self.dict_get(*d, *k, dest),
             Rvalue::Index(s, i) if is_seq(self.func.ty(*s)) => self.item(*s, *i, dest, span),
             Rvalue::Index(s, i) if self.func.ty(*s) == Ty::Range => self.range_item(*s, *i, span),
             Rvalue::Index(s, i) => self.str_item(*s, *i, span),
-            Rvalue::Len(s) if is_seq(self.func.ty(*s)) => self.rt_on(Rt::SeqLen, &[*s]),
+            Rvalue::Len(s) if is_seq(self.func.ty(*s)) || is_table(self.func.ty(*s)) => {
+                self.rt_on(Rt::SeqLen, &[*s])
+            }
+            Rvalue::Entry(t, i, part) => self.entry(*t, *i, *part, dest),
+            Rvalue::View(d) => self.view(*d, self.func.locals[dest.0]),
+            Rvalue::Contains { hay, needle } if is_table(self.func.ty(*hay)) => {
+                let (s, v) = (self.operand(*hay), self.slot(*needle));
+                self.call_rt_value(Rt::TableContains, &[s, v])
+            }
             Rvalue::Len(s) if self.func.ty(*s) == Ty::Range => self.rt_on(Rt::RangeLen, &[*s]),
             Rvalue::Len(s) => self.rt_on(Rt::StrLen, &[*s]),
             Rvalue::Contains { hay, needle } if is_seq(self.func.ty(*hay)) => {
@@ -806,7 +878,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let v = self.operand(*op);
                 Ok(self.b.ins().icmp_imm_s(IntCC::Equal, v, 0))
             }
-            Rvalue::CopyList(s) => self.rt_on(Rt::ListCopy, &[*s]),
+            Rvalue::CopyList(s) if matches!(self.func.ty(*s), Ty::List(_)) => {
+                self.rt_on(Rt::ListCopy, &[*s])
+            }
+            Rvalue::CopyList(s) => self.list_of(*s, self.func.locals[dest.0]),
             Rvalue::NewSeq(items) => self.new_seq(self.func.locals[dest.0], items),
             Rvalue::Field(t, k) => self.field(*t, *k, dest),
             Rvalue::Global(g) => {
@@ -846,7 +921,13 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::Bool => Rt::StrFromBool,
             Ty::None => return self.call_rt_value(Rt::StrNone, &[]),
             Ty::Float => Rt::StrFromFloat,
-            Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Range => Rt::StrFromSeq,
+            Ty::List(_)
+            | Ty::Tuple(_)
+            | Ty::Opt(_)
+            | Ty::Range
+            | Ty::Dict(_)
+            | Ty::Set(_)
+            | Ty::View(_) => Rt::StrFromSeq,
             Ty::Exc => Rt::ExcStr,
             Ty::Str => {
                 self.call_rt(Rt::StrInc, &[v]);
@@ -1109,9 +1190,14 @@ fn raises_inline(value: &Rvalue) -> bool {
     )
 }
 
-/// Whether `ty` is a list or tuple.
+/// Whether `ty` is a list, tuple or dict view: slots read by position.
 fn is_seq(ty: Ty) -> bool {
-    matches!(ty, Ty::List(_) | Ty::Tuple(_))
+    matches!(ty, Ty::List(_) | Ty::Tuple(_) | Ty::View(_))
+}
+
+/// Whether `ty` is a dict or set: read by key.
+fn is_table(ty: Ty) -> bool {
+    matches!(ty, Ty::Dict(_) | Ty::Set(_))
 }
 
 /// The runtime functions adding and dropping a reference to a `ty`. An
@@ -1152,8 +1238,8 @@ fn runtime(span: Span, message: &str) -> Diagnostic {
 /// The native limitation an exception that may close a reference cycle
 /// meets: refcounting has no cycle collector.
 const CYCLE_GAP: &str = "the native backend does not support an exception holding a list \
-                         that may hold exceptions yet: it could form a reference cycle, and \
-                         native code has no cycle collector";
+                         or dict that may hold exceptions yet: it could form a reference \
+                         cycle, and native code has no cycle collector";
 
 /// Rejects what lowering expresses but this backend does not: an
 /// exception whose argument holds a list that may hold an exception,
@@ -1183,20 +1269,24 @@ fn refuse_gaps(program: &Program) -> Result<()> {
 }
 
 /// Whether an exception's argument of type `ty` may close a reference
-/// cycle: it holds, outside any exception, a list whose elements may
-/// hold an exception. Every other value is acyclic: a value is built
+/// cycle: it holds, outside any exception, a list whose elements, or
+/// a dict whose values, may hold an exception (a set's elements never
+/// can: they are hashable). Every other value is acyclic: a value is built
 /// from values that exist, so a cycle needs a list changed afterwards
 /// to reach back, and only an exception hides its argument's type. The
 /// last exception before that list on the cycle holds it by its type.
 /// "An exception" is any `Ty::Exc`, whatever its kind, so a future
 /// `list[Exception]` counts; a future `dyn` must count as one too.
 fn may_cycle(types: &[Compound], ty: Ty) -> bool {
-    let (Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id)) = ty else {
+    let (Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id)) =
+        ty
+    else {
         return false;
     };
     match types.get(id.0) {
-        Some(Compound::List(t)) => ir::holds(types, *t, ir::is_exc),
-        Some(Compound::Opt(t)) => may_cycle(types, *t),
+        Some(Compound::List(t) | Compound::Set(t)) => ir::holds(types, *t, ir::is_exc),
+        Some(Compound::Dict(_, v)) => ir::holds(types, *v, ir::is_exc),
+        Some(Compound::Opt(t) | Compound::View(_, t)) => may_cycle(types, *t),
         Some(Compound::Tuple(fields)) => fields.iter().any(|t| may_cycle(types, *t)),
         None => false,
     }

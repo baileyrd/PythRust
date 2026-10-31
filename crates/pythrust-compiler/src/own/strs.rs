@@ -122,7 +122,11 @@ impl<'a> Held<'a> {
         match inst {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
             Inst::Append { list, value, .. } | Inst::SetItem { list, value, .. } => {
-                let value = self.holdings(*value);
+                let mut value = self.holdings(*value);
+                // A dict keeps its key too.
+                if let Inst::SetItem { index, .. } = inst {
+                    value.extend(self.holdings(*index));
+                }
                 let lists = self.flow.points_to(*list);
                 self.store(&lists, &value)
             }
@@ -146,7 +150,7 @@ impl<'a> Held<'a> {
                 let held = items.iter().flat_map(|a| self.holdings(*a)).collect();
                 return self.store_fresh(dest, &held);
             }
-            Rvalue::CopyList(a) => {
+            Rvalue::CopyList(a) | Rvalue::View(a) => {
                 let held = self.holdings(*a);
                 return self.store_fresh(dest, &held);
             }
@@ -164,6 +168,7 @@ impl<'a> Held<'a> {
             | Rvalue::Wrap(a)
             | Rvalue::Unwrap(a)
             | Rvalue::Field(a, _)
+            | Rvalue::Entry(a, ..)
             | Rvalue::Index(a, _) => self.holdings(*a),
             Rvalue::NewSeq(items) => items.iter().flat_map(|a| self.holdings(*a)).collect(),
             _ => Origins::new(),

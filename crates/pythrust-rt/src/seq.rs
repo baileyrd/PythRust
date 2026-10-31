@@ -22,6 +22,7 @@ use std::sync::atomic::Ordering::Relaxed;
 
 use crate::range::Range;
 use crate::str::{self as pstr, PtStr};
+use crate::table::{self, Index};
 use crate::LIVE;
 
 /// A list or tuple object.
@@ -29,13 +30,16 @@ use crate::LIVE;
 pub struct PtSeq {
     rc: Cell<usize>,
     /// The descriptor of this sequence's own type (`l…` or `t…`).
-    desc: &'static [u8],
-    items: RefCell<Vec<u64>>,
+    pub(crate) desc: &'static [u8],
+    pub(crate) items: RefCell<Vec<u64>>,
+    /// A dict's or set's hash index ([`crate::table`]); `None` for
+    /// every other sequence.
+    pub(crate) index: RefCell<Option<Box<Index>>>,
 }
 
 /// What a descriptor describes.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Int,
     Float,
     Bool,
@@ -46,9 +50,12 @@ enum Kind {
     Range,
     Opt,
     Exc,
+    Dict,
+    Set,
+    View,
 }
 
-fn kind(desc: &[u8]) -> Kind {
+pub(crate) fn kind(desc: &[u8]) -> Kind {
     match desc.first() {
         Some(b'f') => Kind::Float,
         Some(b'b') => Kind::Bool,
@@ -59,6 +66,9 @@ fn kind(desc: &[u8]) -> Kind {
         Some(b'r') => Kind::Range,
         Some(b'o') => Kind::Opt,
         Some(b'x') => Kind::Exc,
+        Some(b'd') => Kind::Dict,
+        Some(b'e') => Kind::Set,
+        Some(b'v') => Kind::View,
         _ => Kind::Int,
     }
 }
@@ -66,7 +76,12 @@ fn kind(desc: &[u8]) -> Kind {
 /// The length of the one type `desc` starts with.
 fn span(desc: &[u8]) -> usize {
     match kind(desc) {
-        Kind::List | Kind::Opt => 1 + span(desc.get(1..).unwrap_or_default()),
+        Kind::List | Kind::Opt | Kind::Set => 1 + span(desc.get(1..).unwrap_or_default()),
+        Kind::Dict => {
+            let key = 1 + span(desc.get(1..).unwrap_or_default());
+            (key + span(desc.get(key..).unwrap_or_default())).min(desc.len())
+        }
+        Kind::View => 2 + span(desc.get(2..).unwrap_or_default()),
         Kind::Tuple => {
             let n = desc.get(1).copied().unwrap_or(0);
             let fields = (0..n).fold(2, |at, _| at + span(desc.get(at..).unwrap_or_default()));
@@ -79,11 +94,16 @@ fn span(desc: &[u8]) -> usize {
 /// The descriptor of slot `k` of a sequence described by `desc`. An
 /// exception's own descriptor is `x`, its kind's code and the type of
 /// its one slot, if it has one.
-fn slot(desc: &'static [u8], k: usize) -> &'static [u8] {
+pub(crate) fn slot(desc: &'static [u8], k: usize) -> &'static [u8] {
     match kind(desc) {
-        Kind::List => return desc.get(1..).unwrap_or_default(),
+        Kind::List | Kind::Set => return desc.get(1..).unwrap_or_default(),
         Kind::Range => return b"i",
-        Kind::Exc => return desc.get(2..).unwrap_or_default(),
+        Kind::Exc | Kind::View => return desc.get(2..).unwrap_or_default(),
+        Kind::Dict if k.is_multiple_of(2) => return desc.get(1..).unwrap_or_default(),
+        Kind::Dict => {
+            let key = desc.get(1..).unwrap_or_default();
+            return key.get(span(key)..).unwrap_or_default();
+        }
         _ => {}
     }
     let first = desc.get(2..).unwrap_or_default();
@@ -95,7 +115,7 @@ fn slot(desc: &'static [u8], k: usize) -> &'static [u8] {
 /// # Safety
 ///
 /// `p` is a live sequence for the borrow.
-unsafe fn seq<'a>(p: u64) -> &'a PtSeq {
+pub(crate) unsafe fn seq<'a>(p: u64) -> &'a PtSeq {
     // SAFETY: guaranteed by the caller.
     unsafe { &*(p as *const PtSeq) }
 }
@@ -105,7 +125,7 @@ unsafe fn seq<'a>(p: u64) -> &'a PtSeq {
 /// # Safety
 ///
 /// `p` is a live string for the borrow.
-unsafe fn text<'a>(p: u64) -> &'a str {
+pub(crate) unsafe fn text<'a>(p: u64) -> &'a str {
     // SAFETY: guaranteed by the caller.
     unsafe { pstr::borrow(p as *const PtStr) }.text()
 }
@@ -114,14 +134,14 @@ unsafe fn text<'a>(p: u64) -> &'a str {
 /// type and whether a present value is boxed, which an `int`, `float`
 /// or `bool` is, in a one-field tuple. A string, list or tuple is held
 /// directly; `None` is null.
-fn opt(desc: &[u8]) -> (&[u8], bool) {
+pub(crate) fn opt(desc: &[u8]) -> (&[u8], bool) {
     let inner = desc.get(1..).unwrap_or_default();
     let boxed = matches!(kind(inner), Kind::Int | Kind::Float | Kind::Bool);
     (inner, boxed)
 }
 
 /// The inner value of a present optional slot `v` of type `desc`.
-fn present(desc: &[u8], v: u64) -> u64 {
+pub(crate) fn present(desc: &[u8], v: u64) -> u64 {
     let (_, boxed) = opt(desc);
     if !boxed {
         return v;
@@ -141,22 +161,26 @@ fn opt_owner(desc: &[u8]) -> &[u8] {
 }
 
 /// Adds a reference to what slot `v` of type `desc` holds, if anything.
-fn inc(desc: &[u8], v: u64) {
+pub(crate) fn inc(desc: &[u8], v: u64) {
     match kind(desc) {
         Kind::Opt if v == 0 => {}
         Kind::Opt => inc(opt_owner(desc), v),
         // SAFETY: a string slot holds a live string.
         Kind::Str => unsafe { pstr::pt_str_inc(v as *const PtStr) },
         // SAFETY: a sequence slot holds a live sequence.
-        Kind::List | Kind::Tuple | Kind::Range | Kind::Exc => unsafe {
-            pt_seq_inc(v as *const PtSeq)
-        },
+        Kind::List
+        | Kind::Tuple
+        | Kind::Range
+        | Kind::Exc
+        | Kind::Dict
+        | Kind::Set
+        | Kind::View => unsafe { pt_seq_inc(v as *const PtSeq) },
         _ => {}
     }
 }
 
 /// Drops the reference slot `v` of type `desc` owns, if any.
-fn dec(desc: &[u8], v: u64) {
+pub(crate) fn dec(desc: &[u8], v: u64) {
     let mut freed = Vec::new();
     dec_into(desc, v, &mut freed);
     free_all(freed);
@@ -170,7 +194,13 @@ fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
         Kind::Opt => dec_into(opt_owner(desc), v, todo),
         // SAFETY: a string slot owns a reference to a live string.
         Kind::Str => unsafe { pstr::pt_str_dec(v as *mut PtStr) },
-        Kind::List | Kind::Tuple | Kind::Range | Kind::Exc => todo.push(v),
+        Kind::List
+        | Kind::Tuple
+        | Kind::Range
+        | Kind::Exc
+        | Kind::Dict
+        | Kind::Set
+        | Kind::View => todo.push(v),
         _ => {}
     }
 }
@@ -207,13 +237,15 @@ fn drop_one(p: u64, todo: &mut Vec<u64>) {
 }
 
 /// `a == b` for two slots of type `desc`.
-fn eq(desc: &[u8], a: u64, b: u64) -> bool {
+pub(crate) fn eq(desc: &[u8], a: u64, b: u64) -> bool {
     match kind(desc) {
         Kind::Float => f64::from_bits(a) == f64::from_bits(b),
         // SAFETY: string slots hold live strings.
         Kind::Str => unsafe { text(a) == text(b) },
         // SAFETY: sequence slots hold live sequences.
-        Kind::List | Kind::Tuple => a == b || unsafe { seq_eq(seq(a), seq(b)) },
+        Kind::List | Kind::Tuple | Kind::View => a == b || unsafe { seq_eq(seq(a), seq(b)) },
+        // SAFETY: table slots hold live tables.
+        Kind::Dict | Kind::Set => a == b || unsafe { table::same(seq(a), seq(b)) },
         // SAFETY: range slots hold live ranges.
         Kind::Range => unsafe {
             range_fields(a as *const PtSeq).same(&range_fields(b as *const PtSeq))
@@ -235,7 +267,7 @@ fn seq_eq(a: &PtSeq, b: &PtSeq) -> bool {
 }
 
 /// Orders two slots of type `desc`; `None` when unordered (a NaN).
-fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
+pub(crate) fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
     match kind(desc) {
         Kind::Int => Some((a as i64).cmp(&(b as i64))),
         Kind::Float => f64::from_bits(a).partial_cmp(&f64::from_bits(b)),
@@ -246,7 +278,7 @@ fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
         Kind::Bool | Kind::None => Some(a.cmp(&b)),
         // Python cannot order `None`, ranges or exceptions; the compiler
         // never asks.
-        Kind::Opt | Kind::Range | Kind::Exc => None,
+        Kind::Opt | Kind::Range | Kind::Exc | Kind::Dict | Kind::Set | Kind::View => None,
     }
 }
 
@@ -295,7 +327,11 @@ fn repr(desc: &'static [u8], v: u64, out: &mut String) -> Result<(), TooDeep> {
                 continue;
             }
         };
-        if matches!(kind(desc), Kind::List | Kind::Tuple | Kind::Exc) {
+        let nests = matches!(
+            kind(desc),
+            Kind::List | Kind::Tuple | Kind::Exc | Kind::Dict | Kind::Set | Kind::View
+        );
+        if nests {
             if depth >= MAX_NESTING {
                 return Err(TooDeep);
             }
@@ -325,6 +361,10 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>) {
         Kind::Opt => todo.push(Step::Show(opt(desc).0, present(desc, v))),
         // SAFETY: an exception slot holds a live exception.
         Kind::Exc => show_exc(unsafe { seq(v) }, out, todo),
+        // SAFETY: a table or view slot holds a live one.
+        Kind::Dict | Kind::Set => show_table(unsafe { seq(v) }, out, todo),
+        // SAFETY: as above.
+        Kind::View => show_view(unsafe { seq(v) }, out, todo),
     }
 }
 
@@ -340,6 +380,44 @@ fn show_seq(s: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
     }));
     for (k, v) in items.iter().enumerate().rev() {
         todo.push(Step::Show(slot(s.desc, k), *v));
+        if k > 0 {
+            todo.push(Step::Text(", "));
+        }
+    }
+}
+
+/// `{1: 'a'}`, `{1, 2}`, or `set()` for an empty set.
+fn show_table(t: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+    let items = t.items.borrow();
+    let dict = kind(t.desc) == Kind::Dict;
+    if !dict && items.is_empty() {
+        out.push_str("set()");
+        return;
+    }
+    out.push('{');
+    todo.push(Step::Text("}"));
+    let stride = if dict { 2 } else { 1 };
+    for (k, v) in items.iter().enumerate().rev() {
+        todo.push(Step::Show(slot(t.desc, k), *v));
+        match (dict, k % 2) {
+            (true, 1) => todo.push(Step::Text(": ")),
+            _ if k >= stride => todo.push(Step::Text(", ")),
+            _ => {}
+        }
+    }
+}
+
+/// `dict_keys([1, 2])`, `dict_values([...])` or `dict_items([...])`.
+fn show_view(v: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+    let name = match v.desc.get(1) {
+        Some(b'k') => "dict_keys([",
+        Some(b'v') => "dict_values([",
+        _ => "dict_items([",
+    };
+    out.push_str(name);
+    todo.push(Step::Text("])"));
+    for (k, item) in v.items.borrow().iter().enumerate().rev() {
+        todo.push(Step::Show(slot(v.desc, k), *item));
         if k > 0 {
             todo.push(Step::Text(", "));
         }
@@ -425,11 +503,19 @@ pub unsafe extern "C" fn pt_seq_new(desc: *const u8, len: usize, cap: i64) -> *m
     // SAFETY: guaranteed by the caller.
     let desc: &'static [u8] = unsafe { std::slice::from_raw_parts(desc, len) };
     let cap = usize::try_from(cap).unwrap_or(0);
+    new_seq(desc, Vec::with_capacity(cap))
+}
+
+/// A new sequence of type `desc` holding `items`, whose references it
+/// takes; a dict or set gets an empty index, so `items` must be empty.
+pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
+    let index = matches!(kind(desc), Kind::Dict | Kind::Set).then(Box::default);
     LIVE.fetch_add(1, Relaxed);
     Box::into_raw(Box::new(PtSeq {
         rc: Cell::new(1),
         desc,
-        items: RefCell::new(Vec::with_capacity(cap)),
+        items: RefCell::new(items),
+        index: RefCell::new(index),
     }))
 }
 
@@ -461,12 +547,7 @@ pub unsafe extern "C" fn pt_list_copy(s: *const PtSeq) -> *mut PtSeq {
     let items = s.items.borrow().clone();
     let desc = slot(s.desc, 0);
     items.iter().for_each(|v| inc(desc, *v));
-    LIVE.fetch_add(1, Relaxed);
-    Box::into_raw(Box::new(PtSeq {
-        rc: Cell::new(1),
-        desc: s.desc,
-        items: RefCell::new(items),
-    }))
+    new_seq(s.desc, items)
 }
 
 /// `len(s)`.
@@ -477,7 +558,8 @@ pub unsafe extern "C" fn pt_list_copy(s: *const PtSeq) -> *mut PtSeq {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_seq_len(s: *const PtSeq) -> i64 {
     // SAFETY: guaranteed by the caller.
-    let n = unsafe { seq(s as u64) }.items.borrow().len();
+    let s = unsafe { seq(s as u64) };
+    let n = s.items.borrow().len() / table::stride(s.desc);
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
@@ -560,6 +642,41 @@ pub unsafe extern "C" fn pt_seq_dec(s: *mut PtSeq) {
     free_all(todo);
 }
 
+/// Sorts list `s` in place by `<`, stably, as `sorted` does in `run`:
+/// a merge sort that takes from the right only when strictly less.
+///
+/// # Safety
+///
+/// `s` is a live list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq) {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let desc = slot(s.desc, 0);
+    let items = std::mem::take(&mut *s.items.borrow_mut());
+    *s.items.borrow_mut() = merge_sort(desc, items);
+}
+
+fn merge_sort(desc: &[u8], mut items: Vec<u64>) -> Vec<u64> {
+    if items.len() < 2 {
+        return items;
+    }
+    let right = items.split_off(items.len() / 2);
+    let (left, right) = (merge_sort(desc, items), merge_sort(desc, right));
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    let (mut left, mut right) = (left.into_iter().peekable(), right.into_iter().peekable());
+    while let (Some(l), Some(r)) = (left.peek(), right.peek()) {
+        let next = match cmp(desc, *r, *l) {
+            Some(Ordering::Less) => right.next(),
+            _ => left.next(),
+        };
+        out.extend(next);
+    }
+    out.extend(left);
+    out.extend(right);
+    out
+}
+
 /// `a == b`.
 ///
 /// # Safety
@@ -606,7 +723,7 @@ pub unsafe extern "C" fn pt_list_contains(s: *const PtSeq, v: u64) -> u8 {
 /// # Safety
 ///
 /// `s` is a live sequence.
-unsafe fn shown(s: *const PtSeq) -> Result<String, TooDeep> {
+pub(crate) unsafe fn shown(s: *const PtSeq) -> Result<String, TooDeep> {
     let mut out = String::new();
     // SAFETY: guaranteed by the caller.
     repr(unsafe { seq(s as u64) }.desc, s as u64, &mut out)?;

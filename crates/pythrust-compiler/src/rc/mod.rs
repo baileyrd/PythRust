@@ -114,6 +114,7 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
         | Inst::SetGlobal { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
+        | Inst::Sort(_)
         | Inst::Raise { .. } => false,
     }
 }
@@ -134,6 +135,8 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::Repeat(..)
         | Rvalue::Index(..)
         | Rvalue::Len(_)
+        | Rvalue::Entry(..)
+        | Rvalue::View(_)
         | Rvalue::Contains { .. }
         | Rvalue::ToStr(_)
         | Rvalue::CopyList(_)
@@ -472,6 +475,7 @@ fn ends(inst: &Inst, l: LocalId) -> bool {
         | Inst::SetGlobal { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
+        | Inst::Sort(_)
         | Inst::Raise { .. } => false,
     }
 }
@@ -511,7 +515,7 @@ fn mentions(inst: &Inst, l: LocalId) -> bool {
         Inst::SetItem {
             list, index, value, ..
         } => [list, index, value].into_iter().any(local),
-        Inst::Raise { exc, .. } => local(exc),
+        Inst::Raise { exc, .. } | Inst::Sort(exc) => local(exc),
     }
 }
 
@@ -523,6 +527,7 @@ fn operands(value: &Rvalue) -> Vec<Operand> {
         | Rvalue::Len(a)
         | Rvalue::ToStr(a)
         | Rvalue::CopyList(a)
+        | Rvalue::View(a)
         | Rvalue::Field(a, _)
         | Rvalue::Wrap(a)
         | Rvalue::Unwrap(a)
@@ -538,6 +543,7 @@ fn operands(value: &Rvalue) -> Vec<Operand> {
         | Rvalue::Concat(a, b)
         | Rvalue::Repeat(a, b)
         | Rvalue::Index(a, b)
+        | Rvalue::Entry(a, b, _)
         | Rvalue::Float(_, a, b)
         | Rvalue::IntPow(a, b) => vec![*a, *b],
         Rvalue::Contains { hay, needle } => vec![*hay, *needle],

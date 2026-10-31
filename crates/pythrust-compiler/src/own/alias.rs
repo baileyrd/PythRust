@@ -336,7 +336,7 @@ impl<'a> Body<'a> {
             Inst::Assign { dest, value, .. } if self.lists(*dest) => {
                 if matches!(
                     value,
-                    Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::Call(..)
+                    Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) | Rvalue::Call(..)
                 ) {
                     age(state, *dest);
                 }
@@ -361,8 +361,8 @@ impl<'a> Body<'a> {
                     fields: Some(fields),
                 };
             }
-            Rvalue::Index(a, _) => self.step(&of(state, *a), ty),
-            Rvalue::NewSeq(_) | Rvalue::CopyList(_) => fresh,
+            Rvalue::Index(a, _) | Rvalue::Entry(a, ..) => self.step(&of(state, *a), ty),
+            Rvalue::NewSeq(_) | Rvalue::CopyList(_) | Rvalue::View(_) => fresh,
             Rvalue::Global(_) => Locs::from([root(Obj::World, ty)]),
             Rvalue::Call(f, args) => self.call(*f, args, dest, state),
             _ => Locs::new(),
@@ -399,7 +399,13 @@ impl<'a> Body<'a> {
             return true;
         }
         match self.program.compound(outer) {
-            Some(Compound::List(t) | Compound::Opt(t)) => self.within(*t, inner),
+            Some(
+                Compound::List(t)
+                | Compound::Opt(t)
+                | Compound::Set(t)
+                | Compound::Dict(_, t)
+                | Compound::View(_, t),
+            ) => self.within(*t, inner),
             Some(Compound::Tuple(fields)) => fields.iter().any(|t| self.within(*t, inner)),
             None => false,
         }
@@ -742,11 +748,11 @@ impl<'a> Body<'a> {
     /// The list types a value of type `ty` is or may hold.
     fn list_types(&self, ty: Ty, out: &mut BTreeSet<Ty>) {
         let inner: Vec<Ty> = match self.program.compound(ty) {
-            Some(Compound::List(t)) => {
+            Some(Compound::List(t) | Compound::Set(t) | Compound::Dict(_, t)) => {
                 out.insert(ty);
                 vec![*t]
             }
-            Some(Compound::Opt(t)) => vec![*t],
+            Some(Compound::Opt(t) | Compound::View(_, t)) => vec![*t],
             Some(Compound::Tuple(fields)) => fields.clone(),
             None => Vec::new(),
         };
@@ -899,7 +905,7 @@ fn of(state: &State, op: Operand) -> Locs {
 fn projected(rv: &Rvalue) -> Option<Operand> {
     match rv {
         Rvalue::Use(a) | Rvalue::Wrap(a) | Rvalue::Unwrap(a) => Some(*a),
-        Rvalue::Index(a, _) | Rvalue::Field(a, _) => Some(*a),
+        Rvalue::Index(a, _) | Rvalue::Field(a, _) | Rvalue::Entry(a, ..) => Some(*a),
         _ => None,
     }
 }
@@ -930,7 +936,7 @@ fn inst_operands(inst: &Inst) -> Vec<Operand> {
         Inst::SetItem {
             list, index, value, ..
         } => vec![*list, *index, *value],
-        Inst::Raise { exc, .. } => vec![*exc],
+        Inst::Raise { exc, .. } | Inst::Sort(exc) => vec![*exc],
         Inst::Retain(_) | Inst::Release(_) | Inst::Forget(_) | Inst::DropGlobal(_) => Vec::new(),
     }
 }
@@ -942,6 +948,7 @@ fn rvalue_operands(rv: &Rvalue) -> Vec<Operand> {
         | Rvalue::Len(a)
         | Rvalue::ToStr(a)
         | Rvalue::CopyList(a)
+        | Rvalue::View(a)
         | Rvalue::Field(a, _)
         | Rvalue::Wrap(a)
         | Rvalue::Unwrap(a)
@@ -953,6 +960,7 @@ fn rvalue_operands(rv: &Rvalue) -> Vec<Operand> {
         | Rvalue::ParseInt(a) => vec![*a],
         Rvalue::Int(_, a, b)
         | Rvalue::Index(a, b)
+        | Rvalue::Entry(a, b, _)
         | Rvalue::Cmp(_, a, b)
         | Rvalue::AddOverflows(a, b)
         | Rvalue::Concat(a, b)
