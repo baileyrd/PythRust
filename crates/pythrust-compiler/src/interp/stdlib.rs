@@ -70,8 +70,12 @@ impl<'m> Interp<'m, '_> {
 }
 
 /// `open(p, "rb")`. A directory fails as CPython's does, though Unix
-/// opens one for reading.
+/// opens one for reading; a NUL in `p` is CPython's untracked
+/// `ValueError`, before any file system call.
 fn open<'m>(p: &str, span: Span) -> Exec<'m, Value<'m>> {
+    if p.contains('\0') {
+        return Err(raised(ExcKind::Value, NUL.to_string(), span));
+    }
     let opened = fs::File::open(p).and_then(|file| match file.metadata()?.is_dir() {
         true => Err(is_a_directory()),
         false => Ok(file),
@@ -81,6 +85,9 @@ fn open<'m>(p: &str, span: Span) -> Exec<'m, Value<'m>> {
     let name = p.to_string();
     Ok(Value::File(Rc::new(File { name, file })))
 }
+
+/// CPython's message for a path holding a NUL.
+const NUL: &str = "embedded null byte";
 
 #[cfg(unix)]
 fn is_a_directory() -> io::Error {

@@ -1256,11 +1256,37 @@ fn files_match_cpython() -> Res<()> {
          \x20   via(f)\n\
          \x20   print('continued')\n\
          except ValueError:\n\
-         \x20   print('caught via')\n",
+         \x20   print('caught via')\n\
+         def read_or(f, fallback):\n\
+         \x20   try:\n\
+         \x20       return f.read()\n\
+         \x20   except OSError:\n\
+         \x20       return fallback\n\
+         try:\n\
+         \x20   print(len(read_or(f, e)))\n\
+         except ValueError:\n\
+         \x20   print('caught before len')\n\
+         def open_or(p):\n\
+         \x20   try:\n\
+         \x20       return open(p, 'rb')\n\
+         \x20   except OSError:\n\
+         \x20       return open({a_path:?}, 'rb')\n\
+         for p in ['a\\x00b', {missing:?}]:\n\
+         \x20   try:\n\
+         \x20       open(p, 'rb')\n\
+         \x20   except ValueError as err:\n\
+         \x20       print('ValueError', err)\n\
+         \x20   except OSError:\n\
+         \x20       print('OSError')\n\
+         \x20   try:\n\
+         \x20       print(len(open_or(p).read()))\n\
+         \x20   except ValueError as err:\n\
+         \x20       print('ValueError via helper', err)\n",
         a = at("data.bin"),
         b = at("same.bin"),
         e = at("empty.bin"),
         a_path = at("data.bin"),
+        missing = at("missing.bin"),
     );
     // Windows names a directory's error differently (PermissionError, a
     // listed deviation), so only POSIX checks the errors' str and repr.
@@ -1286,10 +1312,17 @@ fn files_match_cpython() -> Res<()> {
     // A closed file's read escapes a helper that catches only OSError,
     // directly and through another call (D7: untracked, still caught).
     assert!(
-        want.stdout.contains("caught\ncaught via\n") && !want.stdout.contains("continued"),
+        want.stdout
+            .contains("caught\ncaught via\ncaught before len\n")
+            && !want.stdout.contains("continued"),
         "{}",
         want.stdout
     );
+    // A NUL in `open`'s path is CPython's ValueError, not an OSError,
+    // and escapes a helper that catches only OSError.
+    let nul =
+        "ValueError embedded null byte\nValueError via helper embedded null byte\nOSError\n9\n";
+    assert!(want.stdout.contains(nul), "{}", want.stdout);
     let repr = "[IsADirectoryError(21, 'Is a directory')]";
     assert!(!cfg!(unix) || want.stdout.contains(repr), "{}", want.stdout);
     assert_eq!(run_pythrust(&source)?, want);

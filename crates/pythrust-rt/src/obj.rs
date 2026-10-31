@@ -246,6 +246,10 @@ pub unsafe extern "C" fn pt_open(
 ) -> *mut PtObj {
     // SAFETY: guaranteed by the caller.
     let (p, at) = unsafe { (pstr::borrow(p).text(), site(head, head_len, tail, tail_len)) };
+    if p.contains('\0') {
+        at.raise_text(VALUE_ERROR, "embedded null byte".to_string());
+        return std::ptr::null_mut();
+    }
     match open(p) {
         Ok(file) => into_ptr(Obj::File {
             name: p.into(),

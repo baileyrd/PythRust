@@ -1,13 +1,14 @@
 //! Which functions may return with a catchable fault pending: a division
 //! by zero, an index out of range, a wrong unpacking arity
-//! (docs/research/faults.md) or a read of a closed file. Such a fault is never in a `raises` set,
+//! (docs/research/faults.md), a read of a closed file or a NUL in the
+//! path given to `open`. Such a fault is never in a `raises` set,
 //! so lowering tests the pending flag after a call to one of these as it
 //! does after a call whose set is not empty.
 //!
 //! Syntactic and conservative: `/`, `//` and `%` by anything but a
 //! nonzero literal, an index into anything but a tuple, and unpacking
-//! anything but a tuple fault, as does any `.read()` (a file's, whatever
-//! the receiver's inferred type); a call by name to a function that faults
+//! anything but a tuple fault, as do any `.read()` (a file's, whatever
+//! the receiver's inferred type) and any call to `open`; a call by name to a function that faults
 //! does too, closed over the call graph.
 
 use std::collections::{HashMap, HashSet};
@@ -132,6 +133,7 @@ impl<'a> Sites<'a> {
                 args.iter().for_each(|a| self.expr(&a.value));
                 match &func.kind {
                     ExprKind::Name(name) => {
+                        self.faults |= name == "open";
                         self.calls.insert(name);
                     }
                     ExprKind::Attr { value, attr } => {
