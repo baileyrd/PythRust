@@ -29,14 +29,20 @@ impl FnBuilder<'_, '_> {
 
     /// In generic code, binds the variables a display's type leaves open
     /// from its items' types, as `[n * n]` in `def squares(n)` needs.
-    fn bind_display(&mut self, ops: &[Operand], span: Span) -> Result<()> {
+    pub(super) fn bind_display(&mut self, ops: &[Operand], span: Span) -> Result<()> {
         let node = self.node_type(span)?;
         if super::is_closed(node, &self.subst) {
             return Ok(());
         }
         let slots: Vec<&Type> = match node {
-            Type::List(elem) => vec![elem.as_ref(); ops.len()],
+            Type::List(elem) | Type::Set(elem) => vec![elem.as_ref(); ops.len()],
             Type::Tuple(fields) => fields.iter().collect(),
+            // Keys and values alternate.
+            Type::Dict(k, v) => [k.as_ref(), v.as_ref()]
+                .into_iter()
+                .cycle()
+                .take(ops.len())
+                .collect(),
             _ => Vec::new(),
         };
         for (t, op) in slots.into_iter().zip(ops) {
@@ -70,6 +76,11 @@ impl FnBuilder<'_, '_> {
             Ty::Str => Ok(Ty::Str),
             Ty::Range => Ok(Ty::Int),
             Ty::List(_) => self.slot_ty(ty, 0, span),
+            Ty::View(_) => self
+                .cx
+                .seqs
+                .elem(ty)
+                .ok_or_else(|| internal(span, "a view of no item type")),
             _ => Err(unsupported(span, "indexing this type")),
         }
     }
@@ -77,7 +88,7 @@ impl FnBuilder<'_, '_> {
     /// `v`, which must have type `want`: inference gives every slot its
     /// value's exact type, with no widening, but for wrapping into an
     /// optional.
-    fn expect(&mut self, v: Operand, want: Ty, span: Span) -> Result<Operand> {
+    pub(super) fn expect(&mut self, v: Operand, want: Ty, span: Span) -> Result<Operand> {
         let v = self.fit(v, want, span);
         if self.ty(v) != want {
             return Err(unsupported(
@@ -97,6 +108,9 @@ impl FnBuilder<'_, '_> {
             return self.field(s, k, span);
         }
         let i = self.expr(index)?;
+        if let Ty::Dict(_) = ty {
+            return self.dict_read(s, i, span);
+        }
         let i = self.as_int(i, span);
         let item = self.item_ty(ty, span)?;
         if self.ty(i) != Ty::Int {
@@ -148,6 +162,9 @@ impl FnBuilder<'_, '_> {
     ) -> Result<Operand> {
         let list = self.expr(value)?;
         let ty = self.ty(list);
+        if let Ty::Dict(_) | Ty::Set(_) = ty {
+            return self.table_method(list, attr, args, span);
+        }
         let ([arg], "append", Ty::List(_)) = (args, attr, ty) else {
             return Err(unsupported(span, "methods other than `list.append(x)`"));
         };
@@ -183,6 +200,9 @@ impl FnBuilder<'_, '_> {
         span: Span,
     ) -> Result<()> {
         let ty = self.ty(list);
+        if let Ty::Dict(_) = ty {
+            return self.dict_store(list, index, v, span);
+        }
         let index = self.as_int(index, span);
         if !matches!(ty, Ty::List(_)) || self.ty(index) != Ty::Int {
             return Err(unsupported(
@@ -221,7 +241,13 @@ impl FnBuilder<'_, '_> {
     fn unpack(&mut self, targets: &[Target], s: Operand, span: Span) -> Result<()> {
         let ty = self.ty(s);
         let mut items = Vec::new();
-        if let Ty::List(_) | Ty::Str | Ty::Range = ty {
+        if let Ty::Dict(_) | Ty::Set(_) = ty {
+            self.check_unpack_len(s, targets.len(), span)?;
+            for k in 0..targets.len() {
+                let i = Operand::Int(i64::try_from(k).unwrap_or(i64::MAX));
+                items.push(self.entry_key(s, i, span)?);
+            }
+        } else if let Ty::List(_) | Ty::Str | Ty::Range | Ty::View(_) = ty {
             self.check_unpack_len(s, targets.len(), span)?;
             let elem = self.item_ty(ty, span)?;
             for k in 0..targets.len() {

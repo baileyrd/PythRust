@@ -202,6 +202,7 @@ impl<'m> Value<'m> {
             Value::Dict(t) | Value::Set(t) => Ok(Iter::Table(TableIter {
                 table: Rc::clone(t),
                 is_set: matches!(self, Value::Set(_)),
+                view: View::Keys,
                 next: 0,
                 len: t.borrow().len(),
                 changed: false,
@@ -264,15 +265,37 @@ pub(super) enum Iter<'m> {
     Table(TableIter<'m>),
 }
 
-/// Iteration over a dict's keys or a set's elements. A table whose size
-/// changes stops the iteration and sets `changed`: Python raises a
-/// `RuntimeError` at that step, which the caller reports.
+/// Iteration over a dict's keys, values or items, or a set's elements.
+/// A table whose size changes stops the iteration and sets `changed`:
+/// Python raises a `RuntimeError` at that step, which the caller
+/// reports.
 pub(super) struct TableIter<'m> {
     table: TableRef<'m>,
     is_set: bool,
+    /// What each step gives: a set's are its keys.
+    view: View,
     next: usize,
     len: usize,
     changed: bool,
+}
+
+impl<'m> Value<'m> {
+    /// Live iteration over a dict's `view`, as `for` over `d.keys()`,
+    /// `d.values()` or `d.items()` does in Python: `None` for anything
+    /// but a dict.
+    pub fn iter_view(&self, view: View) -> Option<Iter<'m>> {
+        let Value::Dict(t) = self else {
+            return None;
+        };
+        Some(Iter::Table(TableIter {
+            table: Rc::clone(t),
+            is_set: false,
+            view,
+            next: 0,
+            len: t.borrow().len(),
+            changed: false,
+        }))
+    }
 }
 
 impl Iter<'_> {
@@ -318,9 +341,13 @@ impl<'m> Iterator for Iter<'m> {
                     t.changed = true;
                     return None;
                 }
-                let (k, _) = table.entry(t.next)?;
+                let (k, v) = table.entry(t.next)?;
                 t.next += 1;
-                Some(k.clone())
+                Some(match t.view {
+                    View::Keys => k.clone(),
+                    View::Values => v.clone(),
+                    View::Items => Value::Tuple(Rc::from([k.clone(), v.clone()])),
+                })
             }
         }
     }

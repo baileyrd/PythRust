@@ -14,6 +14,7 @@ mod globals;
 mod opt;
 mod seq;
 mod stmt;
+mod table;
 mod types;
 mod vars;
 
@@ -491,9 +492,18 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::Str => Ty::Str,
         Type::Range => Ty::Range,
         Type::Exception => Ty::Exc,
-        // No native dict or set yet, so the body built none: any slot
-        // type will do, as for an open variable.
-        Type::Dict(..) | Type::Set(_) | Type::View(..) => Ty::None,
+        Type::Dict(k, v) => {
+            let (k, v) = (settle(k, subst, bound, seqs), settle(v, subst, bound, seqs));
+            seqs.dict(k, v)
+        }
+        Type::Set(t) => {
+            let elem = settle(t, subst, bound, seqs);
+            seqs.set(elem)
+        }
+        Type::View(view, t) => {
+            let item = settle(t, subst, bound, seqs);
+            seqs.view(ir_view(*view), item)
+        }
     }
 }
 
@@ -529,6 +539,12 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
             let fields = seqs.fields(ty).map(<[Ty]>::to_vec).unwrap_or_default();
             ts.len() == fields.len() && ts.iter().zip(fields).all(|(t, f)| bind(t, f, seqs, subst))
         }
+        (Type::Set(t), Ty::Set(_)) | (Type::View(_, t), Ty::View(_)) => {
+            seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst))
+        }
+        (Type::Dict(k, v), Ty::Dict(_)) => seqs
+            .key_value(ty)
+            .is_some_and(|(kt, vt)| bind(k, kt, seqs, subst) && bind(v, vt, seqs, subst)),
         (Type::Int, Ty::Int)
         | (Type::Float, Ty::Float)
         | (Type::Bool, Ty::Bool)
@@ -929,13 +945,51 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::Str => Ok(Ty::Str),
         Type::Range => Ok(Ty::Range),
         Type::Exception => Ok(Ty::Exc),
-        Type::Dict(..) => Err(unsupported(span, "dicts")),
-        Type::Set(_) => Err(unsupported(span, "sets")),
-        Type::View(..) => Err(unsupported(span, "dict views")),
+        // Open parts, as in `{}` or `set()` nothing constrains: the
+        // table stays empty, so any slot type will do.
+        Type::Dict(k, v) => {
+            let k = open_or(k, subst, seqs, span)?;
+            let v = open_or(v, subst, seqs, span)?;
+            Ok(seqs.dict(k, v))
+        }
+        Type::Set(t) => {
+            let elem = open_or(t, subst, seqs, span)?;
+            Ok(seqs.set(elem))
+        }
+        Type::View(view, t) => {
+            let item = match &**t {
+                // `{}.items()`: neither part is known.
+                Type::Tuple(parts) => {
+                    let parts = parts
+                        .iter()
+                        .map(|p| open_or(p, subst, seqs, span))
+                        .collect::<Result<Vec<Ty>>>()?;
+                    seqs.tuple(parts)
+                }
+                t => open_or(t, subst, seqs, span)?,
+            };
+            Ok(seqs.view(ir_view(*view), item))
+        }
         Type::Var(v) => subst
             .get(v)
             .copied()
             .ok_or_else(|| unsupported(span, "a value whose type depends on generic code")),
+    }
+}
+
+/// [`concrete`], but `None` for a variable nothing binds.
+fn open_or(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> Result<Ty> {
+    match t {
+        Type::Var(v) if !subst.contains_key(v) => Ok(Ty::None),
+        _ => concrete(t, subst, seqs, span),
+    }
+}
+
+fn ir_view(view: crate::infer::View) -> crate::ir::View {
+    match view {
+        crate::infer::View::Keys => crate::ir::View::Keys,
+        crate::infer::View::Values => crate::ir::View::Values,
+        crate::infer::View::Items => crate::ir::View::Items,
     }
 }
 

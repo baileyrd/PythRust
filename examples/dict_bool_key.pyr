@@ -1,0 +1,7 @@
+# A bool stored as a key of an int-keyed dict is the entry its int names; the first key stored stays.
+by_int = {1: "one"}
+by_int[True] = "true"
+print(by_int, by_int[1])
+fresh: dict[int, str] = {}
+fresh[True] = "t"
+print(fresh, fresh[1])

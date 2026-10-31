@@ -4,7 +4,7 @@ use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, UnaryOp};
 use crate::diag::{Diagnostic, Result};
 use crate::exc::ExcKind;
 use crate::infer::Type;
-use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
+use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty, View};
 use crate::span::Span;
 
 use super::vars::runtime;
@@ -26,8 +26,8 @@ impl<'a> FnBuilder<'_, 'a> {
             ExprKind::Float(f) => Ok(Operand::Float(*f)),
             ExprKind::Str(text) => Ok(self.temp(Ty::Str, Rvalue::StrLit(text.clone()), e.span)),
             ExprKind::Tuple(items) | ExprKind::List(items) => self.display(items, e.span),
-            ExprKind::Dict(_) => Err(unsupported(e.span, "dicts")),
-            ExprKind::Set(_) => Err(unsupported(e.span, "sets")),
+            ExprKind::Dict(items) => self.dict_display(items, e.span),
+            ExprKind::Set(items) => self.set_display(items, e.span),
             ExprKind::Subscript { value, index } => self.subscript(value, index, e.span),
             ExprKind::Attr { .. } => Err(unsupported(e.span, "attributes other than methods")),
         }
@@ -206,6 +206,11 @@ impl<'a> FnBuilder<'_, 'a> {
         for (i, (op, right)) in rest.iter().enumerate() {
             // Past the first link, a path that never returns ends only
             // its own branch.
+            // `x in d.keys()` looks `x` up in `d`, building no view.
+            let right = match (op, self.dict_view(right)) {
+                (ast::CmpOp::In | ast::CmpOp::NotIn, Some((d, View::Keys))) => d,
+                _ => right,
+            };
             let Some(r) = self.on_branch(right, i > 0)? else {
                 break;
             };
@@ -301,6 +306,10 @@ impl<'a> FnBuilder<'_, 'a> {
                 needle
             }
             (Ty::Int | Ty::Bool | Ty::Float, Ty::Range) => l,
+            (_, Ty::Dict(_) | Ty::Set(_) | Ty::View(_)) => {
+                let found = self.table_contains(l, r, span)?;
+                return Ok(self.negate_if(op, found, span));
+            }
             _ => {
                 return Err(unsupported(
                     span,
@@ -635,6 +644,8 @@ impl<'a> FnBuilder<'_, 'a> {
             "len" | "list" | "str" | "int" | "float" | "bool" => {
                 self.unary_builtin(name, &ops, span)
             }
+            "set" => self.new_set(&ops, span),
+            "sorted" => self.sorted(&ops, span),
             "range" => {
                 let (start, stop, step) = self.range_bounds(args, &ops, span)?;
                 let items = vec![start, stop, step];
@@ -716,8 +727,14 @@ impl<'a> FnBuilder<'_, 'a> {
             ("int", Ty::Bool) => return Ok(self.as_int(arg, span)),
             ("bool", _) => return Ok(self.truthy(arg, span)),
             ("len", Ty::Range) => return Ok(self.range_len(arg, span)),
-            ("len", Ty::Str | Ty::List(_) | Ty::Tuple(_)) => (Ty::Int, Rvalue::Len(arg)),
+            (
+                "len",
+                Ty::Str | Ty::List(_) | Ty::Tuple(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_),
+            ) => (Ty::Int, Rvalue::Len(arg)),
             ("list", ty @ Ty::List(_)) => (ty, Rvalue::CopyList(arg)),
+            ("list", Ty::Dict(_) | Ty::Set(_) | Ty::View(_)) => {
+                (self.ty_at(span)?, Rvalue::CopyList(arg))
+            }
             ("str", _) => (Ty::Str, Rvalue::ToStr(arg)),
             ("int", Ty::Float) => (Ty::Int, Rvalue::FloatToInt(arg)),
             ("int" | "float", Ty::Str) => return self.parse(name, arg, span),

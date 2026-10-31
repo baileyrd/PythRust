@@ -5,16 +5,17 @@ use crate::ast::{
 };
 use crate::diag::Result;
 use crate::infer::Type;
-use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
+use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty, View};
 use crate::span::Span;
 
+use super::table::Part;
 use super::{unsupported, FnBuilder, Loop};
 
 /// A `for` loop's parts other than what it iterates.
-struct Looped<'s> {
-    target: &'s Target,
-    body: &'s Block,
-    orelse: &'s Block,
+pub(super) struct Looped<'s> {
+    pub(super) target: &'s Target,
+    pub(super) body: &'s Block,
+    pub(super) orelse: &'s Block,
 }
 
 /// A generic function's result type that no `return` decides first.
@@ -130,6 +131,12 @@ impl FnBuilder<'_, '_> {
             TargetKind::Subscript { value: list, index } => {
                 let list = self.expr(list)?;
                 let index = self.expr(index)?;
+                if let Ty::Dict(_) = self.ty(list) {
+                    let l = self.dict_read(list, index, target.span)?;
+                    let r = self.expr(value)?;
+                    let v = self.arith(op, l, r, span)?;
+                    return self.store_item(list, index, v, target.span);
+                }
                 let index = self.as_int(index, target.span);
                 let ty = self.ty(list);
                 if !matches!(ty, Ty::List(_)) || self.ty(index) != Ty::Int {
@@ -296,7 +303,7 @@ impl FnBuilder<'_, '_> {
 
     /// Lowers `body` with `break` to `exit` and `continue` to `next`, then
     /// jumps to `next`.
-    fn loop_body(&mut self, body: &Block, next: BlockId, exit: BlockId) -> Result<()> {
+    pub(super) fn loop_body(&mut self, body: &Block, next: BlockId, exit: BlockId) -> Result<()> {
         let pools = self.pools.len();
         self.loops.push(Loop { next, exit, pools });
         let lowered = self.block(body);
@@ -326,7 +333,23 @@ impl FnBuilder<'_, '_> {
             let bounds = self.range_bounds(args, &ops, iter.span)?;
             return self.for_range(&looped, bounds, iter.span);
         }
+        // `for x in d.keys()` (or values, or items) reads `d` itself.
+        if let Some((d, view)) = self.dict_view(iter) {
+            let d = self.expr(d)?;
+            let part = match view {
+                View::Keys => Part::Key,
+                View::Values => Part::Value,
+                View::Items => {
+                    let (k, v) = self.key_value(self.ty(d), iter.span)?;
+                    Part::Item(self.cx.seqs.tuple(vec![k, v]))
+                }
+            };
+            return self.for_table(&looped, d, part, iter.span);
+        }
         let s = self.expr(iter)?;
+        if let Ty::Dict(_) | Ty::Set(_) = self.ty(s) {
+            return self.for_table(&looped, s, Part::Key, iter.span);
+        }
         if self.ty(s) == Ty::Range {
             let bounds = [0, 1, 2].map(|k| self.temp(Ty::Int, Rvalue::Field(s, k), iter.span));
             return self.for_range(&looped, bounds.into(), iter.span);
@@ -344,6 +367,7 @@ impl FnBuilder<'_, '_> {
         let item = match self.ty(s) {
             Ty::Str => Ty::Str,
             ty @ Ty::List(_) => self.slot_ty(ty, 0, iter.span)?,
+            ty @ Ty::View(_) => self.cx.seqs.elem(ty).unwrap_or(Ty::None),
             ty @ Ty::Tuple(_) => self.tuple_item(ty, iter.span)?,
             _ => {
                 return Err(unsupported(
@@ -357,7 +381,7 @@ impl FnBuilder<'_, '_> {
 
     /// The one field type of a non-empty tuple `for` iterates: inference
     /// requires every field to have it.
-    fn tuple_item(&self, ty: Ty, span: Span) -> Result<Ty> {
+    pub(super) fn tuple_item(&self, ty: Ty, span: Span) -> Result<Ty> {
         let fields = self.cx.seqs.fields(ty).unwrap_or_default();
         match fields.split_first() {
             Some((first, rest)) if rest.iter().all(|f| f == first) => Ok(*first),
@@ -398,7 +422,7 @@ impl FnBuilder<'_, '_> {
     /// its own: the item and whatever binding it creates (the fields an
     /// unpacking reads, the list an indexed target evaluates) are
     /// released each iteration.
-    fn bind_iteration(
+    pub(super) fn bind_iteration(
         &mut self,
         target: &Target,
         next: impl FnOnce(&mut Self) -> Result<Operand>,
@@ -410,7 +434,12 @@ impl FnBuilder<'_, '_> {
     }
 
     /// Lowers the `else` of a loop in `other`, then continues at `end`.
-    fn finish_loop(&mut self, orelse: &Block, other: BlockId, end: BlockId) -> Result<()> {
+    pub(super) fn finish_loop(
+        &mut self,
+        orelse: &Block,
+        other: BlockId,
+        end: BlockId,
+    ) -> Result<()> {
         self.switch_to(other);
         self.block(orelse)?;
         self.terminate(Term::Goto(end));

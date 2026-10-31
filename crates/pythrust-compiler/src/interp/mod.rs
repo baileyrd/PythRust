@@ -26,6 +26,7 @@ use crate::ast::{
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
+use crate::infer::View;
 use crate::span::Span;
 use builtins::{Args, Builtin};
 use table::{Key, Table};
@@ -320,7 +321,10 @@ impl<'m> Interp<'m, '_> {
         body: &'m Block,
         orelse: &'m Block,
     ) -> Exec<'m, Flow<'m>> {
-        let mut items = self.eval(iter)?.iter(iter.span)?;
+        let mut items = match self.dict_view(iter)? {
+            Some(items) => items,
+            None => self.eval(iter)?.iter(iter.span)?,
+        };
         for v in items.by_ref() {
             self.assign(target, v)?;
             if let Some(flow) = loop_exit(self.exec_block(body)?) {
@@ -331,6 +335,38 @@ impl<'m> Interp<'m, '_> {
             return Err(rt_err(iter.span, format!("RuntimeError: {message}")).into());
         }
         self.exec_block(orelse)
+    }
+
+    /// For `for x in d.keys()` (or `values()`, `items()`) on a dict `d`:
+    /// live iteration over `d`, as Python's view gives, not over a
+    /// snapshot; `None` for any other iterable, which is evaluated as
+    /// usual.
+    fn dict_view(&mut self, iter: &'m Expr) -> Exec<'m, Option<value::Iter<'m>>> {
+        let ExprKind::Call { func, args } = &iter.kind else {
+            return Ok(None);
+        };
+        let ExprKind::Attr { value, attr } = &func.kind else {
+            return Ok(None);
+        };
+        let view = match attr.name.as_str() {
+            "keys" => View::Keys,
+            "values" => View::Values,
+            "items" => View::Items,
+            _ => return Ok(None),
+        };
+        if !args.is_empty() {
+            return Ok(None);
+        }
+        // Inference allows these methods only on a dict.
+        let receiver = self.eval(value)?;
+        match receiver.iter_view(view) {
+            Some(items) => Ok(Some(items)),
+            None => Err(rt_err(
+                iter.span,
+                format!("internal: `{}` of a non-dict", attr.name),
+            )
+            .into()),
+        }
     }
 
     /// `def`: evaluates defaults now, as Python does, and binds the name.

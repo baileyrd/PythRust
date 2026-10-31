@@ -1241,8 +1241,34 @@ fn dicts_and_sets_are_mutable_heap_types() {
     assert_eq!(checked(modes), Ok(()));
     let tuple = "def f(mut t: tuple[dict[int, int], int]):\n    t[0][1] = 2\nf(({}, 0))\n";
     assert_eq!(checked(tuple), Ok(()));
-    // Native code has no dicts or sets yet, so their bodies' modes are
-    // checked once it does.
-    conservative("def f(d):\n    d[1] = 2\nf({})\n");
-    conservative("def f(s: set[int]) -> int:\n    return len(s)\nprint(f({1}))\n");
+}
+
+#[test]
+fn dict_stores_and_set_adds_are_mut_and_keep_what_they_store() {
+    let src = "\
+def put(d, k, v):
+    d[k] = v
+def add(s):
+    s.add(1)
+def size(s, d):
+    return len(s) + len(d)
+names: dict[str, list[int]] = {}
+put(names, \"a\", [1])
+nums = {0}
+add(nums)
+print(size(nums, names))
+";
+    assert_eq!(modes(src, "put"), (vec![MUT, READ, OWNED], vec![false; 3]));
+    assert_eq!(modes(src, "add"), (vec![MUT], vec![false]));
+    assert_eq!(modes(src, "size"), (vec![READ, READ], vec![false; 2]));
+    assert_eq!(strs(src, "put")[1], (true, false));
+    let undeclared = "temper def put(d: dict[str, int], k: str) -> None:\n    d[k] = 1\n";
+    assert_eq!(
+        mode_err(undeclared).0,
+        "tempered `put` changes `d` in place; write `mut d`"
+    );
+    let key_kept = "temper def put(mut d: dict[str, int], k: str) -> None:\n    d[k] = 1\n";
+    assert_eq!(mode_err(key_kept).1, "k");
+    let ok = "temper def put(mut d: dict[str, int], owned k: str) -> None:\n    d[k] = 1\n";
+    assert_eq!(checked(ok), Ok(()));
 }

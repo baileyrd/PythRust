@@ -1,8 +1,9 @@
-//! List, tuple and optional types, interned so that [`Ty`] stays `Copy`.
+//! List, tuple, optional, dict, set and view types, interned so that
+//! [`Ty`] stays `Copy`.
 
 use std::collections::HashMap;
 
-use crate::ir::{Compound, Ty, TypeId};
+use crate::ir::{Compound, Ty, TypeId, View};
 
 /// Every list, tuple and optional type of the program, each once.
 #[derive(Default)]
@@ -18,6 +19,18 @@ impl SeqTypes {
 
     pub(super) fn tuple(&mut self, fields: Vec<Ty>) -> Ty {
         Ty::Tuple(self.intern(Compound::Tuple(fields)))
+    }
+
+    pub(super) fn dict(&mut self, key: Ty, value: Ty) -> Ty {
+        Ty::Dict(self.intern(Compound::Dict(key, value)))
+    }
+
+    pub(super) fn set(&mut self, elem: Ty) -> Ty {
+        Ty::Set(self.intern(Compound::Set(elem)))
+    }
+
+    pub(super) fn view(&mut self, view: View, item: Ty) -> Ty {
+        Ty::View(self.intern(Compound::View(view, item)))
     }
 
     /// `present | None`: `None` itself when `present` is `None`, and
@@ -39,10 +52,26 @@ impl SeqTypes {
         id
     }
 
-    /// A list's element type.
+    /// A list's or set's element type, or a view's item type.
     pub(super) fn elem(&self, ty: Ty) -> Option<Ty> {
         match self.compound(ty)? {
-            Compound::List(elem) => Some(*elem),
+            Compound::List(elem) | Compound::Set(elem) | Compound::View(_, elem) => Some(*elem),
+            _ => None,
+        }
+    }
+
+    /// Which view a view type is.
+    pub(super) fn view_kind(&self, ty: Ty) -> Option<View> {
+        match self.compound(ty)? {
+            Compound::View(view, _) => Some(*view),
+            _ => None,
+        }
+    }
+
+    /// A dict's key and value types.
+    pub(super) fn key_value(&self, ty: Ty) -> Option<(Ty, Ty)> {
+        match self.compound(ty)? {
+            Compound::Dict(key, value) => Some((*key, *value)),
             _ => None,
         }
     }
@@ -65,7 +94,12 @@ impl SeqTypes {
 
     fn compound(&self, ty: Ty) -> Option<&Compound> {
         match ty {
-            Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) => self.all.get(id.0),
+            Ty::List(id)
+            | Ty::Tuple(id)
+            | Ty::Opt(id)
+            | Ty::Dict(id)
+            | Ty::Set(id)
+            | Ty::View(id) => self.all.get(id.0),
             _ => None,
         }
     }
