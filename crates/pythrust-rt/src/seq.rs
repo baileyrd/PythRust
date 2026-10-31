@@ -11,7 +11,7 @@
 //! `i` int, `f` float, `b` bool, `n` `None`, `s` str, `l` and the element
 //! type for a list, `t`, a field count byte and the field types for a
 //! tuple, `r` for a range (see [`crate::range`]), `x` for an exception
-//! (see [`crate::exc`]). Ownership follows strings: functions borrow
+//! (see [`crate::exc`]), `y` for bytes or a file (see [`crate::obj`]). Ownership follows strings: functions borrow
 //! their arguments, and slots read out are new references.
 
 #![allow(unsafe_code)] // Slots are pointers; the C ABI below.
@@ -20,6 +20,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 
+use crate::obj::{self, PtObj};
 use crate::range::Range;
 use crate::str::{self as pstr, PtStr};
 use crate::table::{self, Index};
@@ -53,6 +54,8 @@ pub(crate) enum Kind {
     Dict,
     Set,
     View,
+    /// Bytes or a file ([`crate::obj`]).
+    Obj,
 }
 
 pub(crate) fn kind(desc: &[u8]) -> Kind {
@@ -69,6 +72,7 @@ pub(crate) fn kind(desc: &[u8]) -> Kind {
         Some(b'd') => Kind::Dict,
         Some(b'e') => Kind::Set,
         Some(b'v') => Kind::View,
+        Some(b'y') => Kind::Obj,
         _ => Kind::Int,
     }
 }
@@ -172,6 +176,8 @@ pub(crate) fn inc(desc: &[u8], v: u64) {
         Kind::Opt => inc(opt_owner(desc), v),
         // SAFETY: a string slot holds a live string.
         Kind::Str => unsafe { pstr::pt_str_inc(v as *const PtStr) },
+        // SAFETY: an object slot holds a live object.
+        Kind::Obj => unsafe { obj::pt_obj_inc(v as *const PtObj) },
         // SAFETY: a sequence slot holds a live sequence.
         Kind::List
         | Kind::Tuple
@@ -199,6 +205,8 @@ fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
         Kind::Opt => dec_into(opt_owner(desc), v, todo),
         // SAFETY: a string slot owns a reference to a live string.
         Kind::Str => unsafe { pstr::pt_str_dec(v as *mut PtStr) },
+        // SAFETY: an object slot owns a reference to a live object.
+        Kind::Obj => unsafe { obj::pt_obj_dec(v as *mut PtObj) },
         Kind::List
         | Kind::Tuple
         | Kind::Range
@@ -247,6 +255,8 @@ pub(crate) fn eq(desc: &[u8], a: u64, b: u64) -> bool {
         Kind::Float => f64::from_bits(a) == f64::from_bits(b),
         // SAFETY: string slots hold live strings.
         Kind::Str => unsafe { text(a) == text(b) },
+        // SAFETY: object slots hold live objects.
+        Kind::Obj => unsafe { obj::borrow(a as *const PtObj).same(obj::borrow(b as *const PtObj)) },
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple | Kind::View => a == b || unsafe { seq_eq(seq(a), seq(b)) },
         // SAFETY: table slots hold live tables.
@@ -283,7 +293,9 @@ pub(crate) fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
         Kind::Bool | Kind::None => Some(a.cmp(&b)),
         // Python cannot order `None`, ranges or exceptions; the compiler
         // never asks.
-        Kind::Opt | Kind::Range | Kind::Exc | Kind::Dict | Kind::Set | Kind::View => None,
+        Kind::Opt | Kind::Range | Kind::Exc | Kind::Dict | Kind::Set | Kind::View | Kind::Obj => {
+            None
+        }
     }
 }
 
@@ -358,6 +370,8 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>) {
         Kind::None => out.push_str("None"),
         // SAFETY: a string slot holds a live string.
         Kind::Str => out.push_str(&pstr::repr(unsafe { text(v) })),
+        // SAFETY: an object slot holds a live object.
+        Kind::Obj => out.push_str(&unsafe { obj::borrow(v as *const PtObj) }.repr()),
         // SAFETY: a sequence slot holds a live sequence.
         Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo),
         // SAFETY: a range slot holds a live range.

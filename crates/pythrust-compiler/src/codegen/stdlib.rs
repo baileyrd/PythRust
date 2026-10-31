@@ -1,4 +1,5 @@
-//! Module functions ([`crate::stdlib`]): runtime calls. One that fails
+//! Module functions, `open` and a file's methods ([`crate::stdlib`]):
+//! runtime calls. One that fails
 //! raises at `span`'s site and gives a placeholder; lowering tests the
 //! flag next.
 
@@ -12,7 +13,8 @@ use crate::stdlib::StdFn;
 
 impl FnGen<'_, '_, '_> {
     /// `f`'s result, of type `ty`, from `args`. Lowering gave `os.listdir`
-    /// its path and `os.path.join` at least two parts.
+    /// its path, `os.path.join` at least two parts and `open` its path
+    /// alone; a file method's one argument is the file.
     pub(super) fn std(&mut self, f: StdFn, args: &[Operand], ty: Ty, span: Span) -> Result<Value> {
         let args: Vec<Value> = args.iter().map(|a| self.operand(*a)).collect();
         match (f, args.as_slice()) {
@@ -32,6 +34,18 @@ impl FnGen<'_, '_, '_> {
             (StdFn::Getsize, [p]) => {
                 let site = self.site(span)?;
                 self.call_rt_value(Rt::OsPathGetsize, &[[*p].as_slice(), &site].concat())
+            }
+            (StdFn::Open, [p]) => {
+                let site = self.site(span)?;
+                self.call_rt_value(Rt::Open, &[[*p].as_slice(), &site].concat())
+            }
+            (StdFn::Read, [f]) => {
+                let site = self.site(span)?;
+                self.call_rt_value(Rt::FileRead, &[[*f].as_slice(), &site].concat())
+            }
+            (StdFn::Close, [f]) => {
+                self.call_rt(Rt::FileClose, &[*f]);
+                Ok(self.b.ins().iconst(types::I8, 0))
             }
             _ => Err(backend(format!(
                 "`{}` with {} arguments",

@@ -16,7 +16,7 @@ use crate::str::{borrow, into_ptr, repr, PtStr};
 /// What CPython raises for `e` on path `p`: the `OSError` subclass
 /// code its kind names, its errno if the system gave one, and the
 /// system's text (`No such file or directory`).
-fn os_error(e: &io::Error) -> (u8, Option<i32>, String) {
+pub(crate) fn os_error(e: &io::Error) -> (u8, Option<i32>, String) {
     let code = match e.kind() {
         io::ErrorKind::NotFound => FILE_NOT_FOUND,
         io::ErrorKind::PermissionDenied => PERMISSION,
@@ -34,24 +34,27 @@ fn os_error(e: &io::Error) -> (u8, Option<i32>, String) {
 /// Where a failing call raises: the rendered diagnostic around its
 /// uncaught line, as for `pt_raise`.
 #[derive(Clone, Copy)]
-struct Site {
+pub(crate) struct Site {
     head: &'static [u8],
     tail: &'static [u8],
 }
 
 impl Site {
-    /// Raises CPython's `OSError` for `e` on `p`: with `errno`,
-    /// `strerror` and `filename` when the system gave an errno, else a
-    /// message alone (`text: 'p'`).
-    fn raise(self, e: &io::Error, p: &str) {
+    /// Raises CPython's `OSError` for `e` on `p`, if it names one: with
+    /// `errno`, `strerror` and `filename` when the system gave an errno,
+    /// else a message alone (`text: 'p'`).
+    pub(crate) fn raise(self, e: &io::Error, p: Option<&str>) {
         let (code, errno, detail) = os_error(e);
-        match errno {
-            Some(n) => raise_errno(code, n, &detail, Some(p), self.head, self.tail),
-            None => {
-                let message = format!("{detail}: {}", repr(p));
-                raise_text(code, message, self.head, self.tail);
-            }
+        match (errno, p) {
+            (Some(n), _) => raise_errno(code, n, &detail, p, self.head, self.tail),
+            (None, Some(p)) => self.raise_text(code, format!("{detail}: {}", repr(p))),
+            (None, None) => self.raise_text(code, detail),
         }
+    }
+
+    /// Makes pending an exception of kind `code` holding `text`.
+    pub(crate) fn raise_text(self, code: u8, text: String) {
+        raise_text(code, text, self.head, self.tail);
     }
 }
 
@@ -59,7 +62,12 @@ impl Site {
 ///
 /// `head` and `tail` point to `head_len` and `tail_len` bytes that live
 /// for the whole program.
-unsafe fn site(head: *const u8, head_len: usize, tail: *const u8, tail_len: usize) -> Site {
+pub(crate) unsafe fn site(
+    head: *const u8,
+    head_len: usize,
+    tail: *const u8,
+    tail_len: usize,
+) -> Site {
     // SAFETY: guaranteed by the caller.
     unsafe {
         Site {
@@ -126,7 +134,7 @@ pub unsafe extern "C" fn pt_os_listdir(
             new_seq(desc, items)
         }
         Err(e) => {
-            at.raise(&e, p);
+            at.raise(&e, Some(p));
             std::ptr::null_mut()
         }
     }
@@ -184,7 +192,7 @@ pub unsafe extern "C" fn pt_os_path_getsize(
     match fs::metadata(p) {
         Ok(m) => i64::try_from(m.len()).unwrap_or(i64::MAX),
         Err(e) => {
-            at.raise(&e, p);
+            at.raise(&e, Some(p));
             0
         }
     }

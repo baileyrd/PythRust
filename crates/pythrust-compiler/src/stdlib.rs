@@ -1,5 +1,6 @@
 //! The standard library (M6a): the modules a program may `import` and
-//! the names each exposes. A Python-compatible surface over the Rust
+//! the names each exposes, and the builtin `open` with its file's
+//! methods. A Python-compatible surface over the Rust
 //! runtime (`docs/roadmap.md#phase-5-m6-plan`): each name behaves as in
 //! CPython or is on grammar.md's deviations list.
 //!
@@ -58,10 +59,16 @@ pub enum StdFn {
     Islink,
     /// `os.path.getsize(p)`, following links.
     Getsize,
+    /// The builtin `open(p, "rb")`: a file for reading bytes.
+    Open,
+    /// `f.read()` of a file: the rest of it, as `bytes`.
+    Read,
+    /// `f.close()` of a file; closing it again does nothing.
+    Close,
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 7] = [
+    pub const ALL: [StdFn; 10] = [
         StdFn::Argv,
         StdFn::Listdir,
         StdFn::Join,
@@ -69,6 +76,9 @@ impl StdFn {
         StdFn::Isfile,
         StdFn::Islink,
         StdFn::Getsize,
+        StdFn::Open,
+        StdFn::Read,
+        StdFn::Close,
     ];
 
     /// The builtin name stages call it by: the dotted name a program
@@ -83,15 +93,35 @@ impl StdFn {
             StdFn::Isfile => "os.path.isfile",
             StdFn::Islink => "os.path.islink",
             StdFn::Getsize => "os.path.getsize",
+            StdFn::Open => "open",
+            StdFn::Read => "BufferedReader.read",
+            StdFn::Close => "BufferedReader.close",
+        }
+    }
+
+    /// The file method called `attr`: `read` or `close`. Each method
+    /// name belongs to one type, so the name alone decides.
+    pub fn method(attr: &str) -> Option<StdFn> {
+        match attr {
+            "read" => Some(StdFn::Read),
+            "close" => Some(StdFn::Close),
+            _ => None,
         }
     }
 
     /// The class of what it may raise, tracked in `raises` (D8). An
     /// `OSError` is raised as the subclass the error's kind names.
+    /// Reading a closed file also raises a `ValueError`, untracked like
+    /// the operator faults: it means a bug, as an index out of range does.
     pub fn raises(self) -> Option<ExcKind> {
         match self {
-            StdFn::Listdir | StdFn::Getsize => Some(ExcKind::Os),
-            StdFn::Argv | StdFn::Join | StdFn::Isdir | StdFn::Isfile | StdFn::Islink => None,
+            StdFn::Listdir | StdFn::Getsize | StdFn::Open | StdFn::Read => Some(ExcKind::Os),
+            StdFn::Argv
+            | StdFn::Join
+            | StdFn::Isdir
+            | StdFn::Isfile
+            | StdFn::Islink
+            | StdFn::Close => None,
         }
     }
 
@@ -176,6 +206,19 @@ mod tests {
         assert!(os.continues("os.path"));
         assert!(!os.exposes("os.path"));
         assert!(os.exposes("os.path.getsize"));
+    }
+
+    #[test]
+    fn file_methods_are_unwritable_names() {
+        for attr in ["read", "close"] {
+            let Some(f) = StdFn::method(attr) else {
+                panic!("{attr} is a file method")
+            };
+            assert!(f.name().ends_with(&format!(".{attr}")));
+            assert!(MODULES.iter().all(|m| !m.exposes(f.name())));
+        }
+        assert_eq!(StdFn::method("write"), None);
+        assert_eq!(StdFn::from_name("open"), Some(StdFn::Open));
     }
 
     #[test]

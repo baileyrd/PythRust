@@ -88,6 +88,11 @@ pub enum Ty {
     /// or items; `types[id]` is a [`Compound::View`]. It indexes like a
     /// list, for `for` (the language has no view subscripts).
     View(TypeId),
+    /// Immutable, reference-counted bytes (M6a).
+    Bytes,
+    /// A reference-counted file open for reading bytes (M6a); dropping
+    /// its last reference closes it.
+    File,
 }
 
 impl Ty {
@@ -104,6 +109,8 @@ impl Ty {
                 | Ty::Dict(_)
                 | Ty::Set(_)
                 | Ty::View(_)
+                | Ty::Bytes
+                | Ty::File
         )
     }
 }
@@ -259,8 +266,9 @@ pub enum Rvalue {
     /// Negation of an `Int` (checked: `-i64::MIN` fails) or a `Float`.
     Neg(Operand),
     /// Both operands have the same type: `Int`, `Float` (IEEE: false
-    /// with a NaN, but for `Ne`), `Bool`, `Str` (code point order), or a
-    /// list or tuple (lexicographic). Gives a `Bool`.
+    /// with a NaN, but for `Ne`), `Bool`, `Str` (code point order), a
+    /// list or tuple (lexicographic), or `Bytes` (`Eq` and `Ne` only).
+    /// Gives a `Bool`.
     Cmp(CmpOp, Operand, Operand),
     /// Whether int `a + b` overflows. Never fails; ends `range` loops.
     AddOverflows(Operand, Operand),
@@ -279,8 +287,8 @@ pub enum Rvalue {
     /// null or 0. On a dict, the value of key `i`, which lowering proved
     /// present.
     Index(Operand, Operand),
-    /// `len(s)` of a `Str` (in chars), list, tuple, range, dict, set or
-    /// view: an `Int`. For a range whose length does not fit in one, -1.
+    /// `len(s)` of a `Str` (in chars), list, tuple, range, dict, set,
+    /// view or `Bytes`: an `Int`. For a range whose length does not fit in one, -1.
     Len(Operand),
     /// Part `k` (0 the key, 1 the value) of entry `i` of a dict or set,
     /// in insertion order; lowering keeps `i` below the length.

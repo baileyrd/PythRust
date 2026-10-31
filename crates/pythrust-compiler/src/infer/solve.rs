@@ -415,8 +415,8 @@ fn equal(s: &mut Subst, c: &Constraint, l: &Type, r: &Type) -> Result<Step> {
     Ok(Step::Done(vec![Need::Comparable(l)]))
 }
 
-/// A view compares by identity in CPython, so a type holding one, at
-/// any depth, is not comparable; the parts are checked as they become
+/// A view or a file compares by identity in CPython, so a type holding
+/// one, at any depth, is not comparable; the parts are checked as they become
 /// known.
 fn comparable(s: &Subst, c: &Constraint, t: &Type) -> Result<Step> {
     let Some(t) = known(s, t) else {
@@ -428,6 +428,10 @@ fn comparable(s: &Subst, c: &Constraint, t: &Type) -> Result<Step> {
                 "{} cannot be compared; compare lists instead, as in `list(d.keys())`",
                 s.zonk(&t)
             );
+            return Err(error(c, msg));
+        }
+        Type::File => {
+            let msg = "files compare by identity, which is not supported".to_string();
             return Err(error(c, msg));
         }
         Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => vec![*inner],
@@ -478,6 +482,7 @@ fn len(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
             | Type::View(..)
             | Type::Tuple(_)
             | Type::Range
+            | Type::Bytes
     );
     if sized {
         return Ok(Step::Done(vec![]));

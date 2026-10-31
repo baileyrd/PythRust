@@ -406,6 +406,7 @@ const NATIVE: &[&str] = &[
     "optional_shapes",
     "optional_short_circuit",
     "os_error_uncaught",
+    "open_errors",
     "os_path",
     "overflow_add",
     "overflow_factorial",
@@ -1198,6 +1199,72 @@ fn os_matches_cpython_on_a_tree() -> Res<()> {
     let want = run_cpython(&source)?;
     assert_eq!(want.status, 0, "{}", want.stdout);
     assert!(want.stdout.contains("FileNotFoundError"), "{}", want.stdout);
+    assert_eq!(run_pythrust(&source)?, want);
+    assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
+    cleanup(&dir)?;
+    Ok(())
+}
+
+/// `open`, `read` and `close` on real files, with bytes that need every
+/// `repr` escape, agree with CPython in both backends. Not a corpus
+/// program: the files are made here.
+#[test]
+fn files_match_cpython() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("files")?;
+    let data: &[u8] = b"ab\x00\xff\"'\n\t\\";
+    fs::write(dir.join("data.bin"), data).map_err(|e| e.to_string())?;
+    fs::write(dir.join("same.bin"), data).map_err(|e| e.to_string())?;
+    fs::write(dir.join("empty.bin"), b"").map_err(|e| e.to_string())?;
+    let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let src = format!(
+        "def digest(path: str) -> bytes:\n\
+         \x20   f = open(path, 'rb')\n\
+         \x20   data = f.read()\n\
+         \x20   f.close()\n\
+         \x20   return data\n\
+         a = digest({a:?})\n\
+         b = digest({b:?})\n\
+         e = digest({e:?})\n\
+         print(a, len(a), a == b, a != b, a == e, str(e), len(e))\n\
+         print([a, e], (a, 1), [a] == [b])\n\
+         print('a' if a else '-', 'e' if e else '-')\n\
+         f = open({a_path:?}, 'rb')\n\
+         print(f.read() == a, f.read(), len(f.read()))\n\
+         f.close()\n\
+         f.close()\n\
+         try:\n\
+         \x20   f.read()\n\
+         except ValueError as err:\n\
+         \x20   print('ValueError', err)\n",
+        a = at("data.bin"),
+        b = at("same.bin"),
+        e = at("empty.bin"),
+        a_path = at("data.bin"),
+    );
+    // Windows names a directory's error differently (PermissionError, a
+    // listed deviation), so only POSIX checks the errors' str and repr.
+    let errors = format!(
+        "for p in [{missing:?}, {dir:?}]:\n\
+         \x20   try:\n\
+         \x20       open(p, 'rb')\n\
+         \x20   except OSError as err:\n\
+         \x20       print(err, [err])\n",
+        missing = at("missing.bin"),
+        dir = at(""),
+    );
+    let src = if cfg!(unix) { src + &errors } else { src };
+    let exe = native_case(&dir, "files", &src)?;
+    let source = exe.with_extension("pyr");
+    let want = run_cpython(&source)?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert!(
+        want.stdout.contains("read of closed file"),
+        "{}",
+        want.stdout
+    );
+    let repr = "[IsADirectoryError(21, 'Is a directory')]";
+    assert!(!cfg!(unix) || want.stdout.contains(repr), "{}", want.stdout);
     assert_eq!(run_pythrust(&source)?, want);
     assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
     cleanup(&dir)?;

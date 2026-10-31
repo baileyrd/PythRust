@@ -462,7 +462,7 @@ fn is_closed(t: &Type, subst: &Subst) -> bool {
         Type::Dict(k, v) => is_closed(k, subst) && is_closed(v, subst),
         Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
-        Type::Exception => true,
+        Type::Exception | Type::Bytes | Type::File => true,
     }
 }
 
@@ -492,6 +492,8 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::Str => Ty::Str,
         Type::Range => Ty::Range,
         Type::Exception => Ty::Exc,
+        Type::Bytes => Ty::Bytes,
+        Type::File => Ty::File,
         Type::Dict(k, v) => {
             let (k, v) = (settle(k, subst, bound, seqs), settle(v, subst, bound, seqs));
             seqs.dict(k, v)
@@ -551,7 +553,9 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         | (Type::None, Ty::None)
         | (Type::Str, Ty::Str)
         | (Type::Range, Ty::Range)
-        | (Type::Exception, Ty::Exc) => true,
+        | (Type::Exception, Ty::Exc)
+        | (Type::Bytes, Ty::Bytes)
+        | (Type::File, Ty::File) => true,
         _ => false,
     }
 }
@@ -950,6 +954,8 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::Str => Ok(Ty::Str),
         Type::Range => Ok(Ty::Range),
         Type::Exception => Ok(Ty::Exc),
+        Type::Bytes => Ok(Ty::Bytes),
+        Type::File => Ok(Ty::File),
         // Open parts, as in `{}` or `set()` nothing constrains: the
         // table stays empty, so any slot type will do.
         Type::Dict(k, v) => {

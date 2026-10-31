@@ -34,6 +34,10 @@ pub enum Type {
     /// name: one type, so `except ValueError as e` and `except IndexError
     /// as e` can share `e`.
     Exception,
+    /// Immutable bytes, as `f.read()` returns (M6a).
+    Bytes,
+    /// What `open(p, "rb")` returns: Python's `_io.BufferedReader`.
+    File,
     Var(TypeVar),
 }
 
@@ -84,7 +88,9 @@ impl Type {
             | Type::Dict(..)
             | Type::Set(_)
             | Type::View(..)
-            | Type::Exception => Some(true),
+            | Type::Exception
+            | Type::Bytes
+            | Type::File => Some(true),
             _ => self.any_part(Type::holds_heap),
         }
     }
@@ -92,11 +98,12 @@ impl Type {
     /// Whether the type's own operations reach a mutable heap value, so
     /// a value of it can change in place (D2 `mut`): a list, dict or
     /// set, or a tuple, optional or dict view holding one (a view itself
-    /// cannot change). Not an exception: no operation reaches
-    /// its argument. `None` while it depends on a generic type.
+    /// cannot change), or a file, which reading moves and `close` closes.
+    /// Not an exception: no operation reaches its argument. `None` while
+    /// it depends on a generic type.
     pub fn reaches_mutable(&self) -> Option<bool> {
         match self {
-            Type::List(_) | Type::Dict(..) | Type::Set(_) => Some(true),
+            Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::File => Some(true),
             _ => self.any_part(Type::reaches_mutable),
         }
     }
@@ -140,6 +147,8 @@ impl fmt::Display for Type {
             Type::None => f.write_str("None"),
             Type::Range => f.write_str("range"),
             Type::Exception => f.write_str("Exception"),
+            Type::Bytes => f.write_str("bytes"),
+            Type::File => f.write_str("BufferedReader"),
             Type::List(elem) => write!(f, "list[{elem}]"),
             Type::Dict(key, value) => write!(f, "dict[{key}, {value}]"),
             Type::Set(elem) => write!(f, "set[{elem}]"),

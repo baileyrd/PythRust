@@ -1323,3 +1323,12 @@ fn a_view_shares_the_lists_its_dict_holds() {
         assert_eq!(checked(&src.replace("(d:", "(mut d:")), Ok(()), "{body}");
     }
 }
+
+#[test]
+fn reading_or_closing_a_file_parameter_is_mut() {
+    let src = "def r(f):\n    return f.read()\ndef c(f):\n    f.close()\ndef keep(f, p: str):\n    return len(p)\n\
+               g = open(\"p\", \"rb\")\nprint(r(g))\nc(g)\nprint(keep(g, \"x\"))\n";
+    assert_eq!(modes(src, "r").0, vec![MUT]);
+    assert_eq!(modes(src, "c").0, vec![MUT]);
+    assert_eq!(modes(src, "keep").0, vec![READ, READ]);
+}

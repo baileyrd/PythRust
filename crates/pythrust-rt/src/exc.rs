@@ -43,6 +43,9 @@ const NAMES: [&str; 15] = [
     "NotADirectoryError",
 ];
 
+/// The kind code of `ValueError`.
+pub(crate) const VALUE_ERROR: u8 = 0;
+
 /// The kind code of `KeyError`, whose message is its argument's `repr`.
 pub(crate) const KEY_ERROR: u8 = 9;
 

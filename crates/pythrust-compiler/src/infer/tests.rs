@@ -2261,3 +2261,52 @@ fn listdir_takes_its_path_by_keyword_and_nothing_else_does() {
         assert!(got.contains(want), "{src:?}: {got}");
     }
 }
+
+#[test]
+fn files_read_bytes_that_size_and_compare() {
+    let ok = "f = open(\"p\", \"rb\")\ndata: bytes = f.read()\nf.close()\n\
+              print(len(data), data == f.read(), data != data, str(data))\nif data:\n    print(f)\n";
+    assert_eq!(src_err(ok), "no error");
+    let cases = [
+        ("f = open(\"p\")\n", "only binary reading is supported yet"),
+        (
+            "f = open(\"p\", \"r\")\n",
+            "only binary reading is supported yet",
+        ),
+        (
+            "m = \"rb\"\nf = open(\"p\", m)\n",
+            "only binary reading is supported yet",
+        ),
+        ("f = open(1, \"rb\")\n", "argument of `open`"),
+        (
+            "f = open(\"p\", \"rb\", 1)\n",
+            "`open` takes 1 to 2 arguments",
+        ),
+        ("x = [1]\nx.read()\n", "`read` needs a file from `open`"),
+        (
+            "f = open(\"p\", \"rb\")\nf.read(10)\n",
+            "`read` takes no arguments",
+        ),
+        (
+            "f = open(\"p\", \"rb\")\nprint(f == f)\n",
+            "files compare by identity",
+        ),
+        (
+            "f = open(\"p\", \"rb\")\nprint(f.read() < f.read())\n",
+            "cannot order bytes",
+        ),
+        (
+            "f = open(\"p\", \"rb\")\nd = {f.read(): 1}\n",
+            "bytes dict keys and set elements",
+        ),
+        (
+            "f = open(\"p\", \"rb\")\nprint(f.read() + \"a\")\n",
+            "unsupported operand types for +",
+        ),
+        ("x: bytes = \"a\"\n", "expected bytes, found str"),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src:?}: {got}");
+    }
+}

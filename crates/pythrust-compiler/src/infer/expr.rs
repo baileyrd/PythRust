@@ -362,19 +362,20 @@ impl Checker {
         }
     }
 
-    /// A method call: `list.append`, `set.add`, and `dict.get`,
-    /// `.keys`, `.values`, `.items`. Each name belongs to one type, so
-    /// the name alone fixes the receiver's.
+    /// A method call: `list.append`, `set.add`, `dict.get`, `.keys`,
+    /// `.values`, `.items`, and a file's `.read` and `.close`. Each name
+    /// belongs to one type, so the name alone fixes the receiver's.
     fn method(&mut self, value: &Expr, attr: &Ident, args: &[Arg]) -> Result<Type> {
         let name = attr.name.as_str();
         let (min, max) = match name {
             "append" | "add" => (1, 1),
             "get" => (1, 2),
-            "keys" | "values" | "items" => (0, 0),
+            "keys" | "values" | "items" | "read" | "close" => (0, 0),
             _ => {
                 let msg = format!(
                     "unknown method `.{name}`; the methods are `list.append`, `set.add`, \
-                     and `dict.get`, `.keys`, `.values` and `.items`"
+                     `dict.get`, `.keys`, `.values` and `.items`, and a file's `.read` \
+                     and `.close`"
                 );
                 return Err(error(attr.span, msg));
             }
@@ -384,6 +385,15 @@ impl Checker {
         match name {
             "append" | "add" => self.insert(name, value.span, &receiver, &args[0]),
             "get" => self.get(value.span, &receiver, args, attr.span),
+            "read" | "close" => {
+                let needs = format!("`{name}` needs a file from `open`");
+                self.expect(value.span, &Type::File, &receiver, &needs)?;
+                Ok(if name == "read" {
+                    Type::Bytes
+                } else {
+                    Type::None
+                })
+            }
             _ => self.view(name, value.span, &receiver),
         }
     }
@@ -538,6 +548,7 @@ impl Checker {
             "bool" => Type::Bool,
             "None" => Type::None,
             "Exception" => Type::Exception,
+            "bytes" => Type::Bytes,
             "list" => return self.list_annotation(args, t.span),
             "dict" | "set" => return self.container_annotation(name, args, t.span),
             "tuple" if args.is_empty() => {

@@ -1,9 +1,9 @@
 //! The closed builtin functions: `print len list set sorted range str int
-//! float bool`,
+//! float bool open`,
 //! and the builtin exception classes (D6, B4), which build an `Exception`
 //! when called.
 
-use crate::ast::Arg;
+use crate::ast::{Arg, ExprKind};
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::span::Span;
@@ -64,7 +64,7 @@ impl Checker {
     }
 
     /// A call to a [`StdFn`] by its builtin name. Every argument is a
-    /// `str` (a path).
+    /// `str` (a path), but `open`'s mode.
     fn std(&mut self, name: &str, args: &[Arg], span: Span) -> Result<Type> {
         let Some(f) = StdFn::from_name(name) else {
             return Err(error(
@@ -79,6 +79,11 @@ impl Checker {
             StdFn::Join => (1, usize::MAX, Type::Str),
             StdFn::Isdir | StdFn::Isfile | StdFn::Islink => (1, 1, Type::Bool),
             StdFn::Getsize => (1, 1, Type::Int),
+            StdFn::Open => return self.open(args, span),
+            StdFn::Read | StdFn::Close => {
+                let msg = format!("internal: `{name}` is a method");
+                return Err(error(span, msg));
+            }
         };
         let what = format!("argument of `{name}`");
         let args = by_position(f, args)?;
@@ -86,6 +91,24 @@ impl Checker {
             self.expect(at, &Type::Str, &t, &what)?;
         }
         Ok(result)
+    }
+
+    /// `open(path, "rb")`: the one mode supported, written as a literal
+    /// so the file's type is known.
+    fn open(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        let mut found = self.positional("open", args, 1, 2, span)?.into_iter();
+        if let Some((t, at)) = found.next() {
+            self.expect(at, &Type::Str, &t, "argument of `open`")?;
+        }
+        let rb = args
+            .get(1)
+            .is_some_and(|a| matches!(&a.value.kind, ExprKind::Str(m) if m == "rb"));
+        if !rb {
+            let at = args.get(1).map_or(span, |a| a.value.span);
+            let msg = "only binary reading is supported yet: write `open(path, \"rb\")`";
+            return Err(error(at, msg.to_string()));
+        }
+        Ok(Type::File)
     }
 
     /// Any positional values; `sep` and `end` must be `str`.
