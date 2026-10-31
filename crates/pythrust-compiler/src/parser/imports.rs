@@ -138,17 +138,22 @@ impl Parser<'_> {
         })
     }
 
-    /// A name a statement binds: not an imported module's.
+    /// A name a statement binds: not an imported module's or Rust
+    /// binding's.
     pub(super) fn binding_name(&mut self, what: &str) -> Result<Ident> {
         let name = self.expect_name(what)?;
-        if self.imported(&name.name).is_some() || self.imported_binding(&name.name).is_some() {
-            let msg = format!(
-                "`{}` names an imported module; choose another name",
-                name.name
-            );
-            return Err(error(name.span, msg));
-        }
-        Ok(name)
+        let kind = if self.imported(&name.name).is_some() {
+            "module"
+        } else if self.imported_binding(&name.name).is_some() {
+            "Rust binding"
+        } else {
+            return Ok(name);
+        };
+        let msg = format!(
+            "`{}` names an imported {kind}; choose another name",
+            name.name
+        );
+        Err(error(name.span, msg))
     }
 }
 

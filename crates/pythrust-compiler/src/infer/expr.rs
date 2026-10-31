@@ -316,6 +316,13 @@ impl Checker {
             let msg = format!("`{name}` is {}, not a function", self.subst.zonk(t));
             return Err(error(at, msg));
         }
+        if let Some(class) = self.stub_redefined.get(name) {
+            let msg = format!(
+                "`{name}` raises the builtin `{class}`, which this program redefines, \
+                 so it can be neither declared nor caught; rename the program's `{class}`"
+            );
+            return Err(error(at, msg));
+        }
         let sig = match self.funcs.get(name).cloned() {
             Some(Func::Mono(sig)) => sig,
             Some(Func::Poly(scheme)) => self.instantiate(name, &scheme, span),

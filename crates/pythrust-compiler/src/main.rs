@@ -155,6 +155,10 @@ fn main() -> ExitCode {
     }
     match inv.command {
         Command::Check => ExitCode::SUCCESS,
+        Command::Build if !module.stubs.is_empty() => {
+            eprintln!("pythrust: {}", stdlib::RUST_BUILD_GAP);
+            ExitCode::FAILURE
+        }
         Command::Build => build(&sources, &module, &types),
         Command::Run if !module.stubs.is_empty() => {
             eprintln!("pythrust: {}", stdlib::RUST_RUN_GAP);

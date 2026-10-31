@@ -17,9 +17,10 @@ struct Source {
     base: usize,
 }
 
-/// The program's file, then each stub's.
+/// The program's file and each stub's, in the order added.
 pub(crate) struct Sources {
-    files: Vec<Source>,
+    main: Source,
+    stubs: Vec<Source>,
 }
 
 impl Sources {
@@ -30,19 +31,23 @@ impl Sources {
             text: text.to_string(),
             base: 0,
         };
-        Sources { files: vec![main] }
+        Sources {
+            main,
+            stubs: Vec::new(),
+        }
     }
 
     /// The program's file name.
     pub(crate) fn path(&self) -> &str {
-        &self.files[0].path
+        &self.main.path
     }
 
     /// Adds a file after the others, one past the last one's end so an
     /// end-of-file span stays in its own file; returns its base.
     fn add(&mut self, path: &str, text: &str) -> usize {
-        let base = self.files.last().map_or(0, |f| f.base + f.text.len() + 1);
-        self.files.push(Source {
+        let last = self.stubs.last().unwrap_or(&self.main);
+        let base = last.base + last.text.len() + 1;
+        self.stubs.push(Source {
             path: path.to_string(),
             text: text.to_string(),
             base,
@@ -53,11 +58,11 @@ impl Sources {
     /// The file `span` belongs to, and `span` within it.
     fn locate(&self, span: Span) -> (&Source, Span) {
         let file = self
-            .files
+            .stubs
             .iter()
             .rev()
             .find(|f| f.base <= span.start)
-            .unwrap_or(&self.files[0]);
+            .unwrap_or(&self.main);
         (file, unshift(span, file.base))
     }
 

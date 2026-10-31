@@ -1522,10 +1522,16 @@ fn stub_raises_only_os_error_or_exception() {
 
 #[test]
 fn ellipsis_outside_a_stub_says_use_pass() {
-    let msg = "`...` is for stub bodies only; use pass";
-    assert_eq!(src_err("def f():\n    ...\n"), msg);
-    assert_eq!(src_err("x = ...\n"), msg);
-    assert_eq!(src_err("def f(): ...\n"), msg);
+    let stmt = "`...` is for stub bodies only; use pass";
+    assert_eq!(src_err("def f():\n    ...\n"), stmt);
+    assert_eq!(src_err("def f(): ...\n"), stmt);
+    assert_eq!(src_err("if True:\n    ...\n"), stmt);
+    assert_eq!(src_err("...\n"), stmt);
+    // As a value, `pass` would not parse: no fix-it.
+    let value = "`...` (Ellipsis) is not supported; it is legal only as a stub body";
+    assert_eq!(src_err("x = ...\n"), value);
+    assert_eq!(src_err("print(...)\n"), value);
+    assert_eq!(src_err("x = [1, ...]\n"), value);
 }
 
 fn with_fastfs(src: &str) -> diag::Result<Module> {
@@ -1571,7 +1577,7 @@ fn a_binding_name_is_not_a_value() {
     );
     assert_eq!(
         err("import fastfs\ndef fastfs():\n    pass\n"),
-        "`fastfs` names an imported module; choose another name"
+        "`fastfs` names an imported Rust binding; choose another name"
     );
     let msg = "no module named `fastfs`; the modules are: hashlib, os, sys; \
                a Rust binding needs `--rust fastfs=path`";

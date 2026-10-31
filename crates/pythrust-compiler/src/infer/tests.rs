@@ -2383,9 +2383,29 @@ fn a_stub_raises_what_it_declares() {
     let loose = with_fastfs("import fastfs\ndef g():\n    fastfs.any_error()\n");
     let set = loose.map(|t| t.raises("g").map(|r| r.escapes().count()));
     assert_eq!(set, Ok(Some(1)));
-    // A stub's `raises` cannot name a redefined class.
-    let shadow = with_fastfs("import fastfs\nOSError = 1\n")
-        .err()
-        .unwrap_or_default();
-    assert!(shadow.contains("`OSError` is redefined"), "{shadow}");
+}
+
+/// A stub's `OSError` is the builtin whatever the program defines; a
+/// call to it where the program redefines the class is refused at the
+/// call, in the program, and a program that never calls it checks.
+#[test]
+fn a_redefined_class_refuses_calls_to_stubs_that_raise_it() {
+    for redefine in ["OSError = 1\n", "def OSError() -> int:\n    return 1\n"] {
+        assert!(with_fastfs(&format!("import fastfs\n{redefine}")).is_ok());
+        assert!(with_fastfs(&format!("import fastfs\n{redefine}fastfs.add(1, 2)\n")).is_ok());
+        let call = format!("import fastfs\n{redefine}print(fastfs.file_xxh3(\"x\"))\n");
+        let binding = crate::parser::test_binding("fastfs", FASTFS);
+        let tokens = crate::lexer::lex(&call).unwrap_or_else(|d| panic!("{d}"));
+        let parsed = crate::parser::parse_with(&tokens, &[binding]);
+        let module = parsed.unwrap_or_else(|d| panic!("{d}"));
+        let Err(err) = infer(&module) else {
+            panic!("{call:?} checked");
+        };
+        assert_eq!(&call[err.span.start..err.span.end], "fastfs.file_xxh3");
+        assert!(
+            err.message.contains("which this program redefines"),
+            "{}",
+            err.message
+        );
+    }
 }

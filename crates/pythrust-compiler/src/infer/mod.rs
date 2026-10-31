@@ -78,7 +78,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     let defs = top_level_defs(module)?;
     let mut c = Checker::default();
     c.declare_globals(module, &defs)?;
-    c.declare_stubs(&module.stubs)?;
+    c.declare_stubs(&module.stubs, &defs)?;
     for group in scope::groups(&defs) {
         c.infer_group(&group)?;
     }
@@ -171,6 +171,9 @@ struct Checker {
     /// Types of parameters with defaults, across all groups. Never
     /// generic, and resolved afresh at each generalization.
     defaults: Vec<Type>,
+    /// Rust binding functions that raise a class the program redefines,
+    /// with that class's name.
+    stub_redefined: HashMap<String, String>,
 }
 
 impl Checker {
@@ -195,9 +198,17 @@ impl Checker {
 
     /// Gives each Rust binding function its stub's signature (M6b). A
     /// stub has no body to check, and its dotted name no program can
-    /// bind, so it is never generic or shadowed.
-    fn declare_stubs(&mut self, stubs: &[StubDef]) -> Result<()> {
+    /// bind, so it is never generic or shadowed. A class it raises that
+    /// the program redefines is recorded for its calls to refuse.
+    fn declare_stubs(&mut self, stubs: &[StubDef], defs: &[&FuncDef]) -> Result<()> {
         for f in stubs {
+            let redefined = f.raises.iter().find(|r| {
+                self.globals.contains_key(&r.name) || defs.iter().any(|d| d.name.name == r.name)
+            });
+            if let Some(r) = redefined {
+                self.stub_redefined
+                    .insert(f.name.name.clone(), r.name.clone());
+            }
             let mut params = Vec::new();
             for p in &f.params {
                 let ty = self.annotation(&p.annotation)?;

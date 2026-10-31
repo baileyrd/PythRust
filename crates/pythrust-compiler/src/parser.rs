@@ -137,10 +137,21 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// A statement that is only `...`, with Nano's fix-it: Python's
+    /// placeholder body, which Pythrust spells `pass` outside a stub.
+    fn ellipsis_stmt(&self) -> Result<()> {
+        let tok = self.tok(0);
+        if tok.kind == TokenKind::Ellipsis && self.tok(1).kind == TokenKind::Newline {
+            return Err(error(tok.span, "`...` is for stub bodies only; use pass"));
+        }
+        Ok(())
+    }
+
     fn unexpected(&self, expected: &str) -> Diagnostic {
         let tok = self.tok(0);
         if tok.kind == TokenKind::Ellipsis {
-            return error(tok.span, "`...` is for stub bodies only; use pass");
+            let msg = "`...` (Ellipsis) is not supported; it is legal only as a stub body";
+            return error(tok.span, msg);
         }
         if tok.kind == TokenKind::As {
             return error(tok.span, "'as' is reserved outside `except Name as e`");
@@ -206,6 +217,7 @@ impl<'a> Parser<'a> {
     }
 
     fn stmt(&mut self) -> Result<Stmt> {
+        self.ellipsis_stmt()?;
         match self.peek() {
             TokenKind::Def | TokenKind::Temper => self.func_def(),
             TokenKind::If => self.if_stmt(),
@@ -225,6 +237,7 @@ impl<'a> Parser<'a> {
     }
 
     fn block(&mut self) -> Result<Block> {
+        self.ellipsis_stmt()?;
         self.expect(&TokenKind::Newline)?;
         self.expect(&TokenKind::Indent)?;
         self.nested(|p| {

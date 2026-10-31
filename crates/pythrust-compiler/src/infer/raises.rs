@@ -95,7 +95,7 @@ pub(super) fn check(
         }
     }
     for f in &module.stubs {
-        declared.insert(f.name.name.as_str(), stub_declaration(f, defs, &globals)?);
+        declared.insert(f.name.name.as_str(), stub_declaration(f)?);
     }
     let early = early(module);
     let late_shadow = defs
@@ -161,11 +161,18 @@ fn declaration(f: &FuncDef, defs: &[&FuncDef], globals: &Bindings) -> Result<Opt
 }
 
 /// A Rust binding function's declared set: its stub's `raises`, whose
-/// names the parser limited to `OSError` and `Exception`.
-fn stub_declaration(f: &StubDef, defs: &[&FuncDef], globals: &Bindings) -> Result<Raises> {
+/// names the parser limited to `OSError` and `Exception`. The stub is
+/// its own file, so they name the builtins whatever the program
+/// defines; inference refuses a call to the stub where the program
+/// redefines one.
+fn stub_declaration(f: &StubDef) -> Result<Raises> {
     let mut set = Raises::default();
     for name in &f.raises {
-        set.add(declared_escape(name, defs, globals)?, name.span);
+        let Some(e) = ExcKind::from_name(&name.name) else {
+            let msg = format!("internal: stub raises `{}`, not a builtin", name.name);
+            return Err(error(name.span, msg));
+        };
+        set.add(e, name.span);
     }
     Ok(set)
 }
