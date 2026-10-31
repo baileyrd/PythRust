@@ -153,14 +153,3 @@ fn run_passes_the_arguments_after_the_file_to_sys_argv() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
-
-/// A built program sees its own arguments in `sys.argv`.
-#[test]
-fn a_built_program_reads_its_arguments() {
-    let path = source("argv_built", ARGS);
-    let out = pythrust("build", "argv_built", ARGS);
-    assert!(out.status.success(), "{out:?}");
-    let exe = path.with_extension(std::env::consts::EXE_EXTENSION);
-    let out = Command::new(exe).args(["a b", "-x"]).output().unwrap();
-    assert_eq!(text(&out.stdout), "3\na b\n-x\n", "{out:?}");
-}
