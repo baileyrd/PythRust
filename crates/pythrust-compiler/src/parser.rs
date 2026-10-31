@@ -301,6 +301,7 @@ impl<'a> Parser<'a> {
         let ExprKind::Name(name) = lhs.kind else {
             return Err(error(lhs.span, "only a single name can be annotated"));
         };
+        check_assignable(&name, lhs.span)?;
         let annotation = self.type_expr()?;
         self.expect(&TokenKind::Assign)?;
         let value = self.expr()?;
@@ -982,11 +983,10 @@ impl<'a> Parser<'a> {
 fn to_target(expr: Expr) -> Result<Target> {
     let span = expr.span;
     let kind = match expr.kind {
-        ExprKind::Name(name) if name.contains('.') => {
-            let msg = format!("assigning to a module's name (`{name}`) is not supported yet");
-            return Err(error(span, msg));
+        ExprKind::Name(name) => {
+            check_assignable(&name, span)?;
+            TargetKind::Name(name)
         }
-        ExprKind::Name(name) => TargetKind::Name(name),
         ExprKind::Subscript { value, index } => TargetKind::Subscript { value, index },
         ExprKind::Tuple(items) if !items.is_empty() => {
             let targets = items.into_iter().map(to_target);
@@ -1001,6 +1001,16 @@ fn to_target(expr: Expr) -> Result<Target> {
         }
     };
     Ok(Target { kind, span })
+}
+
+/// A name an assignment may bind: not a module's (`sys.argv`), which
+/// the parser resolved to one dotted name.
+fn check_assignable(name: &str, span: Span) -> Result<()> {
+    if !name.contains('.') {
+        return Ok(());
+    }
+    let msg = format!("assigning to a module's name (`{name}`) is not supported yet");
+    Err(error(span, msg))
 }
 
 fn check_params(params: &[Param]) -> Result<()> {

@@ -1358,8 +1358,14 @@ fn a_module_name_cannot_be_rebound_or_assigned_through() {
     let handler = "import sys\ntry:\n    pass\nexcept ValueError as sys:\n    pass\n";
     assert_eq!(src_err(handler), taken);
     assert!(src_err("import sys\nsys = 1\n").contains("is a module, not a value"));
+    let assign = "assigning to a module's name (`sys.argv`) is not supported yet";
+    assert_eq!(src_err("import sys\nsys.argv = []\n"), assign);
+    assert_eq!(src_err("import sys\nsys.argv += []\n"), assign);
+    assert_eq!(src_err("import sys\nsys.argv: list[str] = []\n"), assign);
+    let in_def = "import sys\ndef f():\n    sys.argv: list[str] = []\n";
+    assert_eq!(src_err(in_def), assign);
     assert_eq!(
-        src_err("import sys\nsys.argv = []\n"),
-        "assigning to a module's name (`sys.argv`) is not supported yet"
+        src_err("import sys\nfor sys.argv in [[]]:\n    pass\n"),
+        assign
     );
 }
