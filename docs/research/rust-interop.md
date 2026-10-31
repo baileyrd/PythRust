@@ -120,7 +120,7 @@ Every parameter is `read`: Rust borrows for the call, and a borrow cannot outliv
 
 ### Threads
 
-Pythrust values never reach Rust threads; Rust threads see plain Rust data and call-scoped borrows (Nano, 2026-10-31). A binding may hand a `&str` or `&[u8]` argument to scoped threads (`std::thread::scope`) joined before it returns: the borrow checker already keeps them from outliving the call, and the runtime buffer cannot change during it. Runtime handles and refcount operations happen only on the calling thread, so refcounts stay single-threaded until M6c (concurrency). A panic in a thread the binding detaches and never joins is not caught.
+Pythrust values never reach Rust threads; Rust threads see plain Rust data and call-scoped borrows (Nano, 2026-10-31). A binding may hand a `&str` or `&[u8]` argument to scoped threads (`std::thread::scope`) joined before it returns: the borrow checker already keeps them from outliving the call, and the runtime buffer cannot change during it. Runtime handles and refcount operations happen only on the calling thread, so refcounts stay single-threaded until M6c (concurrency). A panic in a thread the binding detaches and never joins is not caught. The conversions PR tests this now (Nano, 2026-10-31), independent of `group_xxh3`: a probe function hands its `&str` to a scoped thread that reads it and returns its length.
 
 ### Errors
 
@@ -144,7 +144,7 @@ CPython cannot import a Rust binding, so an interop program has no CPython oracl
 
 Done means: the same duplicate groups as `fclone_lite.py` on the M6a trees, compared as sets of groups, since `fclone_lite.py` prints a size's groups in SHA-256 digest order and xxh3 orders them differently; fixtures with two distinct duplicated payloads of one size, and with an unreadable file (made unreadable by a method that holds for root, and skipped visibly where none exists, as on Windows); benchmark rows for native fclone-lite, `fclone_fast`, CPython and rusty_fclone; and xxhash-rust justified in the driver PR as the app's dependency. No speedup is claimed before the benchmark runs.
 
-**Follow-up only if measured:** if `fclone_fast` is not already I/O-bound, a later PR adds `group_xxh3(paths: list[str]) -> list[str]`, hashing a size group in parallel with rayon, with the `list[str]` row and a probe whose scoped thread reads a borrowed `&str`.
+**Follow-up only if measured:** if `fclone_fast` is not already I/O-bound, a later PR adds `group_xxh3(paths: list[str]) -> list[str]`, hashing a size group in parallel with rayon, with the `list[str]` row.
 
 ## Not in this cut
 
