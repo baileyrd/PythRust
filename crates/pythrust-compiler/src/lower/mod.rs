@@ -597,6 +597,10 @@ struct Unbind {
 struct FnBuilder<'c, 'a> {
     cx: &'c mut Cx<'a>,
     subst: Subst,
+    /// Whether this is an instance of a generic function: its signature
+    /// bound type variables. Fixed at the start; `subst` grows later as
+    /// open call results are resolved, in any function.
+    generic: bool,
     /// What calls that never return bind: types for values that never
     /// exist (a variable only such a call assigns), used where `subst`
     /// has none, and never evidence against what a live value decides.
@@ -659,6 +663,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
     fn new(cx: &'c mut Cx<'a>, subst: Subst, scope: BTreeSet<String>, ret: Ty) -> Self {
         let mut b = FnBuilder {
             cx,
+            generic: !subst.is_empty(),
             subst,
             dead: Subst::new(),
             hints: Hints::new(),

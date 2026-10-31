@@ -14,3 +14,19 @@ def pair(k):
 held = pair(5)
 held[True] = "h"
 print(held)
+# An earlier call with an open result does not make the code after it generic.
+def empty():
+    return {}
+print(empty())
+late: dict[int, int] = {}
+late[True] = 1
+print(late)
+def concrete(x: int) -> dict[int, int]:
+    print(empty())
+    e: dict[int, int] = {}
+    e[True] = x
+    t: set[int] = set()
+    t.add(False)
+    print(t)
+    return e
+print(concrete(3))

@@ -119,7 +119,7 @@ impl FnBuilder<'_, '_> {
     /// `bool` as `True`; there `build` refuses rather than differ
     /// (grammar.md, Deviations).
     fn stored(&mut self, k: Operand, key: Ty, span: Span) -> Result<Operand> {
-        if (self.ty(k), key) == (Ty::Bool, Ty::Int) && !self.subst.is_empty() {
+        if (self.ty(k), key) == (Ty::Bool, Ty::Int) && self.generic {
             let what = "a bool stored as a key of an int-keyed dict or set in a generic function";
             return Err(unsupported(span, what));
         }
