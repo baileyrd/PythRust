@@ -1410,6 +1410,28 @@ mod tests {
         }
     }
 
+    /// Dicts and sets are containers too: a value or element that may hold
+    /// an exception is refused; keys never can, being hashable.
+    #[test]
+    fn an_exception_holding_a_table_that_may_hold_one_is_refused() {
+        for src in [
+            "d: dict[str, Exception] = {}\ne = ValueError(d)\n",
+            "ds = [{'a': [ValueError(0)]}]\ne = ValueError(ds)\n",
+            "d = {1: [ValueError(0)]}\ne = ValueError(d.values())\n",
+            "d = {1: (2, [IndexError(0)])}\ne = ValueError(d.items())\n",
+        ] {
+            assert!(refused_as_cycle(src), "{src}");
+        }
+        for src in [
+            "e = ValueError({'a': [1]})\nprint(e)\n",
+            "e = ValueError({1, 2})\nprint(e)\n",
+            "e = ValueError({'a': 1}.keys())\nprint(e)\n",
+            "es = {'a': (1, ValueError(1))}\nprint(ValueError(es.items()))\nprint(ValueError({(1, 'x'): 2}), es)\n",
+        ] {
+            assert!(!refused_as_cycle(src), "{src}");
+        }
+    }
+
     /// The refusal is by type, and every class's value is an `Exception`,
     /// so it holds for every class, outer and inner (B4).
     #[test]

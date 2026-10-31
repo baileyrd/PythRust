@@ -216,21 +216,21 @@ impl FnBuilder<'_, '_> {
         });
         self.switch_to(hit);
         let v = self.temp(value, Rvalue::Index(d, k), span);
-        self.into_dest(dest, ty, v, span)?;
+        self.store_dest(dest, ty, v, span)?;
         self.terminate(Term::Goto(end));
         self.switch_to(miss);
         let v = match default {
             Some(a) => self.expr(&a.value)?,
             None => Operand::None,
         };
-        self.into_dest(dest, ty, v, span)?;
+        self.store_dest(dest, ty, v, span)?;
         self.terminate(Term::Goto(end));
         self.switch_to(end);
         Ok(Operand::Local(dest))
     }
 
     /// Moves `v`, fitted to `ty`, into `dest`.
-    fn into_dest(&mut self, dest: LocalId, ty: Ty, v: Operand, span: Span) -> Result<()> {
+    fn store_dest(&mut self, dest: LocalId, ty: Ty, v: Operand, span: Span) -> Result<()> {
         let v = self.expect(v, ty, span)?;
         self.move_into(dest, v, span);
         Ok(())

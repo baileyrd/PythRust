@@ -436,6 +436,29 @@ fn changing_a_list_a_loop_runs_over_is_an_error() {
 }
 
 #[test]
+fn changing_a_dict_or_set_a_loop_runs_over_is_an_error() {
+    let src = "temper def f(mut d: dict[str, int]) -> int:\n    for k in d:\n        d[k + \"x\"] = 1\n    return 0\nprint(f({\"a\": 1}))\n";
+    assert_eq!(
+        alias_err(src),
+        Some((
+            "tempered `f` changes `d` while a `for` loop over it is running; loop over a copy: `for ... in list(...)`".into(),
+            "d[k + \"x\"]".into()
+        ))
+    );
+    assert_eq!(checked(&src.replace("in d:", "in list(d):")), Ok(()));
+    // A view loop runs over the dict itself.
+    let keys = src.replace("in d:", "in d.keys():");
+    assert_eq!(alias_err(&keys).map(|e| e.1), Some("d[k + \"x\"]".into()));
+    // Like an item store in a list loop, a store at the loop's own key
+    // is a change: the analysis does not track which keys exist.
+    let same = src.replace("d[k + \"x\"] = 1", "d[k] = d[k] + 1");
+    assert_eq!(alias_err(&same).map(|e| e.1), Some("d[k]".into()));
+    let set = "temper def f(mut s: set[int]) -> int:\n    for k in s:\n        s.add(k + 1)\n    return 0\nprint(f({1}))\n";
+    assert_eq!(alias_err(set).map(|e| e.1), Some("s.add(k + 1)".into()));
+    assert_eq!(checked(&set.replace("in s:", "in list(s):")), Ok(()));
+}
+
+#[test]
 fn each_run_of_an_allocation_is_a_new_list() {
     let src = "temper def f(n: int) -> int:\n    prev = [0]\n    cur = [1]\n    rows: list[list[int]] = []\n    for i in range(n):\n        prev = cur\n        cur = [i]\n        cur.append(i)\n        rows.append(cur)\n    return len(prev) + len(rows)\nprint(f(3))\n";
     assert_eq!(checked(src), Ok(()));
