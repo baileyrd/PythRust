@@ -2,7 +2,7 @@
 //! membership, iteration, and the builtins that build lists and sets
 //! from any iterable (`set`, `sorted`).
 
-use crate::ast::{Arg, Expr, ExprKind};
+use crate::ast::{self, Arg, Expr, ExprKind};
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::infer::Type;
@@ -113,11 +113,16 @@ impl FnBuilder<'_, '_> {
         self.expect(k, key, span)
     }
 
-    /// `d[k]`: raises `KeyError(k)` when `k` is missing.
+    /// `d[k]`: raises `KeyError(k)` when `k` is missing, holding `k` as
+    /// written (`True`, not the int it probes as).
     pub(super) fn dict_read(&mut self, d: Operand, k: Operand, span: Span) -> Result<Operand> {
         let (key, value) = self.key_value(self.ty(d), span)?;
-        let k = self.probe(k, key, span)?;
-        let found = self.temp(Ty::Bool, Rvalue::Contains { hay: d, needle: k }, span);
+        let probe = self.probe(k, key, span)?;
+        let found = Rvalue::Contains {
+            hay: d,
+            needle: probe,
+        };
+        let found = self.temp(Ty::Bool, found, span);
         let (missing, ok) = (self.new_block(), self.new_block());
         self.terminate(Term::Branch {
             cond: found,
@@ -129,7 +134,7 @@ impl FnBuilder<'_, '_> {
         self.emit(Inst::Raise { exc, span });
         self.raise_path()?;
         self.switch_to(ok);
-        Ok(self.temp(value, Rvalue::Index(d, k), span))
+        Ok(self.temp(value, Rvalue::Index(d, probe), span))
     }
 
     /// `d[k] = v`, which adds or replaces and never raises.
@@ -196,6 +201,11 @@ impl FnBuilder<'_, '_> {
         let (key, value) = self.key_value(self.ty(d), span)?;
         let k = self.expr(&k.value)?;
         let k = self.probe(k, key, span)?;
+        // Python evaluates the default before the lookup, hit or miss.
+        let default = match default {
+            Some(a) => self.expr(&a.value)?,
+            None => Operand::None,
+        };
         let ty = self.ty_at(span)?;
         let dest = self.pooled(ty);
         let found = self.temp(Ty::Bool, Rvalue::Contains { hay: d, needle: k }, span);
@@ -210,11 +220,7 @@ impl FnBuilder<'_, '_> {
         self.store_dest(dest, ty, v, span)?;
         self.terminate(Term::Goto(end));
         self.switch_to(miss);
-        let v = match default {
-            Some(a) => self.expr(&a.value)?,
-            None => Operand::None,
-        };
-        self.store_dest(dest, ty, v, span)?;
+        self.store_dest(dest, ty, default, span)?;
         self.terminate(Term::Goto(end));
         self.switch_to(end);
         Ok(Operand::Local(dest))
@@ -231,17 +237,23 @@ impl FnBuilder<'_, '_> {
     /// search; but `x in d.keys()` looks `x` up in `d`).
     pub(super) fn table_contains(&mut self, x: Operand, t: Operand, span: Span) -> Result<Operand> {
         let ty = self.ty(t);
-        let needle = match ty {
-            Ty::Dict(_) => {
-                let (key, _) = self.key_value(ty, span)?;
-                self.probe(x, key, span)?
-            }
-            _ => {
-                let elem = self.elem_of(ty, span)?;
-                self.probe(x, elem, span)?
-            }
+        let key = match ty {
+            Ty::Dict(_) => self.key_value(ty, span)?.0,
+            _ => self.elem_of(ty, span)?,
         };
-        Ok(self.temp(Ty::Bool, Rvalue::Contains { hay: t, needle }, span))
+        let x = match (self.ty(x), key) {
+            (Ty::Bool, Ty::Int) => self.as_int(x, span),
+            _ => x,
+        };
+        let needle = self.fit(x, key, span);
+        if self.ty(needle) == key {
+            return Ok(self.temp(Ty::Bool, Rvalue::Contains { hay: t, needle }, span));
+        }
+        // A needle of another type (`1 in {True}`) meets each key as
+        // `==` does, in a copy of the keys.
+        let keys = self.cx.seqs.list(key);
+        let keys = self.temp(keys, Rvalue::CopyList(t), span);
+        self.contains(ast::CmpOp::In, x, keys, span)
     }
 
     /// `for` over dict or set `t`, binding `part` of each entry: by

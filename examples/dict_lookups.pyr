@@ -1,0 +1,28 @@
+# Lookups: get's default runs before the lookup, KeyError holds the key as written, and an int meets bool keys as == does.
+calls = [0]
+def noisy(n: int) -> int:
+    calls[0] += 1
+    print("default", n)
+    return n
+def insert(d: dict[int, int], k: int) -> int:
+    d[k] = 99
+    return -1
+def bad() -> int:
+    raise ValueError("from default")
+d = {1: 10}
+print(d.get(1, noisy(5)), d.get(2, noisy(6)), calls)
+print(d.get(3, insert(d, 3)), d)
+try:
+    print(d.get(1, bad()))
+except ValueError as e:
+    print("caught", e)
+by_int: dict[int, str] = {}
+try:
+    print(by_int[True])
+except KeyError as e:
+    print("missing", e, [str(e)])
+bools = {True: 7}
+flags = {False}
+print(1 in bools, 0 in bools, 2 in bools, -1 in bools, 1 in bools.keys(), 2 not in bools.keys())
+print(0 in flags, 1 in flags, -1 in flags, 1 not in flags)
+print(True in {1: "a"}, False in {1, 2}, True in {1: "a"}.keys())

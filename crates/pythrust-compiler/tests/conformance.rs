@@ -336,6 +336,7 @@ const NATIVE: &[&str] = &[
     "default_eval_error",
     "dict_bool_key",
     "dict_changed_size",
+    "dict_lookups",
     "dict_view_changed_size",
     "dict_views",
     "dicts",

@@ -1295,3 +1295,31 @@ print(size(nums, names))
     let ok = "temper def put(mut d: dict[str, int], owned k: str) -> None:\n    d[k] = 1\n";
     assert_eq!(checked(ok), Ok(()));
 }
+
+/// A values or items view shares the dict's values, as a shallow copy
+/// does: changing one is changing the dict's, and returning one shares it.
+#[test]
+fn a_view_shares_the_lists_its_dict_holds() {
+    let returned =
+        "temper def f(d: dict[int, list[int]]) -> list[list[int]]:\n    return list(d.values())\n";
+    assert!(
+        alias_err(returned).is_some_and(|e| e.0.contains("sharing a list with its parameter `d`")),
+        "{:?}",
+        alias_err(returned)
+    );
+    for body in [
+        "    rows = list(d.values())\n    rows[0].append(2)\n",
+        "    vs = d.values()\n    for v in vs:\n        v.append(1)\n",
+        "    for v in d.values():\n        v.append(1)\n",
+        "    for k, v in d.items():\n        v.append(k)\n",
+        "    for p in list(d.items()):\n        p[1].append(1)\n",
+    ] {
+        let src = format!("temper def f(d: dict[int, list[int]]) -> None:\n{body}");
+        assert_eq!(
+            mode_err(&src).0,
+            "tempered `f` changes `d` in place; write `mut d`",
+            "{body}"
+        );
+        assert_eq!(checked(&src.replace("(d:", "(mut d:")), Ok(()), "{body}");
+    }
+}

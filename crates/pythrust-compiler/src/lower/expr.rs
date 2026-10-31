@@ -282,7 +282,13 @@ impl<'a> FnBuilder<'_, 'a> {
 
     /// `l in r` and `l not in r`: a substring of a string, or an element
     /// of a list or range.
-    fn contains(&mut self, op: ast::CmpOp, l: Operand, r: Operand, span: Span) -> Result<Operand> {
+    pub(super) fn contains(
+        &mut self,
+        op: ast::CmpOp,
+        l: Operand,
+        r: Operand,
+        span: Span,
+    ) -> Result<Operand> {
         let needle = match (self.ty(l), self.ty(r)) {
             (Ty::Str, Ty::Str) => l,
             // A bool meets a number element as the int it is.

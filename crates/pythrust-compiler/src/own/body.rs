@@ -543,10 +543,11 @@ impl<'a> Flow<'a> {
         out
     }
 
-    /// Whether the list `dest` holds elements that can hold a list.
+    /// Whether the list or view `dest` holds elements that can hold a
+    /// list: a view shares its dict's, as a shallow copy does.
     fn elements_hold_list(&self, dest: LocalId) -> bool {
         match self.program.compound(self.func.locals[dest.0]) {
-            Some(Compound::List(elem)) => holds_list(self.program, *elem),
+            Some(Compound::List(elem) | Compound::View(_, elem)) => holds_list(self.program, *elem),
             _ => false,
         }
     }
