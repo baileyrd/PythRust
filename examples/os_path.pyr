@@ -1,10 +1,19 @@
 # `os` and `os.path` without touching real files: joining, tests on a
 # missing path, and the `OSError` subclasses a missing path raises,
-# caught by class (their messages differ on Windows).
+# caught by class (their messages differ on Windows). CPython on Windows
+# joins with `\\` (a listed deviation), so joins are checked against both
+# separators and paths are not printed.
 import os
 
-print(os.path.join("a"), os.path.join("a", "b", "c"), os.path.join("a/", "b"))
-print(os.path.join("a", "/b", "c"), os.path.join("", "b"), os.path.join("a", ""))
+
+def joined(got: str, posix: str, windows: str) -> bool:
+    return got == posix or got == windows
+
+
+print(os.path.join("a") == "a", joined(os.path.join("a", "b", "c"), "a/b/c", "a\\b\\c"))
+print(joined(os.path.join("a/", "b"), "a/b", "a/b"), os.path.join("", "b") == "b")
+print(joined(os.path.join("a", "/b", "c"), "/b/c", "/b\\c"))
+print(joined(os.path.join("a", ""), "a/", "a\\"))
 missing = os.path.join("no", "such", "path")
 print(os.path.isdir(missing), os.path.isfile(missing), os.path.islink(missing))
 print(os.path.isdir("."), os.path.isfile("."))
@@ -18,7 +27,7 @@ def names(path: str) -> list[str]:
     try:
         return os.listdir(path)
     except FileNotFoundError:
-        print("not found:", path)
+        print("not found")
         return []
 
 

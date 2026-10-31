@@ -1,9 +1,11 @@
-a a/b/c a/b
-/b/c b a/
+True True
+True True
+True
+True
 False False False
 True False
 FileNotFoundError
-not found: no/such/path
+not found
 []
 OSError caught True
 True
