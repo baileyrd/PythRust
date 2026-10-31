@@ -1524,8 +1524,12 @@ fn stub_raises_only_os_error_or_exception() {
 fn ellipsis_outside_a_stub_says_use_pass() {
     let stmt = "`...` is for stub bodies only; use pass";
     assert_eq!(src_err("def f():\n    ...\n"), stmt);
-    assert_eq!(src_err("def f(): ...\n"), stmt);
     assert_eq!(src_err("if True:\n    ...\n"), stmt);
+    // No body shares the `:` line, so `pass` moves down too.
+    let inline = "`...` is for stub bodies only; use pass on its own indented line";
+    assert_eq!(src_err("def f() -> None: ...\n"), inline);
+    assert_eq!(src_err("if True: ...\n"), inline);
+    assert!(src_parse("def f() -> None:\n    pass\nif True:\n    pass\n").is_ok());
     assert_eq!(src_err("...\n"), stmt);
     // As a value, `pass` would not parse: no fix-it.
     let value = "`...` (Ellipsis) is not supported; it is legal only as a stub body";

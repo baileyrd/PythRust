@@ -139,10 +139,12 @@ impl<'a> Parser<'a> {
 
     /// A statement that is only `...`, with Nano's fix-it: Python's
     /// placeholder body, which Pythrust spells `pass` outside a stub.
-    fn ellipsis_stmt(&self) -> Result<()> {
+    /// `hint` says where `pass` goes.
+    fn ellipsis_stmt(&self, hint: &str) -> Result<()> {
         let tok = self.tok(0);
         if tok.kind == TokenKind::Ellipsis && self.tok(1).kind == TokenKind::Newline {
-            return Err(error(tok.span, "`...` is for stub bodies only; use pass"));
+            let msg = format!("`...` is for stub bodies only; use pass{hint}");
+            return Err(error(tok.span, msg));
         }
         Ok(())
     }
@@ -217,7 +219,7 @@ impl<'a> Parser<'a> {
     }
 
     fn stmt(&mut self) -> Result<Stmt> {
-        self.ellipsis_stmt()?;
+        self.ellipsis_stmt("")?;
         match self.peek() {
             TokenKind::Def | TokenKind::Temper => self.func_def(),
             TokenKind::If => self.if_stmt(),
@@ -237,7 +239,8 @@ impl<'a> Parser<'a> {
     }
 
     fn block(&mut self) -> Result<Block> {
-        self.ellipsis_stmt()?;
+        // A body is never on the `:` line, so `pass` must move down too.
+        self.ellipsis_stmt(" on its own indented line")?;
         self.expect(&TokenKind::Newline)?;
         self.expect(&TokenKind::Indent)?;
         self.nested(|p| {
