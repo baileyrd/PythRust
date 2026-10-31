@@ -123,6 +123,14 @@ fn open(p: &str) -> io::Result<fs::File> {
     Ok(file)
 }
 
+/// CPython's message for a path holding a NUL: Windows converts the
+/// path to wide characters, POSIX to bytes.
+const NUL: &str = if cfg!(windows) {
+    "embedded null character"
+} else {
+    "embedded null byte"
+};
+
 #[cfg(unix)]
 fn is_a_directory() -> io::Error {
     io::Error::from_raw_os_error(21) // EISDIR on Linux and macOS.
@@ -247,7 +255,7 @@ pub unsafe extern "C" fn pt_open(
     // SAFETY: guaranteed by the caller.
     let (p, at) = unsafe { (pstr::borrow(p).text(), site(head, head_len, tail, tail_len)) };
     if p.contains('\0') {
-        at.raise_text(VALUE_ERROR, "embedded null byte".to_string());
+        at.raise_text(VALUE_ERROR, NUL.to_string());
         return std::ptr::null_mut();
     }
     match open(p) {

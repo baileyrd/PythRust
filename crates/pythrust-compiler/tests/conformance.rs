@@ -1320,9 +1320,11 @@ fn files_match_cpython() -> Res<()> {
     );
     // A NUL in `open`'s path is CPython's ValueError, not an OSError,
     // and escapes a helper that catches only OSError.
-    let nul =
-        "ValueError embedded null byte\nValueError via helper embedded null byte\nOSError\n9\n";
-    assert!(want.stdout.contains(nul), "{}", want.stdout);
+    let null = if cfg!(windows) { "character" } else { "byte" };
+    let nul = format!(
+        "ValueError embedded null {null}\nValueError via helper embedded null {null}\nOSError\n9\n"
+    );
+    assert!(want.stdout.contains(&nul), "{}", want.stdout);
     let repr = "[IsADirectoryError(21, 'Is a directory')]";
     assert!(!cfg!(unix) || want.stdout.contains(repr), "{}", want.stdout);
     assert_eq!(run_pythrust(&source)?, want);

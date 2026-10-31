@@ -86,8 +86,13 @@ fn open<'m>(p: &str, span: Span) -> Exec<'m, Value<'m>> {
     Ok(Value::File(Rc::new(File { name, file })))
 }
 
-/// CPython's message for a path holding a NUL.
-const NUL: &str = "embedded null byte";
+/// CPython's message for a path holding a NUL: Windows converts the
+/// path to wide characters, POSIX to bytes.
+const NUL: &str = if cfg!(windows) {
+    "embedded null character"
+} else {
+    "embedded null byte"
+};
 
 #[cfg(unix)]
 fn is_a_directory() -> io::Error {
