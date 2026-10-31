@@ -103,7 +103,7 @@ fn plural(ty: &Type) -> String {
 }
 
 /// Rejects the first parameter of `def` whose written mode its body outgrows.
-fn func(def: &FuncDef, summary: &Summary) -> Result<()> {
+pub(super) fn func(def: &FuncDef, summary: &Summary) -> Result<()> {
     for (p, inferred) in def.params.iter().zip(&summary.params) {
         if def.mode == Temper::Loose && p.mode == ParamMode::Read {
             continue;

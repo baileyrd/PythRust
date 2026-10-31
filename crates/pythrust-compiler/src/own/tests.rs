@@ -1,4 +1,5 @@
-use super::{analyze, check, Analysis, Mode, Param, Precision, Strs};
+use super::{analyze, check, modes, Analysis, Mode, Param, Precision, Strs};
+use crate::ast::{Mode as Temper, ParamMode, StmtKind};
 use crate::diag::DiagKind;
 use crate::{infer, lexer, parser};
 
@@ -1327,8 +1328,48 @@ fn a_view_shares_the_lists_its_dict_holds() {
 #[test]
 fn reading_or_closing_a_file_parameter_is_mut() {
     let src = "def r(f):\n    return f.read()\ndef c(f):\n    f.close()\ndef keep(f, p: str):\n    return len(p)\n\
-               g = open(\"p\", \"rb\")\nprint(r(g))\nc(g)\nprint(keep(g, \"x\"))\n";
+               def copy(f):\n    g = f\n    return g.read()\n\
+               h = open(\"p\", \"rb\")\nprint(r(h))\nc(h)\nprint(keep(h, \"x\"))\nprint(copy(h))\n";
     assert_eq!(modes(src, "r").0, vec![MUT]);
     assert_eq!(modes(src, "c").0, vec![MUT]);
     assert_eq!(modes(src, "keep").0, vec![READ, READ]);
+    // A documented non-detection: the rule is syntactic, so reading a
+    // copy of the parameter is not seen (grammar.md, parameter modes).
+    assert_eq!(modes(src, "copy").0, vec![READ]);
+}
+
+/// No source program reaches the file `mut` check yet: a tempered
+/// function must annotate its parameters and no file type is spellable.
+/// So the check runs on `r`'s real summary with its definition edited
+/// into a tempered one, with and without `mut`.
+#[test]
+fn a_tempered_file_parameter_read_without_mut_is_an_error() {
+    let src = "def r(f):\n    return f.read()\nprint(r(open(\"p\", \"rb\")))\n";
+    let module = match lexer::lex(src).and_then(|t| parser::parse(&t)) {
+        Ok(m) => m,
+        Err(d) => panic!("parse failed: {d}"),
+    };
+    let Some(StmtKind::FuncDef(def)) = module.body.first().map(|s| &s.kind) else {
+        panic!("`r` comes first")
+    };
+    let analysis = analyzed(src);
+    let Some(summary) = analysis.funcs.get("r") else {
+        panic!("no summary for `r`")
+    };
+    let mut tempered = def.clone();
+    tempered.mode = Temper::Tempered;
+    let Err(d) = modes::func(&tempered, summary) else {
+        panic!("reading `f` without `mut` passed")
+    };
+    assert_eq!(
+        d.message,
+        "tempered `r` changes `f` in place; write `mut f`"
+    );
+    tempered.params[0].mode = ParamMode::Mut;
+    assert_eq!(modes::func(&tempered, summary), Ok(()));
+    assert_eq!(
+        modes::func(def, summary),
+        Ok(()),
+        "loose `r` infers its mode"
+    );
 }
