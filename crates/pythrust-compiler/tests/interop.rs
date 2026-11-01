@@ -480,23 +480,64 @@ fn a_broad_range_keeps_its_bindings_pin() {
     );
 }
 
-/// A build script linking a shared library from a directory it adds is
-/// refused: the final link would not see the directory and could find
-/// another library of that name.
+/// A search path a build script adds reaches the final link, beside a
+/// library from the default paths (as the `cc` crate adds `OUT_DIR` and
+/// links the C++ runtime).
 #[test]
-fn a_shared_library_from_an_added_path_is_refused() {
+fn a_build_script_search_path_reaches_the_link() {
     let dir = scratch("search");
+    let a = binding(&dir, "a", "build = \"build.rs\"\n", false, Some(&[]));
+    let lib = if cfg!(windows) {
+        ""
+    } else {
+        "    println!(\"cargo:rustc-link-lib=dylib=m\");\n"
+    };
+    fs::write(
+        a.join("build.rs"),
+        format!(
+            "fn main() {{\n    let out = std::env::var(\"OUT_DIR\").unwrap();\n    \
+             println!(\"cargo:rustc-link-search=native={{out}}\");\n{lib}}}\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "5\n");
+}
+
+/// A library found only through a build script's search path links: the
+/// binding names it in a `#[link]` attribute, and the script adds only
+/// the directory, where it builds the library.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_library_only_in_an_added_path_links() {
+    let dir = scratch("onlypath");
     let a = binding(&dir, "a", "build = \"build.rs\"\n", false, Some(&[]));
     fs::write(
         a.join("build.rs"),
-        "fn main() {\n    let out = std::env::var(\"OUT_DIR\").unwrap();\n    \
-         println!(\"cargo:rustc-link-search=native={out}\");\n    \
-         println!(\"cargo:rustc-link-lib=dylib=m\");\n}\n",
+        "use std::process::Command;\n\
+         fn main() {\n    \
+             let out = std::env::var(\"OUT_DIR\").unwrap();\n    \
+             std::fs::write(format!(\"{out}/seven.c\"), \"long seven(void) { return 7; }\\n\").unwrap();\n    \
+             let ok = Command::new(\"cc\").args([\"-shared\", \"-fPIC\", \"-o\"]).arg(format!(\"{out}/libptseven.so\")).arg(format!(\"{out}/seven.c\")).status().unwrap();\n    \
+             assert!(ok.success());\n    \
+             println!(\"cargo:rustc-link-search=native={out}\");\n\
+         }\n",
     )
     .unwrap();
-    let err = failure(build(&dir, DIGITS, &[("a", &a)]));
-    assert_eq!(
-        err,
-        "pythrust: the Rust crate `a` links a shared library from a directory its build script adds, which is not supported yet\n"
-    );
+    fs::write(
+        a.join("src/lib.rs"),
+        "#[link(name = \"ptseven\")]\nunsafe extern \"C\" {\n    fn seven() -> i64;\n}\n\n\
+         pub fn digits(x: i64) -> i64 {\n    x + unsafe { seven() }\n}\n",
+    )
+    .unwrap();
+    let path = dir.join("main.pyr");
+    fs::write(&path, DIGITS).unwrap();
+    let mut flag = std::ffi::OsString::from("a=");
+    flag.push(&a);
+    let built = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .args(["build", "--rust"])
+        .arg(flag)
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", text(&built.stderr));
 }

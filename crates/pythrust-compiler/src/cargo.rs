@@ -74,60 +74,99 @@ pub(crate) fn build(shims: &str, crates: &[Crate], out: &Path) -> Result<Runtime
     }
     let built = read_lock(&dir.join("Cargo.lock"))?;
     lock::verify(&built, &named).map_err(|e| format!("pythrust: {e}\n"))?;
-    let native = native_libs(&String::from_utf8_lossy(&output.stderr))?;
     let profile = dir
         .join("target")
         .join(host())
         .join(if RELEASE { "release" } else { "debug" });
-    refuse_search_paths(&profile.join("build"))?;
+    let mut native = search_paths(&profile.join("build"), &built)?;
+    native.extend(native_libs(&String::from_utf8_lossy(&output.stderr))?);
     Ok(Runtime {
         lib: profile.join(STATICLIB),
         native,
     })
 }
 
-/// Refuses a build script that links a non-static library from a search
-/// path it adds: `native-static-libs` names the library but not the
-/// path, so the final link would miss it or find another of that name.
-/// Static libraries are bundled into the staticlib and need no path.
-fn refuse_search_paths(build: &Path) -> Result<(), String> {
-    let Ok(entries) = std::fs::read_dir(build) else {
-        return Ok(());
+/// The linker arguments for the library search paths the bindings'
+/// build scripts add (`rustc-link-search`, or `-L` in `rustc-flags`),
+/// which `native-static-libs` leaves out: without them the final link
+/// would miss a library there or find another of its name. Read from
+/// each build script's `output` in `build`, for the packages of `built`
+/// only, so a crate no longer in the build adds nothing.
+fn search_paths(build: &Path, built: &Lock) -> Result<Vec<String>, String> {
+    let entries = match std::fs::read_dir(build) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("pythrust: cannot read {}: {e}\n", build.display())),
     };
-    for entry in entries.flatten() {
-        let Ok(text) = std::fs::read_to_string(entry.path().join("output")) else {
-            continue;
-        };
-        if !needs_search_path(&text) {
-            continue;
-        }
+    let mut args = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("pythrust: cannot read {}: {e}\n", build.display()))?;
         let dir = entry.file_name().to_string_lossy().into_owned();
         let package = dir.rsplit_once('-').map_or(dir.as_str(), |(p, _)| p);
-        return Err(format!(
-            "pythrust: the Rust crate `{package}` links a shared library from a directory its build script adds, which is not supported yet\n"
-        ));
+        if !built.packages.iter().any(|p| p.name == package) {
+            continue;
+        }
+        let path = entry.path().join("output");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => args.extend(search_args(&text)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("pythrust: cannot read {}: {e}\n", path.display())),
+        }
     }
-    Ok(())
+    args.dedup();
+    Ok(args)
 }
 
-/// Whether a build script's `output` adds a search path and links a
-/// library that is not static.
-fn needs_search_path(output: &str) -> bool {
-    let directives: Vec<&str> = output
-        .lines()
-        .filter_map(|l| {
-            l.strip_prefix("cargo::")
-                .or_else(|| l.strip_prefix("cargo:"))
-        })
-        .collect();
-    let searches = directives
-        .iter()
-        .any(|d| d.starts_with("rustc-link-search="));
-    let shared = directives
-        .iter()
-        .filter_map(|d| d.strip_prefix("rustc-link-lib="))
-        .any(|lib| !lib.starts_with("static="));
-    searches && shared
+/// The search paths in one build script's `output`, as linker arguments.
+fn search_args(output: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        let Some(d) = line
+            .strip_prefix("cargo::")
+            .or_else(|| line.strip_prefix("cargo:"))
+        else {
+            continue;
+        };
+        if let Some(path) = d.strip_prefix("rustc-link-search=") {
+            paths.push(path);
+        } else if let Some(flags) = d.strip_prefix("rustc-flags=") {
+            paths.extend(flag_paths(flags));
+        }
+    }
+    paths.into_iter().filter_map(search_arg).collect()
+}
+
+/// The `-L` values in `rustc-flags`: `-L x` or `-Lx`.
+fn flag_paths(flags: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut words = flags.split_whitespace();
+    while let Some(word) = words.next() {
+        match word.strip_prefix("-L") {
+            Some("") => out.extend(words.next()),
+            Some(path) => out.push(path),
+            None => {}
+        }
+    }
+    out
+}
+
+/// The linker argument for one `[KIND=]PATH` search path; none for the
+/// kinds that name Rust crates, which the staticlib already holds.
+fn search_arg(value: &str) -> Option<String> {
+    let (kind, path) = match value.split_once('=') {
+        Some((kind @ ("native" | "all" | "framework" | "dependency" | "crate"), path)) => {
+            (kind, path)
+        }
+        _ => ("all", value),
+    };
+    match kind {
+        "dependency" | "crate" => None,
+        "framework" if cfg!(target_os = "macos") => Some(format!("-F{path}")),
+        "framework" => None,
+        _ if cfg!(windows) => Some(format!("/LIBPATH:{path}")),
+        _ => Some(format!("-L{path}")),
+    }
 }
 
 /// `pythrust-rt`'s source: `$PYTHRUST_RT_SRC`, or where it was when this
@@ -415,17 +454,18 @@ mod tests {
     }
 
     #[test]
-    fn only_shared_libraries_from_added_paths_are_refused() {
-        let shared = "cargo:rustc-link-search=native=/custom\ncargo:rustc-link-lib=dylib=foo\n";
-        assert!(needs_search_path(shared));
-        assert!(needs_search_path(
-            "cargo::rustc-link-search=/c\ncargo::rustc-link-lib=foo\n"
-        ));
-        let bundled = "cargo:rustc-link-search=native=/out\ncargo:rustc-link-lib=static=foo\n";
-        assert!(!needs_search_path(bundled));
-        assert!(!needs_search_path(
-            "cargo:rustc-link-lib=dylib=m\ncargo:rerun-if-changed=x\n"
-        ));
+    fn search_paths_come_from_every_directive_form() {
+        let output = "cargo:rustc-link-search=native=/a\n\
+                      cargo::rustc-link-search=/b\n\
+                      cargo:rustc-link-search=dependency=/rust\n\
+                      cargo:rustc-flags=-L native=/c -l dylib=foo -L/d\n\
+                      cargo:rustc-link-lib=dylib=foo\n";
+        let arg = |p: &str| match cfg!(windows) {
+            true => format!("/LIBPATH:{p}"),
+            false => format!("-L{p}"),
+        };
+        assert_eq!(search_args(output), ["/a", "/b", "/c", "/d"].map(arg));
+        assert!(search_args("cargo:rustc-link-lib=static=x\n").is_empty());
     }
 
     #[test]
