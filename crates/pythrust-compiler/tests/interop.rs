@@ -756,7 +756,7 @@ fn fclone_fast_finds_the_groups_fclone_lite_finds() {
     let oracle = dir.join("fclone_lite.py");
     fs::copy(apps.join("fclone_lite.py"), &oracle).unwrap();
     let src = fs::read_to_string(apps.join("fclone_fast.pyr")).unwrap();
-    let (built, _) = build_as(
+    let built = compile(
         &dir,
         "fclone_fast.pyr",
         &src,
