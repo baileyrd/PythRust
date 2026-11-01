@@ -44,6 +44,8 @@ pub enum Cross {
     Bool,
     Str,
     Bytes,
+    /// `list[str]`: copied in, borrowed by Rust as `&[String]`.
+    StrList,
     /// A result only.
     None,
 }
@@ -52,6 +54,9 @@ impl Cross {
     /// The type `t` names; the parser admits only these in a stub.
     fn of(t: &TypeExpr) -> Result<Cross> {
         let cross = match t.name.name.as_str() {
+            "list" if !t.optional && matches!(t.args.as_slice(), [e] if e.name.name == "str") => {
+                Some(Cross::StrList)
+            }
             _ if !t.args.is_empty() || t.optional => None,
             "int" => Some(Cross::Int),
             "float" => Some(Cross::Float),
@@ -72,6 +77,7 @@ impl Cross {
             Cross::Bool | Cross::None => "u8",
             Cross::Str => "*const pythrust_rt::abi::Str",
             Cross::Bytes => "*const pythrust_rt::abi::Bytes",
+            Cross::StrList => "*const pythrust_rt::abi::List",
         }
     }
 
@@ -80,6 +86,7 @@ impl Cross {
         match self {
             Cross::Str => "*mut pythrust_rt::abi::Str",
             Cross::Bytes => "*mut pythrust_rt::abi::Bytes",
+            Cross::StrList => "*mut pythrust_rt::abi::List",
             other => other.c_param(),
         }
     }
@@ -90,7 +97,17 @@ impl Cross {
             Cross::Bool => format!("pythrust_rt::abi::arg_bool({p})"),
             Cross::Str => format!("pythrust_rt::abi::arg_str(&{p})"),
             Cross::Bytes => format!("pythrust_rt::abi::arg_bytes(&{p})"),
+            Cross::StrList => format!("pythrust_rt::abi::arg_str_list(&{p})"),
             Cross::Int | Cross::Float | Cross::None => p.to_string(),
+        }
+    }
+
+    /// How the call passes the converted argument `a`: a copied list is
+    /// lent, the rest go as they are.
+    fn pass(self, a: &str) -> String {
+        match self {
+            Cross::StrList => format!("&{a}"),
+            _ => a.to_string(),
         }
     }
 
@@ -103,6 +120,7 @@ impl Cross {
             Cross::Bool => "bool",
             Cross::Str => "String",
             Cross::Bytes => "Vec<u8>",
+            Cross::StrList => "Vec<String>",
             Cross::None => "()",
         }
     }
@@ -223,7 +241,12 @@ fn shim(stub: &StubDef, locate: &dyn Fn(Span) -> String) -> Result<String> {
         .enumerate()
         .map(|(i, c)| c.arg(&format!("p{i}")))
         .collect();
-    let args = names.join(", ");
+    let args = params
+        .iter()
+        .zip(&names)
+        .map(|(c, a)| c.pass(a))
+        .collect::<Vec<_>>()
+        .join(", ");
     names.push("at".to_string());
     values.push(SITE.to_string());
     let (call, result) = match stub.raises.is_empty() {

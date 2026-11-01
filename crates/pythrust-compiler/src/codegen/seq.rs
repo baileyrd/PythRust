@@ -275,6 +275,15 @@ mod tests {
         assert_eq!(out, "lt\u{3}slfb");
     }
 
+    /// `pythrust_rt::abi` builds the `list[str]` a Rust binding returns
+    /// with this descriptor, fixed there (`LIST_STR`).
+    #[test]
+    fn a_str_list_is_ls_as_the_runtime_assumes() {
+        let mut out = String::new();
+        descriptor(&[Compound::List(Ty::Str)], Ty::List(TypeId(0)), &mut out).expect("descriptor");
+        assert_eq!(out, "ls");
+    }
+
     #[test]
     fn optional_descriptors_name_their_present_type() {
         let types = vec![Compound::Opt(Ty::Int), Compound::List(Ty::Opt(TypeId(0)))];

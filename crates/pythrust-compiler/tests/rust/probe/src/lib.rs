@@ -92,3 +92,8 @@ pub fn keep_bytes(data: &'static [u8]) -> i64 {
 pub unsafe fn danger(x: i64) -> i64 {
     x
 }
+
+/// Each of `items` with `!` after it.
+pub fn tag_all(items: &[String]) -> Vec<String> {
+    items.iter().map(|s| format!("{s}!")).collect()
+}

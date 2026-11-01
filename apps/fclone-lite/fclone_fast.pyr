@@ -1,7 +1,8 @@
-# fclone_fast: fclone-lite hashing each candidate with xxh3-128 in Rust,
-# through the `fastfs` binding (M6b driver,
+# fclone_fast: fclone-lite hashing every candidate with xxh3-128 in Rust,
+# in parallel and in one call, through the `fastfs` binding (M6b driver,
 # docs/research/rust-interop.md#driver-fast-fclone-lite). The walk and the
-# grouping are fclone_lite.py's. Build it with
+# grouping are fclone_lite.py's; an unreadable file has the digest "" and
+# is skipped, as fclone_lite.py skips its OSError. Build it with
 #   pythrust build --rust fastfs=apps/fclone-lite/fastfs apps/fclone-lite/fclone_fast.pyr
 import fastfs
 import os
@@ -27,12 +28,12 @@ def collect(root: str, by_size: dict[int, list[str]]) -> None:
                 by_size[size] = [path]
 
 
-def groups(paths: list[str]) -> list[list[str]]:
+def groups(paths: list[str], digests: list[str], start: int) -> list[list[str]]:
     by_hash: dict[str, list[str]] = {}
-    for path in paths:
-        try:
-            h = fastfs.file_xxh3(path)
-        except OSError:
+    for i in range(len(paths)):
+        h = digests[start + i]
+        path = paths[i]
+        if h == "":
             continue
         if h in by_hash:
             by_hash[h].append(path)
@@ -49,17 +50,28 @@ def main() -> None:
     root = sys.argv[1] if len(sys.argv) > 1 else "."
     by_size: dict[int, list[str]] = {}
     collect(root, by_size)
-    first = True
+    sizes: list[int] = []
+    candidates: list[str] = []
     for size in sorted(by_size):
         if len(by_size[size]) < 2:
             continue
-        for group in groups(by_size[size]):
+        sizes.append(size)
+        for path in by_size[size]:
+            candidates.append(path)
+    # One call hashes every candidate, so the threads start once, not
+    # once per size group.
+    digests = fastfs.group_xxh3(candidates)
+    start = 0
+    first = True
+    for size in sizes:
+        for group in groups(by_size[size], digests, start):
             if not first:
                 print()
             first = False
             print(size, "bytes:")
             for path in group:
                 print(" ", path)
+        start += len(by_size[size])
 
 
 main()

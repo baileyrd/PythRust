@@ -271,6 +271,10 @@ def main(path: str) -> None:
     print(\"before\")
     print(probe.note(3))
     print(probe.scoped_len(\"h\\u00e9llo\"))
+    tagged = probe.tag_all([\"a\", \"b\"])
+    print(tagged, len(tagged))
+    none: list[str] = []
+    print(probe.tag_all(none))
     print(probe.size(path))
     try:
         print(probe.size(path + \".missing\"))
@@ -291,6 +295,8 @@ before
 note 3
 None
 6
+['a!', 'b!'] 2
+[]
 5
 caught a missing file
 caught nope
