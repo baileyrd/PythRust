@@ -4,7 +4,7 @@
 
 ## Pause marker
 
-**What it marks.** A pause point is a call where other tasks may interleave: I/O, a channel receive, a lock acquire, or any function that transitively reaches one. Functions are uncolored, so the compiler infers which calls can pause. Loose code needs no marker. Tempered code must mark every pause point. The marker changes nothing at runtime; it is documentation the compiler checks.
+**What it marks.** A pause point is a call where other tasks may interleave: I/O, a channel receive, a lock acquire, or any function that transitively reaches one. (M6c narrows this for now: only waits on other tasks count, not I/O; see [concurrency.md](concurrency.md#decided).) Functions are uncolored, so the compiler infers which calls can pause. Loose code needs no marker. Tempered code must mark every pause point. The marker changes nothing at runtime; it is documentation the compiler checks.
 
 ### Options
 
