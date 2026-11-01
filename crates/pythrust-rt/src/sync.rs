@@ -108,6 +108,12 @@ impl<T> Slot<T> {
         }
     }
 
+    /// Whether nobody holds the slot (the mark aside).
+    #[cfg(test)]
+    pub(crate) fn is_free(&self) -> bool {
+        self.state.load(Ordering::Relaxed) & !MARK == 0
+    }
+
     /// Whether the slot may be reached by another thread.
     pub(crate) fn is_marked(&self) -> bool {
         self.state.load(Ordering::Relaxed) & MARK != 0

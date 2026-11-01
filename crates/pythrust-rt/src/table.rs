@@ -136,8 +136,10 @@ fn grow(t: &PtSeq, slots: &mut Vec<usize>, entries: usize) {
 /// and for a dict equal values, in any order.
 pub(crate) fn same(a: &PtSeq, b: &PtSeq) -> bool {
     let step = stride(a.desc);
-    let items = a.items.borrow();
-    if items.len() != b.items.borrow().len() {
+    // Both borrows last through every comparison, so a value read from
+    // `b` stays reachable from it until compared.
+    let (items, others) = (a.items.borrow(), b.items.borrow());
+    if items.len() != others.len() {
         return false;
     }
     items.chunks(step).all(|entry| {
@@ -147,7 +149,7 @@ pub(crate) fn same(a: &PtSeq, b: &PtSeq) -> bool {
         match entry.get(1) {
             None => true,
             Some(v) => {
-                let w = b.items.borrow().get(at * 2 + 1).copied();
+                let w = others.get(at * 2 + 1).copied();
                 w.is_some_and(|w| seq::eq(slot(a.desc, 1), *v, w))
             }
         }

@@ -16,7 +16,7 @@
 
 #![allow(unsafe_code)] // Slots are pointers; the C ABI below.
 
-use crate::sync::{Count, Slot};
+use crate::sync::{Count, Ref, Slot};
 use std::cmp::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -253,8 +253,9 @@ fn drop_one(p: u64, todo: &mut Vec<u64>) {
 /// never writes a mark twice. Iterative, as nesting can be deep.
 pub(crate) fn mark(desc: &'static [u8], v: u64) {
     let mut todo = vec![(desc, v)];
+    let mut held = Held::new();
     while let Some((desc, v)) = todo.pop() {
-        mark_one(desc, v, &mut todo);
+        mark_one(desc, v, &mut todo, &mut held);
     }
 }
 
@@ -278,7 +279,7 @@ fn store(desc: &'static [u8], v: u64, marked: bool) {
     inc(desc, v);
 }
 
-fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>) {
+fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>, held: &mut Held) {
     match kind(desc) {
         Kind::Opt if v == 0 => {}
         Kind::Opt => todo.push((opt_owner(desc), v)),
@@ -307,6 +308,7 @@ fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>) {
                     .enumerate()
                     .map(|(k, &item)| (slot(s.desc, k), item)),
             );
+            held.push(items);
         }
         _ => {}
     }
@@ -396,6 +398,12 @@ const MAX_NESTING: usize = 10_000;
 #[derive(Debug, PartialEq)]
 pub(crate) struct TooDeep;
 
+/// Read borrows of the containers a walk has queued children of, kept
+/// until the walk ends: a queued child stays reachable from its borrowed
+/// parent, so a writer rule 4 failed to keep out conflicts instead of
+/// freeing the child before the walk uses it.
+type Held = Vec<Ref<'static, Vec<u64>>>;
+
 /// What is left of a `repr` in progress.
 enum Step {
     Show(&'static [u8], u64),
@@ -407,6 +415,16 @@ enum Step {
 /// Appends Python's `repr` of slot `v` of type `desc` to `out`. A loop
 /// with its own stack, since exceptions nest to any depth.
 fn repr(desc: &'static [u8], v: u64, out: &mut String) -> Result<(), TooDeep> {
+    repr_holding(desc, v, out, &mut Held::new())
+}
+
+/// [`repr`], leaving the borrows of the containers it read in `held`.
+fn repr_holding(
+    desc: &'static [u8],
+    v: u64,
+    out: &mut String,
+    held: &mut Held,
+) -> Result<(), TooDeep> {
     let mut todo = vec![Step::Show(desc, v)];
     let mut depth = 0;
     while let Some(step) = todo.pop() {
@@ -432,14 +450,14 @@ fn repr(desc: &'static [u8], v: u64, out: &mut String) -> Result<(), TooDeep> {
             depth += 1;
             todo.push(Step::Leave);
         }
-        show(desc, v, out, &mut todo);
+        show(desc, v, out, &mut todo, held);
     }
     Ok(())
 }
 
 /// Writes what of slot `v` of type `desc` comes first, and pushes the
 /// rest on `todo`, last first.
-fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>) {
+fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     match kind(desc) {
         Kind::Int => out.push_str(&(v as i64).to_string()),
         Kind::Float => out.push_str(&crate::num::repr(f64::from_bits(v))),
@@ -450,22 +468,22 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>) {
         // SAFETY: an object slot holds a live object.
         Kind::Obj => out.push_str(&unsafe { obj::borrow(v as *const PtObj) }.repr()),
         // SAFETY: a sequence slot holds a live sequence.
-        Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo),
+        Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo, held),
         // SAFETY: a range slot holds a live range.
         Kind::Range => out.push_str(&unsafe { range_fields(v as *const PtSeq) }.repr()),
         Kind::Opt if v == 0 => out.push_str("None"),
         Kind::Opt => todo.push(Step::Show(opt(desc).0, present(desc, v))),
         // SAFETY: an exception slot holds a live exception.
-        Kind::Exc => show_exc(unsafe { seq(v) }, out, todo),
+        Kind::Exc => show_exc(unsafe { seq(v) }, out, todo, held),
         // SAFETY: a table or view slot holds a live one.
-        Kind::Dict | Kind::Set => show_table(unsafe { seq(v) }, out, todo),
+        Kind::Dict | Kind::Set => show_table(unsafe { seq(v) }, out, todo, held),
         // SAFETY: as above.
-        Kind::View => show_view(unsafe { seq(v) }, out, todo),
+        Kind::View => show_view(unsafe { seq(v) }, out, todo, held),
     }
 }
 
 /// `[1, 2]` or `(1,)`.
-fn show_seq(s: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+fn show_seq(s: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     let items = s.items.borrow();
     let tuple = kind(s.desc) == Kind::Tuple;
     out.push(if tuple { '(' } else { '[' });
@@ -480,10 +498,11 @@ fn show_seq(s: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
             todo.push(Step::Text(", "));
         }
     }
+    held.push(items);
 }
 
 /// `{1: 'a'}`, `{1, 2}`, or `set()` for an empty set.
-fn show_table(t: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+fn show_table(t: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     let items = t.items.borrow();
     let dict = kind(t.desc) == Kind::Dict;
     if !dict && items.is_empty() {
@@ -501,10 +520,11 @@ fn show_table(t: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
             _ => {}
         }
     }
+    held.push(items);
 }
 
 /// `dict_keys([1, 2])`, `dict_values([...])` or `dict_items([...])`.
-fn show_view(v: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+fn show_view(v: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     let name = match v.desc.get(1) {
         Some(b'k') => "dict_keys([",
         Some(b'v') => "dict_values([",
@@ -512,16 +532,18 @@ fn show_view(v: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
     };
     out.push_str(name);
     todo.push(Step::Text("])"));
-    for (k, item) in v.items.borrow().iter().enumerate().rev() {
+    let items = v.items.borrow();
+    for (k, item) in items.iter().enumerate().rev() {
         todo.push(Step::Show(slot(v.desc, k), *item));
         if k > 0 {
             todo.push(Step::Text(", "));
         }
     }
+    held.push(items);
 }
 
 /// `ValueError('bad')`, or `ValueError()` without an argument.
-fn show_exc(e: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+fn show_exc(e: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     out.push_str(crate::exc::name(exc_kind(e as *const PtSeq as u64)));
     out.push('(');
     if let Some(os) = errno_form(e) {
@@ -529,9 +551,11 @@ fn show_exc(e: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
         return;
     }
     todo.push(Step::Text(")"));
-    if let Some(v) = e.items.borrow().first() {
+    let items = e.items.borrow();
+    if let Some(v) = items.first() {
         todo.push(Step::Show(slot(e.desc, 0), *v));
     }
+    held.push(items);
 }
 
 /// The arguments of an `OSError` the runtime raised: CPython's
@@ -794,8 +818,11 @@ pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq) {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
     let desc = slot(s.desc, 0);
-    let items = std::mem::take(&mut *s.items.borrow_mut());
-    *s.items.borrow_mut() = merge_sort(desc, items);
+    // One write borrow for the whole sort: a party rule 4 failed to keep
+    // out conflicts rather than seeing the list empty mid-sort.
+    let mut items = s.items.borrow_mut();
+    let taken = std::mem::take(&mut *items);
+    *items = merge_sort(desc, taken);
 }
 
 fn merge_sort(desc: &[u8], mut items: Vec<u64>) -> Vec<u64> {
@@ -1300,6 +1327,44 @@ mod tests {
         }
     }
 
+    /// A `repr` keeps every container it queued children of borrowed
+    /// until it is done, so none of those children can be replaced and
+    /// freed before it is shown; a marking walk releases what it held.
+    #[test]
+    fn walks_hold_their_containers_until_done() {
+        let inner = make(b"ls", &[]);
+        let word = crate::str::into_ptr(PtStr::new("w".into()));
+        // SAFETY: both live; the list takes its own reference.
+        unsafe {
+            pt_seq_push(inner, word as u64);
+            pstr::pt_str_dec(word);
+        }
+        let outer = make(b"lls", &[inner as u64]);
+        let free = |p: *mut PtSeq| {
+            // SAFETY: both lists are live until the end of the test.
+            unsafe { seq(p as u64) }.items.is_free()
+        };
+        let mut held = Held::new();
+        let mut out = String::new();
+        assert_eq!(
+            repr_holding(b"lls", outer as u64, &mut out, &mut held),
+            Ok(())
+        );
+        assert_eq!(
+            (out.as_str(), free(outer), free(inner)),
+            ("[['w']]", false, false)
+        );
+        drop(held);
+        assert!(free(outer) && free(inner));
+        mark(b"lls", outer as u64);
+        assert!(free(outer) && free(inner));
+        // SAFETY: the test's references.
+        unsafe {
+            pt_seq_dec(outer);
+            pt_seq_dec(inner);
+        }
+    }
+
     #[test]
     fn deep_exception_chains_render_to_the_limit_and_free_in_a_loop() {
         // `e = ValueError(e)` repeatedly, as a list element: the list
@@ -1320,6 +1385,7 @@ mod tests {
             // SAFETY: both live until dropped here.
             unsafe {
                 assert_eq!(super::shown(xs).is_ok(), fits, "{n}");
+                assert!(seq(xs as u64).items.is_free(), "{n}: released");
                 assert_eq!(exc_message(e as u64), Ok(String::new()));
                 pt_seq_dec(e);
                 pt_seq_dec(xs);
