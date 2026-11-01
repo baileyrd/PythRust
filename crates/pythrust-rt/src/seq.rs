@@ -666,14 +666,11 @@ pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
 pub unsafe extern "C" fn pt_seq_push(s: *const PtSeq, v: u64) {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
-    // Rule 4 gives this thread `s` alone while it changes, so marking and
-    // counting `v` after it lands is as good as before.
-    let (k, marked) = s.items.push(v);
-    let desc = slot(s.desc, k);
-    if marked {
-        mark(desc, v);
-    }
-    inc(desc, v);
+    // A marked `s` is borrowed while `v` is marked; the walk never
+    // borrows `s`, since it stops at what is already marked. Counting `v`
+    // after it lands is safe: rule 4 gives this thread `s` alone.
+    let k = s.items.push(v, |k| mark(slot(s.desc, k), v));
+    inc(slot(s.desc, k), v);
 }
 
 /// `list(s)`: a new list with `s`'s type and elements, each gaining a

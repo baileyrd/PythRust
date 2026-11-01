@@ -203,23 +203,28 @@ impl<T: Copy> Slot<Vec<T>> {
         position(i, items.len()).map(|k| (k, items[k]))
     }
 
-    /// Appends `v`, giving its position and whether the slot is marked.
+    /// Appends `v`, giving its position. On a marked slot, `marking(k)`
+    /// runs first, under the writer bit, so `v` is marked before any
+    /// party can reach it, even one rule 4 should have kept out.
     #[inline]
-    pub(crate) fn push(&self, v: T) -> (usize, bool) {
+    pub(crate) fn push(&self, v: T, marking: impl FnOnce(usize)) -> usize {
         if !self.idle() {
-            return self.push_borrowed(v);
+            return self.push_borrowed(v, marking);
         }
         // SAFETY: see `idle`; the reference ends in this expression.
         let items = unsafe { &mut *self.value.get() };
         items.push(v);
-        (items.len() - 1, false)
+        items.len() - 1
     }
 
     #[cold]
-    fn push_borrowed(&self, v: T) -> (usize, bool) {
+    fn push_borrowed(&self, v: T, marking: impl FnOnce(usize)) -> usize {
         let mut items = self.borrow_mut();
+        if items.is_marked() {
+            marking(items.len());
+        }
         items.push(v);
-        (items.len() - 1, items.is_marked())
+        items.len() - 1
     }
 
     /// Puts `v` at Python index `i`, giving back the old item; `None`,

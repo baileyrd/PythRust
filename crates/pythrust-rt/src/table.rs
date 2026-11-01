@@ -361,6 +361,48 @@ mod tests {
         }
     }
 
+    /// A dict marked in one executor block gains a fresh string key; in
+    /// the next block two tasks iterate its keys. The key was marked when
+    /// stored, so its count stays exact.
+    #[test]
+    fn a_key_added_to_a_marked_dict_is_shared_safely() {
+        let d = empty(b"dsi");
+        seq::mark(b"dsi", d as u64);
+        let key = crate::str::into_ptr(crate::str::PtStr::new("fresh".into()));
+        // SAFETY: both live; the dict takes its own reference to the key.
+        unsafe {
+            pt_dict_set(d, key as u64, 1);
+            assert!(crate::str::borrow(key).rc.is_marked());
+            crate::str::pt_str_dec(key);
+        }
+        seq::mark(b"dsi", d as u64);
+        let p = d as usize;
+        let tasks: Vec<_> = (0..2)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    for _ in 0..if cfg!(miri) { 40 } else { 10_000 } {
+                        // SAFETY: the dict stays live until both are
+                        // joined; an entry's key is a new reference.
+                        unsafe {
+                            let k = pt_table_entry(p as *const PtSeq, 0, 0);
+                            crate::str::pt_str_dec(k as *mut crate::str::PtStr);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in tasks {
+            assert!(t.join().is_ok());
+        }
+        // SAFETY: both tasks are done; the dict holds the key's one reference.
+        unsafe {
+            let k = pt_table_entry(d, 0, 0) as *mut crate::str::PtStr;
+            assert_eq!(crate::str::borrow(k).rc.get(), 2);
+            crate::str::pt_str_dec(k);
+            pt_seq_dec(d);
+        }
+    }
+
     #[test]
     fn marked_dicts_survive_concurrent_readers() {
         let d = empty(b"dii");
