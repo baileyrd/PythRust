@@ -78,7 +78,7 @@ pub(crate) fn build(shims: &str, crates: &[Crate], out: &Path) -> Result<Runtime
         .join("target")
         .join(host())
         .join(if RELEASE { "release" } else { "debug" });
-    let mut native = search_paths(&profile.join("build"), &built)?;
+    let mut native = search_paths(&String::from_utf8_lossy(&output.stdout))?;
     native.extend(native_libs(&String::from_utf8_lossy(&output.stderr))?);
     Ok(Runtime {
         lib: profile.join(STATICLIB),
@@ -86,69 +86,67 @@ pub(crate) fn build(shims: &str, crates: &[Crate], out: &Path) -> Result<Runtime
     })
 }
 
-/// The linker arguments for the library search paths the bindings'
-/// build scripts add (`rustc-link-search`, or `-L` in `rustc-flags`),
-/// which `native-static-libs` leaves out: without them the final link
-/// would miss a library there or find another of its name. Read from
-/// each build script's `output` in `build`, for the packages of `built`
-/// only, so a crate no longer in the build adds nothing.
-fn search_paths(build: &Path, built: &Lock) -> Result<Vec<String>, String> {
-    let entries = match std::fs::read_dir(build) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("pythrust: cannot read {}: {e}\n", build.display())),
-    };
+/// The linker arguments for the library search paths this build's build
+/// scripts add (`rustc-link-search`, or `-L` in `rustc-flags`), which
+/// `native-static-libs` leaves out: without them the final link would
+/// miss a library there or find another of its name. Taken from cargo's
+/// `build-script-executed` messages for this invocation (`linked_paths`,
+/// fresh or cached), never from older outputs left in the target dir.
+fn search_paths(messages: &str) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
-    for entry in entries {
-        let entry =
-            entry.map_err(|e| format!("pythrust: cannot read {}: {e}\n", build.display()))?;
-        let dir = entry.file_name().to_string_lossy().into_owned();
-        let package = dir.rsplit_once('-').map_or(dir.as_str(), |(p, _)| p);
-        if !built.packages.iter().any(|p| p.name == package) {
+    for line in messages.lines() {
+        if !line.contains("\"reason\":\"build-script-executed\"") {
             continue;
         }
-        let path = entry.path().join("output");
-        match std::fs::read_to_string(&path) {
-            Ok(text) => args.extend(search_args(&text)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("pythrust: cannot read {}: {e}\n", path.display())),
-        }
+        let paths = json_strings(line, "linked_paths")
+            .ok_or_else(|| format!("pythrust: cannot read cargo's message `{line}`\n"))?;
+        args.extend(paths.iter().filter_map(|p| search_arg(p)));
     }
     args.dedup();
     Ok(args)
 }
 
-/// The search paths in one build script's `output`, as linker arguments.
-fn search_args(output: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-    for line in output.lines() {
-        let Some(d) = line
-            .strip_prefix("cargo::")
-            .or_else(|| line.strip_prefix("cargo:"))
-        else {
-            continue;
-        };
-        if let Some(path) = d.strip_prefix("rustc-link-search=") {
-            paths.push(path);
-        } else if let Some(flags) = d.strip_prefix("rustc-flags=") {
-            paths.extend(flag_paths(flags));
+/// The array of strings under `"key":` in the one-line JSON object
+/// `line`, as cargo writes it; `None` if it is not there or malformed.
+fn json_strings(line: &str, key: &str) -> Option<Vec<String>> {
+    let (_, rest) = line.split_once(&format!("\"{key}\":["))?;
+    let mut chars = rest.chars();
+    let mut out = Vec::new();
+    loop {
+        match chars.next()? {
+            ']' => return Some(out),
+            ',' => {}
+            '"' => out.push(json_string(&mut chars)?),
+            _ => return None,
         }
     }
-    paths.into_iter().filter_map(search_arg).collect()
 }
 
-/// The `-L` values in `rustc-flags`: `-L x` or `-Lx`.
-fn flag_paths(flags: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut words = flags.split_whitespace();
-    while let Some(word) = words.next() {
-        match word.strip_prefix("-L") {
-            Some("") => out.extend(words.next()),
-            Some(path) => out.push(path),
-            None => {}
+/// The rest of a JSON string after its opening quote, unescaped.
+fn json_string(chars: &mut std::str::Chars) -> Option<String> {
+    let mut out = String::new();
+    loop {
+        match chars.next()? {
+            '"' => return Some(out),
+            '\\' => out.push(json_escape(chars)?),
+            c => out.push(c),
         }
     }
-    out
+}
+
+fn json_escape(chars: &mut std::str::Chars) -> Option<char> {
+    match chars.next()? {
+        'n' => Some('\n'),
+        't' => Some('\t'),
+        'r' => Some('\r'),
+        'b' => Some('\u{8}'),
+        'f' => Some('\u{c}'),
+        'u' => {
+            let hex: String = chars.by_ref().take(4).collect();
+            char::from_u32(u32::from_str_radix(&hex, 16).ok()?)
+        }
+        c => Some(c),
+    }
 }
 
 /// The linker argument for one `[KIND=]PATH` search path; none for the
@@ -355,11 +353,16 @@ fn cargo() -> Command {
 
 fn cargo_rustc(dir: &Path) -> Command {
     let mut c = cargo();
-    c.args(["rustc", "--lib", "--manifest-path"])
-        .arg(dir.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(dir.join("target"))
-        .args(["--target", &host()]);
+    c.args([
+        "rustc",
+        "--lib",
+        "--message-format=json-render-diagnostics",
+        "--manifest-path",
+    ])
+    .arg(dir.join("Cargo.toml"))
+    .arg("--target-dir")
+    .arg(dir.join("target"))
+    .args(["--target", &host()]);
     if RELEASE {
         c.arg("--release");
     }
@@ -454,18 +457,25 @@ mod tests {
     }
 
     #[test]
-    fn search_paths_come_from_every_directive_form() {
-        let output = "cargo:rustc-link-search=native=/a\n\
-                      cargo::rustc-link-search=/b\n\
-                      cargo:rustc-link-search=dependency=/rust\n\
-                      cargo:rustc-flags=-L native=/c -l dylib=foo -L/d\n\
-                      cargo:rustc-link-lib=dylib=foo\n";
+    fn search_paths_come_from_this_builds_messages() {
+        let messages = concat!(
+            r#"{"reason":"compiler-artifact","filenames":["/x"]}"#,
+            "\n",
+            r#"{"reason":"build-script-executed","package_id":"a","linked_libs":["dylib=foo"],"linked_paths":["native=/a","dependency=/rust","C:\\b\u0041"],"cfgs":[]}"#,
+            "\n",
+            r#"{"reason":"build-script-executed","package_id":"b","linked_libs":[],"linked_paths":[]}"#,
+            "\n",
+        );
         let arg = |p: &str| match cfg!(windows) {
             true => format!("/LIBPATH:{p}"),
             false => format!("-L{p}"),
         };
-        assert_eq!(search_args(output), ["/a", "/b", "/c", "/d"].map(arg));
-        assert!(search_args("cargo:rustc-link-lib=static=x\n").is_empty());
+        assert_eq!(
+            search_paths(messages),
+            Ok(["/a", "C:\\bA"].map(arg).to_vec())
+        );
+        let broken = r#"{"reason":"build-script-executed","linked_paths":[oops]}"#;
+        assert!(search_paths(broken).is_err());
     }
 
     #[test]

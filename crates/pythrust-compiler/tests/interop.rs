@@ -503,24 +503,35 @@ fn a_build_script_search_path_reaches_the_link() {
     assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "5\n");
 }
 
-/// A library found only through a build script's search path links: the
-/// binding names it in a `#[link]` attribute, and the script adds only
-/// the directory, where it builds the library.
+/// A binding at `version` whose build script builds `libptseven.a`, with
+/// `seven()` returning `value`, in a directory it adds only as a search
+/// path; the binding names the library in a `#[link]` attribute, so only
+/// the final link finds it.
 #[cfg(target_os = "linux")]
-#[test]
-fn a_library_only_in_an_added_path_links() {
-    let dir = scratch("onlypath");
-    let a = binding(&dir, "a", "build = \"build.rs\"\n", false, Some(&[]));
+fn seven_binding(dir: &Path, version: &str, value: i64) -> PathBuf {
+    let a = binding(dir, "a", "build = \"build.rs\"\n", false, Some(&[]));
+    for file in ["Cargo.toml", "Cargo.lock"] {
+        let text = fs::read_to_string(a.join(file)).unwrap();
+        fs::write(
+            a.join(file),
+            text.replace("version = \"0.1.0\"", &format!("version = \"{version}\"")),
+        )
+        .unwrap();
+    }
     fs::write(
         a.join("build.rs"),
-        "use std::process::Command;\n\
-         fn main() {\n    \
-             let out = std::env::var(\"OUT_DIR\").unwrap();\n    \
-             std::fs::write(format!(\"{out}/seven.c\"), \"long seven(void) { return 7; }\\n\").unwrap();\n    \
-             let ok = Command::new(\"cc\").args([\"-shared\", \"-fPIC\", \"-o\"]).arg(format!(\"{out}/libptseven.so\")).arg(format!(\"{out}/seven.c\")).status().unwrap();\n    \
-             assert!(ok.success());\n    \
-             println!(\"cargo:rustc-link-search=native={out}\");\n\
-         }\n",
+        format!(
+            "use std::process::Command;\n\
+             fn main() {{\n    \
+                 let out = std::env::var(\"OUT_DIR\").unwrap();\n    \
+                 std::fs::write(format!(\"{{out}}/seven.c\"), \"long seven(void) {{ return {value}; }}\\n\").unwrap();\n    \
+                 let cc = Command::new(\"cc\").args([\"-c\", \"-fPIC\", \"-o\"]).arg(format!(\"{{out}}/seven.o\")).arg(format!(\"{{out}}/seven.c\")).status().unwrap();\n    \
+                 assert!(cc.success());\n    \
+                 let ar = Command::new(\"ar\").arg(\"rcs\").arg(format!(\"{{out}}/libptseven.a\")).arg(format!(\"{{out}}/seven.o\")).status().unwrap();\n    \
+                 assert!(ar.success());\n    \
+                 println!(\"cargo:rustc-link-search=native={{out}}\");\n\
+             }}\n"
+        ),
     )
     .unwrap();
     fs::write(
@@ -529,15 +540,30 @@ fn a_library_only_in_an_added_path_links() {
          pub fn digits(x: i64) -> i64 {\n    x + unsafe { seven() }\n}\n",
     )
     .unwrap();
-    let path = dir.join("main.pyr");
-    fs::write(&path, DIGITS).unwrap();
-    let mut flag = std::ffi::OsString::from("a=");
-    flag.push(&a);
-    let built = Command::new(env!("CARGO_BIN_EXE_pythrust"))
-        .args(["build", "--rust"])
-        .arg(flag)
-        .arg(&path)
-        .output()
-        .unwrap();
-    assert!(built.status.success(), "{}", text(&built.stderr));
+    a
+}
+
+/// A library only in a build script's search path reaches the final
+/// link, and a warm rebuild after a version bump links this build's
+/// library, not one an older build left in the target directory.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_link_uses_this_builds_search_paths() {
+    let dir = scratch("onlypath");
+    let a = seven_binding(&dir, "0.1.0", 7);
+    assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "12352\n");
+    let a = seven_binding(&dir, "0.2.0", 8);
+    assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "12353\n");
+    let builds = fs::read_dir(dir.join(".pythrust/main/target"))
+        .unwrap()
+        .flatten()
+        .filter_map(|t| fs::read_dir(t.path().join("debug/build")).ok())
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join("out/libptseven.a").is_file())
+        .count();
+    assert!(
+        builds >= 2,
+        "the old build's library stays in the target dir"
+    );
 }
