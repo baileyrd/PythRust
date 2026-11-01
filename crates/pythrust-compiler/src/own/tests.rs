@@ -1373,3 +1373,51 @@ fn a_tempered_file_parameter_read_without_mut_is_an_error() {
         "loose `r` infers its mode"
     );
 }
+
+/// A program whose functions use tasks (M6c), which lowering cannot
+/// express yet: one called, one no code calls.
+const TASKS: &str = "import concurrent.futures\n\
+def sq(x: int) -> int:\n    return x * x\n\
+def called(n: int) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+return ex.submit(sq, n).result()\n\
+def unused(n: int) -> None:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        pass\n\
+print(called(2))\n";
+
+#[test]
+fn tasks_leave_the_other_functions_checked() {
+    let grow =
+        format!("{TASKS}temper def grow(xs: list[int]) -> None:\n    xs.append(1)\ngrow([0])\n");
+    assert_eq!(
+        mode_err(&grow).0,
+        "tempered `grow` changes `xs` in place; write `mut xs`"
+    );
+    let alias =
+        format!("{TASKS}temper def same(xs: list[int]) -> list[int]:\n    return xs\nsame([1])\n");
+    assert!(
+        mode_err(&alias).0.contains("returns its parameter `xs`"),
+        "{alias}"
+    );
+    let shared = format!(
+        "{TASKS}temper def two(mut a: list[int], b: list[int]) -> None:\n    a.append(len(b))\n\
+         def go() -> None:\n    xs = [1]\n    two(xs, xs)\ngo()\n"
+    );
+    assert!(mode_err(&shared).0.contains("list(...)"), "{shared}");
+    let a = analyzed(TASKS);
+    assert_eq!(a.precision, Precision::Precise);
+    assert!(a.opaque.contains("called") && a.opaque.contains("unused"));
+    assert!(!a.opaque.contains("sq"));
+}
+
+#[test]
+fn a_function_that_reaches_a_task_body_is_not_diagnosed() {
+    // `keep` passes `xs` to `run`, whose body nothing summarizes yet: its
+    // written `mut` may be too weak, but nothing can tell.
+    let src = "import concurrent.futures\n\
+def sq(x: int) -> int:\n    return x * x\n\
+def run(xs: list[int]) -> None:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+print(ex.submit(sq, len(xs)).result())\n\
+def keep(mut xs: list[int]) -> None:\n    run(xs)\nkeep([1])\n";
+    assert_eq!(checked(src), Ok(()));
+    let a = analyzed(src);
+    assert!(a.opaque.contains("keep"), "{:?}", a.opaque);
+}

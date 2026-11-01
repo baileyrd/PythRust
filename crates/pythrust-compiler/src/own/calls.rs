@@ -66,6 +66,9 @@ pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
     let mut sites: Vec<&CallSite> = analysis.calls.iter().collect();
     sites.sort_by_key(|s| s.span.start);
     for site in sites {
+        if analysis.opaque.contains(&analysis.names[site.caller]) {
+            continue;
+        }
         let Some(def) = defs.get(analysis.names[site.callee].as_str()) else {
             continue;
         };

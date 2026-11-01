@@ -151,9 +151,10 @@ pub(super) fn check(module: &Module, defs: &[&FuncDef], types: &Types) -> Result
             return Err(error(w.span, msg.to_string()));
         }
     }
+    let names: BTreeSet<&str> = defs.iter().map(|f| f.name.name.as_str()).collect();
     for f in defs {
         signature(f, types)?;
-        Body::new(f, types).check()?;
+        Body::new(f, types, &names).check()?;
     }
     let module_exprs = top
         .iter()
@@ -191,10 +192,12 @@ struct Body<'a> {
     exprs: Vec<&'a Expr>,
     withs: Vec<With<'a>>,
     blocks: Blocks,
+    /// The `def`s, which a call by name reaches before a builtin.
+    defs: &'a BTreeSet<&'a str>,
 }
 
 impl<'a> Body<'a> {
-    fn new(f: &'a FuncDef, types: &'a Types) -> Self {
+    fn new(f: &'a FuncDef, types: &'a Types, defs: &'a BTreeSet<&'a str>) -> Self {
         let mut locals = scope::assigned(&f.body);
         locals.extend(f.params.iter().map(|p| p.name.name.clone()));
         Body {
@@ -204,6 +207,7 @@ impl<'a> Body<'a> {
             exprs: scope::exprs(&f.body),
             withs: scope::withs(&f.body),
             blocks: Blocks::of(&f.body),
+            defs,
         }
     }
 
@@ -299,14 +303,17 @@ impl<'a> Body<'a> {
     }
 
     /// No call takes one, but the methods that make and take them,
-    /// `append` to a local list, and `len`, `list`, `sorted` and `set`, which
-    /// read them where they are.
+    /// `append` to a local list, and the builtins `len`, `list`, `sorted`
+    /// and `set` (not a `def` of that name), which read them where they are.
     fn call(&self, e: &Expr) -> Result<()> {
         let ExprKind::Call { func, args } = &e.kind else {
             return Ok(());
         };
         let (callee, checked) = match &func.kind {
-            ExprKind::Name(n) if matches!(n.as_str(), "len" | "list" | "sorted" | "set") => {
+            ExprKind::Name(n)
+                if matches!(n.as_str(), "len" | "list" | "sorted" | "set")
+                    && !self.defs.contains(n.as_str()) =>
+            {
                 return Ok(())
             }
             ExprKind::Name(n) => (format!("`{n}`"), args.as_slice()),
@@ -556,6 +563,26 @@ def keep(fut):\n    pass\n";
         ));
         let got = program(&rebound).err().unwrap_or_default();
         assert!(got.contains("name one only with `with ... as a:`"), "{got}");
+    }
+
+    #[test]
+    fn a_def_named_like_a_reading_builtin_takes_none() {
+        for name in ["len", "list", "sorted", "set"] {
+            let src = format!(
+                "{HEAD}def {name}(x):\n    return x\n\
+                 def main() -> None:\n    \
+                 with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+                 f = {name}(ex.submit(sq, 1))\n        print(f.result())\nmain()\n"
+            );
+            let got = program(&src).err().unwrap_or_default();
+            assert!(
+                got.contains(&format!("`{name}` cannot take one")),
+                "{name}: {got}"
+            );
+        }
+        let builtins = "futs = [ex.submit(sq, 1)]\nprint(len(futs), len(list(futs)))\n\
+                        print(sorted(ex.map(sq, [2])), set(ex.map(sq, [3])))";
+        assert_eq!(verdict(builtins), Ok(()));
     }
 
     #[test]

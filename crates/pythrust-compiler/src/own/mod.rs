@@ -12,7 +12,10 @@
 //! The analysis runs on the IR, so it sees only what lowering covers.
 //! [`analyze`] is the coverage gate: a program lowering cannot express
 //! gets [`Precision::Conservative`] summaries, never an error, so a
-//! lowering gap is never a new language restriction.
+//! lowering gap is never a new language restriction. A function using
+//! tasks (M6c), which lowering cannot express yet, narrows that to
+//! itself: it gets a conservative summary, and it and the functions
+//! that may call it are not diagnosed ([`Analysis::opaque`]).
 //!
 //! [`check`] holds the modes a function writes (D2) to these summaries,
 //! calls to tempered functions to their `mut` and `owned` parameters
@@ -32,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::ast::{Module, StmtKind};
 use crate::diag::{Diagnostic, Result};
 use crate::infer::{Type, Types};
-use crate::ir::{Compound, Program, Ty};
+use crate::ir::{Compound, FuncId, Program, Ty};
 use crate::lower;
 use crate::span::Span;
 
@@ -164,6 +167,10 @@ pub struct Analysis {
     /// present even when conservative.
     pub params: BTreeMap<String, Vec<Type>>,
     pub precision: Precision,
+    /// Functions whose summaries rest on a body lowering left out
+    /// ([`Program::opaque`]): those, and every function that may call
+    /// one. Nothing is diagnosed in them; the rest stays checked.
+    pub opaque: BTreeSet<String>,
 }
 
 /// Summarizes `module`, typed by `types`, including functions no code
@@ -174,8 +181,11 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
         Ok(program) => {
             let summaries = infer(&program);
             let calls = program.funcs.iter().enumerate();
-            let calls = calls.flat_map(|(i, f)| body::calls(&program, i, f, &summaries));
+            let calls: Vec<CallSite> = calls
+                .flat_map(|(i, f)| body::calls(&program, i, f, &summaries))
+                .collect();
             Analysis {
+                opaque: opaque(&program, &calls),
                 funcs: by_name(&program, &summaries),
                 aliasing: alias::tempered(module, &program, &summaries),
                 names: program.funcs.iter().map(|f| f.name.clone()).collect(),
@@ -184,7 +194,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
                     .iter()
                     .map(|f| body::heap(&program, f, &summaries))
                     .collect(),
-                calls: calls.collect(),
+                calls,
                 params: param_types(module, types),
                 precision: Precision::Precise,
             }
@@ -197,6 +207,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
             calls: Vec::new(),
             params: param_types(module, types),
             precision: Precision::Conservative(gap),
+            opaque: BTreeSet::new(),
         },
     }
 }
@@ -221,7 +232,10 @@ pub fn infer(program: &Program) -> Vec<Summary> {
     loop {
         let mut changed = false;
         for (i, func) in program.funcs.iter().enumerate() {
-            let next = body::summarize(program, func, &summaries);
+            let next = match program.opaque.contains(&FuncId(i)) {
+                true => Summary::conservative(func.params.len()),
+                false => body::summarize(program, func, &summaries),
+            };
             if next != summaries[i] {
                 summaries[i] = next;
                 changed = true;
@@ -296,6 +310,26 @@ fn by_name(program: &Program, summaries: &[Summary]) -> BTreeMap<String, Summary
             .or_insert_with(|| summary.clone());
     }
     funcs
+}
+
+/// The names of [`Program::opaque`] functions and of every function
+/// that may call one, through any chain of calls.
+fn opaque(program: &Program, calls: &[CallSite]) -> BTreeSet<String> {
+    let mut out: BTreeSet<usize> = program.opaque.iter().map(|f| f.0).collect();
+    loop {
+        let callers = calls.iter().filter(|c| out.contains(&c.callee));
+        let new: Vec<usize> = callers
+            .map(|c| c.caller)
+            .filter(|c| !out.contains(c))
+            .collect();
+        if new.is_empty() {
+            break;
+        }
+        out.extend(new);
+    }
+    out.into_iter()
+        .map(|i| program.funcs[i].name.clone())
+        .collect()
 }
 
 /// The parameter types of each function `module` defines.

@@ -150,6 +150,8 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         lowering: 0,
         waits: usize::MAX,
         diverges: HashSet::new(),
+        reach,
+        opaque: BTreeSet::new(),
     };
     let main = cx.reserve();
     let func = with_hints(|hints| {
@@ -188,6 +190,7 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         types: cx.seqs.into_vec(),
         globals,
         global_names,
+        opaque: cx.opaque,
     })
 }
 
@@ -217,6 +220,9 @@ struct Cx<'a> {
     /// Settled instances that never return: every path through them
     /// needs their own result first.
     diverges: HashSet<FuncId>,
+    reach: Reach,
+    /// Instances lowered without their bodies ([`Program::opaque`]).
+    opaque: BTreeSet<FuncId>,
 }
 
 /// An instance waiting to be lowered.
@@ -425,6 +431,11 @@ impl<'a> Cx<'a> {
 
     fn instance_attempt(&mut self, job: &Job<'a>, hints: &Hints) -> Result<Attempt<Body>> {
         let f = job.def;
+        if let (Reach::Every, Some(ret)) = (self.reach, job.ret) {
+            if !scope::withs(&f.body).is_empty() {
+                return Ok(Attempt::Done(self.opaque_body(job, ret)));
+            }
+        }
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
         let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret.unwrap_or(Ty::None));
@@ -455,6 +466,21 @@ impl<'a> Cx<'a> {
         let skipped = b.skipped;
         let func = b.finish(&f.name.name, params);
         Ok(Attempt::Done(Body::Lowered(func, skipped)))
+    }
+}
+
+impl<'a> Cx<'a> {
+    /// An instance whose body uses tasks, for analysis: its parameters
+    /// and an unreachable body ([`Program::opaque`]). One whose result
+    /// type only its body decides stays a lowering gap.
+    fn opaque_body(&mut self, job: &Job<'a>, ret: Ty) -> Body {
+        let f = job.def;
+        let mut b = FnBuilder::new(self, job.subst.clone(), BTreeSet::new(), ret);
+        let params: Vec<LocalId> = job.args.iter().map(|ty| b.new_local(*ty)).collect();
+        b.terminate(Term::Unreachable);
+        let func = b.finish(&f.name.name, params);
+        self.opaque.insert(job.id);
+        Body::Lowered(func, false)
     }
 }
 
