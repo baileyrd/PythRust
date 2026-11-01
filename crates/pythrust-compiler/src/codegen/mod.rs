@@ -906,7 +906,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Call(callee, args) => self.call(*callee, args, dest, span),
             Rvalue::StrLit(text) => self.str_lit(text),
             Rvalue::Std(f, args) => self.std(*f, args, self.func.locals[dest.0], span),
-            Rvalue::Rust(name, args) => self.rust(name, args, dest),
+            Rvalue::Rust(name, args) => self.rust(name, args, dest, span),
             Rvalue::Concat(a, b) => self.rt_on(Rt::StrConcat, &[*a, *b]),
             Rvalue::Repeat(s, n) => self.rt_nonnull(Rt::StrRepeat, &[*s, *n], span, TOO_LARGE),
             Rvalue::Index(d, k) if is_table(self.func.ty(*d)) => self.dict_get(*d, *k, dest),

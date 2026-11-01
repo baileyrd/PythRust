@@ -55,6 +55,11 @@ pub(crate) fn mark(o: &PtObj) {
     }
 }
 
+/// A new bytes object holding `data`.
+pub(crate) fn new_bytes(data: Vec<u8>) -> *mut PtObj {
+    into_ptr(Obj::Bytes(data.into_boxed_slice()))
+}
+
 /// Borrows a live object.
 ///
 /// # Safety
@@ -111,6 +116,14 @@ impl PtObj {
         match (&self.obj, &other.obj) {
             (Obj::Bytes(a), Obj::Bytes(b)) => a == b,
             _ => std::ptr::eq(self, other),
+        }
+    }
+
+    /// A bytes object's data; `None` for a file.
+    pub(crate) fn bytes(&self) -> Option<&[u8]> {
+        match &self.obj {
+            Obj::Bytes(data) => Some(data),
+            Obj::File { .. } => None,
         }
     }
 

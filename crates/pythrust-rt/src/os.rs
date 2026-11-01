@@ -5,7 +5,8 @@
 
 #![allow(unsafe_code)] // The C ABI below.
 
-use std::{fs, io};
+use std::fs;
+use std::io::{self, Write};
 
 use crate::exc::{
     raise_errno, raise_text, FILE_NOT_FOUND, IS_A_DIRECTORY, NOT_A_DIRECTORY, OS_ERROR, PERMISSION,
@@ -33,8 +34,8 @@ pub(crate) fn os_error(e: &io::Error) -> (u8, Option<i32>, String) {
 
 /// Where a failing call raises: the rendered diagnostic around its
 /// uncaught line, as for `pt_raise`.
-#[derive(Clone, Copy)]
-pub(crate) struct Site {
+#[derive(Debug, Clone, Copy)]
+pub struct Site {
     head: &'static [u8],
     tail: &'static [u8],
 }
@@ -56,6 +57,25 @@ impl Site {
     pub(crate) fn raise_text(self, code: u8, text: String) {
         raise_text(code, text, self.head, self.tail);
     }
+
+    /// Ends the program as a fault here does: flushes stdout, prints the
+    /// diagnostic with `line` as its message, exits 1.
+    pub(crate) fn fail(self, line: &str) -> ! {
+        crate::flush();
+        let mut err = io::stderr().lock();
+        let _ = err
+            .write_all(self.head)
+            .and_then(|()| err.write_all(line.as_bytes()))
+            .and_then(|()| err.write_all(self.tail));
+        std::process::exit(1)
+    }
+
+    /// A site with an empty diagnostic, for unit tests.
+    #[cfg(test)]
+    pub(crate) const BARE: Site = Site {
+        head: b"",
+        tail: b"",
+    };
 }
 
 /// # Safety
