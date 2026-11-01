@@ -186,19 +186,27 @@ fn stub_param(p: Param) -> Result<StubParam> {
 }
 
 /// Checks that `t` is a type that crosses into Rust: a [`PARAM_TYPES`]
-/// name, or `None` for a result.
+/// name, `list[str]`, or `None` for a result.
 fn crossing(t: &TypeExpr, what: &str, result: bool) -> Result<()> {
     let name = t.name.name.as_str();
-    let scalar = PARAM_TYPES.contains(&name) || (result && name == "None");
-    if scalar && t.args.is_empty() && !t.optional {
+    let plain = t.args.is_empty() && (PARAM_TYPES.contains(&name) || (result && name == "None"));
+    if !t.optional && (plain || is_str_list(t)) {
         return Ok(());
     }
     let none = if result { ", or None" } else { "" };
     let msg = format!(
-        "{what} must be one of {}{none}; `{name}` does not cross into Rust yet",
+        "{what} must be one of {}, list[str]{none}; `{name}` does not cross into Rust yet",
         PARAM_TYPES.join(", ")
     );
     Err(error(t.span, msg))
+}
+
+/// Whether `t` is `list[str]`, the one container that crosses.
+fn is_str_list(t: &TypeExpr) -> bool {
+    let [elem] = t.args.as_slice() else {
+        return false;
+    };
+    t.name.name == "list" && elem.name.name == "str" && elem.args.is_empty() && !elem.optional
 }
 
 /// A stub's `raises` lists `OSError` or `Exception`, each at most once.

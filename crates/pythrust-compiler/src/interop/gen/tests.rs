@@ -65,6 +65,11 @@ fn each_type_converts_as_the_table_says() {
             "|| -> Vec<u8> {",
         ),
         (
+            "temper def f(x: list[str], n: int) -> list[str]: ...\n",
+            "(pythrust_rt::abi::arg_str_list(&p0), p1,",
+            "|| -> Vec<String> { r#probe::r#f(&a0, a1) }",
+        ),
+        (
             "temper def f() -> bytes raises Exception: ...\n",
             "-> *mut pythrust_rt::abi::Bytes {",
             "call_raising(at, || -> std::io::Result<Vec<u8>> {",

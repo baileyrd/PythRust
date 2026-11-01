@@ -18,6 +18,13 @@ pub type Str = crate::str::PtStr;
 /// A Pythrust `bytes`, as a shim receives and returns it.
 pub type Bytes = crate::obj::PtObj;
 
+/// A Pythrust `list[str]`, as a shim receives and returns it.
+pub type List = crate::seq::PtSeq;
+
+/// The runtime descriptor of `list[str]`, as the compiler writes it
+/// (`codegen::seq::descriptor`), for a list a binding returns.
+const LIST_STR: &[u8] = b"ls";
+
 /// The site a shim's call raises or faults at.
 ///
 /// # Safety
@@ -54,6 +61,30 @@ pub unsafe fn arg_bytes(p: &*const Bytes) -> &[u8] {
     let obj = unsafe { crate::obj::borrow(*p) };
     obj.bytes()
         .unwrap_or_else(|| crate::internal("a Rust call was passed a file as bytes"))
+}
+
+/// A `list[str]` argument's strings, copied under the list's read
+/// borrow, so the binding gets plain Rust data that nothing else can
+/// change or free during the call; it borrows them as `&[String]`.
+///
+/// # Safety
+///
+/// `*p` is a live `list[str]`.
+#[allow(unsafe_code)]
+pub unsafe fn arg_str_list(p: &*const List) -> Vec<String> {
+    // SAFETY: guaranteed by the caller.
+    let list = unsafe { crate::seq::seq(*p as u64) };
+    let items = list.items.borrow();
+    items
+        .iter()
+        // SAFETY: a `list[str]` holds live strings, retained by the list
+        // while its read borrow is held.
+        .map(|v| {
+            unsafe { crate::str::borrow(*v as *const Str) }
+                .text()
+                .to_string()
+        })
+        .collect()
 }
 
 /// A `bool` argument, which crosses the C ABI as a byte: any nonzero
@@ -118,6 +149,21 @@ impl IntoValue for String {
         crate::str::into_ptr(Str::new(self.into_boxed_str()))
     }
     fn placeholder() -> *mut Str {
+        std::ptr::null_mut()
+    }
+}
+
+/// A new `list[str]` the caller owns, taking each new string.
+impl IntoValue for Vec<String> {
+    type Out = *mut List;
+    fn into_value(self) -> *mut List {
+        let items = self
+            .into_iter()
+            .map(|t| crate::str::into_ptr(Str::new(t.into_boxed_str())) as u64)
+            .collect();
+        crate::seq::new_seq(LIST_STR, items)
+    }
+    fn placeholder() -> *mut List {
         std::ptr::null_mut()
     }
 }
@@ -226,6 +272,23 @@ mod tests {
         assert_eq!(data, Some(vec![0, 255]));
         // SAFETY: the test owns `b`'s one reference.
         unsafe { crate::obj::pt_obj_dec(b) };
+    }
+
+    #[test]
+    fn a_str_list_round_trips() {
+        let made = vec!["a".to_string(), "héllo".to_string(), String::new()];
+        let list = call(Site::BARE, || made.clone());
+        let p: *const List = list;
+        // SAFETY: `list` is the live `list[str]` `call` made.
+        assert_eq!(unsafe { arg_str_list(&p) }, made);
+        // SAFETY: the test owns `list`'s one reference.
+        unsafe { crate::seq::pt_seq_dec(list) };
+        let empty = call(Site::BARE, Vec::<String>::new);
+        let q: *const List = empty;
+        // SAFETY: as above.
+        assert!(unsafe { arg_str_list(&q) }.is_empty());
+        // SAFETY: as above.
+        unsafe { crate::seq::pt_seq_dec(empty) };
     }
 
     #[test]

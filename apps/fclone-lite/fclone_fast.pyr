@@ -1,7 +1,8 @@
-# fclone_fast: fclone-lite hashing each candidate with xxh3-128 in Rust,
-# through the `fastfs` binding (M6b driver,
+# fclone_fast: fclone-lite hashing each size group with xxh3-128 in Rust,
+# in parallel, through the `fastfs` binding (M6b driver,
 # docs/research/rust-interop.md#driver-fast-fclone-lite). The walk and the
-# grouping are fclone_lite.py's. Build it with
+# grouping are fclone_lite.py's; an unreadable file has the digest "" and
+# is skipped, as fclone_lite.py skips its OSError. Build it with
 #   pythrust build --rust fastfs=apps/fclone-lite/fastfs apps/fclone-lite/fclone_fast.pyr
 import fastfs
 import os
@@ -28,11 +29,12 @@ def collect(root: str, by_size: dict[int, list[str]]) -> None:
 
 
 def groups(paths: list[str]) -> list[list[str]]:
+    digests = fastfs.group_xxh3(paths)
     by_hash: dict[str, list[str]] = {}
-    for path in paths:
-        try:
-            h = fastfs.file_xxh3(path)
-        except OSError:
+    for i in range(len(paths)):
+        h = digests[i]
+        path = paths[i]
+        if h == "":
             continue
         if h in by_hash:
             by_hash[h].append(path)

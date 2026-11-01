@@ -1485,15 +1485,18 @@ fn stub_rules_are_named_errors() {
 
 #[test]
 fn stub_types_are_those_that_cross() {
-    for ty in ["int", "float", "bool", "str", "bytes"] {
+    for ty in ["int", "float", "bool", "str", "bytes", "list[str]"] {
         let src = format!("temper def f(x: {ty}) -> {ty}: ...\n");
         assert!(stub(&src).is_ok(), "{ty}");
     }
     assert!(stub("temper def f() -> None: ...\n").is_ok());
-    let param = "a stub parameter must be one of int, float, bool, str, bytes;";
+    let param = "a stub parameter must be one of int, float, bool, str, bytes, list[str];";
     for bad in [
         "None",
         "list[int]",
+        "list[str | None]",
+        "list[list[str]]",
+        "list[str] | None",
         "int | None",
         "dict[str, int]",
         "Exception",
@@ -1501,8 +1504,8 @@ fn stub_types_are_those_that_cross() {
         let src = format!("temper def f(x: {bad}) -> int: ...\n");
         assert!(stub_err(&src).starts_with(param), "{bad}");
     }
-    let result = "a stub result must be one of int, float, bool, str, bytes, or None;";
-    for bad in ["list[str]", "str | None", "tuple[int, int]"] {
+    let result = "a stub result must be one of int, float, bool, str, bytes, list[str], or None;";
+    for bad in ["list[bytes]", "str | None", "tuple[int, int]"] {
         let src = format!("temper def f() -> {bad}: ...\n");
         assert!(stub_err(&src).starts_with(result), "{bad}");
     }

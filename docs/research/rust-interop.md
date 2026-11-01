@@ -119,6 +119,7 @@ Every parameter is `read`: Rust borrows for the call, and a borrow cannot outliv
 | `None` | not allowed | `()` | |
 | `str` | `&str` | `String` | No copy in; a fresh string out |
 | `bytes` | `&[u8]` | `Vec<u8>` | No copy in |
+| `list[str]` | `&[String]` | `Vec<String>` | Copied in under the list's read borrow, so Rust holds plain data no Pythrust task can change during the call; a fresh list out |
 
 ### Threads
 
@@ -146,11 +147,11 @@ CPython cannot import a Rust binding, so an interop program has no CPython oracl
 
 Done means: the same duplicate groups as `fclone_lite.py` on the M6a trees, compared as sets of groups, since `fclone_lite.py` prints a size's groups in SHA-256 digest order and xxh3 orders them differently; fixtures with two distinct duplicated payloads of one size, and with an unreadable file (made unreadable by a method that holds for root, and skipped visibly where none exists, as on Windows); benchmark rows for native fclone-lite, `fclone_fast`, CPython and rusty_fclone; and xxhash-rust justified in the driver PR as the app's dependency. No speedup is claimed before the benchmark runs.
 
-**Follow-up only if measured:** if `fclone_fast` is not already I/O-bound, a later PR adds `group_xxh3(paths: list[str]) -> list[str]`, hashing a size group in parallel with rayon, with the `list[str]` row.
+**Follow-up (done, Nano 2026-11-01):** `fclone_fast` was not I/O-bound on a warm cache, so `group_xxh3(paths: list[str]) -> list[str]` hashes a size group in parallel, with the `list[str]` row. It runs one `std::thread::scope` worker per core, each taking the next path from an atomic index, rather than rayon: the same balancing for a flat list, with no new dependency. An unreadable file's digest is `""`, which the program skips as `fclone_lite.py` skips its `OSError`.
 
 ## Not in this cut
 
-Each waits for an app that needs it: named-builtin raises (`abi::Raise`); lists, `dict`, `set` and tuples crossing; other integer widths and `&'static str` results; native `run`; Rust objects held by Pythrust (a hasher with `update`); callbacks from Rust into Pythrust; `mut` parameters; generic functions; naming crates.io crates directly in `import`; and the manifest (M6d).
+Each waits for an app that needs it: named-builtin raises (`abi::Raise`); lists other than `list[str]`, `dict`, `set` and tuples crossing; other integer widths and `&'static str` results; native `run`; Rust objects held by Pythrust (a hasher with `update`); callbacks from Rust into Pythrust; `mut` parameters; generic functions; naming crates.io crates directly in `import`; and the manifest (M6d).
 
 ## Risks
 
