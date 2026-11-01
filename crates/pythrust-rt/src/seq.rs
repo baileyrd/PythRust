@@ -1398,6 +1398,7 @@ mod tests {
     /// A walk that stops early still releases deepest first: each link
     /// of the chain is owned by its parent alone.
     #[test]
+    #[cfg_attr(miri, ignore = "a 10,000-link chain is too slow under Miri")]
     fn a_walk_cut_short_releases_children_before_parents() {
         let mut links = vec![make(b"x0", &[])];
         for _ in 0..MAX_NESTING {
