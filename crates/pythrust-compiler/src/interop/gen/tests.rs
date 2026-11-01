@@ -105,13 +105,20 @@ fn stub_of_finds_the_shim_a_line_is_in() {
 
 #[test]
 fn manifest_quotes_and_escapes_paths() {
-    let toml = manifest("/rt", &[("fastfs", "C:\\b \"q\"\n")]);
+    let dep = Dep {
+        name: "fastfs",
+        package: "fastfs-binding",
+        dir: "C:\\b \"q\"\n",
+    };
+    let toml = manifest("/rt", &[dep]);
     assert!(
         toml.contains("pythrust-rt = { path = \"/rt\" }\n"),
         "{toml}"
     );
     assert!(
-        toml.contains("fastfs = { path = \"C:\\\\b \\\"q\\\"\\u000A\" }\n"),
+        toml.contains(
+            "fastfs = { package = \"fastfs-binding\", path = \"C:\\\\b \\\"q\\\"\\u000A\" }\n"
+        ),
         "{toml}"
     );
     for part in [

@@ -125,6 +125,7 @@ Cards, in order (one PR or more each):
   - [ ] *Driver:* `fastfs` with `file_xxh3`, `apps/fclone-lite/fclone_fast.pyr`, a test comparing its groups with `fclone_lite.py`'s as sets (with two duplicate groups of one size, and an unreadable file), benchmark rows. No speedup claimed before the benchmark.
   - Follow-up only if the benchmark shows `fclone_fast` is not I/O-bound: `group_xxh3` with rayon and the `list[str]` row.
   - Deferred until an app needs them: `abi::Raise`, native `run` for interop programs.
+  - Known plumbing gaps (Codex on #77), until a binding needs them: library search paths a binding's build script adds (`rustc-link-search`) are not passed to the final link, which matters only for a dynamic library outside the linker's default paths; and lock entries are keyed by name and version, not source, so one crate at one version from two registries in two bindings is not told apart.
 - [ ] **M6c. Concurrency:** uncolored tasks, channels and `shared[T]`.
 - [ ] **M6d. Package tool:** one manifest and one lockfile for all three dependency kinds.
 - [ ] **M6e. Python typed bridge.** Waits for a second app that needs it.

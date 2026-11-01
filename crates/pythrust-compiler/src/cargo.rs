@@ -40,24 +40,37 @@ pub(crate) struct Crate {
 /// for the executable `out`; gives the runtime to link.
 pub(crate) fn build(shims: &str, crates: &[Crate], out: &Path) -> Result<Runtime, String> {
     let runtime = runtime_src()?;
-    let mut locks = Vec::new();
+    let mut checked = Vec::new();
     for c in crates {
-        locks.push(binding_lock(c)?);
+        checked.push(binding_lock(c)?);
     }
-    let named: Vec<(&str, &Lock)> = crates.iter().map(|c| c.name.as_str()).zip(&locks).collect();
+    let named: Vec<(&str, &Lock)> = crates
+        .iter()
+        .zip(&checked)
+        .map(|(c, k)| (c.name.as_str(), &k.lock))
+        .collect();
     let seed = lock::seed(&named).map_err(|e| format!("pythrust: {e}\n"))?;
     let dir = crate_dir(out)?;
-    let deps: Vec<(&str, String)> = crates
+    let dirs: Vec<String> = crates
         .iter()
-        .map(|c| Ok((c.name.as_str(), utf8(&c.dir)?)))
+        .map(|c| utf8(&c.dir))
         .collect::<Result<_, String>>()?;
-    let deps: Vec<(&str, &str)> = deps.iter().map(|(n, d)| (*n, d.as_str())).collect();
+    let deps: Vec<gen::Dep> = crates
+        .iter()
+        .zip(&checked)
+        .zip(&dirs)
+        .map(|((c, k), dir)| gen::Dep {
+            name: &c.name,
+            package: &k.package,
+            dir,
+        })
+        .collect();
     write(&dir, "Cargo.toml", &gen::manifest(&utf8(&runtime)?, &deps))?;
     write(&dir, "lib.rs", shims)?;
     write(&dir, "Cargo.lock", &seed)?;
     let output = run(cargo_rustc(&dir))?;
     if !output.status.success() {
-        return Err(failure(&output, shims, crates));
+        return Err(failure(&output, shims, &deps));
     }
     let built = read_lock(&dir.join("Cargo.lock"))?;
     lock::verify(&built, &named).map_err(|e| format!("pythrust: {e}\n"))?;
@@ -86,11 +99,18 @@ fn runtime_src() -> Result<PathBuf, String> {
     crate::absolute(&dir)
 }
 
-/// `c`'s lock, once `c` is checked to be its own workspace, with a
+/// A binding's lock and its Cargo package's name, which may differ from
+/// the binding's (`--rust fastfs=...` over package `fastfs-binding`).
+struct Checked {
+    lock: Lock,
+    package: String,
+}
+
+/// `c`'s lock and package name, once `c` is checked to be its own workspace, with a
 /// committed lock that has no git package and matches its manifest
 /// (`cargo metadata --locked` fails when the manifest asks for anything
 /// the lock does not pin).
-fn binding_lock(c: &Crate) -> Result<Lock, String> {
+fn binding_lock(c: &Crate) -> Result<Checked, String> {
     let name = &c.name;
     let manifest = c.dir.join("Cargo.toml");
     if !manifest.is_file() {
@@ -125,7 +145,36 @@ fn binding_lock(c: &Crate) -> Result<Lock, String> {
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    Ok(lock)
+    let package = package_name(name, &manifest)?;
+    Ok(Checked { lock, package })
+}
+
+/// The package name of the binding `name` at `manifest`, from `cargo
+/// pkgid`: `path+file:///dir/fastfs#0.1.0`, or `...#fastfs-binding@0.1.0`
+/// when it differs from the directory's name.
+fn package_name(name: &str, manifest: &Path) -> Result<String, String> {
+    let mut pkgid = cargo();
+    pkgid
+        .args(["pkgid", "--locked", "--manifest-path"])
+        .arg(manifest);
+    let output = run(pkgid)?;
+    let id = String::from_utf8_lossy(&output.stdout);
+    match (output.status.success(), parse_pkgid(id.trim())) {
+        (true, Some(package)) => Ok(package.to_string()),
+        _ => Err(format!(
+            "pythrust: binding `{name}`: cargo cannot name its package\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        )),
+    }
+}
+
+/// The package name in a `cargo pkgid` id.
+fn parse_pkgid(id: &str) -> Option<&str> {
+    let (url, fragment) = id.rsplit_once('#')?;
+    match fragment.split_once('@') {
+        Some((package, _)) => Some(package),
+        None => url.rsplit('/').next().filter(|s| !s.is_empty()),
+    }
 }
 
 /// Refuses a binding inside another workspace, whose lock is that
@@ -249,17 +298,21 @@ fn run(mut command: Command) -> Result<Output, String> {
 
 /// A failed build, named by what failed: a shim (the stub does not match
 /// the Rust function), a binding, or something else, with cargo's output.
-fn failure(output: &Output, shims: &str, crates: &[Crate]) -> String {
+fn failure(output: &Output, shims: &str, deps: &[gen::Dep]) -> String {
     let log = String::from_utf8_lossy(&output.stderr);
     let head = match failed_crate(&log) {
         Some(name) if name == CRATE => match shim_line(&log).and_then(|l| gen::stub_of(shims, l)) {
             Some(stub) => format!("{stub} does not match the Rust function"),
             None => "pythrust: the generated bindings crate failed to build".to_string(),
         },
-        Some(name) if crates.iter().any(|c| c.name == name) => {
+        Some(package) if deps.iter().any(|d| d.package == package) => {
+            let name = deps
+                .iter()
+                .find(|d| d.package == package)
+                .map_or(package, |d| d.name);
             format!("pythrust: binding `{name}` failed to build")
         }
-        _ => match crates {
+        _ => match deps {
             [only] => format!("pythrust: binding `{}` failed to build", only.name),
             _ => "pythrust: the Rust bindings failed to build".to_string(),
         },
@@ -312,6 +365,16 @@ mod tests {
     fn the_named_minimum_is_the_runtimes_rust_version() {
         let manifest = include_str!("../../pythrust-rt/Cargo.toml");
         assert!(manifest.contains(&format!("\nrust-version = \"{MIN_RUST}\"\n")));
+    }
+
+    #[test]
+    fn pkgid_names_the_package() {
+        assert_eq!(parse_pkgid("path+file:///x/probe#0.1.0"), Some("probe"));
+        assert_eq!(
+            parse_pkgid("path+file:///x/dir#fastfs-binding@0.1.0"),
+            Some("fastfs-binding")
+        );
+        assert_eq!(parse_pkgid("nonsense"), None);
     }
 
     #[test]

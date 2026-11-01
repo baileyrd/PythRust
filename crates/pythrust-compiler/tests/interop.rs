@@ -435,3 +435,19 @@ fn programs_named_alike_build_apart() {
     assert!(dir.join(".pythrust/a/lib.rs").is_file());
     assert!(dir.join(".pythrust/a.b/lib.rs").is_file());
 }
+
+/// A binding's package may be named apart from the binding.
+#[test]
+fn a_binding_package_may_have_another_name() {
+    let dir = scratch("package");
+    let a = binding(&dir, "a", "", false, Some(&[]));
+    for file in ["Cargo.toml", "Cargo.lock"] {
+        let text = fs::read_to_string(a.join(file)).unwrap();
+        fs::write(
+            a.join(file),
+            text.replace("name = \"a\"", "name = \"a-binding\""),
+        )
+        .unwrap();
+    }
+    assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "5\n");
+}
