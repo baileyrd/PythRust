@@ -5,11 +5,16 @@
 //! ([`obj`]), the `sys` and `os` modules ([`sys`], [`os`]), and what
 //! Rust binding shims call ([`abi`]).
 //!
-//! The C ABI surface is the only `unsafe` in the project. Each exported
+//! The C ABI surface is the project's `unsafe`, with one exception
+//! inside the runtime, the borrow cell in `sync.rs`. Each exported
 //! item (or module, for [`str`], [`seq`], [`table`], [`range`], [`num`], [`exc`], [`obj`], [`sys`] and [`os`]) carries `allow(unsafe_code)` and a
 //! `# Safety` note on what the caller guarantees, so the audit is
 //! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
 //! tested.
+//!
+//! Every ABI caller also guarantees, beyond each item's `# Safety`, that
+//! an object reaches another thread only after `pt_mark` has marked it
+//! (M6c): an unmarked object takes no atomic steps.
 
 #![deny(unsafe_code)]
 
@@ -22,12 +27,13 @@ pub mod range;
 pub mod seq;
 mod sha256;
 pub mod str;
+mod sync;
 pub mod sys;
 pub mod table;
 
 use std::io::{self, Write};
 use std::sync::atomic::AtomicUsize;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Strings and sequences allocated and not yet freed. A debug runtime
 /// checks it is 0 when the program ends normally, so a leak fails the
@@ -37,17 +43,48 @@ pub(crate) static LIVE: AtomicUsize = AtomicUsize::new(0);
 /// Flush threshold for buffered stdout.
 const FLUSH_AT: usize = 1 << 16;
 
-/// Buffered stdout. Compiled programs are single-threaded; the lock is
-/// uncontended and only makes the static safe.
+/// Buffered stdout, shared by every thread. A thread's output reaches it
+/// a whole line at a time ([`LINE`]), so lines printed by tasks running at
+/// once (M6c) never mix mid-line.
 static OUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
-/// Appends `bytes` to stdout, flushing when the buffer is full.
+thread_local! {
+    /// This thread's output since its last complete line.
+    static LINE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Appends `bytes` to this thread's line, moving its complete lines to
+/// stdout's buffer.
 fn write(bytes: &[u8]) {
-    let mut out = OUT.lock().unwrap_or_else(PoisonError::into_inner);
-    out.extend_from_slice(bytes);
-    if out.len() >= FLUSH_AT {
-        drain(&mut out);
-    }
+    LINE.with_borrow_mut(|line| {
+        let Some(mut out) = append(line, bytes, &OUT) else {
+            return;
+        };
+        if out.len() >= FLUSH_AT {
+            drain(&mut out);
+        }
+    });
+}
+
+/// Appends `bytes` to `line` and moves everything through its last line
+/// end to `out`, giving back `out` still locked when it moved anything;
+/// an unfinished line stays in `line`. One unfinished line past the
+/// flush threshold moves as it is, which bounds memory: only a line that
+/// long can mix with another thread's output.
+fn append<'a>(
+    line: &mut Vec<u8>,
+    bytes: &[u8],
+    out: &'a Mutex<Vec<u8>>,
+) -> Option<MutexGuard<'a, Vec<u8>>> {
+    line.extend_from_slice(bytes);
+    let end = match bytes.iter().rposition(|&c| c == b'\n') {
+        Some(at) => line.len() - bytes.len() + at + 1,
+        None if line.len() >= FLUSH_AT => line.len(),
+        None => return None,
+    };
+    let mut out = out.lock().unwrap_or_else(PoisonError::into_inner);
+    out.extend(line.drain(..end));
+    Some(out)
 }
 
 /// Writes `out` to stdout and clears it. A write error ends the program:
@@ -62,8 +99,14 @@ fn drain(out: &mut Vec<u8>) {
     }
 }
 
+/// Writes this thread's pending line and everything buffered to stdout.
 fn flush() {
-    drain(&mut OUT.lock().unwrap_or_else(PoisonError::into_inner));
+    LINE.with_borrow_mut(|line| {
+        let mut out = OUT.lock().unwrap_or_else(PoisonError::into_inner);
+        out.extend_from_slice(line);
+        line.clear();
+        drain(&mut out);
+    });
 }
 
 /// `str(b)` for a bool.
@@ -167,8 +210,9 @@ fn internal(what: &str) -> ! {
 mod entry {
     #[allow(unsafe_code)]
     unsafe extern "C" {
-        /// The compiled module's top-level code, emitted by the compiler.
-        fn pythrust_main();
+        /// The compiled module's top-level code, emitted by the compiler;
+        /// it takes the thread's context, as every generated function does.
+        fn pythrust_main(ctx: *const super::exc::PtCtx);
     }
 
     /// Runs the module, then flushes stdout. A debug runtime then
@@ -176,9 +220,9 @@ mod entry {
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn main() -> i32 {
-        // SAFETY: `pythrust_main` takes and returns nothing; the compiler
-        // emits it with exactly that signature.
-        unsafe { pythrust_main() };
+        // SAFETY: `pythrust_main` takes the context pointer and returns
+        // nothing; the compiler emits it with exactly that signature.
+        unsafe { pythrust_main(super::exc::pt_ctx()) };
         super::flush();
         super::leak_status(
             cfg!(debug_assertions),
@@ -206,6 +250,57 @@ mod tests {
         assert_eq!(leak_status(true, 0), 0);
         assert_eq!(leak_status(false, 3), 0);
         assert_eq!(leak_status(true, 3), 1);
+    }
+
+    /// Two threads print 8-byte lines in pieces at once, each piece but
+    /// the first holding the end of one line and the start of the next:
+    /// each line reaches the shared buffer whole, never an unfinished one.
+    #[test]
+    fn lines_from_two_threads_never_mix() {
+        let out = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let print = |c: u8| {
+            let out = std::sync::Arc::clone(&out);
+            move || {
+                let mut line = Vec::new();
+                _ = append(&mut line, &[c; 4], &out);
+                for _ in 0..200 {
+                    _ = append(&mut line, &[c; 3], &out);
+                    _ = append(&mut line, &[c, b'\n', c, c, c, c], &out);
+                }
+                line
+            }
+        };
+        let (a, b) = (
+            std::thread::spawn(print(b'x')),
+            std::thread::spawn(print(b'y')),
+        );
+        let rest = (a.join(), b.join());
+        assert!(matches!(rest, (Ok(a), Ok(b)) if a == b"xxxx" && b == b"yyyy"));
+        let out = out.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(out.last(), Some(&b'\n'));
+        let lines: Vec<&[u8]> = out
+            .split(|&c| c == b'\n')
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(lines.len(), 400);
+        assert!(lines
+            .iter()
+            .all(|l| l.len() == 8 && l.iter().all(|c| *c == l[0])));
+    }
+
+    /// A line longer than the threshold moves in pieces, bounding memory
+    /// (the one case where lines can mix); what follows a line end in the
+    /// same write stays unpublished.
+    #[test]
+    fn a_line_past_the_threshold_moves_in_pieces() {
+        let out = Mutex::new(Vec::new());
+        let mut line = Vec::new();
+        let moved = |line: &mut Vec<u8>, bytes: &[u8]| append(line, bytes, &out).map(|o| o.len());
+        assert_eq!(moved(&mut line, &vec![b'a'; FLUSH_AT - 1]), None);
+        assert_eq!(moved(&mut line, b"a"), Some(FLUSH_AT));
+        assert!(line.is_empty());
+        assert_eq!(moved(&mut line, b"\nrest"), Some(FLUSH_AT + 1));
+        assert_eq!(line, b"rest");
     }
 
     #[test]

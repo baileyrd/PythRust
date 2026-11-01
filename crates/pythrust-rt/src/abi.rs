@@ -206,8 +206,7 @@ fn panic_line(payload: &(dyn Any + Send)) -> String {
 #[allow(unsafe_code)] // Values made and freed as generated code does.
 mod tests {
     use super::*;
-    use crate::exc::{pt_catch, pt_pending_is, ONE_AT_A_TIME};
-    use std::sync::PoisonError;
+    use crate::exc::{pt_catch, pt_pending_is};
 
     #[test]
     fn call_converts_each_result() {
@@ -248,7 +247,6 @@ mod tests {
 
     #[test]
     fn an_err_raises_the_mapped_os_error() {
-        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let missing = || -> io::Result<String> { Err(io::ErrorKind::NotFound.into()) };
         assert!(call_raising(Site::BARE, missing).is_null());
         assert_eq!(pt_pending_is(1 << crate::exc::FILE_NOT_FOUND), 1);

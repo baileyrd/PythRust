@@ -99,6 +99,10 @@ fn place(slots: &mut [usize], hash: usize, entry: usize) {
 /// Appends key `k` (and value `v` for a dict), adding references, and
 /// indexes it. The key must be absent.
 fn append(t: &PtSeq, k: u64, v: Option<u64>) {
+    seq::mark_stored(t, key_desc(t), k);
+    if let Some(v) = v {
+        seq::mark_stored(t, slot(t.desc, 1), v);
+    }
     let entries = {
         let mut items = t.items.borrow_mut();
         seq::inc(key_desc(t), k);
@@ -132,8 +136,10 @@ fn grow(t: &PtSeq, slots: &mut Vec<usize>, entries: usize) {
 /// and for a dict equal values, in any order.
 pub(crate) fn same(a: &PtSeq, b: &PtSeq) -> bool {
     let step = stride(a.desc);
-    let items = a.items.borrow();
-    if items.len() != b.items.borrow().len() {
+    // Both borrows last through every comparison, so a value read from
+    // `b` stays reachable from it until compared.
+    let (items, others) = (a.items.borrow(), b.items.borrow());
+    if items.len() != others.len() {
         return false;
     }
     items.chunks(step).all(|entry| {
@@ -143,7 +149,7 @@ pub(crate) fn same(a: &PtSeq, b: &PtSeq) -> bool {
         match entry.get(1) {
             None => true,
             Some(v) => {
-                let w = b.items.borrow().get(at * 2 + 1).copied();
+                let w = others.get(at * 2 + 1).copied();
                 w.is_some_and(|w| seq::eq(slot(a.desc, 1), *v, w))
             }
         }
@@ -175,6 +181,7 @@ pub unsafe extern "C" fn pt_dict_set(d: *const PtSeq, k: u64, v: u64) {
         return append(d, k, Some(v));
     };
     let desc = slot(d.desc, 1);
+    seq::mark_stored(d, desc, v);
     seq::inc(desc, v);
     let old = d
         .items
@@ -223,14 +230,16 @@ pub unsafe extern "C" fn pt_table_contains(t: *const PtSeq, k: u64) -> u8 {
 pub unsafe extern "C" fn pt_dict_get(d: *const PtSeq, k: u64, status: *mut u8) -> u64 {
     // SAFETY: guaranteed by the caller.
     let d = unsafe { table(d) };
-    let v = find(d, k).and_then(|entry| d.items.borrow().get(entry * 2 + 1).copied());
+    // Retained under the read borrow, so no writer can free it first.
+    let v = find(d, k).and_then(|entry| {
+        let items = d.items.borrow();
+        let v = items.get(entry * 2 + 1).copied()?;
+        seq::inc(slot(d.desc, 1), v);
+        Some(v)
+    });
     // SAFETY: guaranteed by the caller.
     unsafe { *status = u8::from(v.is_none()) };
-    let Some(v) = v else {
-        return 0;
-    };
-    seq::inc(slot(d.desc, 1), v);
-    v
+    v.unwrap_or(0)
 }
 
 /// Part `part` (0 the key, 1 a dict's value) of entry `entry` of table
@@ -247,9 +256,11 @@ pub unsafe extern "C" fn pt_table_entry(t: *const PtSeq, entry: i64, part: i64) 
     let k = at
         .saturating_mul(stride(t.desc))
         .saturating_add(usize::try_from(part).unwrap_or(0));
-    let Some(v) = t.items.borrow().get(k).copied() else {
+    let items = t.items.borrow();
+    let Some(v) = items.get(k).copied() else {
         crate::internal("a table entry out of range");
     };
+    // Retained under the read borrow, so no writer can free it first.
     seq::inc(slot(t.desc, k), v);
     v
 }
@@ -302,14 +313,10 @@ pub unsafe extern "C" fn pt_view_new(d: *const PtSeq, desc: *const u8, len: usiz
 pub unsafe extern "C" fn pt_list_of(x: *const PtSeq, desc: *const u8, len: usize) -> *mut PtSeq {
     // SAFETY: guaranteed by the caller.
     let (x, desc) = unsafe { (table(x), std::slice::from_raw_parts(desc, len)) };
-    let items: Vec<u64> = x
-        .items
-        .borrow()
-        .iter()
-        .step_by(stride(x.desc))
-        .copied()
-        .collect();
     let item = slot(desc, 0);
+    // Retained under the read borrow, so no writer can free one first.
+    let all = x.items.borrow();
+    let items: Vec<u64> = all.iter().step_by(stride(x.desc)).copied().collect();
     items.iter().for_each(|v| seq::inc(item, *v));
     new_seq(desc, items)
 }
@@ -327,6 +334,105 @@ mod tests {
     fn shown(s: *const PtSeq) -> String {
         // SAFETY: `s` is live in every test.
         unsafe { seq::shown(s) }.expect("shallow")
+    }
+
+    /// Keys and values stored into a marked dict or set are marked.
+    #[test]
+    fn entries_stored_into_marked_tables_are_marked() {
+        let list = |v: u64| {
+            let l = empty(b"li");
+            // SAFETY: `l` is live.
+            unsafe { seq::pt_seq_push(l, v) };
+            l
+        };
+        let (old, new) = (list(1), list(2));
+        let key = crate::str::into_ptr(crate::str::PtStr::new("k".into()));
+        let d = empty(b"dili");
+        let s = empty(b"es");
+        // SAFETY: every table and list stays live until dropped below.
+        unsafe {
+            pt_dict_set(d, 0, old as u64);
+            seq::mark(b"dili", d as u64);
+            seq::mark(b"es", s as u64);
+            pt_dict_set(d, 0, new as u64);
+            pt_set_add(s, key as u64);
+            let marked = |p: *mut PtSeq| seq::seq(p as u64).rc.is_marked();
+            assert!(marked(old) && marked(new) && crate::str::borrow(key).rc.is_marked());
+            crate::str::pt_str_dec(key);
+            [old, new, d, s].into_iter().for_each(|p| pt_seq_dec(p));
+        }
+    }
+
+    /// A dict marked in one executor block gains a fresh string key; in
+    /// the next block two tasks iterate its keys. The key was marked when
+    /// stored, so its count stays exact.
+    #[test]
+    fn a_key_added_to_a_marked_dict_is_shared_safely() {
+        let d = empty(b"dsi");
+        seq::mark(b"dsi", d as u64);
+        let key = crate::str::into_ptr(crate::str::PtStr::new("fresh".into()));
+        // SAFETY: both live; the dict takes its own reference to the key.
+        unsafe {
+            pt_dict_set(d, key as u64, 1);
+            assert!(crate::str::borrow(key).rc.is_marked());
+            crate::str::pt_str_dec(key);
+        }
+        seq::mark(b"dsi", d as u64);
+        let p = d as usize;
+        let tasks: Vec<_> = (0..2)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    for _ in 0..if cfg!(miri) { 40 } else { 10_000 } {
+                        // SAFETY: the dict stays live until both are
+                        // joined; an entry's key is a new reference.
+                        unsafe {
+                            let k = pt_table_entry(p as *const PtSeq, 0, 0);
+                            crate::str::pt_str_dec(k as *mut crate::str::PtStr);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in tasks {
+            assert!(t.join().is_ok());
+        }
+        // SAFETY: both tasks are done; the dict holds the key's one reference.
+        unsafe {
+            let k = pt_table_entry(d, 0, 0) as *mut crate::str::PtStr;
+            assert_eq!(crate::str::borrow(k).rc.get(), 2);
+            crate::str::pt_str_dec(k);
+            pt_seq_dec(d);
+        }
+    }
+
+    #[test]
+    fn marked_dicts_survive_concurrent_readers() {
+        let d = empty(b"dii");
+        // SAFETY: `d` is live.
+        unsafe { (0..64).for_each(|k| pt_dict_set(d, k, k * 10)) };
+        seq::mark(b"dii", d as u64);
+        let p = d as usize;
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let d = p as *const PtSeq;
+                    let mut status = 0;
+                    for k in 0..if cfg!(miri) { 40 } else { 10_000 } {
+                        let k = k % 64;
+                        // SAFETY: `d` stays live until every thread is joined.
+                        unsafe {
+                            assert_eq!((pt_dict_get(d, k, &mut status), status), (k * 10, 0));
+                            assert_eq!(pt_table_contains(d, k + 64), 0);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            assert!(t.join().is_ok());
+        }
+        // SAFETY: all threads are done.
+        unsafe { pt_seq_dec(d) };
     }
 
     #[test]

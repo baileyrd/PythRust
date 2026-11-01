@@ -16,7 +16,7 @@
 
 #![allow(unsafe_code)] // Slots are pointers; the C ABI below.
 
-use std::cell::{Cell, RefCell};
+use crate::sync::{Count, Ref, Slot};
 use std::cmp::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -29,13 +29,13 @@ use crate::LIVE;
 /// A list or tuple object.
 #[derive(Debug)]
 pub struct PtSeq {
-    rc: Cell<usize>,
+    pub(crate) rc: Count,
     /// The descriptor of this sequence's own type (`l…` or `t…`).
     pub(crate) desc: &'static [u8],
-    pub(crate) items: RefCell<Vec<u64>>,
+    pub(crate) items: Slot<Vec<u64>>,
     /// A dict's or set's hash index ([`crate::table`]); `None` for
     /// every other sequence.
-    pub(crate) index: RefCell<Option<Box<Index>>>,
+    pub(crate) index: Slot<Option<Box<Index>>>,
 }
 
 /// What a descriptor describes.
@@ -235,9 +235,7 @@ fn free_all(mut todo: Vec<u64>) {
 fn drop_one(p: u64, todo: &mut Vec<u64>) {
     // SAFETY: `p` is a live sequence whose reference is given up.
     let s = unsafe { seq(p) };
-    let count = s.rc.get() - 1;
-    if count > 0 {
-        s.rc.set(count);
+    if !s.rc.dec() {
         return;
     }
     // SAFETY: the last reference: `p` came from `Box::into_raw` and no
@@ -247,6 +245,87 @@ fn drop_one(p: u64, todo: &mut Vec<u64>) {
     for (k, v) in owned.items.into_inner().into_iter().enumerate() {
         dec_into(slot(owned.desc, k), v, todo);
     }
+}
+
+/// Marks what slot `v` of type `desc` holds, and everything it reaches,
+/// as reachable from another thread ([`crate::sync`]). A value already
+/// marked is skipped with what it reaches, so a walk ends on a cycle and
+/// never writes a mark twice. Iterative, as nesting can be deep.
+pub(crate) fn mark(desc: &'static [u8], v: u64) {
+    let mut todo = vec![(desc, v)];
+    let mut held = Held::new();
+    while let Some((desc, v)) = todo.pop() {
+        mark_one(desc, v, &mut todo, &mut held);
+    }
+}
+
+/// Marks `v` (of slot type `desc`) before it is stored into `into` if
+/// `into` is marked, keeping marking transitive: everything a marked
+/// value reaches is marked, even what it gains after its own marking.
+/// An unmarked `v` is reachable from this thread alone, so the walk does
+/// not race.
+pub(crate) fn mark_stored(into: &PtSeq, desc: &'static [u8], v: u64) {
+    if into.items.is_marked() {
+        mark(desc, v);
+    }
+}
+
+/// Takes a container's new reference to `v`, marking `v` first when the
+/// container is `marked`.
+fn store(desc: &'static [u8], v: u64, marked: bool) {
+    if marked {
+        mark(desc, v);
+    }
+    inc(desc, v);
+}
+
+fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>, held: &mut Held) {
+    match kind(desc) {
+        Kind::Opt if v == 0 => {}
+        Kind::Opt => todo.push((opt_owner(desc), v)),
+        // SAFETY: a string slot holds a live string.
+        Kind::Str => _ = unsafe { pstr::borrow(v as *const PtStr) }.rc.mark(),
+        // SAFETY: an object slot holds a live object.
+        Kind::Obj => obj::mark(unsafe { obj::borrow(v as *const PtObj) }),
+        Kind::List
+        | Kind::Tuple
+        | Kind::Range
+        | Kind::Exc
+        | Kind::Dict
+        | Kind::Set
+        | Kind::View => {
+            // SAFETY: a sequence slot holds a live sequence.
+            let s = unsafe { seq(v) };
+            if s.rc.mark() {
+                return;
+            }
+            s.items.mark();
+            s.index.mark();
+            let items = s.items.borrow();
+            todo.extend(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &item)| (slot(s.desc, k), item)),
+            );
+            held.push(items);
+        }
+        _ => {}
+    }
+}
+
+/// Marks the value `v` of type `desc[..len]` and everything it reaches
+/// as reachable from another thread, before a task can see it (M6c).
+///
+/// # Safety
+///
+/// `desc` points to `len` bytes of the compiler's read-only descriptor
+/// data; `v` is a live value of that type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_mark(desc: *const u8, len: usize, v: u64) {
+    // SAFETY: guaranteed by the caller.
+    let desc: &'static [u8] = unsafe { std::slice::from_raw_parts(desc, len) };
+    mark(desc, v);
 }
 
 /// `a == b` for two slots of type `desc`.
@@ -319,6 +398,38 @@ const MAX_NESTING: usize = 10_000;
 #[derive(Debug, PartialEq)]
 pub(crate) struct TooDeep;
 
+/// Read borrows of the containers a walk has queued children of, kept
+/// until the walk ends: a queued child stays reachable from its borrowed
+/// parent, so a writer rule 4 failed to keep out conflicts instead of
+/// freeing the child before the walk uses it.
+///
+/// A walk borrows a child only after its parent, so releasing in
+/// reverse order lets every guard go while its container is still kept
+/// alive by the parent's guard: a parent released first could let a
+/// writer free a child whose guard is still pending.
+struct Held(Vec<Ref<'static, Vec<u64>>>);
+
+impl Held {
+    fn new() -> Self {
+        Held(Vec::new())
+    }
+
+    fn push(&mut self, guard: Ref<'static, Vec<u64>>) {
+        self.0.push(guard);
+    }
+
+    /// Releases the most recent borrow; false when none is left.
+    fn release_last(&mut self) -> bool {
+        self.0.pop().is_some()
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        while self.release_last() {}
+    }
+}
+
 /// What is left of a `repr` in progress.
 enum Step {
     Show(&'static [u8], u64),
@@ -330,6 +441,16 @@ enum Step {
 /// Appends Python's `repr` of slot `v` of type `desc` to `out`. A loop
 /// with its own stack, since exceptions nest to any depth.
 fn repr(desc: &'static [u8], v: u64, out: &mut String) -> Result<(), TooDeep> {
+    repr_holding(desc, v, out, &mut Held::new())
+}
+
+/// [`repr`], leaving the borrows of the containers it read in `held`.
+fn repr_holding(
+    desc: &'static [u8],
+    v: u64,
+    out: &mut String,
+    held: &mut Held,
+) -> Result<(), TooDeep> {
     let mut todo = vec![Step::Show(desc, v)];
     let mut depth = 0;
     while let Some(step) = todo.pop() {
@@ -355,14 +476,14 @@ fn repr(desc: &'static [u8], v: u64, out: &mut String) -> Result<(), TooDeep> {
             depth += 1;
             todo.push(Step::Leave);
         }
-        show(desc, v, out, &mut todo);
+        show(desc, v, out, &mut todo, held);
     }
     Ok(())
 }
 
 /// Writes what of slot `v` of type `desc` comes first, and pushes the
 /// rest on `todo`, last first.
-fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>) {
+fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     match kind(desc) {
         Kind::Int => out.push_str(&(v as i64).to_string()),
         Kind::Float => out.push_str(&crate::num::repr(f64::from_bits(v))),
@@ -373,22 +494,22 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>) {
         // SAFETY: an object slot holds a live object.
         Kind::Obj => out.push_str(&unsafe { obj::borrow(v as *const PtObj) }.repr()),
         // SAFETY: a sequence slot holds a live sequence.
-        Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo),
+        Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo, held),
         // SAFETY: a range slot holds a live range.
         Kind::Range => out.push_str(&unsafe { range_fields(v as *const PtSeq) }.repr()),
         Kind::Opt if v == 0 => out.push_str("None"),
         Kind::Opt => todo.push(Step::Show(opt(desc).0, present(desc, v))),
         // SAFETY: an exception slot holds a live exception.
-        Kind::Exc => show_exc(unsafe { seq(v) }, out, todo),
+        Kind::Exc => show_exc(unsafe { seq(v) }, out, todo, held),
         // SAFETY: a table or view slot holds a live one.
-        Kind::Dict | Kind::Set => show_table(unsafe { seq(v) }, out, todo),
+        Kind::Dict | Kind::Set => show_table(unsafe { seq(v) }, out, todo, held),
         // SAFETY: as above.
-        Kind::View => show_view(unsafe { seq(v) }, out, todo),
+        Kind::View => show_view(unsafe { seq(v) }, out, todo, held),
     }
 }
 
 /// `[1, 2]` or `(1,)`.
-fn show_seq(s: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+fn show_seq(s: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     let items = s.items.borrow();
     let tuple = kind(s.desc) == Kind::Tuple;
     out.push(if tuple { '(' } else { '[' });
@@ -403,10 +524,11 @@ fn show_seq(s: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
             todo.push(Step::Text(", "));
         }
     }
+    held.push(items);
 }
 
 /// `{1: 'a'}`, `{1, 2}`, or `set()` for an empty set.
-fn show_table(t: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+fn show_table(t: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     let items = t.items.borrow();
     let dict = kind(t.desc) == Kind::Dict;
     if !dict && items.is_empty() {
@@ -424,10 +546,11 @@ fn show_table(t: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
             _ => {}
         }
     }
+    held.push(items);
 }
 
 /// `dict_keys([1, 2])`, `dict_values([...])` or `dict_items([...])`.
-fn show_view(v: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+fn show_view(v: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     let name = match v.desc.get(1) {
         Some(b'k') => "dict_keys([",
         Some(b'v') => "dict_values([",
@@ -435,16 +558,18 @@ fn show_view(v: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
     };
     out.push_str(name);
     todo.push(Step::Text("])"));
-    for (k, item) in v.items.borrow().iter().enumerate().rev() {
+    let items = v.items.borrow();
+    for (k, item) in items.iter().enumerate().rev() {
         todo.push(Step::Show(slot(v.desc, k), *item));
         if k > 0 {
             todo.push(Step::Text(", "));
         }
     }
+    held.push(items);
 }
 
 /// `ValueError('bad')`, or `ValueError()` without an argument.
-fn show_exc(e: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
+fn show_exc(e: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
     out.push_str(crate::exc::name(exc_kind(e as *const PtSeq as u64)));
     out.push('(');
     if let Some(os) = errno_form(e) {
@@ -452,9 +577,11 @@ fn show_exc(e: &PtSeq, out: &mut String, todo: &mut Vec<Step>) {
         return;
     }
     todo.push(Step::Text(")"));
-    if let Some(v) = e.items.borrow().first() {
+    let items = e.items.borrow();
+    if let Some(v) = items.first() {
         todo.push(Step::Show(slot(e.desc, 0), *v));
     }
+    held.push(items);
 }
 
 /// The arguments of an `OSError` the runtime raised: CPython's
@@ -542,7 +669,7 @@ pub(crate) fn exc_message(mut e: u64) -> Result<String, TooDeep> {
 }
 
 /// Resolves a Python index (negative counts from the end) into `0..len`.
-fn position(i: i64, len: usize) -> Option<usize> {
+pub(crate) fn position(i: i64, len: usize) -> Option<usize> {
     let len = i64::try_from(len).ok()?;
     let i = if i < 0 { i.checked_add(len)? } else { i };
     usize::try_from(i)
@@ -581,10 +708,10 @@ pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
     let index = matches!(kind(desc), Kind::Dict | Kind::Set).then(Box::default);
     LIVE.fetch_add(1, Relaxed);
     Box::into_raw(Box::new(PtSeq {
-        rc: Cell::new(1),
+        rc: Count::new(),
         desc,
-        items: RefCell::new(items),
-        index: RefCell::new(index),
+        items: Slot::new(items),
+        index: Slot::new(index),
     }))
 }
 
@@ -598,9 +725,11 @@ pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
 pub unsafe extern "C" fn pt_seq_push(s: *const PtSeq, v: u64) {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
-    let mut items = s.items.borrow_mut();
-    inc(slot(s.desc, items.len()), v);
-    items.push(v);
+    // On a busy `s`, `v` is marked and counted under the writer bit,
+    // before it lands; the walk never borrows `s`, since it stops at
+    // what is already marked.
+    s.items
+        .push(v, |k, marked| store(slot(s.desc, k), v, marked));
 }
 
 /// `list(s)`: a new list with `s`'s type and elements, each gaining a
@@ -613,10 +742,11 @@ pub unsafe extern "C" fn pt_seq_push(s: *const PtSeq, v: u64) {
 pub unsafe extern "C" fn pt_list_copy(s: *const PtSeq) -> *mut PtSeq {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
-    let items = s.items.borrow().clone();
     let desc = slot(s.desc, 0);
+    // Retained under the read borrow, so no writer can free one first.
+    let items = s.items.borrow();
     items.iter().for_each(|v| inc(desc, *v));
-    new_seq(s.desc, items)
+    new_seq(s.desc, items.clone())
 }
 
 /// `len(s)`.
@@ -642,14 +772,11 @@ pub unsafe extern "C" fn pt_seq_len(s: *const PtSeq) -> i64 {
 pub unsafe extern "C" fn pt_seq_get(s: *const PtSeq, i: i64, status: *mut u8) -> u64 {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
-    let items = s.items.borrow();
-    let Some(k) = position(i, items.len()) else {
+    let Some((_, v)) = s.items.get(i, |k, v| inc(slot(s.desc, k), v)) else {
         // SAFETY: guaranteed by the caller.
         unsafe { report(status, 1) };
         return 0;
     };
-    let v = items[k];
-    inc(slot(s.desc, k), v);
     // SAFETY: guaranteed by the caller.
     unsafe { report(status, 0) };
     v
@@ -667,13 +794,8 @@ pub unsafe extern "C" fn pt_list_set(s: *const PtSeq, i: i64, v: u64) -> u8 {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
     let desc = slot(s.desc, 0);
-    let old = {
-        let mut items = s.items.borrow_mut();
-        let Some(k) = position(i, items.len()) else {
-            return 1;
-        };
-        inc(desc, v);
-        std::mem::replace(&mut items[k], v)
+    let Some(old) = s.items.replace(i, v, |marked| store(desc, v, marked)) else {
+        return 1;
     };
     // Dropped after the borrow ends: freeing may reach other sequences.
     dec(desc, old);
@@ -692,7 +814,7 @@ pub unsafe extern "C" fn pt_seq_inc(s: *const PtSeq) {
     }
     // SAFETY: non-null, so live by the caller's guarantee.
     let s = unsafe { seq(s as u64) };
-    s.rc.set(s.rc.get() + 1);
+    s.rc.inc();
 }
 
 /// Drops a reference, freeing the sequence and dropping its slots' at
@@ -722,8 +844,11 @@ pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq) {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
     let desc = slot(s.desc, 0);
-    let items = std::mem::take(&mut *s.items.borrow_mut());
-    *s.items.borrow_mut() = merge_sort(desc, items);
+    // One write borrow for the whole sort: a party rule 4 failed to keep
+    // out conflicts rather than seeing the list empty mid-sort.
+    let mut items = s.items.borrow_mut();
+    let taken = std::mem::take(&mut *items);
+    *items = merge_sort(desc, taken);
 }
 
 fn merge_sort(desc: &[u8], mut items: Vec<u64>) -> Vec<u64> {
@@ -922,6 +1047,193 @@ mod tests {
     }
 
     #[test]
+    fn marking_reaches_nested_values_once() {
+        let inner = make(b"li", &[1, 2]);
+        let outer = make(b"lli", &[inner as u64, inner as u64]);
+        // SAFETY: both live until dropped below.
+        unsafe {
+            assert!(!seq(inner as u64).rc.is_marked());
+            mark(b"lli", outer as u64);
+            assert!(seq(outer as u64).rc.is_marked());
+            assert!(seq(inner as u64).rc.is_marked());
+            assert_eq!(seq(inner as u64).rc.get(), 3);
+            pt_seq_dec(outer);
+            pt_seq_dec(inner);
+        }
+    }
+
+    /// Four threads read one marked list of lists at once, as tasks
+    /// reading a shared argument do: element reads take and drop
+    /// references, and comparing the list with itself takes two read
+    /// borrows of it on one thread. Counts must balance.
+    #[test]
+    fn marked_lists_survive_concurrent_readers() {
+        let inner = make(b"li", &[7, 8, 9]);
+        let outer = make(b"lli", &[inner as u64; 8]);
+        mark(b"lli", outer as u64);
+        let p = outer as usize;
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let outer = p as *const PtSeq;
+                    let mut status = 0;
+                    for k in 0..if cfg!(miri) { 40 } else { 10_000 } {
+                        // SAFETY: `outer` stays live until every thread is
+                        // joined; a read slot is a new reference.
+                        unsafe {
+                            let got = pt_seq_get(outer, k % 8, &mut status);
+                            assert_eq!((pt_seq_cmp(outer, outer), status), (0, 0));
+                            pt_seq_dec(got as *mut PtSeq);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            assert!(t.join().is_ok());
+        }
+        // SAFETY: all threads are done; both still live.
+        unsafe {
+            assert_eq!(seq(inner as u64).rc.get(), 9);
+            assert_eq!(seq(outer as u64).rc.get(), 1);
+            pt_seq_dec(outer);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn marked_tuples_survive_concurrent_readers() {
+        let inner = make(b"li", &[1, 2]);
+        let pair = make(b"t\x02li", &[inner as u64, 5]) as usize;
+        mark(b"t\x02li", pair as u64);
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let pair = pair as *const PtSeq;
+                    let mut status = 0;
+                    for _ in 0..if cfg!(miri) { 40 } else { 10_000 } {
+                        // SAFETY: `pair` stays live until every thread is
+                        // joined; a read field is a new reference.
+                        unsafe {
+                            let list = pt_seq_get(pair, 0, &mut status);
+                            assert_eq!((pt_seq_get(pair, -1, &mut status), status), (5, 0));
+                            pt_seq_dec(list as *mut PtSeq);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            assert!(t.join().is_ok());
+        }
+        // SAFETY: all threads are done; both still live.
+        unsafe {
+            assert_eq!(seq(inner as u64).rc.get(), 2);
+            pt_seq_dec(pair as *mut PtSeq);
+            pt_seq_dec(inner);
+        }
+    }
+
+    /// A list marked, then given a fresh element, then marked again (two
+    /// executor blocks) shares that element safely; and marking a new
+    /// container that reaches the list while other threads read it (a
+    /// submit during a running task) neither races nor loses counts.
+    #[test]
+    fn remarking_after_a_store_and_marking_during_reads_keep_counts() {
+        let list = make(b"lli", &[]);
+        mark(b"lli", list as u64);
+        let fresh = make(b"li", &[1]);
+        // SAFETY: both live; the push adds the list's own reference.
+        unsafe { pt_seq_push(list, fresh as u64) };
+        mark(b"lli", list as u64);
+        let p = list as usize;
+        let readers: Vec<_> = (0..3)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let list = p as *const PtSeq;
+                    let mut status = 0;
+                    for _ in 0..if cfg!(miri) { 40 } else { 10_000 } {
+                        // SAFETY: `list` stays live until every thread is
+                        // joined; a read element is a new reference.
+                        unsafe {
+                            let got = pt_seq_get(list, -1, &mut status);
+                            pt_seq_dec(got as *mut PtSeq);
+                        }
+                    }
+                })
+            })
+            .collect();
+        let outer = make(b"llli", &[list as u64]);
+        mark(b"llli", outer as u64);
+        for t in readers {
+            assert!(t.join().is_ok());
+        }
+        // SAFETY: all threads are done; every list is live.
+        unsafe {
+            assert_eq!(seq(fresh as u64).rc.get(), 2);
+            pt_seq_dec(outer);
+            pt_seq_dec(list);
+            assert_eq!(seq(fresh as u64).rc.get(), 1);
+            pt_seq_dec(fresh);
+        }
+    }
+
+    /// A value stored into a marked container is marked with what it
+    /// reaches; one stored into an unmarked container is not.
+    #[test]
+    fn values_stored_into_marked_containers_are_marked() {
+        let (a, b, c) = (make(b"li", &[1]), make(b"li", &[2]), make(b"li", &[3]));
+        let outer = make(b"lli", &[a as u64]);
+        let plain = make(b"lli", &[]);
+        mark(b"lli", outer as u64);
+        let marked = |p: *mut PtSeq| {
+            // SAFETY: every list here is live until the end of the test.
+            unsafe { seq(p as u64) }.rc.is_marked()
+        };
+        // SAFETY: all lists live; each store adds its own reference.
+        unsafe {
+            pt_seq_push(plain, b as u64);
+            assert!(!marked(b));
+            pt_seq_push(outer, b as u64);
+            assert_eq!(pt_list_set(outer, 0, c as u64), 0);
+            assert!(marked(b) && marked(c));
+            [a, b, c, outer, plain]
+                .into_iter()
+                .for_each(|p| pt_seq_dec(p));
+        }
+    }
+
+    /// A marked list goes to another thread, which changes it, and comes
+    /// back: the join orders every count operation, so none is lost.
+    #[test]
+    fn a_marked_list_handed_between_threads_keeps_its_counts() {
+        let inner = make(b"li", &[7]);
+        let outer = make(b"lli", &[inner as u64, inner as u64]) as usize;
+        mark(b"lli", outer as u64);
+        let item = inner as u64;
+        let worker = std::thread::spawn(move || {
+            let outer = outer as *const PtSeq;
+            let fresh = make(b"li", &[8]);
+            // SAFETY: `outer` is live and this thread alone uses it until
+            // the join; `fresh`'s reference moves into the list.
+            unsafe {
+                assert_eq!(pt_list_set(outer, 0, fresh as u64), 0);
+                pt_seq_dec(fresh);
+                pt_seq_push(outer, item);
+            }
+        });
+        assert!(worker.join().is_ok());
+        // SAFETY: the worker is done; every value is live.
+        unsafe {
+            assert_eq!(shown(outer as *const PtSeq), "[[8], [7], [7]]");
+            assert_eq!(seq(inner as u64).rc.get(), 3);
+            pt_seq_dec(outer as *mut PtSeq);
+            assert_eq!(seq(inner as u64).rc.get(), 1);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
     fn indexing_wraps_negatives_and_reports_range() {
         let s = make(b"li", &[10, 20, 30]);
         let mut status = 9;
@@ -1041,6 +1353,83 @@ mod tests {
         }
     }
 
+    /// A `repr` keeps every container it queued children of borrowed
+    /// until it is done, so none of those children can be replaced and
+    /// freed before it is shown; a marking walk releases what it held.
+    #[test]
+    fn walks_hold_their_containers_until_done() {
+        let inner = make(b"ls", &[]);
+        let word = crate::str::into_ptr(PtStr::new("w".into()));
+        // SAFETY: both live; the list takes its own reference.
+        unsafe {
+            pt_seq_push(inner, word as u64);
+            pstr::pt_str_dec(word);
+        }
+        let outer = make(b"lls", &[inner as u64]);
+        // SAFETY: `outer` keeps `inner` alive; the walks below see it
+        // owned by its parent alone.
+        unsafe { pt_seq_dec(inner) };
+        let free = |p: *mut PtSeq| {
+            // SAFETY: both lists are live until the end of the test.
+            unsafe { seq(p as u64) }.items.is_free()
+        };
+        let mut held = Held::new();
+        let mut out = String::new();
+        assert_eq!(
+            repr_holding(b"lls", outer as u64, &mut out, &mut held),
+            Ok(())
+        );
+        assert_eq!(
+            (out.as_str(), free(outer), free(inner)),
+            ("[['w']]", false, false)
+        );
+        // Children go first: `inner` is free while `outer`, which keeps
+        // it alive, is still held.
+        assert!(held.release_last());
+        assert_eq!((free(outer), free(inner)), (false, true));
+        assert!(held.release_last() && !held.release_last());
+        assert!(free(outer));
+        mark(b"lls", outer as u64);
+        assert!(free(outer) && free(inner));
+        // SAFETY: the test's one reference, which frees both.
+        unsafe { pt_seq_dec(outer) };
+    }
+
+    /// A walk that stops early still releases deepest first: each link
+    /// of the chain is owned by its parent alone.
+    #[test]
+    #[cfg_attr(miri, ignore = "a 10,000-link chain is too slow under Miri")]
+    fn a_walk_cut_short_releases_children_before_parents() {
+        let mut links = vec![make(b"x0", &[])];
+        for _ in 0..MAX_NESTING {
+            let next = make(b"x0x", &[links[links.len() - 1] as u64]);
+            // SAFETY: `next` holds its own reference.
+            unsafe { pt_seq_dec(links[links.len() - 1]) };
+            links.push(next);
+        }
+        links.reverse();
+        let free = |p: *mut PtSeq| {
+            // SAFETY: every link is live while the head is.
+            unsafe { seq(p as u64) }.items.is_free()
+        };
+        let mut held = Held::new();
+        let mut out = String::new();
+        assert_eq!(
+            repr_holding(b"x0x", links[0] as u64, &mut out, &mut held),
+            Err(TooDeep)
+        );
+        let mut busy: Vec<usize> = (0..links.len()).filter(|&i| !free(links[i])).collect();
+        assert!(busy.len() > 1, "the walk held a chain");
+        while let Some(deepest) = busy.pop() {
+            assert!(held.release_last());
+            assert!(free(links[deepest]));
+            assert!(busy.iter().all(|&i| !free(links[i])), "parents still held");
+        }
+        assert!(!held.release_last());
+        // SAFETY: the head's one reference, which frees the chain.
+        unsafe { pt_seq_dec(links[0]) };
+    }
+
     #[test]
     fn deep_exception_chains_render_to_the_limit_and_free_in_a_loop() {
         // `e = ValueError(e)` repeatedly, as a list element: the list
@@ -1061,6 +1450,7 @@ mod tests {
             // SAFETY: both live until dropped here.
             unsafe {
                 assert_eq!(super::shown(xs).is_ok(), fits, "{n}");
+                assert!(seq(xs as u64).items.is_free(), "{n}: released");
                 assert_eq!(exc_message(e as u64), Ok(String::new()));
                 pt_seq_dec(e);
                 pt_seq_dec(xs);
