@@ -1,0 +1,68 @@
+# Tasks through `concurrent.futures` (M6c): `submit` checks each call as
+# a call of its function, `result()` returns what the task returned and
+# raises what escaped it, and a list holds the futures.
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def pair(a, b):
+    return [a, b]
+
+
+def checked(x: int) -> int:
+    if x < 0:
+        raise ValueError("negative: " + str(x))
+    return x
+
+
+def deep(n: int) -> int:
+    if n == 0:
+        return 0
+    return 1 + deep(n - 1)
+
+
+def gather(xs: list[int]) -> list[int]:
+    out: list[int] = []
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        futs = []
+        for x in xs:
+            futs.append(ex.submit(square, x))
+        for f in futs:
+            out.append(f.result())
+    return out
+
+
+def errors() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        good = ex.submit(checked, 3)
+        bad = ex.submit(checked, -2)
+        ex.submit(checked, -5)  # escapes unobserved, and is dropped
+        print(good.result())
+        try:
+            print(bad.result())
+        except ValueError as e:
+            print("caught", e)
+    print("after the block", good.result())
+
+
+def generic() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(pair, 1, 2)
+        b = ex.submit(pair, "x", "y")
+        print(a.result(), b.result())
+
+
+def depth() -> None:
+    # Each task counts its call depth from zero, as CPython's threads do.
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print(ex.submit(deep, 900).result())
+
+
+print(gather([1, 2, 3]))
+print(gather([]))
+errors()
+generic()
+depth()

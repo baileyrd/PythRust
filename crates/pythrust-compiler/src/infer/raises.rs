@@ -253,6 +253,10 @@ fn bindings<'a>(block: &'a [Stmt], out: &mut Bindings<'a>) {
                     bindings(&h.body, out);
                 }
             }
+            StmtKind::With { binding, body, .. } => {
+                out.entry(&binding.name).or_default().push(Source::Opaque);
+                bindings(body, out);
+            }
             _ => {}
         }
     }
@@ -332,8 +336,27 @@ impl<'a> Analysis<'a> {
             a: self,
             locals: &locals,
             module: false,
+            tasks: self.tasks(&f.body),
         };
         cx.block(&f.body)
+    }
+
+    /// What the tasks `body` starts may raise (M6c): the sets of the
+    /// functions it submits or maps, joined. A task's escape surfaces
+    /// where its result is taken, and futures and `map`'s results stay
+    /// in the function that made them, so each place there that takes
+    /// one may raise any of them.
+    fn tasks(&self, body: &'a [Stmt]) -> Raises {
+        let mut out = Raises::default();
+        for e in scope::exprs(body) {
+            let Some((name, _, _)) = scope::task_call(e) else {
+                continue;
+            };
+            if let Some(set) = self.sets.get(name) {
+                set.escapes().for_each(|k| out.add(k, e.span));
+            }
+        }
+        out
     }
 
     /// The first escape from `f`'s body that `declared` does not admit,
@@ -446,6 +469,8 @@ struct Cx<'s, 'a> {
     /// Whether `locals` are the module's: names there fall back to the
     /// builtins until bound, where a function's locals do not.
     module: bool,
+    /// What the body's tasks may raise, wherever a result is taken.
+    tasks: Raises,
 }
 
 impl<'a> Cx<'_, 'a> {
@@ -458,13 +483,16 @@ impl<'a> Cx<'_, 'a> {
     fn stmt(&self, s: &'a Stmt) -> Raises {
         let mut out = Raises::default();
         match &s.kind {
-            StmtKind::Assign { target, value } | StmtKind::AugAssign { target, value, .. } => {
+            StmtKind::Assign { target, value } => {
+                self.bound(value, &mut out);
+                self.target(target, &mut out);
+            }
+            StmtKind::AugAssign { target, value, .. } => {
                 self.expr(value, &mut out);
                 self.target(target, &mut out);
             }
-            StmtKind::AnnAssign { value, .. } | StmtKind::Expr(value) => {
-                self.expr(value, &mut out);
-            }
+            StmtKind::AnnAssign { value, .. } => self.bound(value, &mut out),
+            StmtKind::Expr(value) => self.expr(value, &mut out),
             StmtKind::Return(value) => value.iter().for_each(|v| self.expr(v, &mut out)),
             StmtKind::Raise(value) => {
                 self.expr(value, &mut out);
@@ -510,6 +538,10 @@ impl<'a> Cx<'_, 'a> {
                     .iter()
                     .for_each(|h| out.extend(self.block(&h.body)));
             }
+            StmtKind::With { value, body, .. } => {
+                self.expr(value, &mut out);
+                out.extend(self.block(body));
+            }
             StmtKind::FuncDef(_) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
         }
         out
@@ -528,8 +560,27 @@ impl<'a> Cx<'_, 'a> {
     }
 
     /// Adds what evaluating `e` may raise: calls to functions that raise,
-    /// `int(s)`/`float(s)` of a string, and a file's `read`.
+    /// `int(s)`/`float(s)` of a string, a file's `read`, and taking a
+    /// task's result.
     fn expr(&self, e: &Expr, out: &mut Raises) {
+        if self.takes_results(e) {
+            self.tasks.escapes().for_each(|k| out.add(k, e.span));
+        }
+        self.parts(e, out);
+    }
+
+    /// A value bound to a name: binding `map`'s results takes none, so
+    /// what the tasks raise escapes where the name is iterated.
+    fn bound(&self, value: &Expr, out: &mut Raises) {
+        match self.a.types.at(value.span) {
+            Some(Type::Results(_)) => self.parts(value, out),
+            _ => self.expr(value, out),
+        }
+    }
+
+    /// What evaluating `e`'s parts and `e` itself may raise, but taking
+    /// a task's result.
+    fn parts(&self, e: &Expr, out: &mut Raises) {
         match &e.kind {
             ExprKind::Call { func, args } => {
                 args.iter().for_each(|a| self.expr(&a.value, out));
@@ -576,6 +627,18 @@ impl<'a> Cx<'_, 'a> {
             | ExprKind::Bool(_)
             | ExprKind::None => {}
         }
+    }
+
+    /// Whether `e` may take a task's result: `fut.result()`, or any use
+    /// of `map`'s results, which every consumer iterates.
+    fn takes_results(&self, e: &Expr) -> bool {
+        if matches!(self.a.types.at(e.span), Some(Type::Results(_))) {
+            return true;
+        }
+        let ExprKind::Call { func, .. } = &e.kind else {
+            return false;
+        };
+        matches!(&func.kind, ExprKind::Attr { attr, .. } if attr.name == "result")
     }
 
     /// A call by name: a top-level function or a Rust binding function
@@ -641,6 +704,7 @@ impl<'a> Cx<'_, 'a> {
                 a: self.a,
                 locals: &self.a.globals,
                 module: true,
+                tasks: Raises::default(),
             };
             return module.name_kinds(name, &mut BTreeSet::new());
         }
@@ -1406,5 +1470,62 @@ def a(n: int) -> int raises Exception:
             assert_eq!(types.warnings(), &[], "{src}");
             assert_ne!(src, program, "no warning for:\n{program}");
         }
+    }
+
+    /// The tasks a function starts (M6c). Header shared by the cases.
+    const TASKS: &str = "import concurrent.futures\n\
+def bad(x: int) -> int:\n    if x < 0:\n        raise ValueError\n    return x\n\
+def opens(p: str) -> bytes:\n    return open(p, \"rb\").read()\n";
+
+    #[test]
+    fn a_task_raises_where_its_result_is_taken() {
+        let taken = format!(
+            "{TASKS}def g(x: int) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             f = ex.submit(bad, x)\n        return f.result()\n"
+        );
+        assert_eq!(raises(&taken, "g"), "ValueError");
+        let caught = format!(
+            "{TASKS}def g(x: int) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             f = ex.submit(bad, x)\n        try:\n            return f.result()\n        \
+             except ValueError:\n            return 0\n"
+        );
+        assert_eq!(raises(&caught, "g"), "");
+        let unobserved = format!(
+            "{TASKS}def g(x: int) -> None:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             ex.submit(bad, x)\n"
+        );
+        assert_eq!(raises(&unobserved, "g"), "");
+    }
+
+    #[test]
+    fn every_task_of_a_body_may_raise_at_each_result() {
+        let src = format!(
+            "{TASKS}def g(x: int, p: str) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             a = ex.submit(bad, x)\n        b = ex.submit(opens, p)\n        return a.result()\n"
+        );
+        assert_eq!(raises(&src, "g"), "OSError, ValueError");
+    }
+
+    #[test]
+    fn map_raises_where_its_results_are_iterated() {
+        let iterated = format!(
+            "{TASKS}def g(xs: list[int]) -> int:\n    t = 0\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             rs = ex.map(bad, xs)\n        try:\n            for r in rs:\n                t += r\n        \
+             except ValueError:\n            pass\n    return t\n"
+        );
+        assert_eq!(raises(&iterated, "g"), "");
+        let outside = format!(
+            "{TASKS}def g(xs: list[int]) -> list[int]:\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             try:\n            rs = ex.map(bad, xs)\n        except ValueError:\n            \
+             return []\n        return list(rs)\n"
+        );
+        assert_eq!(raises(&outside, "g"), "ValueError");
+        let direct = format!(
+            "{TASKS}def g(xs: list[int]) -> list[int]:\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        return sorted(ex.map(bad, xs))\n"
+        );
+        assert_eq!(raises(&direct, "g"), "ValueError");
     }
 }

@@ -854,7 +854,7 @@ fn builtin_misuse_is_an_error() {
         ),
         (
             b.call("list", vec![b.s("ab")]),
-            "`list` copies a list, dict, set or dict view, not str",
+            "`list` copies a list, dict, set, dict view or `map`'s results, not str",
         ),
         (
             b.call("list", vec![]),
@@ -2117,7 +2117,7 @@ fn dict_and_set_misuse_is_an_error() {
         ),
         (
             "print(list(\"ab\"))\n",
-            "`list` copies a list, dict, set or dict view, not str",
+            "`list` copies a list, dict, set, dict view or `map`'s results, not str",
         ),
         (
             "print(sorted([{1}]))\n",

@@ -1,0 +1,17 @@
+# deviation: only a local list may hold futures (M6c, Nano 2026-11-01); CPython lets a tuple hold one.
+# expect-exit: 1
+# expect-error: only a local list may hold futures
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        pair = (3, ex.submit(square, 3))
+        print(pair[1].result())
+
+
+main()

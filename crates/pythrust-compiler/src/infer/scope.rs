@@ -5,8 +5,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ast::{
-    Arg, Block, CmpOp, Expr, ExprKind, FuncDef, LogicalOp, Stmt, StmtKind, Target, TargetKind,
-    TypeExpr, UnaryOp,
+    Arg, Block, CmpOp, Expr, ExprKind, FuncDef, Ident, LogicalOp, Stmt, StmtKind, Target,
+    TargetKind, TypeExpr, UnaryOp,
 };
 use crate::span::Span;
 
@@ -19,6 +19,9 @@ pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
         | StmtKind::For { target, .. } => target_names(target, &mut out),
         StmtKind::AnnAssign { target, .. } => {
             out.insert(target.name.clone());
+        }
+        StmtKind::With { binding, .. } => {
+            out.insert(binding.name.clone());
         }
         StmtKind::Try { handlers, .. } => {
             let bindings = handlers.iter().filter_map(|h| h.binding.as_ref());
@@ -83,9 +86,157 @@ fn walk<'a>(block: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
                 walk(body, f);
                 handlers.iter().for_each(|h| walk(&h.body, f));
             }
+            StmtKind::With { body, .. } => walk(body, f),
             _ => {}
         }
     }
+}
+
+/// Every expression in `block`, nested ones and those of nested blocks
+/// included, each after the expression it is part of.
+pub(crate) fn exprs(block: &[Stmt]) -> Vec<&Expr> {
+    let mut out = Vec::new();
+    walk(block, &mut |s| {
+        own_exprs(s).into_iter().for_each(|e| subexprs(e, &mut out))
+    });
+    out
+}
+
+/// The expressions a statement holds outside its nested blocks.
+fn own_exprs(s: &Stmt) -> Vec<&Expr> {
+    match &s.kind {
+        StmtKind::Assign { target, value } | StmtKind::AugAssign { target, value, .. } => {
+            let mut out = vec![value];
+            out.extend(target_exprs(target));
+            out
+        }
+        StmtKind::AnnAssign { value, .. }
+        | StmtKind::Expr(value)
+        | StmtKind::Raise(value)
+        | StmtKind::With { value, .. } => vec![value],
+        StmtKind::Return(value) => value.iter().collect(),
+        StmtKind::If { branch, elifs, .. } => std::iter::once(branch)
+            .chain(elifs)
+            .map(|b| &b.test)
+            .collect(),
+        StmtKind::While { branch, .. } => vec![&branch.test],
+        StmtKind::For { target, iter, .. } => {
+            let mut out = vec![iter];
+            out.extend(target_exprs(target));
+            out
+        }
+        StmtKind::FuncDef(_)
+        | StmtKind::Try { .. }
+        | StmtKind::Break
+        | StmtKind::Continue
+        | StmtKind::Pass => Vec::new(),
+    }
+}
+
+/// `e` and every expression inside it, outermost first.
+fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+    out.push(e);
+    let parts: Vec<&Expr> = match &e.kind {
+        ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
+            items.iter().collect()
+        }
+        ExprKind::Dict(items) => items.iter().flat_map(|(k, v)| [k, v]).collect(),
+        ExprKind::Unary { operand, .. } => vec![operand],
+        ExprKind::Binary { left, right, .. } | ExprKind::Logical { left, right, .. } => {
+            vec![left, right]
+        }
+        ExprKind::Compare { left, rest } => std::iter::once(&**left)
+            .chain(rest.iter().map(|(_, x)| x))
+            .collect(),
+        ExprKind::IfExp { test, body, orelse } => vec![test, body, orelse],
+        ExprKind::Call { func, args } => std::iter::once(&**func)
+            .chain(args.iter().map(|a| &a.value))
+            .collect(),
+        ExprKind::Subscript { value, index } => vec![value, index],
+        ExprKind::Attr { value, .. } => vec![value],
+        ExprKind::Name(_)
+        | ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::None => Vec::new(),
+    };
+    parts.into_iter().for_each(|p| subexprs(p, out));
+}
+
+/// A `with` statement's parts (M6c).
+#[derive(Clone, Copy)]
+pub(crate) struct With<'a> {
+    pub value: &'a Expr,
+    pub binding: &'a Ident,
+    pub body: &'a [Stmt],
+    pub span: Span,
+}
+
+impl With<'_> {
+    /// Whether `span` lies inside the block.
+    pub(crate) fn holds(&self, span: Span) -> bool {
+        let (Some(first), Some(last)) = (self.body.first(), self.body.last()) else {
+            return false;
+        };
+        first.span.start <= span.start && span.end <= last.span.end
+    }
+}
+
+/// Every `with` in `block`, nested ones included, outermost first.
+pub(crate) fn withs(block: &[Stmt]) -> Vec<With<'_>> {
+    let mut out = Vec::new();
+    walk(block, &mut |s| {
+        if let StmtKind::With {
+            value,
+            binding,
+            body,
+        } = &s.kind
+        {
+            out.push(With {
+                value,
+                binding,
+                body,
+                span: s.span,
+            });
+        }
+    });
+    out
+}
+
+/// Every `name = value` and `name: T = value` in `block`, nested ones
+/// included.
+pub(crate) fn name_assigns(block: &[Stmt]) -> Vec<(&str, &Expr)> {
+    let mut out = Vec::new();
+    walk(block, &mut |s| match &s.kind {
+        StmtKind::Assign { target, value } => {
+            if let TargetKind::Name(n) = &target.kind {
+                out.push((n.as_str(), value));
+            }
+        }
+        StmtKind::AnnAssign { target, value, .. } => out.push((target.name.as_str(), value)),
+        _ => {}
+    });
+    out
+}
+
+/// A call `x.submit(f, ...)` or `x.map(f, xs)` (M6c): the method and
+/// the function it starts as a task, by name, with its arguments.
+pub(crate) fn task_call(e: &Expr) -> Option<(&str, &Ident, &[Arg])> {
+    let ExprKind::Call { func, args } = &e.kind else {
+        return None;
+    };
+    let ExprKind::Attr { attr, .. } = &func.kind else {
+        return None;
+    };
+    if attr.name != "submit" && attr.name != "map" {
+        return None;
+    }
+    let first = args.first()?;
+    let ExprKind::Name(name) = &first.value.kind else {
+        return None;
+    };
+    Some((name.as_str(), attr, &args[1..]))
 }
 
 fn target_names(target: &Target, out: &mut BTreeSet<String>) {
@@ -203,6 +354,10 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             );
             let bodies = handlers.iter().flat_map(|h| &h.body);
             body.iter().chain(bodies).for_each(|s| stmt_names(s, out));
+        }
+        StmtKind::With { value, body, .. } => {
+            e(value);
+            body.iter().for_each(|s| stmt_names(s, out));
         }
         StmtKind::FuncDef(_) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
     }
@@ -439,6 +594,7 @@ fn exits(block: &[Stmt], jumps: bool) -> bool {
         StmtKind::Try { body, handlers } => {
             exits(body, jumps) && handlers.iter().all(|h| exits(&h.body, jumps))
         }
+        StmtKind::With { body, .. } => exits(body, jumps),
         StmtKind::If {
             branch,
             elifs,
@@ -475,6 +631,7 @@ fn breaks(stmt: &Stmt) -> bool {
             let bodies = handlers.iter().flat_map(|h| &h.body);
             body.iter().chain(bodies).any(breaks)
         }
+        StmtKind::With { body, .. } => body.iter().any(breaks),
         _ => false,
     }
 }

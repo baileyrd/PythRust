@@ -20,6 +20,7 @@ pub(crate) mod scope;
 mod solve;
 mod stmt;
 mod subst;
+mod tasks;
 mod temper;
 mod ty;
 
@@ -95,6 +96,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     solve::default_assigns(&mut c.subst, mem::take(&mut c.pending))?;
     c.resolve_schemes()?;
     let mut types = c.finish();
+    tasks::check(module, &defs, &types)?;
     temper::check(&defs, &types)?;
     (types.raises, types.warnings) = raises::check(module, &defs, &types)?;
     Ok(types)

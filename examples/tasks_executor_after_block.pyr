@@ -1,0 +1,17 @@
+# expect-exit: 1
+# expect-error: `ex` is used outside its `with` block
+# CPython raises a RuntimeError: the executor is shut down.
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        pass
+    print(ex.submit(square, 3).result())
+
+
+main()

@@ -462,11 +462,16 @@ impl<'a> Cx<'a> {
 fn is_closed(t: &Type, subst: &Subst) -> bool {
     match t {
         Type::Var(v) => subst.contains_key(v),
-        Type::List(t) | Type::Set(t) | Type::Optional(t) | Type::View(_, t) => is_closed(t, subst),
+        Type::List(t)
+        | Type::Set(t)
+        | Type::Optional(t)
+        | Type::View(_, t)
+        | Type::Future(t)
+        | Type::Results(t) => is_closed(t, subst),
         Type::Dict(k, v) => is_closed(k, subst) && is_closed(v, subst),
         Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
-        Type::Exception | Type::Bytes | Type::File => true,
+        Type::Exception | Type::Bytes | Type::File | Type::Executor => true,
     }
 }
 
@@ -510,6 +515,9 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
             let item = settle(t, subst, bound, seqs);
             seqs.view(ir_view(*view), item)
         }
+        // Never a result: they stay in the function that made them, and
+        // a function using them does not lower.
+        Type::Executor | Type::Future(_) | Type::Results(_) => Ty::None,
     }
 }
 
@@ -960,6 +968,9 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::Exception => Ok(Ty::Exc),
         Type::Bytes => Ok(Ty::Bytes),
         Type::File => Ok(Ty::File),
+        Type::Executor | Type::Future(_) | Type::Results(_) => {
+            Err(unsupported(span, "tasks (`concurrent.futures`)"))
+        }
         // Open parts, as in `{}` or `set()` nothing constrains: the
         // table stays empty, so any slot type will do.
         Type::Dict(k, v) => {

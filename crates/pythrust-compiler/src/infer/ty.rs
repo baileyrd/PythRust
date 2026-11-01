@@ -38,6 +38,12 @@ pub enum Type {
     Bytes,
     /// What `open(p, "rb")` returns: Python's `_io.BufferedReader`.
     File,
+    /// `concurrent.futures.ThreadPoolExecutor()` (M6c).
+    Executor,
+    /// What `ex.submit(f, ...)` returns: `f`'s result, once it ends.
+    Future(Box<Type>),
+    /// What `ex.map(f, xs)` returns: `f`'s results, in order, for `for`.
+    Results(Box<Type>),
     Var(TypeVar),
 }
 
@@ -90,7 +96,10 @@ impl Type {
             | Type::View(..)
             | Type::Exception
             | Type::Bytes
-            | Type::File => Some(true),
+            | Type::File
+            | Type::Executor
+            | Type::Future(_)
+            | Type::Results(_) => Some(true),
             _ => self.any_part(Type::holds_heap),
         }
     }
@@ -103,17 +112,22 @@ impl Type {
     /// it depends on a generic type.
     pub fn reaches_mutable(&self) -> Option<bool> {
         match self {
-            Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::File => Some(true),
+            Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::File | Type::Executor => {
+                Some(true)
+            }
             _ => self.any_part(Type::reaches_mutable),
         }
     }
 
-    /// Whether `pred` holds of a tuple field, an optional's value or a
-    /// view's items; false for any other type.
+    /// Whether `pred` holds of a tuple field, an optional's value, a
+    /// view's items or a task's result; false for any other type.
     fn any_part(&self, pred: fn(&Type) -> Option<bool>) -> Option<bool> {
         let parts: Vec<Option<bool>> = match self {
             Type::Tuple(fields) => fields.iter().map(pred).collect(),
-            Type::Optional(present) | Type::View(_, present) => vec![pred(present)],
+            Type::Optional(present)
+            | Type::View(_, present)
+            | Type::Future(present)
+            | Type::Results(present) => vec![pred(present)],
             Type::Var(_) => vec![None],
             _ => Vec::new(),
         };
@@ -149,6 +163,9 @@ impl fmt::Display for Type {
             Type::Exception => f.write_str("Exception"),
             Type::Bytes => f.write_str("bytes"),
             Type::File => f.write_str("BufferedReader"),
+            Type::Executor => f.write_str("ThreadPoolExecutor"),
+            Type::Future(result) => write!(f, "Future[{result}]"),
+            Type::Results(result) => write!(f, "Iterator[{result}]"),
             Type::List(elem) => write!(f, "list[{elem}]"),
             Type::Dict(key, value) => write!(f, "dict[{key}, {value}]"),
             Type::Set(elem) => write!(f, "set[{elem}]"),

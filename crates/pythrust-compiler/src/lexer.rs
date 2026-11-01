@@ -28,7 +28,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>> {
 
 /// Words reserved for later phases. The lexer rejects them.
 const RESERVED: &[&str] = &[
-    "finally", "assert", "class", "from", "with", "lambda", "yield", "async", "await", "global",
+    "finally", "assert", "class", "from", "lambda", "yield", "async", "await", "global",
     "nonlocal", "del", "pause", "shared",
 ];
 
@@ -589,6 +589,7 @@ fn keyword(text: &str) -> Option<TokenKind> {
         "raise" => Raise,
         "as" => As,
         "import" => Import,
+        "with" => With,
         _ => return Option::None,
     };
     Some(kind)
@@ -1006,10 +1007,10 @@ mod tests {
     #[test]
     fn keywords_and_names() {
         let src = "def return if elif else while for in break continue pass and or not \
-                   True False None temper try except raise as import";
+                   True False None temper try except raise as import with";
         let expected = vec![
             Def, Return, If, Elif, Else, While, For, In, Break, Continue, Pass, And, Or, Not, True,
-            False, None, Temper, Try, Except, Raise, As, Import,
+            False, None, Temper, Try, Except, Raise, As, Import, With,
         ];
         assert_eq!(line(src), expected);
         assert_eq!(

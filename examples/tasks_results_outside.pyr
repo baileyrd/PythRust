@@ -1,0 +1,17 @@
+# deviation: `map`'s results are used only inside the block of the executor that made them (M6c, Nano 2026-11-01); CPython reads them after the block.
+# expect-exit: 1
+# expect-error: `rs` holds `map`'s results, used only inside its `with` block
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        rs = ex.map(square, [1, 2])
+    print(list(rs))
+
+
+main()
