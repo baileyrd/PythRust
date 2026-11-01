@@ -221,6 +221,8 @@ This is the canonical documented deviations-from-CPython list. Thread E treats t
 - **Pause marker** (lands with concurrency): `pause <expr>`, a loosely binding prefix covering the whole expression to its right, like Swift's `await`. Required in tempered code at every pause point; it must cover at least one. See [research/concurrency-syntax.md](research/concurrency-syntax.md).
 - **Shared lock** (lands with concurrency): a builtin type `shared[T]`, built with `shared(v)` and accessed through `with x as n:`, where `n` writes through. Not a keyword.
 
+- **Tasks** (M6c, Nano 2026-11-01): a subset of `concurrent.futures.ThreadPoolExecutor` scoped by `with`; from `submit` to the end of the executor's `with` block, no two parties (the submitter and each task) may touch one container, or anything it reaches, where either changes or keeps it, in loose code too; `run` runs each task at `submit`; only waits on other tasks are pause points. See [research/concurrency.md](research/concurrency.md). Not yet implemented.
+
 `pause`, `shared` and `with` stay reserved until those features land, so adopting them breaks no programs. `temper` is already live in `func_def`.
 
 ### Phase 4 (M5): tempering, ownership, exceptions (Nano, 2026-10-27)

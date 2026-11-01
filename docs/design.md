@@ -40,7 +40,7 @@ Code starts **loose** (Python-feeling, inferred) and is **tempered** (hardened, 
 ## Concurrency
 
 - I/O concurrency and true CPU parallelism, under one syntax family.
-- Functions are uncolored: no async/sync split. The runtime parks lightweight tasks on blocking calls.
+- Functions are uncolored: no async/sync split. The runtime parks lightweight tasks on blocking calls (M6c starts with a pool of OS threads; see [research/concurrency.md](research/concurrency.md)).
 - Tempered mode requires an explicit marker at pause points (where other tasks could interleave).
 - Shared data has three tiers: (1) default, move into a task or lend read-only; (2) a built-in locked wrapper, the builtin type `shared[T]` with scoped `with` access; (3) channels, where ownership moves with the message.
 - Actors are not a language feature. The owner-object pattern is built from channels.
