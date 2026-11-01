@@ -451,3 +451,31 @@ fn a_binding_package_may_have_another_name() {
     }
     assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "5\n");
 }
+
+/// A binding accepting a broad range keeps the version its lock pins,
+/// even beside a binding pinning a newer one cargo would prefer.
+#[test]
+fn a_broad_range_keeps_its_bindings_pin() {
+    let dir = scratch("broad");
+    let a = binding(
+        &dir,
+        "a",
+        "[dependencies]\nitoa = \">=0.4, <2\"\n",
+        true,
+        Some(&["0.4.8"]),
+    );
+    let b = binding(
+        &dir,
+        "b",
+        "[dependencies]\nitoa = \"1.0\"\n",
+        true,
+        Some(&["1.0.1"]),
+    );
+    let src = "import a\nimport b\nprint(a.digits(12), b.digits(345))\n";
+    assert_eq!(stdout(build(&dir, src, &[("a", &a), ("b", &b)])), "2 3\n");
+    let generated = fs::read_to_string(dir.join(".pythrust/main/Cargo.lock")).unwrap();
+    assert!(
+        generated.contains("name = \"a\"\nversion = \"0.1.0\"\ndependencies = [\n \"itoa 0.4.8\","),
+        "{generated}"
+    );
+}

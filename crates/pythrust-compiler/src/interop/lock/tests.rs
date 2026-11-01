@@ -82,7 +82,7 @@ fn resolved_names_the_only_version_or_the_written_one() {
 }
 
 #[test]
-fn seed_is_the_registry_union_with_qualified_dependencies() {
+fn seed_is_the_union_with_qualified_dependencies() {
     let a = lock("a", &["b"], &[("b", "1.0.0", &["c"]), ("c", "0.2.0", &[])]);
     let b = lock("b2", &["d"], &[("d", "3.1.0", &[]), ("c", "0.2.0", &[])]);
     let text = seed(&[("a", &a), ("b2", &b)]).unwrap_or_default();
@@ -90,8 +90,10 @@ fn seed_is_the_registry_union_with_qualified_dependencies() {
     let seeded = parse(&text).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(seeded.format, 4);
     let names: Vec<_> = seeded.packages.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, ["b", "c", "d"], "path packages are left for cargo");
-    assert_eq!(seeded.packages[0].deps, ["c 0.2.0"]);
+    assert_eq!(names, ["a", "b", "b2", "c", "d"]);
+    assert_eq!(seeded.packages[0].source, None, "a binding keeps its edges");
+    assert_eq!(seeded.packages[0].deps, ["b 1.0.0"]);
+    assert_eq!(seeded.packages[1].deps, ["c 0.2.0"]);
 }
 
 #[test]
@@ -140,7 +142,7 @@ fn incompatible_and_zero_zero_pins_coexist() {
     );
     let text = seed(&[("a", &a), ("b", &b)]).unwrap_or_default();
     let seeded = parse(&text).unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(seeded.packages.len(), 4);
+    assert_eq!(seeded.packages.len(), 6, "four pins and the two bindings");
 }
 
 #[test]
@@ -271,5 +273,43 @@ fn other_registries_are_pinned_and_checked() {
         .err()
         .map(|e| e.to_string())
         .unwrap_or_default();
-    assert!(err.contains("`s 1.3.0` is not pinned"), "{err}");
+    assert!(err.contains("s 1.3.0"), "{err}");
+}
+
+/// A binding's own edge moved to a version another binding pins: every
+/// registry entry still matches, but the binding's edge does not.
+#[test]
+fn verify_checks_a_bindings_own_edges() {
+    let a = lock("a", &["itoa"], &[("itoa", "0.4.8", &[])]);
+    let b = lock("b", &["itoa"], &[("itoa", "1.0.1", &[])]);
+    let built = lock(
+        "pythrust_bindings",
+        &["a", "b"],
+        &[("itoa", "0.4.8", &[]), ("itoa", "1.0.1", &[])],
+    );
+    let mut moved = built.clone();
+    moved.packages.push(Package {
+        name: "a".into(),
+        version: "0.1.0".into(),
+        source: None,
+        checksum: None,
+        deps: vec!["itoa 1.0.1".into()],
+    });
+    let err = verify(&moved, &[("a", &a), ("b", &b)])
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        err.contains("`a 0.1.0` depends on `itoa 1.0.1`, not `itoa 0.4.8`"),
+        "{err}"
+    );
+    let mut kept = built;
+    kept.packages.push(Package {
+        name: "a".into(),
+        version: "0.1.0".into(),
+        source: None,
+        checksum: None,
+        deps: vec!["itoa 0.4.8".into()],
+    });
+    assert_eq!(verify(&kept, &[("a", &a), ("b", &b)]), Ok(()));
 }

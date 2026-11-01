@@ -154,10 +154,12 @@ impl Lock {
         found.next().is_none().then(|| first.version.clone())
     }
 
-    fn find(&self, name: &str, version: &str) -> Option<&Package> {
-        self.packages
-            .iter()
-            .find(|p| p.name == name && p.version == version)
+    /// The entry for the package `p` is: same name, version, and kind
+    /// (path or not).
+    fn find(&self, p: &Package) -> Option<&Package> {
+        self.packages.iter().find(|q| {
+            q.name == p.name && q.version == p.version && q.source.is_none() == p.source.is_none()
+        })
     }
 }
 
@@ -212,9 +214,10 @@ impl std::fmt::Display for LockError {
     }
 }
 
-/// The text of the lock the generated crate starts from: every registry
-/// package of every binding's lock, each dependency written with its
-/// version so the union stays unambiguous.
+/// The text of the lock the generated crate starts from: every pinned
+/// package of every binding's lock, and each binding's path packages
+/// with their edges, each dependency written with its version so the
+/// union stays unambiguous.
 pub fn seed(bindings: &[BindingLock]) -> Result<String, LockError> {
     let union = union(bindings)?;
     let format = bindings.iter().map(|(_, l)| l.format).max().unwrap_or(0);
@@ -260,11 +263,12 @@ pub fn refuse_git(binding: &str, lock: &Lock) -> Result<(), LockError> {
     }
 }
 
-/// Registry packages by name and version, each with the lock it came from.
+/// Seeded packages by name and version, each with the lock it came from.
 type Union<'a> = BTreeMap<(String, String), (&'a Package, &'a Lock)>;
 
-/// Each registry package of `bindings`; refuses git packages and
-/// compatible pins that differ.
+/// Each package of `bindings` the seed holds: every pinned one, and every
+/// path one (the bindings themselves), so cargo keeps their dependency
+/// edges too. Refuses git packages and compatible pins that differ.
 fn union<'a>(bindings: &[BindingLock<'a>]) -> Result<Union<'a>, LockError> {
     let mut union: Union = BTreeMap::new();
     let mut owner: BTreeMap<(String, String), &str> = BTreeMap::new();
@@ -283,51 +287,76 @@ fn union<'a>(bindings: &[BindingLock<'a>]) -> Result<Union<'a>, LockError> {
                     ],
                 });
             }
-            let key = (p.name.clone(), p.version.clone());
-            owner.entry(key.clone()).or_insert(binding);
-            union.entry(key).or_insert((p, lock));
+            owner
+                .entry((p.name.clone(), p.version.clone()))
+                .or_insert(binding);
+        }
+        for p in lock
+            .packages
+            .iter()
+            .filter(|p| p.source.is_none() || p.is_pinned())
+        {
+            union
+                .entry((p.name.clone(), p.version.clone()))
+                .or_insert((p, lock));
         }
     }
     Ok(union)
 }
 
+/// A binding holding a package of a built lock: its name, its entry, and
+/// its lock.
+type Holder<'a> = (&'a str, &'a Package, &'a Lock);
+
 /// Checks the lock cargo wrote, `built`, one way against the bindings':
-/// every registry entry is pinned by some binding with the same
-/// checksum, and every dependency edge it shares with a binding's entry
-/// resolves to the same version. Entries the build did not need may be
-/// missing.
+/// every pinned entry is pinned by some binding with the same checksum,
+/// and every dependency edge an entry (pinned, or a binding's path
+/// package) shares with a binding's entry resolves to the same version.
+/// Entries the build did not need may be missing.
 pub fn verify(built: &Lock, bindings: &[BindingLock]) -> Result<(), LockError> {
-    for p in built.packages.iter().filter(|p| p.is_pinned()) {
-        let pinned: Vec<(&str, &Package, &Lock)> = bindings
+    for p in &built.packages {
+        let holders: Vec<Holder> = bindings
             .iter()
-            .filter_map(|&(b, l)| l.find(&p.name, &p.version).map(|q| (b, q, l)))
+            .filter_map(|&(b, l)| l.find(p).map(|q| (b, q, l)))
             .collect();
-        let Some(&(first, q, _)) = pinned.first() else {
-            return Err(changed(
-                bindings,
-                &p.name,
-                format!("`{} {}` is not pinned", p.name, p.version),
-            ));
-        };
-        if q.checksum != p.checksum {
-            let detail = format!("`{} {}` has another checksum", p.name, p.version);
-            return Err(changed_in(first, detail));
+        if p.is_pinned() {
+            check_entry(p, &holders, bindings)?;
         }
-        let built_deps = built.resolved(p);
-        for &(binding, q, lock) in &pinned {
-            for (dep, versions) in lock.resolved(q) {
-                let Some(got) = built_deps.get(&dep).filter(|got| **got != versions) else {
-                    continue;
-                };
-                let detail = format!(
-                    "`{} {}` depends on `{dep} {}`, not `{dep} {}`",
-                    p.name,
-                    p.version,
-                    join(got),
-                    join(&versions)
-                );
-                return Err(changed_in(binding, detail));
-            }
+        check_edges(built, p, &holders)?;
+    }
+    Ok(())
+}
+
+/// `p` is pinned by the first of `holders`, with the same checksum.
+fn check_entry(p: &Package, holders: &[Holder], bindings: &[BindingLock]) -> Result<(), LockError> {
+    let Some(&(first, q, _)) = holders.first() else {
+        let detail = format!("`{} {}` is not pinned", p.name, p.version);
+        return Err(changed(bindings, &p.name, detail));
+    };
+    if q.checksum != p.checksum {
+        let detail = format!("`{} {}` has another checksum", p.name, p.version);
+        return Err(changed_in(first, detail));
+    }
+    Ok(())
+}
+
+/// Each edge of `p` in `built` that a holder's entry also has resolves to
+/// the same versions.
+fn check_edges(built: &Lock, p: &Package, holders: &[Holder]) -> Result<(), LockError> {
+    let built_deps = built.resolved(p);
+    for &(binding, q, lock) in holders {
+        for (dep, versions) in lock.resolved(q) {
+            let Some(got) = built_deps.get(&dep).filter(|got| **got != versions) else {
+                continue;
+            };
+            let detail = format!(
+                "`{} {}` depends on `{dep} {}`, not `{dep} {}`",
+                p.name,
+                p.version,
+                join(got),
+                join(&versions)
+            );
+            return Err(changed_in(binding, detail));
         }
     }
     Ok(())
