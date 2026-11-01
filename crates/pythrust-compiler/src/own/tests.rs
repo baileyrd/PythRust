@@ -1438,4 +1438,11 @@ print(outer(2))\ngrow([0])\n";
     assert_eq!(checked(src), Ok(()));
     let called = src.replace("return run(y) + 1", "return 1");
     assert!(mode_err(&called).0.contains("write `mut xs`"));
+    // A discarded result leaves it open too.
+    let discarded = "import concurrent.futures\n\
+def task(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        pass\n    return x * x\n\
+def wrap(x):\n    task(x)\n    return x\n\
+temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
+wrap(2)\ngrow([1])\n";
+    conservative(discarded);
 }
