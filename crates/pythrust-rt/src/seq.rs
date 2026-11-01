@@ -269,6 +269,15 @@ pub(crate) fn mark_stored(into: &PtSeq, desc: &'static [u8], v: u64) {
     }
 }
 
+/// Takes a container's new reference to `v`, marking `v` first when the
+/// container is `marked`.
+fn store(desc: &'static [u8], v: u64, marked: bool) {
+    if marked {
+        mark(desc, v);
+    }
+    inc(desc, v);
+}
+
 fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>) {
     match kind(desc) {
         Kind::Opt if v == 0 => {}
@@ -666,11 +675,11 @@ pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
 pub unsafe extern "C" fn pt_seq_push(s: *const PtSeq, v: u64) {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
-    // A marked `s` is borrowed while `v` is marked; the walk never
-    // borrows `s`, since it stops at what is already marked. Counting `v`
-    // after it lands is safe: rule 4 gives this thread `s` alone.
-    let k = s.items.push(v, |k| mark(slot(s.desc, k), v));
-    inc(slot(s.desc, k), v);
+    // On a busy `s`, `v` is marked and counted under the writer bit,
+    // before it lands; the walk never borrows `s`, since it stops at
+    // what is already marked.
+    s.items
+        .push(v, |k, marked| store(slot(s.desc, k), v, marked));
 }
 
 /// `list(s)`: a new list with `s`'s type and elements, each gaining a
@@ -735,12 +744,10 @@ pub unsafe extern "C" fn pt_list_set(s: *const PtSeq, i: i64, v: u64) -> u8 {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
     let desc = slot(s.desc, 0);
-    mark_stored(s, desc, v);
-    let Some(old) = s.items.replace(i, v) else {
+    let Some(old) = s.items.replace(i, v, |marked| store(desc, v, marked)) else {
         return 1;
     };
-    inc(desc, v);
-    // Dropped after the swap: freeing may reach other sequences.
+    // Dropped after the borrow ends: freeing may reach other sequences.
     dec(desc, old);
     0
 }

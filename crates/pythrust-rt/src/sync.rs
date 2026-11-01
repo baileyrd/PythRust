@@ -217,41 +217,60 @@ impl<T: Copy> Slot<Vec<T>> {
         Some((k, v))
     }
 
-    /// Appends `v`, giving its position. On a marked slot, `marking(k)`
-    /// runs first, under the writer bit, so `v` is marked before any
-    /// party can reach it, even one rule 4 should have kept out.
+    /// Appends `v`, giving its position, with `retain(k, marked)` run
+    /// once for it. On a busy slot `retain` runs under the writer bit
+    /// before `v` lands, so the slot's reference to `v` exists before any
+    /// party can see `v`, even one rule 4 should have kept out; on an
+    /// idle one (this thread's alone) it runs after.
     #[inline]
-    pub(crate) fn push(&self, v: T, marking: impl FnOnce(usize)) -> usize {
+    pub(crate) fn push(&self, v: T, retain: impl FnOnce(usize, bool)) -> usize {
         if !self.idle() {
-            return self.push_borrowed(v, marking);
+            return self.push_borrowed(v, retain);
         }
-        // SAFETY: see `idle`; the reference ends in this expression.
-        let items = unsafe { &mut *self.value.get() };
-        items.push(v);
-        items.len() - 1
+        let k = {
+            // SAFETY: see `idle`; the reference ends in this block.
+            let items = unsafe { &mut *self.value.get() };
+            items.push(v);
+            items.len() - 1
+        };
+        retain(k, false);
+        k
     }
 
     #[cold]
-    fn push_borrowed(&self, v: T, marking: impl FnOnce(usize)) -> usize {
+    fn push_borrowed(&self, v: T, retain: impl FnOnce(usize, bool)) -> usize {
         let mut items = self.borrow_mut();
-        if items.is_marked() {
-            marking(items.len());
-        }
+        let k = items.len();
+        retain(k, items.is_marked());
         items.push(v);
-        items.len() - 1
+        k
     }
 
-    /// Puts `v` at Python index `i`, giving back the old item; `None`,
-    /// changing nothing, out of range.
-    pub(crate) fn replace(&self, i: i64, v: T) -> Option<T> {
-        if self.idle() {
-            // SAFETY: see `idle`; the reference ends in this expression,
-            // and `position` runs no other code.
-            let items = unsafe { &mut *self.value.get() };
-            return position(i, items.len()).map(|k| std::mem::replace(&mut items[k], v));
+    /// Puts `v` at Python index `i`, giving back the old item, with
+    /// `retain(marked)` run once for `v`, ordered as in [`Slot::push`];
+    /// `None`, changing nothing and running nothing, out of range.
+    #[inline]
+    pub(crate) fn replace(&self, i: i64, v: T, retain: impl FnOnce(bool)) -> Option<T> {
+        if !self.idle() {
+            return self.replace_borrowed(i, v, retain);
         }
+        let old = {
+            // SAFETY: see `idle`; the reference ends in this block, and
+            // `position` runs no other code.
+            let items = unsafe { &mut *self.value.get() };
+            let k = position(i, items.len())?;
+            std::mem::replace(&mut items[k], v)
+        };
+        retain(false);
+        Some(old)
+    }
+
+    #[cold]
+    fn replace_borrowed(&self, i: i64, v: T, retain: impl FnOnce(bool)) -> Option<T> {
         let mut items = self.borrow_mut();
-        position(i, items.len()).map(|k| std::mem::replace(&mut items[k], v))
+        let k = position(i, items.len())?;
+        retain(items.is_marked());
+        Some(std::mem::replace(&mut items[k], v))
     }
 }
 
@@ -386,10 +405,17 @@ mod tests {
             ),
             (Some((0, 10)), Some((2, 30)), None, None)
         );
-        assert_eq!((s.replace(-3, 11), s.replace(3, 0)), (Some(10), None));
+        assert_eq!(
+            (s.replace(-3, 11, |_| {}), s.replace(3, 0, |_| {})),
+            (Some(10), None)
+        );
         s.mark();
         assert_eq!(
-            (s.get(0, |_, _| {}), s.replace(1, 21), s.get(-2, |_, _| {})),
+            (
+                s.get(0, |_, _| {}),
+                s.replace(1, 21, |_| {}),
+                s.get(-2, |_, _| {})
+            ),
             (Some((0, 11)), Some(20), Some((1, 21)))
         );
         assert_eq!(s.into_inner(), vec![11, 21, 30]);
@@ -410,6 +436,25 @@ mod tests {
         assert_eq!((seen, readers(&s)), (Some((1, 5, 1)), 0));
     }
 
+    /// On a marked slot the writer retains the stored item while it
+    /// holds the writer bit, before the item is in place.
+    #[test]
+    fn a_marked_store_retains_before_it_lands() {
+        let s = Slot::new(vec![1u64]);
+        s.mark();
+        let writing = |s: &Slot<Vec<u64>>| s.state.load(Ordering::Relaxed) & WRITER != 0;
+        let mut pushed = None;
+        let k = s.push(2, |k, marked| pushed = Some((k, marked, writing(&s))));
+        assert_eq!((k, pushed), (1, Some((1, true, true))));
+        let mut replaced = None;
+        let old = s.replace(-1, 3, |marked| replaced = Some((marked, writing(&s))));
+        assert_eq!((old, replaced), (Some(2), Some((true, true))));
+        let mut ran = false;
+        assert_eq!(s.replace(5, 9, |_| ran = true), None);
+        assert!(!ran && !writing(&s));
+        assert_eq!(s.into_inner(), vec![1, 3]);
+    }
+
     /// A held read borrow sends copying reads down the counted path,
     /// which still admits them.
     #[test]
@@ -418,7 +463,7 @@ mod tests {
         let held = s.borrow();
         assert_eq!(s.get(1, |_, _| {}), Some((1, 2)));
         drop(held);
-        assert_eq!(s.replace(0, 5), Some(1));
+        assert_eq!(s.replace(0, 5, |_| {}), Some(1));
     }
 
     #[test]
