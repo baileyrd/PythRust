@@ -118,6 +118,19 @@ fn build_as(
     src: &str,
     bindings: &[(&str, &Path)],
 ) -> (Output, Option<Output>) {
+    let built = compile(dir, file, src, bindings);
+    let exe = dir
+        .join(file)
+        .with_extension(std::env::consts::EXE_EXTENSION);
+    let ran = built
+        .status
+        .success()
+        .then(|| Command::new(&exe).output().unwrap());
+    (built, ran)
+}
+
+/// `pythrust build` of `src` as `dir/file`, without running it.
+fn compile(dir: &Path, file: &str, src: &str, bindings: &[(&str, &Path)]) -> Output {
     let path = dir.join(file);
     fs::write(&path, src).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_pythrust"));
@@ -127,13 +140,7 @@ fn build_as(
         flag.push(binding);
         command.arg("--rust").arg(flag);
     }
-    let built = command.arg(&path).output().unwrap();
-    let exe = path.with_extension(std::env::consts::EXE_EXTENSION);
-    let ran = built
-        .status
-        .success()
-        .then(|| Command::new(&exe).output().unwrap());
-    (built, ran)
+    command.arg(&path).output().unwrap()
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -697,4 +704,80 @@ fn the_link_uses_this_builds_search_paths() {
         builds >= 2,
         "the old build's library stays in the target dir"
     );
+}
+
+/// The driver's groups, as a set: each `N bytes:` block with its paths
+/// sorted, since `fclone_lite.py` orders a size's groups by SHA-256 and
+/// `fclone_fast` by xxh3.
+#[cfg(unix)]
+fn group_set(out: &str) -> std::collections::BTreeSet<Vec<String>> {
+    out.split("\n\n")
+        .filter(|block| !block.trim().is_empty())
+        .map(|block| {
+            let mut lines: Vec<String> = block.lines().map(str::to_string).collect();
+            lines[1..].sort();
+            lines
+        })
+        .collect()
+}
+
+/// `fclone_fast` (`apps/fclone-lite`) finds the groups `fclone_lite.py`
+/// finds under CPython: two duplicated payloads of one size, an empty
+/// pair, and a file it cannot read, which both skip. The unreadable file
+/// is mode 000; when that does not stop this user (root), both programs
+/// run as `nobody`, so the case holds for root too. Unix only: the
+/// programs print `/`-joined paths, as `fclone_lite_matches_cpython`.
+#[cfg(unix)]
+#[test]
+fn fclone_fast_finds_the_groups_fclone_lite_finds() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+
+    let dir = scratch("fclone-fast");
+    let root = dir.join("tree");
+    fs::create_dir_all(root.join("a/b")).unwrap();
+    let files = [
+        ("one", "ab"),
+        ("a/two", "ab"),
+        ("a/b/three", "cd"),
+        ("four", "cd"),
+        ("five", "ef"),
+        ("empty", ""),
+        ("a/empty", ""),
+        ("locked", "ab"),
+    ];
+    for (name, text) in files {
+        fs::write(root.join(name), text).unwrap();
+    }
+    let locked = root.join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let as_nobody = fs::read(&locked).is_ok();
+    let apps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/fclone-lite");
+    let oracle = dir.join("fclone_lite.py");
+    fs::copy(apps.join("fclone_lite.py"), &oracle).unwrap();
+    let src = fs::read_to_string(apps.join("fclone_fast.pyr")).unwrap();
+    let (built, _) = build_as(
+        &dir,
+        "fclone_fast.pyr",
+        &src,
+        &[("fastfs", &apps.join("fastfs"))],
+    );
+    assert!(built.status.success(), "{}", text(&built.stderr));
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
+    let run = |command: &mut Command| -> String {
+        if as_nobody {
+            command.uid(65534).gid(65534);
+        }
+        let out = command.arg(&root).output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        text(&out.stdout)
+    };
+    let want = run(Command::new(&python)
+        .args(["-I", "-X", "utf8"])
+        .arg(&oracle));
+    let got = run(&mut Command::new(dir.join("fclone_fast")));
+    let groups = group_set(&want);
+    assert_eq!(groups.len(), 3, "{want}");
+    assert!(!want.contains("locked"), "{want}");
+    assert_eq!(group_set(&got), groups, "{got}");
 }

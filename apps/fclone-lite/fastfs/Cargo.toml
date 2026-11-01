@@ -1,0 +1,15 @@
+# fastfs: the Rust binding fclone_fast.pyr calls (M6b driver,
+# docs/research/rust-interop.md#driver-fast-fclone-lite). Its own
+# workspace, so its committed Cargo.lock decides xxhash-rust's version.
+[package]
+name = "fastfs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# xxh3-128, pure Rust with no dependencies of its own; what rusty_fclone
+# hashes with.
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[workspace]
