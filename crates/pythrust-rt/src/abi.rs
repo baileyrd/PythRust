@@ -31,13 +31,14 @@ pub unsafe fn site(head: *const u8, head_len: usize, tail: *const u8, tail_len: 
 }
 
 /// A `str` argument's text, borrowed for as long as the shim's own
-/// argument `p` lives, so a binding cannot keep it past the call.
+/// argument `p` lives (the elided lifetime ties the two), so a binding
+/// cannot keep it past the call.
 ///
 /// # Safety
 ///
 /// `*p` is a live string.
 #[allow(unsafe_code)]
-pub unsafe fn arg_str<'a>(p: &'a *const Str) -> &'a str {
+pub unsafe fn arg_str(p: &*const Str) -> &str {
     // SAFETY: guaranteed by the caller; the borrow is tied to `p`.
     unsafe { crate::str::borrow(*p) }.text()
 }
@@ -48,7 +49,7 @@ pub unsafe fn arg_str<'a>(p: &'a *const Str) -> &'a str {
 ///
 /// `*p` is a live bytes object.
 #[allow(unsafe_code)]
-pub unsafe fn arg_bytes<'a>(p: &'a *const Bytes) -> &'a [u8] {
+pub unsafe fn arg_bytes(p: &*const Bytes) -> &[u8] {
     // SAFETY: guaranteed by the caller; the borrow is tied to `p`.
     let obj = unsafe { crate::obj::borrow(*p) };
     obj.bytes()
