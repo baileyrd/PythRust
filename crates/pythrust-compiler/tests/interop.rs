@@ -170,57 +170,159 @@ fn build_calls_the_probe_and_builds_again() {
     assert_eq!(stdout(build(&dir, src, &[("probe", &probe)])), "42 2.5\n");
     let generated = fs::read_to_string(dir.join(".pythrust/main/lib.rs")).unwrap();
     assert!(
-        generated.contains("fn pt_rs_5probe_6double(a0: i64) -> i64"),
+        generated.contains("fn pt_rs_5probe_6double(\n    p0: i64,\n"),
         "{generated}"
     );
 }
 
-#[test]
-fn a_stub_that_does_not_match_its_function_names_the_stub() {
-    let dir = scratch("mismatch");
+/// A copy of the probe binding in `dir` with the stub `stub`.
+fn probe_with_stub(dir: &Path, stub: &str) -> PathBuf {
     let probe = dir.join("probe");
     fs::create_dir_all(probe.join("src")).unwrap();
     for file in ["Cargo.toml", "Cargo.lock", "src/lib.rs"] {
         fs::copy(self::probe().join(file), probe.join(file)).unwrap();
     }
-    fs::write(
-        probe.join("probe.pyr"),
-        "temper def half(x: float) -> float: ...\ntemper def double(x: float) -> int: ...\n",
-    )
-    .unwrap();
-    let err = failure(build(
-        &dir,
-        "import probe\nprint(probe.double(1.0))\n",
-        &[("probe", &probe)],
-    ));
-    let head = err.lines().next().unwrap_or_default();
-    assert!(
-        head.ends_with("probe.pyr:2: the stub for `double` does not match the Rust function"),
-        "{err}"
-    );
-    assert!(err.contains("mismatched types"), "{err}");
+    fs::write(probe.join("probe.pyr"), stub).unwrap();
+    probe
+}
+
+/// Each mismatch rustc catches through the shim names the stub: a type,
+/// a missing or an extra `raises`, and a parameter Rust would keep past
+/// the call. One program, so each rebuild is warm.
+#[test]
+fn a_stub_that_does_not_match_its_function_names_the_stub() {
+    let dir = scratch("mismatch");
+    let cases = [
+        (
+            "temper def double(x: int) -> str: ...\n",
+            "mismatched types",
+        ),
+        (
+            "temper def size(path: str) -> int: ...\n",
+            "mismatched types",
+        ),
+        (
+            "temper def double(x: int) -> int raises OSError: ...\n",
+            "mismatched types",
+        ),
+        (
+            "temper def keep(text: str) -> int: ...\n",
+            "does not live long enough",
+        ),
+        (
+            "temper def keep_bytes(data: bytes) -> int: ...\n",
+            "does not live long enough",
+        ),
+    ];
+    for (stub, rustc) in cases {
+        let name = stub["temper def ".len()..]
+            .split('(')
+            .next()
+            .unwrap_or_default();
+        let probe = probe_with_stub(&dir, &format!("{ENCODE}{stub}"));
+        let src = format!("import probe\nprint(probe.{name}({}))\n", arg(stub));
+        let err = failure(build(&dir, &src, &[("probe", &probe)]));
+        let head = err.lines().next().unwrap_or_default();
+        let want = format!("probe.pyr:2: the stub for `{name}` does not match the Rust function");
+        assert!(head.ends_with(&want), "{stub}{err}");
+        assert!(err.contains(rustc), "{stub}{err}");
+    }
+}
+
+/// The first line of the mismatch tests' stubs, which makes `bytes`.
+const ENCODE: &str = "temper def encode(text: str) -> bytes: ...\n";
+
+/// An argument of the stub's first parameter's type.
+fn arg(stub: &str) -> &'static str {
+    let param = stub
+        .split(':')
+        .nth(1)
+        .unwrap_or_default()
+        .split(')')
+        .next()
+        .unwrap_or_default();
+    match param.trim() {
+        "int" => "1",
+        "float" => "1.0",
+        "str" => "\"x\"",
+        _ => "probe.encode(\"x\")",
+    }
+}
+
+/// Every type row crosses both ways, an `Err` raises the mapped
+/// `OSError` that `try` catches, a scoped thread reads a `str` argument,
+/// and the binding's output keeps program order.
+const EVERY_TYPE: &str = "import probe
+
+def main(path: str) -> None:
+    print(probe.double(21), probe.half(5.0), probe.negate(False))
+    print(probe.greet(\"pythrust\"))
+    b = probe.reversed(probe.encode(\"abc\"))
+    print(b, len(b))
+    print(\"before\")
+    print(probe.note(3))
+    print(probe.scoped_len(\"h\\u00e9llo\"))
+    print(probe.size(path))
+    try:
+        print(probe.size(path + \".missing\"))
+    except FileNotFoundError:
+        print(\"caught a missing file\")
+    try:
+        print(probe.refuse(\"nope\"))
+    except Exception as e:
+        print(\"caught\", e)
+
+main(PATH)
+";
+
+const EVERY_TYPE_OUT: &str = "42 2.5 True
+hello, pythrust
+b'cba' 3
+before
+note 3
+None
+6
+5
+caught a missing file
+caught nope
+";
+
+/// [`EVERY_TYPE`] built in `dir` over a five-byte file there.
+fn every_type(dir: &Path) -> (Output, Option<Output>) {
+    let data = dir.join("data.txt");
+    fs::write(&data, "12345").unwrap();
+    let path = data.display().to_string().replace('\\', "/");
+    let src = EVERY_TYPE.replace("PATH", &format!("{path:?}"));
+    build(dir, &src, &[("probe", &probe())])
 }
 
 #[test]
-fn types_this_step_cannot_pass_are_named_at_the_stub() {
-    let dir = scratch("gap");
-    let probe = dir.join("probe");
-    fs::create_dir_all(&probe).unwrap();
-    fs::write(
-        probe.join("probe.pyr"),
-        "temper def name(x: int) -> str: ...\n",
-    )
-    .unwrap();
-    let err = failure(build(
-        &dir,
-        "import probe\nprint(probe.name(1))\n",
-        &[("probe", &probe)],
-    ));
-    assert!(err.contains("probe.pyr:1:28: backend error"), "{err}");
-    assert!(
-        err.contains("build cannot pass `str` to or from Rust yet"),
-        "{err}"
-    );
+fn every_type_crosses_and_errors_raise_os_error() {
+    let dir = scratch("types");
+    assert_eq!(stdout(every_type(&dir)), EVERY_TYPE_OUT);
+}
+
+/// The probe program under valgrind's memcheck when `PYTHRUST_VALGRIND=1`
+/// (the memcheck CI job): no invalid access, no definitely lost block.
+#[test]
+fn every_type_runs_clean_under_memcheck() {
+    if std::env::var_os("PYTHRUST_VALGRIND").is_none_or(|v| v != "1") {
+        return;
+    }
+    let dir = scratch("memcheck");
+    let (built, _) = every_type(&dir);
+    assert!(built.status.success(), "{}", text(&built.stderr));
+    let ran = Command::new("valgrind")
+        .args([
+            "--leak-check=full",
+            "--errors-for-leak-kinds=definite",
+            "--error-exitcode=97",
+        ])
+        .arg(dir.join("main"))
+        .output()
+        .unwrap();
+    assert!(ran.status.success(), "{}", text(&ran.stderr));
+    assert_eq!(text(&ran.stdout), EVERY_TYPE_OUT);
 }
 
 /// A first build from an ordinary lock pinning an older `itoa` than the
@@ -404,8 +506,35 @@ fn a_panic_in_a_binding_keeps_earlier_output_and_exits_1() {
     assert_eq!(ran.status.code(), Some(1), "{ran:?}");
     assert_eq!(text(&ran.stdout), "before\n");
     let err = text(&ran.stderr);
-    assert!(err.contains("boom 1"), "{err}");
-    assert!(!err.contains("cannot unwind"), "{err}");
+    // Only Pythrust's diagnostic, at the call: Rust's hook stays quiet.
+    assert!(
+        err.contains("main.pyr:3:7: runtime error: Rust panic: boom 1\n"),
+        "{err}"
+    );
+    assert!(!err.contains("panicked"), "{err}");
+    assert_eq!(err.lines().count(), 3, "{err}");
+}
+
+/// A panic outside the call's own thread, in a thread the binding
+/// spawns, still prints Rust's message; the call goes on.
+#[test]
+fn a_panic_in_a_bindings_thread_still_prints() {
+    let dir = scratch("worker");
+    let (built, ran) = build(
+        &dir,
+        "import probe\nprint(probe.worker_panics())\n",
+        &[("probe", &probe())],
+    );
+    let Some(ran) = ran else {
+        panic!("build failed:\n{}", text(&built.stderr));
+    };
+    assert!(ran.status.success(), "{ran:?}");
+    assert_eq!(text(&ran.stdout), "True\n");
+    let err = text(&ran.stderr);
+    assert!(
+        err.contains("panicked") && err.contains("worker gave up"),
+        "{err}"
+    );
 }
 
 /// A binding's own output comes where the call is in the program.

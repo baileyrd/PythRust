@@ -47,6 +47,9 @@ jobs:
       - run: cargo test --locked --test conformance corpus_matches_native
         env:
           PYTHRUST_VALGRIND: "1"
+      - run: cargo test --locked --test interop every_type_runs_clean_under_memcheck
+        env:
+          PYTHRUST_VALGRIND: "1"
 
   rust-version:
     # The oldest toolchain a program calling Rust bindings builds with:

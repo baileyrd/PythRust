@@ -85,14 +85,16 @@ Shims follow the M6a functions that raise (`pt_os_path_getsize` in `os.rs`): sca
 // stub fastfs/fastfs.pyr:1: the stub for `file_xxh3`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_rs_6fastfs_9file_xxh3(
-    path: *const pythrust_rt::abi::Str,
+    p0: *const pythrust_rt::abi::Str,
     head: *const u8, head_len: usize, tail: *const u8, tail_len: usize,
 ) -> *mut pythrust_rt::abi::Str {
-    // SAFETY: codegen passes a live string and a static site.
-    let (path, at) = unsafe { (pythrust_rt::abi::arg_str(&path), pythrust_rt::abi::site(head, head_len, tail, tail_len)) };
-    pythrust_rt::abi::call_raising(at, || fastfs::file_xxh3(path))
+    // SAFETY: generated code passes live values and a static site.
+    let (a0, at) = unsafe { (pythrust_rt::abi::arg_str(&p0), pythrust_rt::abi::site(head, head_len, tail, tail_len)) };
+    pythrust_rt::abi::call_raising(at, || -> std::io::Result<String> { r#fastfs::r#file_xxh3(a0) })
 }
 ```
+
+Every shim takes the call's site, also one whose stub does not raise, since a panic is reported there. The closure names the Rust result type, so rustc rejects a stub whose C form agrees by accident (`-> bool` over a function returning `()`; both cross as a byte).
 
 The symbol length-prefixes each part, so no two binding and function names collide. `abi` is a new public module of `pythrust-rt` holding everything else, and part of its audited C ABI surface:
 
@@ -128,7 +130,7 @@ A function returning `Result<T, std::io::Error>` raises on `Err`, and its stub m
 
 ### Panics
 
-`call` catches a panic, which would otherwise abort across `extern "C"`, and stops the program as a fault does: it flushes stdout, prints Pythrust's fault diagnostic at the call site with the panic's message (a non-string payload reads "Rust panic"), and exits 1. A panic hook keeps Rust's own "thread panicked" line from also printing, but only while `call` runs on the calling thread (a thread-local flag); any other panic, such as one in a thread a binding detaches, falls through to the default hook and prints as usual. The conversions PR tests both: a panic inside `call` prints only Pythrust's fault diagnostic, and a detached thread's panic still prints its message. A panic in a scoped thread prints twice by design: the default hook's line from the worker (the flag is per thread), then Pythrust's fault diagnostic when the scope re-raises it on the calling thread. A panic is never catchable, like overflow.
+`call` catches a panic, which would otherwise abort across `extern "C"`, and stops the program as a fault does: it flushes stdout, prints Pythrust's fault diagnostic at the call site with the panic's message (`Rust panic: boom`; a non-string payload reads `Rust panic`), and exits 1. A panic hook keeps Rust's own "thread panicked" line from also printing, but only while `call` runs on the calling thread (a thread-local flag); any other panic, such as one in a thread a binding detaches, falls through to the default hook and prints as usual. The conversions PR tests both: a panic inside `call` prints only Pythrust's fault diagnostic, and a detached thread's panic still prints its message. A panic in a scoped thread prints twice by design: the default hook's line from the worker (the flag is per thread), then Pythrust's fault diagnostic when the scope re-raises it on the calling thread. A panic is never catchable, like overflow.
 
 ### Ownership
 

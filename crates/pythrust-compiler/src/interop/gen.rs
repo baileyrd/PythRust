@@ -1,7 +1,6 @@
 //! The generated crate (`docs/research/rust-interop.md#the-shim`): its
 //! manifest, and one `extern "C"` shim per stub function the program
-//! calls. This step passes `int` and `float` only; other types and
-//! `raises` are named gaps until the conversions step.
+//! calls, each from one fixed template.
 
 use crate::ast::{StubDef, TypeExpr};
 use crate::diag::{DiagKind, Diagnostic, Result};
@@ -36,51 +35,76 @@ pub fn symbol(dotted: &str) -> String {
     format!("pt_rs_{}{binding}_{}{func}", binding.len(), func.len())
 }
 
-/// A value this step passes across the boundary, by value.
+/// A type that crosses the boundary
+/// (`docs/research/rust-interop.md#types-across-the-boundary`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scalar {
+pub enum Cross {
     Int,
     Float,
+    Bool,
+    Str,
+    Bytes,
+    /// A result only.
+    None,
 }
 
-impl Scalar {
-    fn of(t: &TypeExpr) -> Result<Scalar> {
-        let plain = t.args.is_empty() && !t.optional;
-        match t.name.name.as_str() {
-            "int" if plain => Ok(Scalar::Int),
-            "float" if plain => Ok(Scalar::Float),
-            _ => Err(gap(
-                t.span,
-                &format!(
-                    "build cannot pass `{}` to or from Rust yet; only `int` and `float` cross for now",
-                    t.name.name
-                ),
-            )),
-        }
+impl Cross {
+    /// The type `t` names; the parser admits only these in a stub.
+    fn of(t: &TypeExpr) -> Result<Cross> {
+        let cross = match t.name.name.as_str() {
+            _ if !t.args.is_empty() || t.optional => None,
+            "int" => Some(Cross::Int),
+            "float" => Some(Cross::Float),
+            "bool" => Some(Cross::Bool),
+            "str" => Some(Cross::Str),
+            "bytes" => Some(Cross::Bytes),
+            "None" => Some(Cross::None),
+            _ => None,
+        };
+        cross.ok_or_else(|| gap(t.span, "a stub type that does not cross into Rust"))
     }
 
-    fn rust(self) -> &'static str {
+    /// The shim's C type for a parameter of this type.
+    fn c_param(self) -> &'static str {
         match self {
-            Scalar::Int => "i64",
-            Scalar::Float => "f64",
+            Cross::Int => "i64",
+            Cross::Float => "f64",
+            Cross::Bool | Cross::None => "u8",
+            Cross::Str => "*const pythrust_rt::abi::Str",
+            Cross::Bytes => "*const pythrust_rt::abi::Bytes",
         }
     }
-}
 
-/// `stub`'s parameter and result types, if this step can call it.
-pub fn scalars(stub: &StubDef) -> Result<(Vec<Scalar>, Scalar)> {
-    let params = stub
-        .params
-        .iter()
-        .map(|p| Scalar::of(&p.annotation))
-        .collect::<Result<Vec<_>>>()?;
-    let ret = Scalar::of(&stub.returns)?;
-    match stub.raises.first() {
-        Some(class) => Err(gap(
-            class.span,
-            "build cannot call a Rust function that raises yet",
-        )),
-        None => Ok((params, ret)),
+    /// The shim's C type for a result of this type.
+    fn c_result(self) -> &'static str {
+        match self {
+            Cross::Str => "*mut pythrust_rt::abi::Str",
+            Cross::Bytes => "*mut pythrust_rt::abi::Bytes",
+            other => other.c_param(),
+        }
+    }
+
+    /// The Rust argument made from the shim's parameter `p`.
+    fn arg(self, p: &str) -> String {
+        match self {
+            Cross::Bool => format!("pythrust_rt::abi::arg_bool({p})"),
+            Cross::Str => format!("pythrust_rt::abi::arg_str(&{p})"),
+            Cross::Bytes => format!("pythrust_rt::abi::arg_bytes(&{p})"),
+            Cross::Int | Cross::Float | Cross::None => p.to_string(),
+        }
+    }
+
+    /// The Rust function's result type, which the shim names, so rustc
+    /// rejects a stub that disagrees.
+    fn rust_result(self) -> &'static str {
+        match self {
+            Cross::Int => "i64",
+            Cross::Float => "f64",
+            Cross::Bool => "bool",
+            Cross::Str => "String",
+            Cross::Bytes => "Vec<u8>",
+            Cross::None => "()",
+        }
     }
 }
 
@@ -161,8 +185,12 @@ pub fn shims(stubs: &[StubDef], locate: &dyn Fn(Span) -> String) -> Result<Strin
     Ok(out)
 }
 
+/// One shim, from the fixed template
+/// (`docs/research/rust-interop.md#the-shim`): raw parameters `p0..`
+/// and the call's site in; one `unsafe` block converts them; `call` (or
+/// `call_raising`, for a stub that `raises`) runs the function, whose
+/// result type the closure names, so rustc checks it against the stub.
 fn shim(stub: &StubDef, locate: &dyn Fn(Span) -> String) -> Result<String> {
-    let (params, ret) = scalars(stub)?;
     let dotted = &stub.name.name;
     let (binding, func) = dotted.split_once('.').unwrap_or(("", dotted));
     if PATH_WORDS.contains(&func) {
@@ -172,23 +200,59 @@ fn shim(stub: &StubDef, locate: &dyn Fn(Span) -> String) -> Result<String> {
             kind: DiagKind::Backend,
         });
     }
-    let decl: Vec<String> = params
+    let params = stub
+        .params
+        .iter()
+        .map(|p| Cross::of(&p.annotation))
+        .collect::<Result<Vec<_>>>()?;
+    let ret = Cross::of(&stub.returns)?;
+    let decl: String = params
         .iter()
         .enumerate()
-        .map(|(i, s)| format!("a{i}: {}", s.rust()))
+        .map(|(i, c)| format!("    p{i}: {},\n", c.c_param()))
         .collect();
-    let args: Vec<String> = (0..params.len()).map(|i| format!("a{i}")).collect();
+    let mut names: Vec<String> = (0..params.len()).map(|i| format!("a{i}")).collect();
+    let mut values: Vec<String> = params
+        .iter()
+        .enumerate()
+        .map(|(i, c)| c.arg(&format!("p{i}")))
+        .collect();
+    let args = names.join(", ");
+    names.push("at".to_string());
+    values.push(SITE.to_string());
+    let (call, result) = match stub.raises.is_empty() {
+        true => ("call", ret.rust_result().to_string()),
+        false => (
+            "call_raising",
+            format!("std::io::Result<{}>", ret.rust_result()),
+        ),
+    };
     Ok(format!(
         "{STUB_MARK}{}: the stub for `{func}`\n\
          #[unsafe(no_mangle)]\n\
-         pub extern \"C\" fn {}({}) -> {} {{\n    \
-         pythrust_rt::abi::call(|| r#{binding}::r#{func}({}))\n}}\n",
+         pub unsafe extern \"C\" fn {}(\n{decl}    \
+         head: *const u8, head_len: usize, tail: *const u8, tail_len: usize,\n\
+         ) -> {} {{\n    \
+         // SAFETY: generated code passes live values and a static site.\n    \
+         let {} = unsafe {{ {} }};\n    \
+         pythrust_rt::abi::{call}(at, || -> {result} {{ r#{binding}::r#{func}({args}) }})\n}}\n",
         one_line(&locate(stub.span)),
         symbol(dotted),
-        decl.join(", "),
-        ret.rust(),
-        args.join(", ")
+        ret.c_result(),
+        tuple(&names),
+        tuple(&values),
     ))
+}
+
+/// The call's site, from the shim's last four parameters.
+const SITE: &str = "pythrust_rt::abi::site(head, head_len, tail, tail_len)";
+
+/// `items` as a tuple, or the one item alone.
+fn tuple(items: &[String]) -> String {
+    match items {
+        [one] => one.clone(),
+        _ => format!("({})", items.join(", ")),
+    }
 }
 
 /// `text` with control characters escaped, so a file name cannot end
