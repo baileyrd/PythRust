@@ -75,12 +75,59 @@ pub(crate) fn build(shims: &str, crates: &[Crate], out: &Path) -> Result<Runtime
     let built = read_lock(&dir.join("Cargo.lock"))?;
     lock::verify(&built, &named).map_err(|e| format!("pythrust: {e}\n"))?;
     let native = native_libs(&String::from_utf8_lossy(&output.stderr))?;
-    let lib = dir
+    let profile = dir
         .join("target")
         .join(host())
-        .join(if RELEASE { "release" } else { "debug" })
-        .join(STATICLIB);
-    Ok(Runtime { lib, native })
+        .join(if RELEASE { "release" } else { "debug" });
+    refuse_search_paths(&profile.join("build"))?;
+    Ok(Runtime {
+        lib: profile.join(STATICLIB),
+        native,
+    })
+}
+
+/// Refuses a build script that links a non-static library from a search
+/// path it adds: `native-static-libs` names the library but not the
+/// path, so the final link would miss it or find another of that name.
+/// Static libraries are bundled into the staticlib and need no path.
+fn refuse_search_paths(build: &Path) -> Result<(), String> {
+    let Ok(entries) = std::fs::read_dir(build) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path().join("output")) else {
+            continue;
+        };
+        if !needs_search_path(&text) {
+            continue;
+        }
+        let dir = entry.file_name().to_string_lossy().into_owned();
+        let package = dir.rsplit_once('-').map_or(dir.as_str(), |(p, _)| p);
+        return Err(format!(
+            "pythrust: the Rust crate `{package}` links a shared library from a directory its build script adds, which is not supported yet\n"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a build script's `output` adds a search path and links a
+/// library that is not static.
+fn needs_search_path(output: &str) -> bool {
+    let directives: Vec<&str> = output
+        .lines()
+        .filter_map(|l| {
+            l.strip_prefix("cargo::")
+                .or_else(|| l.strip_prefix("cargo:"))
+        })
+        .collect();
+    let searches = directives
+        .iter()
+        .any(|d| d.starts_with("rustc-link-search="));
+    let shared = directives
+        .iter()
+        .filter_map(|d| d.strip_prefix("rustc-link-lib="))
+        .any(|lib| !lib.starts_with("static="));
+    searches && shared
 }
 
 /// `pythrust-rt`'s source: `$PYTHRUST_RT_SRC`, or where it was when this
@@ -365,6 +412,20 @@ mod tests {
     fn the_named_minimum_is_the_runtimes_rust_version() {
         let manifest = include_str!("../../pythrust-rt/Cargo.toml");
         assert!(manifest.contains(&format!("\nrust-version = \"{MIN_RUST}\"\n")));
+    }
+
+    #[test]
+    fn only_shared_libraries_from_added_paths_are_refused() {
+        let shared = "cargo:rustc-link-search=native=/custom\ncargo:rustc-link-lib=dylib=foo\n";
+        assert!(needs_search_path(shared));
+        assert!(needs_search_path(
+            "cargo::rustc-link-search=/c\ncargo::rustc-link-lib=foo\n"
+        ));
+        let bundled = "cargo:rustc-link-search=native=/out\ncargo:rustc-link-lib=static=foo\n";
+        assert!(!needs_search_path(bundled));
+        assert!(!needs_search_path(
+            "cargo:rustc-link-lib=dylib=m\ncargo:rerun-if-changed=x\n"
+        ));
     }
 
     #[test]

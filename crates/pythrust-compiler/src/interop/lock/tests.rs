@@ -330,3 +330,21 @@ fn one_version_from_two_sources_is_refused() {
         "bindings `a` and `b` take `s 1.0.0` from different sources, which is not supported yet; use one registry for it"
     );
 }
+
+/// The refusal names both bindings when the first holds the crate by
+/// path, which no registry pin records.
+#[test]
+fn a_path_holder_is_named_in_the_two_sources_refusal() {
+    let mut v = lock("v", &["itoa"], &[("itoa", "0.4.8", &[])]);
+    v.packages[1].source = None;
+    v.packages[1].checksum = None;
+    let r = lock("r", &["itoa"], &[("itoa", "0.4.8", &[])]);
+    let err = seed(&[("v", &v), ("r", &r)])
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        err.starts_with("bindings `v` and `r` take `itoa 0.4.8`"),
+        "{err}"
+    );
+}

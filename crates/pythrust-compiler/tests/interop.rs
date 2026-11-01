@@ -479,3 +479,24 @@ fn a_broad_range_keeps_its_bindings_pin() {
         "{generated}"
     );
 }
+
+/// A build script linking a shared library from a directory it adds is
+/// refused: the final link would not see the directory and could find
+/// another library of that name.
+#[test]
+fn a_shared_library_from_an_added_path_is_refused() {
+    let dir = scratch("search");
+    let a = binding(&dir, "a", "build = \"build.rs\"\n", false, Some(&[]));
+    fs::write(
+        a.join("build.rs"),
+        "fn main() {\n    let out = std::env::var(\"OUT_DIR\").unwrap();\n    \
+         println!(\"cargo:rustc-link-search=native={out}\");\n    \
+         println!(\"cargo:rustc-link-lib=dylib=m\");\n}\n",
+    )
+    .unwrap();
+    let err = failure(build(&dir, DIGITS, &[("a", &a)]));
+    assert_eq!(
+        err,
+        "pythrust: the Rust crate `a` links a shared library from a directory its build script adds, which is not supported yet\n"
+    );
+}

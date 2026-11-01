@@ -239,7 +239,7 @@ pub fn seed(bindings: &[BindingLock]) -> Result<String, LockError> {
     if format > 0 {
         out.push_str(&format!("version = {format}\n"));
     }
-    for (p, lock) in union.values() {
+    for (p, lock, _) in union.values() {
         out.push_str(&format!(
             "\n[[package]]\nname = \"{}\"\nversion = \"{}\"\n",
             p.name, p.version
@@ -277,8 +277,9 @@ pub fn refuse_git(binding: &str, lock: &Lock) -> Result<(), LockError> {
     }
 }
 
-/// Seeded packages by name and version, each with the lock it came from.
-type Union<'a> = BTreeMap<(String, String), (&'a Package, &'a Lock)>;
+/// Seeded packages by name and version, each with the lock it came from
+/// and that lock's binding.
+type Union<'a> = BTreeMap<(String, String), (&'a Package, &'a Lock, &'a str)>;
 
 /// Each package of `bindings` the seed holds: every pinned one, and every
 /// path one (the bindings themselves), so cargo keeps their dependency
@@ -311,16 +312,13 @@ fn union<'a>(bindings: &[BindingLock<'a>]) -> Result<Union<'a>, LockError> {
             .filter(|p| p.source.is_none() || p.is_pinned())
         {
             let key = (p.name.clone(), p.version.clone());
-            if let Some((q, _)) = union.get(&key).filter(|(q, _)| q.source != p.source) {
-                let other = owner.get(&key).copied().unwrap_or("another binding");
+            if let Some((q, _, other)) = union.get(&key).filter(|(q, ..)| q.source != p.source) {
                 return Err(LockError::Sources {
                     package: format!("{} {}", q.name, q.version),
                     bindings: [other.to_string(), binding.to_string()],
                 });
             }
-            union
-                .entry((p.name.clone(), p.version.clone()))
-                .or_insert((p, lock));
+            union.entry(key).or_insert((p, lock, binding));
         }
     }
     Ok(union)
