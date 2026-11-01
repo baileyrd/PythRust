@@ -82,3 +82,13 @@ pub fn keep(text: &'static str) -> i64 {
 pub fn keep_bytes(data: &'static [u8]) -> i64 {
     i64::try_from(data.len()).unwrap_or(i64::MAX)
 }
+
+/// An `unsafe fn`: no stub over it builds, since the shim may not call
+/// it without `unsafe`.
+///
+/// # Safety
+///
+/// None needed; it only gives `x`.
+pub unsafe fn danger(x: i64) -> i64 {
+    x
+}

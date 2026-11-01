@@ -187,8 +187,9 @@ fn probe_with_stub(dir: &Path, stub: &str) -> PathBuf {
 }
 
 /// Each mismatch rustc catches through the shim names the stub: a type,
-/// a missing or an extra `raises`, and a parameter Rust would keep past
-/// the call. One program, so each rebuild is warm.
+/// a missing or an extra `raises`, a parameter Rust would keep past the
+/// call, and an `unsafe fn`, which no shim may call. One program, so
+/// each rebuild is warm.
 #[test]
 fn a_stub_that_does_not_match_its_function_names_the_stub() {
     let dir = scratch("mismatch");
@@ -209,6 +210,7 @@ fn a_stub_that_does_not_match_its_function_names_the_stub() {
             "temper def keep(text: str) -> int: ...\n",
             "does not live long enough",
         ),
+        ("temper def danger(x: int) -> int: ...\n", "requires unsafe"),
         (
             "temper def keep_bytes(data: bytes) -> int: ...\n",
             "does not live long enough",

@@ -83,13 +83,17 @@ fn each_type_converts_as_the_table_says() {
 
 /// The audit (`docs/research/rust-interop.md#unsafe`): every shim of the
 /// probe's stub holds exactly one `#[unsafe(no_mangle)]`, one `unsafe
-/// extern "C" fn` and one `unsafe {}` block, and nothing else `unsafe`.
+/// extern "C" fn` and one `unsafe {}` block, and nothing else `unsafe`;
+/// the header forbids unsafe operations outside that block.
 #[test]
 fn every_shim_holds_exactly_the_expected_unsafe_items() {
     let lib = shims(&stubs("probe", PROBE), &line).unwrap_or_else(|d| panic!("{d:?}"));
     let mut parts = lib.split(STUB_MARK);
     let header = parts.next().unwrap_or_default();
-    assert!(!header.contains("unsafe"), "{header}");
+    assert!(header.starts_with("//! Generated"), "{header}");
+    assert!(header.contains(&format!("\n{LINT}")), "{header}");
+    let lint = LINT.matches("unsafe").count();
+    assert_eq!(header.matches("unsafe").count(), lint, "{header}");
     let shims: Vec<&str> = parts.collect();
     assert_eq!(shims.len(), PROBE.lines().count(), "{lib}");
     for shim in shims {
