@@ -103,6 +103,11 @@ impl Blocks {
                     out.push((first.span.merge(last.span), looped));
                 }
             }
+            // A `while` test runs again after its body: one loop with it.
+            if let StmtKind::While { branch, .. } = &s.kind {
+                let end = branch.body.last().map_or(branch.test.span, |l| l.span);
+                out.push((branch.test.span.merge(end), true));
+            }
         });
         Blocks(out)
     }

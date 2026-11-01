@@ -548,6 +548,36 @@ def keep(fut):\n    pass\n";
     }
 
     #[test]
+    fn a_with_in_a_while_body_reaches_the_next_test() {
+        const W: &str = "with concurrent.futures.ThreadPoolExecutor() as ex:";
+        let main = |body: &str| format!("{HEAD}def main() -> None:\n{body}main()\n");
+        let header = |rest: &str| {
+            main(&format!(
+                "    {W}\n        i = 0\n        while ex.submit(sq, i).result() < 2:\n{rest}"
+            ))
+        };
+        let later = header(&format!(
+            "            {W}\n                pass\n            i += 1\n"
+        ));
+        let skipped = header(&format!(
+            "            i += 1\n            if i == 1:\n                continue\n            \
+             {W}\n                pass\n"
+        ));
+        for src in [later, skipped] {
+            let got = program(&src).err().unwrap_or_default();
+            assert!(
+                got.contains("`ex` is used outside its `with` block"),
+                "{got}"
+            );
+        }
+        let after = main(&format!(
+            "    {W}\n        i = 0\n        while ex.submit(sq, i).result() < 2:\n            \
+             i += 1\n        {W}\n            print(ex.submit(sq, i).result())\n"
+        ));
+        assert_eq!(program(&after), Ok(()));
+    }
+
+    #[test]
     fn only_a_fresh_executor_opens_a_with_and_none_is_rebound() {
         const W: &str = "with concurrent.futures.ThreadPoolExecutor() as";
         let main = |body: &str| format!("{HEAD}def main() -> None:\n{body}main()\n");

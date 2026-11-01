@@ -1421,3 +1421,21 @@ def keep(mut xs: list[int]) -> None:\n    run(xs)\nkeep([1])\n";
     let a = analyzed(src);
     assert!(a.opaque.contains("keep"), "{:?}", a.opaque);
 }
+
+#[test]
+fn a_generic_task_function_with_an_open_result_falls_back() {
+    // `run`'s result type comes only from its body, which lowering cannot
+    // express yet, so the whole program stays conservative until tasks
+    // lower (step 3b), and `grow` goes unchecked.
+    let src = "import concurrent.futures\n\
+def dbl(n):\n    return n * n\n\
+def run(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+return ex.submit(dbl, x).result()\n\
+def outer(y):\n    return run(y) + 1\n\
+temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
+print(outer(2))\ngrow([0])\n";
+    conservative(src);
+    assert_eq!(checked(src), Ok(()));
+    let called = src.replace("return run(y) + 1", "return 1");
+    assert!(mode_err(&called).0.contains("write `mut xs`"));
+}
