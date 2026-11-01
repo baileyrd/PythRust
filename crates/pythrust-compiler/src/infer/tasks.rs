@@ -255,7 +255,7 @@ impl<'a> Body<'a> {
         if *t != Type::Executor {
             return Ok(());
         }
-        let Some(w) = self.withs.iter().find(|w| w.binding.name == *n) else {
+        let Some(w) = self.latest(n, e.span) else {
             let msg = format!("`{n}` is an executor: name one only with `with ... as {n}:`");
             return Err(error(e.span, msg));
         };
@@ -297,8 +297,9 @@ impl<'a> Body<'a> {
     }
 
     /// `map`'s results are bound only from `ex.map(...)`, and every use
-    /// is inside the `with` block of `ex`.
+    /// is inside the `with` block of the `ex` its latest binding used.
     fn results(&self) -> Result<()> {
+        let mut binds: Vec<(&str, &Expr, With<'a>)> = Vec::new();
         for (name, value) in scope::name_assigns(&self.f.body) {
             if !matches!(self.ty(value), Some(Type::Results(_))) {
                 continue;
@@ -307,11 +308,31 @@ impl<'a> Body<'a> {
                 let msg = format!("bind `{name}` only from `ex.map(...)`");
                 return Err(error(value.span, msg));
             };
-            let stray = self
-                .exprs
+            binds.push((name, value, w));
+        }
+        for (name, _, _) in &binds {
+            self.results_used(name, &binds)?;
+        }
+        Ok(())
+    }
+
+    /// Every use of `name` lies in the `with` block of its latest binding
+    /// before it (any binding, for a use reached only around a loop).
+    fn results_used(&self, name: &str, binds: &[(&str, &Expr, With<'a>)]) -> Result<()> {
+        let mine: Vec<_> = binds.iter().filter(|b| b.0 == name).collect();
+        for e in &self.exprs {
+            if !matches!(&e.kind, ExprKind::Name(n) if n == name) {
+                continue;
+            }
+            let latest = mine
                 .iter()
-                .find(|e| matches!(&e.kind, ExprKind::Name(n) if n == name) && !w.holds(e.span));
-            if let Some(e) = stray {
+                .filter(|b| b.1.span.start < e.span.start)
+                .max_by_key(|b| b.1.span.start);
+            let held = match latest {
+                Some(b) => b.2.holds(e.span),
+                None => mine.iter().any(|b| b.2.holds(e.span)),
+            };
+            if !held {
                 let msg =
                     format!("`{name}` holds `map`'s results, used only inside its `with` block");
                 return Err(error(e.span, msg));
@@ -331,12 +352,17 @@ impl<'a> Body<'a> {
         let ExprKind::Name(ex) = &ex.kind else {
             return None;
         };
-        let bound = |w: &&With| w.binding.name == *ex;
+        self.latest(ex, value.span).filter(|_| attr.name == "map")
+    }
+
+    /// The `with` that last bound `name` before `at`: the executor a use
+    /// there names, since only a `with` binds one.
+    fn latest(&self, name: &str, at: Span) -> Option<With<'a>> {
         self.withs
             .iter()
-            .find(bound)
+            .filter(|w| w.binding.name == name && w.span.start < at.start)
+            .max_by_key(|w| w.span.start)
             .copied()
-            .filter(|_| attr.name == "map")
     }
 }
 
@@ -426,6 +452,33 @@ def keep(fut):\n    pass\n";
         assert!(got.contains("write `import concurrent.futures`"), "{got}");
         let src = "import concurrent.futures\nprint(concurrent.futures)\n";
         assert!(program(src).is_err());
+    }
+
+    #[test]
+    fn a_use_names_the_latest_with_of_its_name() {
+        const W: &str = "with concurrent.futures.ThreadPoolExecutor() as ex:";
+        let main = |body: &str| format!("{HEAD}def main() -> None:\n{body}main()\n");
+        let sequential = main(&format!(
+            "    {W}\n        print(ex.submit(sq, 1).result())\n    \
+             {W}\n        print(ex.submit(sq, 2).result())\n        \
+             rs = ex.map(sq, [3])\n        print(list(rs))\n"
+        ));
+        assert_eq!(program(&sequential), Ok(()));
+        let shadowed = main(&format!(
+            "    {W}\n        {W}\n            print(1)\n        \
+             print(ex.submit(sq, 2).result())\n"
+        ));
+        let got = program(&shadowed).err().unwrap_or_default();
+        assert!(
+            got.contains("`ex` is used outside its `with` block"),
+            "{got}"
+        );
+        let results = main(&format!(
+            "    {W}\n        rs = ex.map(sq, [1])\n        \
+             {W}\n            rs = ex.map(sq, [2])\n        print(list(rs))\n"
+        ));
+        let got = program(&results).err().unwrap_or_default();
+        assert!(got.contains("used only inside its `with` block"), "{got}");
     }
 
     #[test]

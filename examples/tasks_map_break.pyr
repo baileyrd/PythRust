@@ -3,7 +3,8 @@
 # Leaving the loop early. `run` has run every task by then, so the last
 # one's overflow (a fault, which checked integers make fatal) stops the
 # program before anything prints. CPython cancels that task, or runs it
-# without overflowing and drops its result, and prints both lines.
+# without overflowing and drops its result, and prints both lines. The
+# fixture shows this deviation through another one, checked overflow.
 import concurrent.futures
 
 

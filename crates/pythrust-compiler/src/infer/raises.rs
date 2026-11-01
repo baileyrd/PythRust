@@ -1507,6 +1507,18 @@ def opens(p: str) -> bytes:\n    return open(p, \"rb\").read()\n";
     }
 
     #[test]
+    fn a_task_that_submits_a_task_raises_what_the_inner_one_does() {
+        let src = format!(
+            "{TASKS}def inner(x: int) -> int:\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             return ex.submit(bad, x).result()\n\
+             def g(x: int) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             return ex.submit(inner, x).result()\n"
+        );
+        assert_eq!(raises(&src, "g"), "ValueError");
+    }
+
+    #[test]
     fn map_raises_where_its_results_are_iterated() {
         let iterated = format!(
             "{TASKS}def g(xs: list[int]) -> int:\n    t = 0\n    \
