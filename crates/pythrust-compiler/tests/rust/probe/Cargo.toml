@@ -1,0 +1,12 @@
+# A dependency-free binding the CLI tests build against
+# (`docs/research/rust-interop.md`). Its own workspace, so its
+# Cargo.lock is its own.
+[package]
+name = "probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[workspace]
