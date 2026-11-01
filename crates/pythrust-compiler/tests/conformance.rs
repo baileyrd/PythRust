@@ -303,12 +303,48 @@ fn loosen_line(line: &str) -> String {
     }
 }
 
-/// `line` without the `mut `/`owned ` before each parameter name.
+/// `line` without the `mut `/`owned ` before each parameter name. String
+/// literals (a parameter default) are kept as written.
 fn strip_modes(line: &str) -> String {
-    ["mut ", "owned "].iter().fold(line.to_string(), |l, mode| {
-        l.replace(&format!("({mode}"), "(")
-            .replace(&format!(", {mode}"), ", ")
-    })
+    split_strings(line)
+        .into_iter()
+        .map(|(is_string, part)| {
+            if is_string {
+                return part.to_string();
+            }
+            ["mut ", "owned "].iter().fold(part.to_string(), |l, mode| {
+                l.replace(&format!("({mode}"), "(")
+                    .replace(&format!(", {mode}"), ", ")
+            })
+        })
+        .collect()
+}
+
+/// `line` cut into runs outside and inside string literals, each flagged
+/// `true` when it is a string (quotes included). A backslash in a string
+/// escapes the next character, as in Python (raw strings too). Quotes are
+/// read one at a time, so `"""a"""` reads as three adjacent strings, which
+/// keeps `a` inside one unless it holds a quote of its own.
+fn split_strings(line: &str) -> Vec<(bool, &str)> {
+    let mut runs = Vec::new();
+    let (mut start, mut quote, mut escaped) = (0, None, false);
+    for (i, c) in line.char_indices() {
+        match quote {
+            None if c == '"' || c == '\'' => {
+                runs.push((false, &line[start..i]));
+                (start, quote) = (i, Some(c));
+            }
+            Some(_) if escaped => escaped = false,
+            Some(_) if c == '\\' => escaped = true,
+            Some(q) if c == q => {
+                runs.push((true, &line[start..=i]));
+                (start, quote) = (i + 1, None);
+            }
+            _ => {}
+        }
+    }
+    runs.push((quote.is_some(), &line[start..]));
+    runs
 }
 
 fn pythrust_bin() -> Res<PathBuf> {
@@ -861,6 +897,25 @@ fn loosen_strips_parameter_modes() {
     assert_eq!(loosen(src).as_deref(), Some(want));
     assert_eq!(loosen("def f(mut, owned):\n    pass\n"), None);
     assert_eq!(loosen("print(\"(mut x\")\n"), None);
+}
+
+/// A default value's text is the program's, not a mode: `loosen` must
+/// not strip `(mut ` or `, owned ` inside a string literal, or CPython
+/// runs a different program than the one checked (card #458).
+#[test]
+fn loosen_keeps_modes_inside_strings() {
+    let src = "temper def f(mut xs: list[int], s: str = \"(mut x\", t: str = ', owned y') -> None:\n    pass\n";
+    let want =
+        "def f(xs: list[int], s: str = \"(mut x\", t: str = ', owned y') -> None:\n    pass\n";
+    assert_eq!(loosen(src).as_deref(), Some(want));
+    let escaped = "def f(s: str = \"\\\" (mut x\", owned ys: list[int]):\n    pass\n";
+    let want = "def f(s: str = \"\\\" (mut x\", ys: list[int]):\n    pass\n";
+    assert_eq!(loosen(escaped).as_deref(), Some(want));
+    assert_eq!(loosen("def f(s: str = '(mut x'):\n    pass\n"), None);
+    assert_eq!(
+        loosen("def f(s: str = \" raises X\") -> None:\n    pass\n"),
+        None
+    );
 }
 
 #[test]
