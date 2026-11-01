@@ -17,12 +17,15 @@ use crate::diag::Result;
 use crate::span::Span;
 use crate::stdlib::StdFn;
 
-use super::scope::{self, With};
+use super::scope::{self, Blocks, With};
 use super::solve::Need;
 use super::ty::{FuncType, Type};
 use super::{error, Checker, Func, Types};
 
 /// Why a value of one of these types cannot go somewhere.
+const MADE: &str =
+    "an executor is used only as `with concurrent.futures.ThreadPoolExecutor() as ex:`";
+
 const STAY: &str = "executors, futures and `map`'s results stay in the function that made them";
 
 impl Checker {
@@ -187,6 +190,7 @@ struct Body<'a> {
     locals: BTreeSet<String>,
     exprs: Vec<&'a Expr>,
     withs: Vec<With<'a>>,
+    blocks: Blocks,
 }
 
 impl<'a> Body<'a> {
@@ -199,20 +203,49 @@ impl<'a> Body<'a> {
             locals,
             exprs: scope::exprs(&f.body),
             withs: scope::withs(&f.body),
+            blocks: Blocks::of(&f.body),
         }
     }
 
     fn check(&self) -> Result<()> {
+        self.fresh()?;
         for e in &self.exprs {
             self.made_by_with(e)?;
             self.name(e)?;
             self.call(e)?;
         }
+        self.rebound()?;
         self.results()
     }
 
     fn ty(&self, e: &Expr) -> Option<&'a Type> {
         self.types.at(e.span)
+    }
+
+    /// Each `with` opens a fresh executor, so no block shuts down one
+    /// that another still uses.
+    fn fresh(&self) -> Result<()> {
+        let fresh = |w: &&With| {
+            matches!(&w.value.kind, ExprKind::Call { func, .. }
+                if matches!(&func.kind, ExprKind::Name(n) if n == StdFn::Executor.name()))
+        };
+        if let Some(w) = self.withs.iter().find(|w| !fresh(w)) {
+            return Err(error(w.value.span, MADE.to_string()));
+        }
+        Ok(())
+    }
+
+    /// No assignment names an executor: a name holding one always means
+    /// its own `with`'s.
+    fn rebound(&self) -> Result<()> {
+        let rebound = scope::name_assigns(&self.f.body)
+            .into_iter()
+            .find(|(_, v)| self.ty(v) == Some(&Type::Executor));
+        let Some((n, v)) = rebound else {
+            return Ok(());
+        };
+        let msg = format!("`{n}` is an executor: name one only with `with ... as {n}:`");
+        Err(error(v.span, msg))
     }
 
     /// An executor is made only as a `with`'s value.
@@ -224,9 +257,7 @@ impl<'a> Body<'a> {
         if !made || self.withs.iter().any(|w| w.value.span == e.span) {
             return Ok(());
         }
-        let msg = "an executor is used only as `with concurrent.futures.ThreadPoolExecutor() \
-                   as ex:`";
-        Err(error(e.span, msg.to_string()))
+        Err(error(e.span, MADE.to_string()))
     }
 
     /// Every value is one of [`local_form`]; a name holding one is a
@@ -255,11 +286,12 @@ impl<'a> Body<'a> {
         if *t != Type::Executor {
             return Ok(());
         }
-        let Some(w) = self.latest(n, e.span) else {
+        let mine: Vec<With> = self.named(n);
+        if mine.is_empty() {
             let msg = format!("`{n}` is an executor: name one only with `with ... as {n}:`");
             return Err(error(e.span, msg));
-        };
-        if w.holds(e.span) {
+        }
+        if self.reaching(&mine, e.span).iter().all(|w| w.holds(e.span)) {
             return Ok(());
         }
         let msg = format!("`{n}` is used outside its `with` block");
@@ -297,9 +329,9 @@ impl<'a> Body<'a> {
     }
 
     /// `map`'s results are bound only from `ex.map(...)`, and every use
-    /// is inside the `with` block of the `ex` its latest binding used.
+    /// is inside the `with` block of each binding that may reach it.
     fn results(&self) -> Result<()> {
-        let mut binds: Vec<(&str, &Expr, With<'a>)> = Vec::new();
+        let mut binds: Vec<(&str, Span, With<'a>)> = Vec::new();
         for (name, value) in scope::name_assigns(&self.f.body) {
             if !matches!(self.ty(value), Some(Type::Results(_))) {
                 continue;
@@ -308,31 +340,30 @@ impl<'a> Body<'a> {
                 let msg = format!("bind `{name}` only from `ex.map(...)`");
                 return Err(error(value.span, msg));
             };
-            binds.push((name, value, w));
+            binds.push((name, value.span, w));
         }
         for (name, _, _) in &binds {
-            self.results_used(name, &binds)?;
+            let mine: Vec<(Span, With)> = binds
+                .iter()
+                .filter(|b| b.0 == *name)
+                .map(|b| (b.1, b.2))
+                .collect();
+            self.results_used(name, &mine)?;
         }
         Ok(())
     }
 
-    /// Every use of `name` lies in the `with` block of its latest binding
-    /// before it (any binding, for a use reached only around a loop).
-    fn results_used(&self, name: &str, binds: &[(&str, &Expr, With<'a>)]) -> Result<()> {
-        let mine: Vec<_> = binds.iter().filter(|b| b.0 == name).collect();
-        for e in &self.exprs {
-            if !matches!(&e.kind, ExprKind::Name(n) if n == name) {
-                continue;
-            }
-            let latest = mine
-                .iter()
-                .filter(|b| b.1.span.start < e.span.start)
-                .max_by_key(|b| b.1.span.start);
-            let held = match latest {
-                Some(b) => b.2.holds(e.span),
-                None => mine.iter().any(|b| b.2.holds(e.span)),
-            };
-            if !held {
+    /// Every use of `name` lies in the `with` block of each binding in
+    /// `mine` (its value's span and its `with`) that may reach it.
+    fn results_used(&self, name: &str, mine: &[(Span, With<'a>)]) -> Result<()> {
+        let defs: Vec<Span> = mine.iter().map(|b| b.0).collect();
+        let uses = self
+            .exprs
+            .iter()
+            .filter(|e| matches!(&e.kind, ExprKind::Name(n) if n == name));
+        for e in uses {
+            let reach = self.blocks.reaching(&defs, e.span);
+            if !reach.into_iter().all(|i| mine[i].1.holds(e.span)) {
                 let msg =
                     format!("`{name}` holds `map`'s results, used only inside its `with` block");
                 return Err(error(e.span, msg));
@@ -341,7 +372,9 @@ impl<'a> Body<'a> {
         Ok(())
     }
 
-    /// The `with` whose executor `value`, a call `ex.map(...)`, uses.
+    /// The `with` whose executor `value`, a call `ex.map(...)`, uses: the
+    /// latest that may reach it. [`Body::name`] has checked that each
+    /// one that may holds the call.
     fn map_with(&self, value: &Expr) -> Option<With<'a>> {
         let ExprKind::Call { func, .. } = &value.kind else {
             return None;
@@ -352,17 +385,22 @@ impl<'a> Body<'a> {
         let ExprKind::Name(ex) = &ex.kind else {
             return None;
         };
-        self.latest(ex, value.span).filter(|_| attr.name == "map")
+        let reaching = self.reaching(&self.named(ex), value.span);
+        let latest = reaching.into_iter().max_by_key(|w| w.span.start);
+        latest.filter(|_| attr.name == "map")
     }
 
-    /// The `with` that last bound `name` before `at`: the executor a use
-    /// there names, since only a `with` binds one.
-    fn latest(&self, name: &str, at: Span) -> Option<With<'a>> {
-        self.withs
-            .iter()
-            .filter(|w| w.binding.name == name && w.span.start < at.start)
-            .max_by_key(|w| w.span.start)
-            .copied()
+    /// The `with`s that bind `name`.
+    fn named(&self, name: &str) -> Vec<With<'a>> {
+        let mine = self.withs.iter().filter(|w| w.binding.name == name);
+        mine.copied().collect()
+    }
+
+    /// Which of `withs` may have bound the executor a use at `at` names.
+    fn reaching(&self, withs: &[With<'a>], at: Span) -> Vec<With<'a>> {
+        let defs: Vec<Span> = withs.iter().map(|w| w.binding.span).collect();
+        let reach = self.blocks.reaching(&defs, at);
+        reach.into_iter().map(|i| withs[i]).collect()
     }
 }
 
@@ -479,6 +517,45 @@ def keep(fut):\n    pass\n";
         ));
         let got = program(&results).err().unwrap_or_default();
         assert!(got.contains("used only inside its `with` block"), "{got}");
+    }
+
+    #[test]
+    fn a_use_checks_every_binding_that_may_reach_it() {
+        const W: &str = "with concurrent.futures.ThreadPoolExecutor() as";
+        let main = |body: &str| format!("{HEAD}def main(flag: bool) -> None:\n{body}main(False)\n");
+        let branch = main(&format!(
+            "    {W} outer:\n        {W} inner:\n            rs = inner.map(sq, [2])\n        \
+             if flag:\n            rs = outer.map(sq, [3])\n        print(list(rs))\n"
+        ));
+        let got = program(&branch).err().unwrap_or_default();
+        assert!(got.contains("used only inside its `with` block"), "{got}");
+        let looped = main(&format!(
+            "    {W} ex:\n        for i in range(2):\n            \
+             print(ex.submit(sq, i).result())\n            {W} ex:\n                pass\n"
+        ));
+        let got = program(&looped).err().unwrap_or_default();
+        assert!(
+            got.contains("`ex` is used outside its `with` block"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn only_a_fresh_executor_opens_a_with_and_none_is_rebound() {
+        const W: &str = "with concurrent.futures.ThreadPoolExecutor() as";
+        let main = |body: &str| format!("{HEAD}def main() -> None:\n{body}main()\n");
+        let reentered = main(&format!(
+            "    {W} ex:\n        with ex as inner:\n            pass\n        \
+             print(ex.submit(sq, 1).result())\n"
+        ));
+        let got = program(&reentered).err().unwrap_or_default();
+        assert!(got.contains("an executor is used only as `with"), "{got}");
+        let rebound = main(&format!(
+            "    {W} a:\n        {W} b:\n            a = b\n        \
+             print(a.submit(sq, 3).result())\n"
+        ));
+        let got = program(&rebound).err().unwrap_or_default();
+        assert!(got.contains("name one only with `with ... as a:`"), "{got}");
     }
 
     #[test]

@@ -22,7 +22,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::{
-    Arg, Expr, ExprKind, FuncDef, Ident, Mode, Module, Stmt, StmtKind, StubDef, Target, TargetKind,
+    Arg, CmpOp, Expr, ExprKind, FuncDef, Ident, Mode, Module, Stmt, StmtKind, StubDef, Target,
+    TargetKind,
 };
 use crate::diag::{Result, Warning};
 use crate::exc::ExcKind;
@@ -484,14 +485,14 @@ impl<'a> Cx<'_, 'a> {
         let mut out = Raises::default();
         match &s.kind {
             StmtKind::Assign { target, value } => {
-                self.bound(value, &mut out);
+                self.expr(value, &mut out);
                 self.target(target, &mut out);
             }
             StmtKind::AugAssign { target, value, .. } => {
                 self.expr(value, &mut out);
                 self.target(target, &mut out);
             }
-            StmtKind::AnnAssign { value, .. } => self.bound(value, &mut out),
+            StmtKind::AnnAssign { value, .. } => self.expr(value, &mut out),
             StmtKind::Expr(value) => self.expr(value, &mut out),
             StmtKind::Return(value) => value.iter().for_each(|v| self.expr(v, &mut out)),
             StmtKind::Raise(value) => {
@@ -523,6 +524,7 @@ impl<'a> Cx<'_, 'a> {
                 orelse,
             } => {
                 self.expr(iter, &mut out);
+                self.read(iter, &mut out);
                 self.target(target, &mut out);
                 out.extend(self.block(body));
                 out.extend(self.block(orelse));
@@ -563,18 +565,18 @@ impl<'a> Cx<'_, 'a> {
     /// `int(s)`/`float(s)` of a string, a file's `read`, and taking a
     /// task's result.
     fn expr(&self, e: &Expr, out: &mut Raises) {
-        if self.takes_results(e) {
+        if self.takes_result(e) {
             self.tasks.escapes().for_each(|k| out.add(k, e.span));
         }
         self.parts(e, out);
     }
 
-    /// A value bound to a name: binding `map`'s results takes none, so
-    /// what the tasks raise escapes where the name is iterated.
-    fn bound(&self, value: &Expr, out: &mut Raises) {
-        match self.a.types.at(value.span) {
-            Some(Type::Results(_)) => self.parts(value, out),
-            _ => self.expr(value, out),
+    /// Reading `map`'s results, as `for`, `in`, `list`, `sorted` and
+    /// `set` do, takes each task's result; making, binding or testing
+    /// them takes none.
+    fn read(&self, e: &Expr, out: &mut Raises) {
+        if matches!(self.a.types.at(e.span), Some(Type::Results(_))) {
+            self.tasks.escapes().for_each(|k| out.add(k, e.span));
         }
     }
 
@@ -584,6 +586,10 @@ impl<'a> Cx<'_, 'a> {
         match &e.kind {
             ExprKind::Call { func, args } => {
                 args.iter().for_each(|a| self.expr(&a.value, out));
+                if matches!(&func.kind, ExprKind::Name(n) if matches!(n.as_str(), "list" | "sorted" | "set"))
+                {
+                    args.iter().for_each(|a| self.read(&a.value, out));
+                }
                 match &func.kind {
                     ExprKind::Name(name) => self.call(name, args.first(), e.span, out),
                     ExprKind::Attr { value, attr } => {
@@ -609,6 +615,10 @@ impl<'a> Cx<'_, 'a> {
             ExprKind::Compare { left, rest } => {
                 self.expr(left, out);
                 rest.iter().for_each(|(_, x)| self.expr(x, out));
+                let members = rest
+                    .iter()
+                    .filter(|(op, _)| matches!(op, CmpOp::In | CmpOp::NotIn));
+                members.for_each(|(_, x)| self.read(x, out));
             }
             ExprKind::IfExp { test, body, orelse } => {
                 [test, body, orelse]
@@ -629,12 +639,8 @@ impl<'a> Cx<'_, 'a> {
         }
     }
 
-    /// Whether `e` may take a task's result: `fut.result()`, or any use
-    /// of `map`'s results, which every consumer iterates.
-    fn takes_results(&self, e: &Expr) -> bool {
-        if matches!(self.a.types.at(e.span), Some(Type::Results(_))) {
-            return true;
-        }
+    /// Whether `e` takes a task's result: `fut.result()`.
+    fn takes_result(&self, e: &Expr) -> bool {
         let ExprKind::Call { func, .. } = &e.kind else {
             return false;
         };
@@ -1516,6 +1522,22 @@ def opens(p: str) -> bytes:\n    return open(p, \"rb\").read()\n";
              return ex.submit(inner, x).result()\n"
         );
         assert_eq!(raises(&src, "g"), "ValueError");
+    }
+
+    #[test]
+    fn map_raises_only_where_its_results_are_read() {
+        let unread = format!(
+            "{TASKS}def g(xs: list[int]) -> None:\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             ex.map(bad, xs)\n        rs = ex.map(bad, xs)\n        if rs:\n            pass\n"
+        );
+        assert_eq!(raises(&unread, "g"), "");
+        let member = format!(
+            "{TASKS}def g(xs: list[int]) -> bool:\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             return 1 in ex.map(bad, xs)\n"
+        );
+        assert_eq!(raises(&member, "g"), "ValueError");
     }
 
     #[test]

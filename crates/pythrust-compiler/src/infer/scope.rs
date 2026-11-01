@@ -63,33 +63,88 @@ pub(super) fn annotated(block: &Block) -> Vec<(&str, &TypeExpr)> {
 fn walk<'a>(block: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
     for s in block {
         f(s);
-        match &s.kind {
-            StmtKind::For { body, orelse, .. } => {
-                walk(body, f);
-                walk(orelse, f);
-            }
-            StmtKind::While { branch, orelse } => {
-                walk(&branch.body, f);
-                walk(orelse, f);
-            }
-            StmtKind::If {
-                branch,
-                elifs,
-                orelse,
-            } => {
-                std::iter::once(branch)
-                    .chain(elifs)
-                    .for_each(|b| walk(&b.body, f));
-                walk(orelse, f);
-            }
-            StmtKind::Try { body, handlers } => {
-                walk(body, f);
-                handlers.iter().for_each(|h| walk(&h.body, f));
-            }
-            StmtKind::With { body, .. } => walk(body, f),
-            _ => {}
-        }
+        bodies(s).into_iter().for_each(|(b, _)| walk(b, f));
     }
+}
+
+/// The blocks directly nested in `s`, each marked when it is a loop's
+/// body, which may run again after it ends.
+fn bodies(s: &Stmt) -> Vec<(&[Stmt], bool)> {
+    match &s.kind {
+        StmtKind::For { body, orelse, .. } => vec![(body, true), (orelse, false)],
+        StmtKind::While { branch, orelse } => vec![(&branch.body, true), (orelse, false)],
+        StmtKind::If {
+            branch,
+            elifs,
+            orelse,
+        } => std::iter::once(branch)
+            .chain(elifs)
+            .map(|b| (b.body.as_slice(), false))
+            .chain([(orelse.as_slice(), false)])
+            .collect(),
+        StmtKind::Try { body, handlers } => std::iter::once((body.as_slice(), false))
+            .chain(handlers.iter().map(|h| (h.body.as_slice(), false)))
+            .collect(),
+        StmtKind::With { body, .. } => vec![(body, false)],
+        _ => Vec::new(),
+    }
+}
+
+/// The nested blocks of a body, by span, for which bindings of a name
+/// may reach a use of it (M6c).
+pub(crate) struct Blocks(Vec<(Span, bool)>);
+
+impl Blocks {
+    pub(crate) fn of(block: &[Stmt]) -> Self {
+        let mut out = Vec::new();
+        walk(block, &mut |s| {
+            for (b, looped) in bodies(s) {
+                if let (Some(first), Some(last)) = (b.first(), b.last()) {
+                    out.push((first.span.merge(last.span), looped));
+                }
+            }
+        });
+        Blocks(out)
+    }
+
+    /// Which of `defs`, the spans binding one name, may reach a use at
+    /// `at`: the latest binding before it that every path passes
+    /// (one in a block holding the use), and every binding after that
+    /// one, before the use or around a loop the use is in. With no such
+    /// binding, all of them.
+    pub(crate) fn reaching(&self, defs: &[Span], at: Span) -> Vec<usize> {
+        let passed = (0..defs.len())
+            .filter(|&i| self.passed(defs[i], at))
+            .max_by_key(|&i| defs[i].start);
+        let Some(d) = passed.map(|i| defs[i]) else {
+            return (0..defs.len()).collect();
+        };
+        (0..defs.len())
+            .filter(|&i| defs[i].start >= d.start)
+            .filter(|&i| defs[i].start < at.start || self.around(defs[i], at, d))
+            .collect()
+    }
+
+    /// Whether `def` precedes `at` and every block holding it holds `at`.
+    fn passed(&self, def: Span, at: Span) -> bool {
+        def.start < at.start
+            && self
+                .0
+                .iter()
+                .all(|(b, _)| !within(def, *b) || within(at, *b))
+    }
+
+    /// Whether a loop holds `def` and `at` but not `d`, so `def` reaches
+    /// `at` on the loop's next pass.
+    fn around(&self, def: Span, at: Span, d: Span) -> bool {
+        self.0
+            .iter()
+            .any(|(b, looped)| *looped && within(def, *b) && within(at, *b) && !within(d, *b))
+    }
+}
+
+fn within(inner: Span, outer: Span) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
 }
 
 /// Every expression in `block`, nested ones and those of nested blocks
