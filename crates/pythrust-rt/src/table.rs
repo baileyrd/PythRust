@@ -99,6 +99,10 @@ fn place(slots: &mut [usize], hash: usize, entry: usize) {
 /// Appends key `k` (and value `v` for a dict), adding references, and
 /// indexes it. The key must be absent.
 fn append(t: &PtSeq, k: u64, v: Option<u64>) {
+    seq::mark_stored(t, key_desc(t), k);
+    if let Some(v) = v {
+        seq::mark_stored(t, slot(t.desc, 1), v);
+    }
     let entries = {
         let mut items = t.items.borrow_mut();
         seq::inc(key_desc(t), k);
@@ -175,6 +179,7 @@ pub unsafe extern "C" fn pt_dict_set(d: *const PtSeq, k: u64, v: u64) {
         return append(d, k, Some(v));
     };
     let desc = slot(d.desc, 1);
+    seq::mark_stored(d, desc, v);
     seq::inc(desc, v);
     let old = d
         .items
@@ -327,6 +332,63 @@ mod tests {
     fn shown(s: *const PtSeq) -> String {
         // SAFETY: `s` is live in every test.
         unsafe { seq::shown(s) }.expect("shallow")
+    }
+
+    /// Keys and values stored into a marked dict or set are marked.
+    #[test]
+    fn entries_stored_into_marked_tables_are_marked() {
+        let list = |v: u64| {
+            let l = empty(b"li");
+            // SAFETY: `l` is live.
+            unsafe { seq::pt_seq_push(l, v) };
+            l
+        };
+        let (old, new) = (list(1), list(2));
+        let key = crate::str::into_ptr(crate::str::PtStr::new("k".into()));
+        let d = empty(b"dili");
+        let s = empty(b"es");
+        // SAFETY: every table and list stays live until dropped below.
+        unsafe {
+            pt_dict_set(d, 0, old as u64);
+            seq::mark(b"dili", d as u64);
+            seq::mark(b"es", s as u64);
+            pt_dict_set(d, 0, new as u64);
+            pt_set_add(s, key as u64);
+            let marked = |p: *mut PtSeq| seq::seq(p as u64).rc.is_marked();
+            assert!(marked(old) && marked(new) && crate::str::borrow(key).rc.is_marked());
+            crate::str::pt_str_dec(key);
+            [old, new, d, s].into_iter().for_each(|p| pt_seq_dec(p));
+        }
+    }
+
+    #[test]
+    fn marked_dicts_survive_concurrent_readers() {
+        let d = empty(b"dii");
+        // SAFETY: `d` is live.
+        unsafe { (0..64).for_each(|k| pt_dict_set(d, k, k * 10)) };
+        seq::mark(b"dii", d as u64);
+        let p = d as usize;
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let d = p as *const PtSeq;
+                    let mut status = 0;
+                    for k in 0..if cfg!(miri) { 40 } else { 10_000 } {
+                        let k = k % 64;
+                        // SAFETY: `d` stays live until every thread is joined.
+                        unsafe {
+                            assert_eq!((pt_dict_get(d, k, &mut status), status), (k * 10, 0));
+                            assert_eq!(pt_table_contains(d, k + 64), 0);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            assert!(t.join().is_ok());
+        }
+        // SAFETY: all threads are done.
+        unsafe { pt_seq_dec(d) };
     }
 
     #[test]

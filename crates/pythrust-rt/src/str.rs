@@ -11,17 +11,16 @@
 
 #![allow(unsafe_code)] // The C ABI below; the logic above it is safe.
 
-use std::cell::Cell;
 use std::cmp::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 
 use crate::LIVE;
 
-/// A string object. Never shared across threads: compiled programs are
-/// single-threaded.
+/// A string object. Immutable; its count is atomic once marked (see
+/// `sync.rs`), when a task may reach it.
 #[derive(Debug)]
 pub struct PtStr {
-    rc: Cell<usize>,
+    pub(crate) rc: crate::sync::Count,
     chars: usize,
     text: Box<str>,
 }
@@ -30,7 +29,7 @@ impl PtStr {
     pub(crate) fn new(text: Box<str>) -> PtStr {
         let chars = text.chars().count();
         PtStr {
-            rc: Cell::new(1),
+            rc: crate::sync::Count::new(),
             chars,
             text,
         }
@@ -48,7 +47,7 @@ impl PtStr {
 fn concat(a: &PtStr, b: &PtStr) -> PtStr {
     let text: String = [a.text(), b.text()].concat();
     PtStr {
-        rc: Cell::new(1),
+        rc: crate::sync::Count::new(),
         chars: a.chars + b.chars,
         text: text.into_boxed_str(),
     }
@@ -64,7 +63,7 @@ fn repeat(s: &PtStr, n: i64) -> Option<PtStr> {
     out.try_reserve_exact(bytes).ok()?;
     (0..n).for_each(|_| out.push_str(s.text()));
     Some(PtStr {
-        rc: Cell::new(1),
+        rc: crate::sync::Count::new(),
         chars: s.chars * n,
         text: out.into_boxed_str(),
     })
@@ -172,7 +171,7 @@ pub unsafe extern "C" fn pt_str_inc(s: *const PtStr) {
     }
     // SAFETY: non-null, so live by the caller's guarantee.
     let s = unsafe { borrow(s) };
-    s.rc.set(s.rc.get() + 1);
+    s.rc.inc();
 }
 
 /// Drops a reference, freeing the string at zero. Null is ignored.
@@ -186,10 +185,7 @@ pub unsafe extern "C" fn pt_str_dec(s: *mut PtStr) {
         return;
     }
     // SAFETY: non-null, so live by the caller's guarantee.
-    let count = unsafe { borrow(s) }.rc.get() - 1;
-    if count > 0 {
-        // SAFETY: as above.
-        unsafe { borrow(s) }.rc.set(count);
+    if !unsafe { borrow(s) }.rc.dec() {
         return;
     }
     // SAFETY: the last reference: `s` came from `Box::into_raw` and no

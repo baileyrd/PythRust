@@ -8,17 +8,17 @@
 //!
 //! Raising makes an exception *pending*, with the diagnostic of the
 //! place it was raised at, rendered at compile time around the line
-//! [`pt_uncaught`] fills in. Generated code reads [`PENDING_FLAG`] inline
-//! after whatever can raise and branches to a handler, which takes the
-//! exception with [`pt_catch`], or returns to its caller with it still
-//! pending. Compiled programs are single-threaded; the lock is
-//! uncontended and only makes the static safe.
+//! [`pt_uncaught`] fills in. Generated code reads its thread's
+//! [`PtCtx`] flag inline after whatever can raise and branches to a
+//! handler, which takes the exception with [`pt_catch`], or returns to its
+//! caller with it still pending. The pending exception, the flag and the
+//! call depth are per thread, so each task (M6c) has its own.
 
 #![allow(unsafe_code)] // Exceptions and diagnostics cross the C ABI as pointers.
 
+use std::cell::RefCell;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 
 use crate::seq::{self, PtSeq};
 use crate::str::{self as pstr, PtStr};
@@ -82,13 +82,37 @@ struct Pending {
     tail: &'static [u8],
 }
 
-static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
+/// A thread's state that generated code reads and writes inline,
+/// through the pointer [`pt_ctx`] returns, which every generated function
+/// takes as its hidden first parameter. Only its own thread touches it;
+/// the atomics (always `Relaxed`) let generated code write it while the
+/// runtime holds a shared reference. The compiler's `CTX_PENDING` and
+/// `CTX_DEPTH` are the offsets of its fields.
+#[repr(C)]
+pub struct PtCtx {
+    /// Whether an exception is pending, 1 or 0; set and cleared with
+    /// [`PENDING`].
+    pending: AtomicU8,
+    /// Active Pythrust calls, which generated code counts.
+    depth: AtomicI64,
+}
 
-/// Whether an exception is pending, 1 or 0. Generated code reads this
-/// byte inline instead of calling into the runtime; it is set and
-/// cleared with [`PENDING`], under its lock.
-#[unsafe(export_name = "pt_pending_flag")]
-pub static PENDING_FLAG: AtomicU8 = AtomicU8::new(0);
+thread_local! {
+    static CTX: PtCtx = const {
+        PtCtx { pending: AtomicU8::new(0), depth: AtomicI64::new(0) }
+    };
+    static PENDING: RefCell<Option<Pending>> = const { RefCell::new(None) };
+}
+
+/// The running thread's [`PtCtx`], valid while the thread lives.
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctx() -> *const PtCtx {
+    CTX.with(std::ptr::from_ref)
+}
+
+fn set_flag(on: bool) {
+    CTX.with(|c| c.pending.store(u8::from(on), Ordering::Relaxed));
+}
 
 /// The name of the exception kind `code`.
 pub(crate) fn name(code: u8) -> &'static str {
@@ -111,21 +135,17 @@ fn uncaught_line(e: u64) -> String {
     }
 }
 
-fn pending() -> std::sync::MutexGuard<'static, Option<Pending>> {
-    PENDING.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// Makes `exc`, whose reference it takes, pending. One already pending
 /// (never, in generated code) is dropped.
 fn set_pending(exc: *mut PtSeq, head: &'static [u8], tail: &'static [u8]) {
-    let mut slot = pending();
-    let old = slot.replace(Pending {
-        exc: exc as usize,
-        head,
-        tail,
+    let old = PENDING.with_borrow_mut(|slot| {
+        slot.replace(Pending {
+            exc: exc as usize,
+            head,
+            tail,
+        })
     });
-    PENDING_FLAG.store(1, Ordering::Relaxed);
-    drop(slot);
+    set_flag(true);
     if let Some(old) = old {
         // SAFETY: a pending exception is live and owns its reference.
         unsafe { seq::pt_seq_dec(old.exc as *mut PtSeq) };
@@ -268,8 +288,7 @@ pub(crate) fn raise_errno(
 /// from it): 1 or 0.
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_pending_is(codes: u32) -> u8 {
-    let guard = pending();
-    let found = guard.as_ref().map(|p| seq::exc_kind(p.exc as u64));
+    let found = PENDING.with_borrow(|slot| slot.as_ref().map(|p| seq::exc_kind(p.exc as u64)));
     u8::from(found.is_some_and(|code| codes.checked_shr(u32::from(code)).unwrap_or(0) & 1 == 1))
 }
 
@@ -277,9 +296,9 @@ pub extern "C" fn pt_pending_is(codes: u32) -> u8 {
 /// null if there is none.
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_catch() -> *mut PtSeq {
-    let mut slot = pending();
-    PENDING_FLAG.store(0, Ordering::Relaxed);
-    slot.take()
+    set_flag(false);
+    PENDING
+        .with_borrow_mut(Option::take)
         .map_or(std::ptr::null_mut(), |p| p.exc as *mut PtSeq)
 }
 
@@ -288,14 +307,15 @@ pub extern "C" fn pt_catch() -> *mut PtSeq {
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_uncaught() -> ! {
     crate::flush();
-    if let Some(p) = pending().as_ref() {
+    PENDING.with_borrow(|slot| {
+        let Some(p) = slot.as_ref() else { return };
         let line = uncaught_line(p.exc as u64);
         let mut err = io::stderr().lock();
         let _ = err
             .write_all(p.head)
             .and_then(|()| err.write_all(line.as_bytes()))
             .and_then(|()| err.write_all(p.tail));
-    }
+    });
     std::process::exit(1)
 }
 
@@ -316,16 +336,42 @@ pub unsafe extern "C" fn pt_exc_str(e: *const PtSeq) -> *mut PtStr {
 mod tests {
     use super::*;
 
-    /// Serializes the tests: the pending exception is process-wide.
-    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    /// The compiler's `CTX_PENDING` and `CTX_DEPTH`.
+    #[test]
+    fn context_fields_sit_where_generated_code_reads_them() {
+        assert_eq!(std::mem::offset_of!(PtCtx, pending), 0);
+        assert_eq!(std::mem::offset_of!(PtCtx, depth), 8);
+    }
 
+    #[test]
+    fn each_thread_has_its_own_context_and_pending_exception() {
+        let (head, tail) = (b"at: ", b"!");
+        // SAFETY: the exception is live until its last dec; the parts are
+        // static.
+        unsafe {
+            let e = seq::pt_seq_new(b"x4".as_ptr(), 2, 0);
+            pt_raise(e, head.as_ptr(), 4, tail.as_ptr(), 1);
+            seq::pt_seq_dec(e);
+        }
+        let mine = pt_ctx() as usize;
+        let theirs =
+            std::thread::spawn(|| (pt_ctx() as usize, raised(), pt_catch().is_null())).join();
+        assert!(matches!(theirs, Ok((t, 0, true)) if t != mine));
+        assert_eq!(raised(), 1);
+        let caught = pt_catch();
+        // SAFETY: the caught exception owns its reference.
+        unsafe { seq::pt_seq_dec(caught) };
+        assert_eq!(raised(), 0);
+    }
+
+    /// This thread's flag. Each test runs on its own thread, so its
+    /// pending exception is its own.
     fn raised() -> u8 {
-        PENDING_FLAG.load(Ordering::Relaxed)
+        CTX.with(|c| c.pending.load(Ordering::Relaxed))
     }
 
     #[test]
     fn raising_and_catching_move_one_reference() {
-        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let (head, tail) = (b"at: ", b"!");
         // SAFETY: the exception is live until its last dec; the parts are
         // static.
@@ -351,7 +397,6 @@ mod tests {
 
     #[test]
     fn parse_errors_raise_a_value_error_quoting_the_input() {
-        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let prefix = b"could not convert string to float: ";
         let s = pstr::into_ptr(PtStr::new("2.5.1".into()));
         let none = b"";
@@ -379,7 +424,6 @@ mod tests {
 
     #[test]
     fn faults_raise_their_class_with_the_message() {
-        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let msg = b"list index out of range";
         let none = b"";
         // SAFETY: as above.
@@ -402,7 +446,6 @@ mod tests {
 
     #[test]
     fn an_os_error_keeps_errno_strerror_and_filename() {
-        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let strerror = "No such file or directory";
         raise_errno(FILE_NOT_FOUND, 2, strerror, Some("it's"), b"", b"");
         let e = pt_catch();
@@ -433,7 +476,6 @@ mod tests {
 
     #[test]
     fn a_key_error_message_is_its_arguments_repr() {
-        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         // SAFETY: as above; each object is live until its last dec.
         unsafe {
             let s = pstr::into_ptr(PtStr::new("k".into()));

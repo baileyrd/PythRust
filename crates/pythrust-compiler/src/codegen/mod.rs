@@ -11,9 +11,12 @@
 //! A raised exception is the runtime's pending one (`exc.rs`); the IR
 //! spells out every test of it.
 //!
-//! Calls are counted in a module-private depth counter so recursion past
-//! the interpreter's limit is a `RecursionError`, as in `run`, rather
-//! than a native stack overflow.
+//! Every generated function takes the running thread's context
+//! (`pythrust-rt`'s `PtCtx`) as a hidden first parameter, and passes it
+//! on. It holds the pending-exception flag, read inline, and the count of
+//! active calls, so recursion past the interpreter's limit is a
+//! `RecursionError`, as in `run`, rather than a native stack overflow.
+//! Both are per thread, so tasks (M6c) each count from zero.
 
 use std::collections::HashMap;
 
@@ -44,6 +47,11 @@ use crate::span::Span;
 
 /// Symbol the runtime's `main` calls.
 pub const ENTRY: &str = "pythrust_main";
+
+/// Byte offsets of the fields of `pythrust-rt`'s `PtCtx`, which a
+/// runtime test pins: the pending-exception flag and the call depth.
+const CTX_PENDING: i32 = 0;
+const CTX_DEPTH: i32 = 8;
 
 /// Compiles `program` for the host. `render` turns a runtime error into
 /// the exact text the program prints to stderr when it happens.
@@ -376,11 +384,6 @@ struct Codegen<'r> {
     module: ObjectModule,
     render: &'r dyn Fn(&Diagnostic) -> String,
     rt: HashMap<&'static str, ClifFunc>,
-    /// The `i64` count of active Pythrust calls.
-    depth: DataId,
-    /// The runtime's pending-exception flag byte, read only through
-    /// [`FnGen::pending_flag`].
-    pending: DataId,
     /// Read-only byte strings (failure messages, literals), deduplicated.
     bytes: HashMap<String, (DataId, usize)>,
     ptr: types::Type,
@@ -402,22 +405,11 @@ impl<'r> Codegen<'r> {
             .map_err(|e| backend(e.to_string()))?;
         let builder =
             ObjectBuilder::new(isa, "pythrust", default_libcall_names()).map_err(module_err)?;
-        let mut module = ObjectModule::new(builder);
-        let depth = module
-            .declare_data("pythrust_depth", Linkage::Local, true, false)
-            .map_err(module_err)?;
-        let mut zero = DataDescription::new();
-        zero.define_zeroinit(8);
-        module.define_data(depth, &zero).map_err(module_err)?;
-        let pending = module
-            .declare_data("pt_pending_flag", Linkage::Import, true, false)
-            .map_err(module_err)?;
+        let module = ObjectModule::new(builder);
         let ptr = module.target_config().pointer_type();
         let mut cg = Codegen {
             module,
             render,
-            depth,
-            pending,
             rt: HashMap::new(),
             bytes: HashMap::new(),
             ptr,
@@ -470,6 +462,7 @@ impl<'r> Codegen<'r> {
 
     fn signature(&self, f: &Func) -> Signature {
         let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(self.ptr));
         for p in &f.params {
             sig.params.push(AbiParam::new(self.clif_ty(f.locals[p.0])));
         }
@@ -552,6 +545,8 @@ struct FnGen<'b, 'c, 'r> {
     types: &'c [Compound],
     vars: Vec<Variable>,
     blocks: Vec<cranelift_codegen::ir::Block>,
+    /// The running thread's `PtCtx`, the hidden first parameter.
+    ctx: Value,
     /// While translating a site whose flag test is fused ([`fused`]):
     /// where its raise goes, and the local it would have defined.
     raise_to: Option<(BlockId, Option<LocalId>)>,
@@ -576,7 +571,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             .ok_or_else(|| backend(format!("`{}` has no blocks", func.name)))?;
         b.append_block_params_for_function_params(entry);
         b.switch_to_block(entry);
-        let params = b.block_params(entry).to_vec();
+        let (ctx_param, params) = match b.block_params(entry).split_first() {
+            Some((c, rest)) => (*c, rest.to_vec()),
+            None => return Err(backend(format!("`{}` has no context", func.name))),
+        };
         for (i, var) in vars.iter().enumerate() {
             let v = match func.params.iter().position(|p| p.0 == i) {
                 Some(k) => params[k],
@@ -593,6 +591,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             types,
             vars,
             blocks,
+            ctx: ctx_param,
             raise_to: None,
         };
         for (i, block) in func.blocks.iter().enumerate() {
@@ -1028,18 +1027,13 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         Ok((addr, len))
     }
 
-    /// Whether an exception is pending, an `i8` 1 or 0: the runtime's
-    /// flag byte, read inline rather than through a call. Every read of
-    /// the flag goes through here, so it can become per task (phase 5).
+    /// Whether an exception is pending on this thread, an `i8` 1 or 0:
+    /// the context's flag byte, read inline rather than through a call.
+    /// Every read of the flag goes through here.
     fn pending_flag(&mut self) -> Value {
-        let gv = self
-            .cg
-            .module
-            .declare_data_in_func(self.cg.pending, self.b.func);
-        let addr = self.b.ins().symbol_value(self.cg.ptr, gv);
         self.b
             .ins()
-            .load(types::I8, MemFlagsData::trusted(), addr, 0)
+            .load(types::I8, MemFlagsData::trusted(), self.ctx, CTX_PENDING)
     }
 
     /// Calls `callee`, failing at `span` if `MAX_DEPTH` calls are active.
@@ -1055,24 +1049,20 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             .get(callee.0)
             .ok_or_else(|| backend("call to an unknown function".to_string()))?;
         let fref = self.cg.module.declare_func_in_func(id, self.b.func);
-        let args: Vec<Value> = args.iter().map(|op| self.operand(*op)).collect();
-        let ptr = self.cg.module.target_config().pointer_type();
-        let gv = self
-            .cg
-            .module
-            .declare_data_in_func(self.cg.depth, self.b.func);
-        let addr = self.b.ins().symbol_value(ptr, gv);
-        let flags = MemFlagsData::trusted();
-        let depth = self.b.ins().load(types::I64, flags, addr, 0);
+        let args: Vec<Value> = std::iter::once(self.ctx)
+            .chain(args.iter().map(|op| self.operand(*op)))
+            .collect();
+        let (addr, flags) = (self.ctx, MemFlagsData::trusted());
+        let depth = self.b.ins().load(types::I64, flags, addr, CTX_DEPTH);
         let full = self
             .b
             .ins()
             .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, depth, MAX_DEPTH);
         self.fail_if(full, span, RECURSION)?;
         let deeper = self.b.ins().iadd_imm_s(depth, 1);
-        self.b.ins().store(flags, deeper, addr, 0);
+        self.b.ins().store(flags, deeper, addr, CTX_DEPTH);
         let call = self.b.ins().call(fref, &args);
-        self.b.ins().store(flags, depth, addr, 0);
+        self.b.ins().store(flags, depth, addr, CTX_DEPTH);
         match self.b.inst_results(call).first() {
             Some(v) => Ok(*v),
             None => Ok(self

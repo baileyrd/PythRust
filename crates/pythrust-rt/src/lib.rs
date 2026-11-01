@@ -5,7 +5,8 @@
 //! ([`obj`]), the `sys` and `os` modules ([`sys`], [`os`]), and what
 //! Rust binding shims call ([`abi`]).
 //!
-//! The C ABI surface is the only `unsafe` in the project. Each exported
+//! The C ABI surface is the project's `unsafe`, with one exception
+//! inside the runtime, the borrow cell in `sync.rs`. Each exported
 //! item (or module, for [`str`], [`seq`], [`table`], [`range`], [`num`], [`exc`], [`obj`], [`sys`] and [`os`]) carries `allow(unsafe_code)` and a
 //! `# Safety` note on what the caller guarantees, so the audit is
 //! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
@@ -22,6 +23,7 @@ pub mod range;
 pub mod seq;
 mod sha256;
 pub mod str;
+mod sync;
 pub mod sys;
 pub mod table;
 
@@ -37,14 +39,33 @@ pub(crate) static LIVE: AtomicUsize = AtomicUsize::new(0);
 /// Flush threshold for buffered stdout.
 const FLUSH_AT: usize = 1 << 16;
 
-/// Buffered stdout. Compiled programs are single-threaded; the lock is
-/// uncontended and only makes the static safe.
+/// Buffered stdout, shared by every thread. A thread's output reaches it
+/// a whole line at a time ([`LINE`]), so lines printed by tasks running at
+/// once (M6c) never mix mid-line.
 static OUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
-/// Appends `bytes` to stdout, flushing when the buffer is full.
+thread_local! {
+    /// This thread's output since its last complete line.
+    static LINE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Appends `bytes` to this thread's line, moving it to stdout's buffer
+/// once it holds a line end or grows past the flush threshold.
 fn write(bytes: &[u8]) {
+    LINE.with_borrow_mut(|line| {
+        line.extend_from_slice(bytes);
+        if bytes.contains(&b'\n') || line.len() >= FLUSH_AT {
+            publish(line);
+        }
+    });
+}
+
+/// Moves `line` to stdout's buffer under one lock, flushing when the
+/// buffer is full.
+fn publish(line: &mut Vec<u8>) {
     let mut out = OUT.lock().unwrap_or_else(PoisonError::into_inner);
-    out.extend_from_slice(bytes);
+    out.extend_from_slice(line);
+    line.clear();
     if out.len() >= FLUSH_AT {
         drain(&mut out);
     }
@@ -62,8 +83,14 @@ fn drain(out: &mut Vec<u8>) {
     }
 }
 
+/// Writes this thread's pending line and everything buffered to stdout.
 fn flush() {
-    drain(&mut OUT.lock().unwrap_or_else(PoisonError::into_inner));
+    LINE.with_borrow_mut(|line| {
+        let mut out = OUT.lock().unwrap_or_else(PoisonError::into_inner);
+        out.extend_from_slice(line);
+        line.clear();
+        drain(&mut out);
+    });
 }
 
 /// `str(b)` for a bool.
@@ -167,8 +194,9 @@ fn internal(what: &str) -> ! {
 mod entry {
     #[allow(unsafe_code)]
     unsafe extern "C" {
-        /// The compiled module's top-level code, emitted by the compiler.
-        fn pythrust_main();
+        /// The compiled module's top-level code, emitted by the compiler;
+        /// it takes the thread's context, as every generated function does.
+        fn pythrust_main(ctx: *const super::exc::PtCtx);
     }
 
     /// Runs the module, then flushes stdout. A debug runtime then
@@ -176,9 +204,9 @@ mod entry {
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn main() -> i32 {
-        // SAFETY: `pythrust_main` takes and returns nothing; the compiler
-        // emits it with exactly that signature.
-        unsafe { pythrust_main() };
+        // SAFETY: `pythrust_main` takes the context pointer and returns
+        // nothing; the compiler emits it with exactly that signature.
+        unsafe { pythrust_main(super::exc::pt_ctx()) };
         super::flush();
         super::leak_status(
             cfg!(debug_assertions),
@@ -206,6 +234,36 @@ mod tests {
         assert_eq!(leak_status(true, 0), 0);
         assert_eq!(leak_status(false, 3), 0);
         assert_eq!(leak_status(true, 3), 1);
+    }
+
+    /// Two threads print lines piece by piece at once; each line reaches
+    /// stdout's buffer whole.
+    #[test]
+    fn lines_from_two_threads_never_mix() {
+        let print = |c: u8| {
+            move || {
+                for _ in 0..200 {
+                    for _ in 0..8 {
+                        write(&[c]);
+                    }
+                    write(b"\n");
+                }
+            }
+        };
+        let (a, b) = (
+            std::thread::spawn(print(b'x')),
+            std::thread::spawn(print(b'y')),
+        );
+        assert!(a.join().is_ok() && b.join().is_ok());
+        let out = OUT.lock().unwrap_or_else(PoisonError::into_inner);
+        let lines: Vec<&[u8]> = out
+            .split(|&c| c == b'\n')
+            .filter(|l| l.first().is_some_and(|c| *c == b'x' || *c == b'y'))
+            .collect();
+        assert_eq!(lines.len(), 400);
+        assert!(lines
+            .iter()
+            .all(|l| l.len() == 8 && l.iter().all(|c| *c == l[0])));
     }
 
     #[test]

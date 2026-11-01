@@ -10,7 +10,7 @@
 
 #![allow(unsafe_code)] // The C ABI below.
 
-use std::cell::{Cell, RefCell};
+use crate::sync::{Count, Slot};
 use std::fs;
 use std::io::{self, Read};
 use std::sync::atomic::Ordering::Relaxed;
@@ -24,7 +24,7 @@ use crate::LIVE;
 /// A bytes or file object.
 #[derive(Debug)]
 pub struct PtObj {
-    rc: Cell<usize>,
+    pub(crate) rc: Count,
     obj: Obj,
 }
 
@@ -34,16 +34,25 @@ enum Obj {
     /// The path it was opened by, and the open file until `close`.
     File {
         name: Box<str>,
-        file: RefCell<Option<fs::File>>,
+        file: Slot<Option<fs::File>>,
     },
 }
 
 fn into_ptr(obj: Obj) -> *mut PtObj {
     LIVE.fetch_add(1, Relaxed);
     Box::into_raw(Box::new(PtObj {
-        rc: Cell::new(1),
+        rc: Count::new(),
         obj,
     }))
+}
+
+/// Marks object `o` as reachable from another thread
+/// ([`crate::sync`]); its bytes hold no references.
+pub(crate) fn mark(o: &PtObj) {
+    o.rc.mark();
+    if let Obj::File { file, .. } = &o.obj {
+        file.mark();
+    }
 }
 
 /// Borrows a live object.
@@ -165,7 +174,7 @@ pub unsafe extern "C" fn pt_obj_inc(p: *const PtObj) {
     }
     // SAFETY: non-null, so live by the caller's guarantee.
     let o = unsafe { borrow(p) };
-    o.rc.set(o.rc.get() + 1);
+    o.rc.inc();
 }
 
 /// Drops a reference, freeing the object at zero, which closes a file.
@@ -181,9 +190,7 @@ pub unsafe extern "C" fn pt_obj_dec(p: *mut PtObj) {
     }
     // SAFETY: non-null, so live by the caller's guarantee.
     let o = unsafe { borrow(p) };
-    let count = o.rc.get() - 1;
-    if count > 0 {
-        o.rc.set(count);
+    if !o.rc.dec() {
         return;
     }
     // SAFETY: the last reference: `p` came from `Box::into_raw` and no
@@ -261,7 +268,7 @@ pub unsafe extern "C" fn pt_open(
     match open(p) {
         Ok(file) => into_ptr(Obj::File {
             name: p.into(),
-            file: RefCell::new(Some(file)),
+            file: Slot::new(Some(file)),
         }),
         Err(e) => {
             at.raise(&e, Some(p));
@@ -350,10 +357,10 @@ mod tests {
             panic!("opens")
         };
         let f = PtObj {
-            rc: Cell::new(1),
+            rc: Count::new(),
             obj: Obj::File {
                 name: "x".into(),
-                file: RefCell::new(Some(file)),
+                file: Slot::new(Some(file)),
             },
         };
         assert_eq!(read(&f).and_then(Result::ok), Some(b"hi\n".to_vec()));
@@ -380,11 +387,11 @@ mod tests {
     #[test]
     fn bytes_compare_by_content() {
         let a = PtObj {
-            rc: Cell::new(1),
+            rc: Count::new(),
             obj: Obj::Bytes(Box::from(*b"ab")),
         };
         let b = PtObj {
-            rc: Cell::new(1),
+            rc: Count::new(),
             obj: Obj::Bytes(Box::from(*b"ab")),
         };
         assert!(a.same(&b) && a.len() == 2);
