@@ -402,7 +402,33 @@ pub(crate) struct TooDeep;
 /// until the walk ends: a queued child stays reachable from its borrowed
 /// parent, so a writer rule 4 failed to keep out conflicts instead of
 /// freeing the child before the walk uses it.
-type Held = Vec<Ref<'static, Vec<u64>>>;
+///
+/// A walk borrows a child only after its parent, so releasing in
+/// reverse order lets every guard go while its container is still kept
+/// alive by the parent's guard: a parent released first could let a
+/// writer free a child whose guard is still pending.
+struct Held(Vec<Ref<'static, Vec<u64>>>);
+
+impl Held {
+    fn new() -> Self {
+        Held(Vec::new())
+    }
+
+    fn push(&mut self, guard: Ref<'static, Vec<u64>>) {
+        self.0.push(guard);
+    }
+
+    /// Releases the most recent borrow; false when none is left.
+    fn release_last(&mut self) -> bool {
+        self.0.pop().is_some()
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        while self.release_last() {}
+    }
+}
 
 /// What is left of a `repr` in progress.
 enum Step {
@@ -1340,6 +1366,9 @@ mod tests {
             pstr::pt_str_dec(word);
         }
         let outer = make(b"lls", &[inner as u64]);
+        // SAFETY: `outer` keeps `inner` alive; the walks below see it
+        // owned by its parent alone.
+        unsafe { pt_seq_dec(inner) };
         let free = |p: *mut PtSeq| {
             // SAFETY: both lists are live until the end of the test.
             unsafe { seq(p as u64) }.items.is_free()
@@ -1354,15 +1383,50 @@ mod tests {
             (out.as_str(), free(outer), free(inner)),
             ("[['w']]", false, false)
         );
-        drop(held);
-        assert!(free(outer) && free(inner));
+        // Children go first: `inner` is free while `outer`, which keeps
+        // it alive, is still held.
+        assert!(held.release_last());
+        assert_eq!((free(outer), free(inner)), (false, true));
+        assert!(held.release_last() && !held.release_last());
+        assert!(free(outer));
         mark(b"lls", outer as u64);
         assert!(free(outer) && free(inner));
-        // SAFETY: the test's references.
-        unsafe {
-            pt_seq_dec(outer);
-            pt_seq_dec(inner);
+        // SAFETY: the test's one reference, which frees both.
+        unsafe { pt_seq_dec(outer) };
+    }
+
+    /// A walk that stops early still releases deepest first: each link
+    /// of the chain is owned by its parent alone.
+    #[test]
+    fn a_walk_cut_short_releases_children_before_parents() {
+        let mut links = vec![make(b"x0", &[])];
+        for _ in 0..MAX_NESTING {
+            let next = make(b"x0x", &[links[links.len() - 1] as u64]);
+            // SAFETY: `next` holds its own reference.
+            unsafe { pt_seq_dec(links[links.len() - 1]) };
+            links.push(next);
         }
+        links.reverse();
+        let free = |p: *mut PtSeq| {
+            // SAFETY: every link is live while the head is.
+            unsafe { seq(p as u64) }.items.is_free()
+        };
+        let mut held = Held::new();
+        let mut out = String::new();
+        assert_eq!(
+            repr_holding(b"x0x", links[0] as u64, &mut out, &mut held),
+            Err(TooDeep)
+        );
+        let mut busy: Vec<usize> = (0..links.len()).filter(|&i| !free(links[i])).collect();
+        assert!(busy.len() > 1, "the walk held a chain");
+        while let Some(deepest) = busy.pop() {
+            assert!(held.release_last());
+            assert!(free(links[deepest]));
+            assert!(busy.iter().all(|&i| !free(links[i])), "parents still held");
+        }
+        assert!(!held.release_last());
+        // SAFETY: the head's one reference, which frees the chain.
+        unsafe { pt_seq_dec(links[0]) };
     }
 
     #[test]
