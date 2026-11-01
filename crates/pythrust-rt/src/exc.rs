@@ -87,6 +87,11 @@ static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 /// Whether an exception is pending, 1 or 0. Generated code reads this
 /// byte inline instead of calling into the runtime; it is set and
 /// cleared with [`PENDING`], under its lock.
+/// Serializes the tests that raise: the pending exception is
+/// process-wide.
+#[cfg(test)]
+pub(crate) static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
 #[unsafe(export_name = "pt_pending_flag")]
 pub static PENDING_FLAG: AtomicU8 = AtomicU8::new(0);
 
@@ -315,9 +320,6 @@ pub unsafe extern "C" fn pt_exc_str(e: *const PtSeq) -> *mut PtStr {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Serializes the tests: the pending exception is process-wide.
-    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     fn raised() -> u8 {
         PENDING_FLAG.load(Ordering::Relaxed)
