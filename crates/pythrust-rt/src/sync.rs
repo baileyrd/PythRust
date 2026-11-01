@@ -12,6 +12,12 @@
 //! conflict means the compiler let one through, and failing loudly keeps
 //! that from becoming silent memory corruption.
 //!
+//! Safe code cannot share a [`Slot`] between threads: it is not `Sync`,
+//! since an unmarked one takes no atomic steps. Runtime objects reach
+//! another thread only as pointers through the C ABI, whose callers
+//! guarantee the object was marked first (`lib.rs`); that `unsafe`
+//! contract, not a type, carries the invariant across.
+//!
 //! This module holds the runtime's only `unsafe` outside its C ABI
 //! (Nano, 2026-11-01): [`Slot`] hands out references into an
 //! `UnsafeCell` guarded by its borrow word.
@@ -87,13 +93,6 @@ pub(crate) struct Slot<T> {
     state: AtomicUsize,
     value: UnsafeCell<T>,
 }
-
-// SAFETY: a marked slot's state word is changed only by atomic
-// read-modify-writes that admit one writer (so `T: Send`) or any number
-// of readers sharing `&T` (so `T: Sync`),
-// with acquire/release ordering, as a reader-writer lock; an unmarked
-// slot is touched by one thread (the module invariant).
-unsafe impl<T: Send + Sync> Sync for Slot<T> {}
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Slot<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -322,6 +321,30 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// A slot the test marked before sharing it, as the ABI contract
+    /// requires of every caller.
+    struct Marked<T>(Slot<T>);
+
+    // SAFETY: built only by `marked`, after the slot is marked, so every
+    // step on it is atomic: one writer (`T: Send`) or many readers
+    // sharing `&T` (`T: Sync`), as a reader-writer lock.
+    unsafe impl<T: Send + Sync> Sync for Marked<T> {}
+
+    fn marked<T>(value: T) -> Arc<Marked<T>> {
+        let s = Slot::new(value);
+        s.mark();
+        Arc::new(Marked(s))
+    }
+
+    /// `Slot` must not be `Sync`: the line below would be ambiguous,
+    /// and fail to compile, if it were.
+    trait AmbiguousIfSync<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+    impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
+    const _: fn() = <Slot<Vec<u64>> as AmbiguousIfSync<_>>::check;
+
     /// Iterations per thread; Miri runs far fewer.
     const ROUNDS: usize = if cfg!(miri) { 40 } else { 10_000 };
 
@@ -421,14 +444,13 @@ mod tests {
 
     #[test]
     fn marked_slots_admit_concurrent_readers() {
-        let s = Arc::new(Slot::new(vec![1u64; 64]));
-        s.mark();
+        let s = marked(vec![1u64; 64]);
         let threads: Vec<_> = (0..4)
             .map(|_| {
                 let s = Arc::clone(&s);
                 std::thread::spawn(move || {
                     (0..ROUNDS)
-                        .map(|_| s.borrow().iter().sum::<u64>())
+                        .map(|_| s.0.borrow().iter().sum::<u64>())
                         .sum::<u64>()
                 })
             })
@@ -436,7 +458,7 @@ mod tests {
         for t in threads {
             assert!(matches!(t.join(), Ok(t) if t == 64 * ROUNDS as u64));
         }
-        s.borrow_mut().push(1);
-        assert_eq!(s.borrow().len(), 65);
+        s.0.borrow_mut().push(1);
+        assert_eq!(s.0.borrow().len(), 65);
     }
 }

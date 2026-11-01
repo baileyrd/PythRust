@@ -683,10 +683,11 @@ pub unsafe extern "C" fn pt_seq_push(s: *const PtSeq, v: u64) {
 pub unsafe extern "C" fn pt_list_copy(s: *const PtSeq) -> *mut PtSeq {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
-    let items = s.items.borrow().clone();
     let desc = slot(s.desc, 0);
+    // Retained under the read borrow, so no writer can free one first.
+    let items = s.items.borrow();
     items.iter().for_each(|v| inc(desc, *v));
-    new_seq(s.desc, items)
+    new_seq(s.desc, items.clone())
 }
 
 /// `len(s)`.

@@ -228,14 +228,16 @@ pub unsafe extern "C" fn pt_table_contains(t: *const PtSeq, k: u64) -> u8 {
 pub unsafe extern "C" fn pt_dict_get(d: *const PtSeq, k: u64, status: *mut u8) -> u64 {
     // SAFETY: guaranteed by the caller.
     let d = unsafe { table(d) };
-    let v = find(d, k).and_then(|entry| d.items.borrow().get(entry * 2 + 1).copied());
+    // Retained under the read borrow, so no writer can free it first.
+    let v = find(d, k).and_then(|entry| {
+        let items = d.items.borrow();
+        let v = items.get(entry * 2 + 1).copied()?;
+        seq::inc(slot(d.desc, 1), v);
+        Some(v)
+    });
     // SAFETY: guaranteed by the caller.
     unsafe { *status = u8::from(v.is_none()) };
-    let Some(v) = v else {
-        return 0;
-    };
-    seq::inc(slot(d.desc, 1), v);
-    v
+    v.unwrap_or(0)
 }
 
 /// Part `part` (0 the key, 1 a dict's value) of entry `entry` of table
@@ -252,9 +254,11 @@ pub unsafe extern "C" fn pt_table_entry(t: *const PtSeq, entry: i64, part: i64) 
     let k = at
         .saturating_mul(stride(t.desc))
         .saturating_add(usize::try_from(part).unwrap_or(0));
-    let Some(v) = t.items.borrow().get(k).copied() else {
+    let items = t.items.borrow();
+    let Some(v) = items.get(k).copied() else {
         crate::internal("a table entry out of range");
     };
+    // Retained under the read borrow, so no writer can free it first.
     seq::inc(slot(t.desc, k), v);
     v
 }
@@ -307,14 +311,10 @@ pub unsafe extern "C" fn pt_view_new(d: *const PtSeq, desc: *const u8, len: usiz
 pub unsafe extern "C" fn pt_list_of(x: *const PtSeq, desc: *const u8, len: usize) -> *mut PtSeq {
     // SAFETY: guaranteed by the caller.
     let (x, desc) = unsafe { (table(x), std::slice::from_raw_parts(desc, len)) };
-    let items: Vec<u64> = x
-        .items
-        .borrow()
-        .iter()
-        .step_by(stride(x.desc))
-        .copied()
-        .collect();
     let item = slot(desc, 0);
+    // Retained under the read borrow, so no writer can free one first.
+    let all = x.items.borrow();
+    let items: Vec<u64> = all.iter().step_by(stride(x.desc)).copied().collect();
     items.iter().for_each(|v| seq::inc(item, *v));
     new_seq(desc, items)
 }

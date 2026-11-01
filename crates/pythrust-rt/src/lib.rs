@@ -11,6 +11,10 @@
 //! `# Safety` note on what the caller guarantees, so the audit is
 //! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
 //! tested.
+//!
+//! Every ABI caller also guarantees, beyond each item's `# Safety`, that
+//! an object reaches another thread only after `pt_mark` has marked it
+//! (M6c): an unmarked object takes no atomic steps.
 
 #![deny(unsafe_code)]
 
@@ -29,7 +33,7 @@ pub mod table;
 
 use std::io::{self, Write};
 use std::sync::atomic::AtomicUsize;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Strings and sequences allocated and not yet freed. A debug runtime
 /// checks it is 0 when the program ends normally, so a leak fails the
@@ -52,25 +56,35 @@ thread_local! {
 /// Appends `bytes` to this thread's line, moving its complete lines to
 /// stdout's buffer.
 fn write(bytes: &[u8]) {
-    LINE.with_borrow_mut(|line| append(line, bytes, &OUT));
+    LINE.with_borrow_mut(|line| {
+        let Some(mut out) = append(line, bytes, &OUT) else {
+            return;
+        };
+        if out.len() >= FLUSH_AT {
+            drain(&mut out);
+        }
+    });
 }
 
 /// Appends `bytes` to `line` and moves everything through its last line
-/// end to `out`; an unfinished line stays in `line`. One unfinished line
-/// past the flush threshold moves as it is, which bounds memory: only a
-/// line that long can mix with another thread's output.
-fn append(line: &mut Vec<u8>, bytes: &[u8], out: &Mutex<Vec<u8>>) {
+/// end to `out`, giving back `out` still locked when it moved anything;
+/// an unfinished line stays in `line`. One unfinished line past the
+/// flush threshold moves as it is, which bounds memory: only a line that
+/// long can mix with another thread's output.
+fn append<'a>(
+    line: &mut Vec<u8>,
+    bytes: &[u8],
+    out: &'a Mutex<Vec<u8>>,
+) -> Option<MutexGuard<'a, Vec<u8>>> {
     line.extend_from_slice(bytes);
     let end = match bytes.iter().rposition(|&c| c == b'\n') {
         Some(at) => line.len() - bytes.len() + at + 1,
         None if line.len() >= FLUSH_AT => line.len(),
-        None => return,
+        None => return None,
     };
     let mut out = out.lock().unwrap_or_else(PoisonError::into_inner);
     out.extend(line.drain(..end));
-    if out.len() >= FLUSH_AT {
-        drain(&mut out);
-    }
+    Some(out)
 }
 
 /// Writes `out` to stdout and clears it. A write error ends the program:
@@ -248,10 +262,10 @@ mod tests {
             let out = std::sync::Arc::clone(&out);
             move || {
                 let mut line = Vec::new();
-                append(&mut line, &[c; 4], &out);
+                _ = append(&mut line, &[c; 4], &out);
                 for _ in 0..200 {
-                    append(&mut line, &[c; 3], &out);
-                    append(&mut line, &[c, b'\n', c, c, c, c], &out);
+                    _ = append(&mut line, &[c; 3], &out);
+                    _ = append(&mut line, &[c, b'\n', c, c, c, c], &out);
                 }
                 line
             }
@@ -272,6 +286,21 @@ mod tests {
         assert!(lines
             .iter()
             .all(|l| l.len() == 8 && l.iter().all(|c| *c == l[0])));
+    }
+
+    /// A line longer than the threshold moves in pieces, bounding memory
+    /// (the one case where lines can mix); what follows a line end in the
+    /// same write stays unpublished.
+    #[test]
+    fn a_line_past_the_threshold_moves_in_pieces() {
+        let out = Mutex::new(Vec::new());
+        let mut line = Vec::new();
+        let moved = |line: &mut Vec<u8>, bytes: &[u8]| append(line, bytes, &out).map(|o| o.len());
+        assert_eq!(moved(&mut line, &vec![b'a'; FLUSH_AT - 1]), None);
+        assert_eq!(moved(&mut line, b"a"), Some(FLUSH_AT));
+        assert!(line.is_empty());
+        assert_eq!(moved(&mut line, b"\nrest"), Some(FLUSH_AT + 1));
+        assert_eq!(line, b"rest");
     }
 
     #[test]
