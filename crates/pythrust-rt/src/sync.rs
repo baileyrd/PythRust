@@ -191,16 +191,31 @@ impl<T: Copy> Slot<Vec<T>> {
     }
 
     /// Copies out the item at Python index `i` (negative counts from
-    /// the end) with its position; `None` out of range.
-    pub(crate) fn get(&self, i: i64) -> Option<(usize, T)> {
-        if self.idle() {
-            // SAFETY: see `idle`; the reference ends in this expression,
-            // and `position` runs no other code.
-            let items = unsafe { &*self.value.get() };
-            return position(i, items.len()).map(|k| (k, items[k]));
+    /// the end) with its position, after `retain(k, item)` has run;
+    /// `None` out of range. On a busy slot `retain` runs under the read
+    /// borrow, so a writer rule 4 failed to keep out conflicts instead
+    /// of freeing the item first.
+    #[inline]
+    pub(crate) fn get(&self, i: i64, retain: impl FnOnce(usize, T)) -> Option<(usize, T)> {
+        if !self.idle() {
+            return self.get_borrowed(i, retain);
         }
+        // SAFETY: see `idle`; the reference ends in this statement, and
+        // `position` runs no other code.
+        let (k, v) = {
+            let items = unsafe { &*self.value.get() };
+            position(i, items.len()).map(|k| (k, items[k]))?
+        };
+        retain(k, v);
+        Some((k, v))
+    }
+
+    #[cold]
+    fn get_borrowed(&self, i: i64, retain: impl FnOnce(usize, T)) -> Option<(usize, T)> {
         let items = self.borrow();
-        position(i, items.len()).map(|k| (k, items[k]))
+        let (k, v) = position(i, items.len()).map(|k| (k, items[k]))?;
+        retain(k, v);
+        Some((k, v))
     }
 
     /// Appends `v`, giving its position. On a marked slot, `marking(k)`
@@ -340,16 +355,36 @@ mod tests {
     fn copying_reads_and_swaps_take_python_indexes() {
         let s = Slot::new(vec![10u64, 20, 30]);
         assert_eq!(
-            (s.get(0), s.get(-1), s.get(3), s.get(-4)),
+            (
+                s.get(0, |_, _| {}),
+                s.get(-1, |_, _| {}),
+                s.get(3, |_, _| {}),
+                s.get(-4, |_, _| {})
+            ),
             (Some((0, 10)), Some((2, 30)), None, None)
         );
         assert_eq!((s.replace(-3, 11), s.replace(3, 0)), (Some(10), None));
         s.mark();
         assert_eq!(
-            (s.get(0), s.replace(1, 21), s.get(-2)),
+            (s.get(0, |_, _| {}), s.replace(1, 21), s.get(-2, |_, _| {})),
             (Some((0, 11)), Some(20), Some((1, 21)))
         );
         assert_eq!(s.into_inner(), vec![11, 21, 30]);
+    }
+
+    /// On a marked slot the caller retains the item while the read
+    /// borrow still holds off writers.
+    #[test]
+    fn a_marked_read_retains_under_its_borrow() {
+        let s = Slot::new(vec![4u64, 5]);
+        s.mark();
+        let readers = |s: &Slot<Vec<u64>>| s.state.load(Ordering::Relaxed) & !MARK;
+        let mut seen = None;
+        assert_eq!(
+            s.get(-1, |k, v| seen = Some((k, v, readers(&s)))),
+            Some((1, 5))
+        );
+        assert_eq!((seen, readers(&s)), (Some((1, 5, 1)), 0));
     }
 
     /// A held read borrow sends copying reads down the counted path,
@@ -358,7 +393,7 @@ mod tests {
     fn copying_reads_respect_a_held_borrow() {
         let s = Slot::new(vec![1u64, 2]);
         let held = s.borrow();
-        assert_eq!(s.get(1), Some((1, 2)));
+        assert_eq!(s.get(1, |_, _| {}), Some((1, 2)));
         drop(held);
         assert_eq!(s.replace(0, 5), Some(1));
     }

@@ -712,12 +712,11 @@ pub unsafe extern "C" fn pt_seq_len(s: *const PtSeq) -> i64 {
 pub unsafe extern "C" fn pt_seq_get(s: *const PtSeq, i: i64, status: *mut u8) -> u64 {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
-    let Some((k, v)) = s.items.get(i) else {
+    let Some((_, v)) = s.items.get(i, |k, v| inc(slot(s.desc, k), v)) else {
         // SAFETY: guaranteed by the caller.
         unsafe { report(status, 1) };
         return 0;
     };
-    inc(slot(s.desc, k), v);
     // SAFETY: guaranteed by the caller.
     unsafe { report(status, 0) };
     v

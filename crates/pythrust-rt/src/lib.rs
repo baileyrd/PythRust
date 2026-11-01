@@ -49,23 +49,25 @@ thread_local! {
     static LINE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Appends `bytes` to this thread's line, moving it to stdout's buffer
-/// once it holds a line end or grows past the flush threshold.
+/// Appends `bytes` to this thread's line, moving its complete lines to
+/// stdout's buffer.
 fn write(bytes: &[u8]) {
-    LINE.with_borrow_mut(|line| {
-        line.extend_from_slice(bytes);
-        if bytes.contains(&b'\n') || line.len() >= FLUSH_AT {
-            publish(line);
-        }
-    });
+    LINE.with_borrow_mut(|line| append(line, bytes, &OUT));
 }
 
-/// Moves `line` to stdout's buffer under one lock, flushing when the
-/// buffer is full.
-fn publish(line: &mut Vec<u8>) {
-    let mut out = OUT.lock().unwrap_or_else(PoisonError::into_inner);
-    out.extend_from_slice(line);
-    line.clear();
+/// Appends `bytes` to `line` and moves everything through its last line
+/// end to `out`; an unfinished line stays in `line`. One unfinished line
+/// past the flush threshold moves as it is, which bounds memory: only a
+/// line that long can mix with another thread's output.
+fn append(line: &mut Vec<u8>, bytes: &[u8], out: &Mutex<Vec<u8>>) {
+    line.extend_from_slice(bytes);
+    let end = match bytes.iter().rposition(|&c| c == b'\n') {
+        Some(at) => line.len() - bytes.len() + at + 1,
+        None if line.len() >= FLUSH_AT => line.len(),
+        None => return,
+    };
+    let mut out = out.lock().unwrap_or_else(PoisonError::into_inner);
+    out.extend(line.drain(..end));
     if out.len() >= FLUSH_AT {
         drain(&mut out);
     }
@@ -236,29 +238,35 @@ mod tests {
         assert_eq!(leak_status(true, 3), 1);
     }
 
-    /// Two threads print lines piece by piece at once; each line reaches
-    /// stdout's buffer whole.
+    /// Two threads print 8-byte lines in pieces at once, each piece but
+    /// the first holding the end of one line and the start of the next:
+    /// each line reaches the shared buffer whole, never an unfinished one.
     #[test]
     fn lines_from_two_threads_never_mix() {
+        let out = std::sync::Arc::new(Mutex::new(Vec::new()));
         let print = |c: u8| {
+            let out = std::sync::Arc::clone(&out);
             move || {
+                let mut line = Vec::new();
+                append(&mut line, &[c; 4], &out);
                 for _ in 0..200 {
-                    for _ in 0..8 {
-                        write(&[c]);
-                    }
-                    write(b"\n");
+                    append(&mut line, &[c; 3], &out);
+                    append(&mut line, &[c, b'\n', c, c, c, c], &out);
                 }
+                line
             }
         };
         let (a, b) = (
             std::thread::spawn(print(b'x')),
             std::thread::spawn(print(b'y')),
         );
-        assert!(a.join().is_ok() && b.join().is_ok());
-        let out = OUT.lock().unwrap_or_else(PoisonError::into_inner);
+        let rest = (a.join(), b.join());
+        assert!(matches!(rest, (Ok(a), Ok(b)) if a == b"xxxx" && b == b"yyyy"));
+        let out = out.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(out.last(), Some(&b'\n'));
         let lines: Vec<&[u8]> = out
             .split(|&c| c == b'\n')
-            .filter(|l| l.first().is_some_and(|c| *c == b'x' || *c == b'y'))
+            .filter(|l| !l.is_empty())
             .collect();
         assert_eq!(lines.len(), 400);
         assert!(lines
