@@ -176,6 +176,12 @@ pub enum LockError {
         package: String,
         pins: [(String, String); 2],
     },
+    /// Two bindings take one crate at one version from different
+    /// sources, which the lock checks cannot tell apart yet.
+    Sources {
+        package: String,
+        bindings: [String; 2],
+    },
     /// The build's lock differs from the bindings': an entry or an edge
     /// added or changed. `binding` is `None` for an entry none pinned.
     Changed {
@@ -198,6 +204,14 @@ impl std::fmt::Display for LockError {
                     f,
                     "bindings `{a}` and `{b}` pin `{package}` at {va} and {vb}, which cargo \
                      would unify; pin one version in both Cargo.lock files"
+                )
+            }
+            LockError::Sources { package, bindings } => {
+                let [a, b] = bindings;
+                write!(
+                    f,
+                    "bindings `{a}` and `{b}` take `{package}` from different sources, \
+                     which is not supported yet; use one registry for it"
                 )
             }
             LockError::Changed { binding, detail } => {
@@ -296,6 +310,14 @@ fn union<'a>(bindings: &[BindingLock<'a>]) -> Result<Union<'a>, LockError> {
             .iter()
             .filter(|p| p.source.is_none() || p.is_pinned())
         {
+            let key = (p.name.clone(), p.version.clone());
+            if let Some((q, _)) = union.get(&key).filter(|(q, _)| q.source != p.source) {
+                let other = owner.get(&key).copied().unwrap_or("another binding");
+                return Err(LockError::Sources {
+                    package: format!("{} {}", q.name, q.version),
+                    bindings: [other.to_string(), binding.to_string()],
+                });
+            }
             union
                 .entry((p.name.clone(), p.version.clone()))
                 .or_insert((p, lock));

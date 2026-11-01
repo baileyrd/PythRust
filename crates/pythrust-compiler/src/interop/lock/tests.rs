@@ -313,3 +313,20 @@ fn verify_checks_a_bindings_own_edges() {
     });
     assert_eq!(verify(&kept, &[("a", &a), ("b", &b)]), Ok(()));
 }
+
+/// One crate at one version from two registries cannot be told apart by
+/// the checks, so it is refused rather than checked wrongly.
+#[test]
+fn one_version_from_two_sources_is_refused() {
+    let a = lock("a", &["s"], &[("s", "1.0.0", &[])]);
+    let mut b = lock("b", &["s"], &[("s", "1.0.0", &[])]);
+    b.packages[1].source = Some("sparse+https://my-registry.example/index/".into());
+    let err = seed(&[("a", &a), ("b", &b)])
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert_eq!(
+        err,
+        "bindings `a` and `b` take `s 1.0.0` from different sources, which is not supported yet; use one registry for it"
+    );
+}
