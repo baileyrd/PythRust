@@ -3,8 +3,10 @@ name: CI jobs
 # CI's workflow parses and declares every expected job. It lives apart
 # from ci.yml so it still runs, and fails, when ci.yml cannot be parsed:
 # a workflow GitHub cannot parse runs no jobs, and no jobs is not green.
-# A required check on main (Nano, 2026-11-02): it runs on every PR, with
-# no path or branch filter, which check_jobs.py checks too.
+# Meant to be a required check on main (Nano, 2026-11-02; branch
+# protection is Nano's to set, and was off when this was written): it
+# runs on every PR, with no path or branch filter, which check_jobs.py
+# checks too.
 on:
   push:
     branches: [main]
