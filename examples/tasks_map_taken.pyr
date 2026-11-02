@@ -1,7 +1,8 @@
 # `map`'s results are an iterator (M6c): taken once, in order, and
 # true even when empty or used up. `in` takes results up to the first
 # match; an exception a task raised ends them. A loop keeps the results
-# it started with when their name is rebound. A result never taken
+# it started with when their name is rebound. `is` and `is not` take
+# none: they compare identity with `None`. A result never taken
 # drops its exception. Results of any type, over any iterable.
 import concurrent.futures
 
@@ -18,6 +19,10 @@ def pair(s: str) -> list[str]:
 
 def scaled(x: int, k: int = 10) -> int:
     return x * k
+
+
+def nothing(x: int) -> None:
+    pass
 
 
 def main() -> None:
@@ -59,6 +64,11 @@ def main() -> None:
         rs = ex.map(square, [1, 2])
         others = ex.map(square, [5])
         print(list(rs or others), list(others))
+        none = ex.map(nothing, [])
+        print(None is none, none is None, None is not none, none is not None)
+        none = ex.map(nothing, [1])
+        print(None is none, none is None, None is not none, none is not None)
+        print(list(none))
         ps = ex.map(pair, ["x", "y"])
         for p in ps:
             p.append("!")

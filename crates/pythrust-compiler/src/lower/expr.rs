@@ -221,8 +221,9 @@ impl<'a> FnBuilder<'_, 'a> {
             if let ast::CmpOp::In | ast::CmpOp::NotIn = op {
                 self.reads_results(right)?;
             }
-            let c = match self.ty(r) {
-                Ty::Results => {
+            // Only membership takes results; `None is rs` is identity.
+            let c = match (self.ty(r), op) {
+                (Ty::Results, ast::CmpOp::In | ast::CmpOp::NotIn) => {
                     let found = self.results_contain(l, r, right.span, span)?;
                     self.negate_if(*op, found, span)
                 }

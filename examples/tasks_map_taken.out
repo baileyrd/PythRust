@@ -15,6 +15,9 @@ rebound 1
 rebound 4
 [16]
 [1, 4] [25]
+False False True True
+False False True True
+[None]
 ['x', 'xx', '!']
 ['y', 'yy', '!']
 done []
