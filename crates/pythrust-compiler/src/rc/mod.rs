@@ -273,7 +273,8 @@ fn copy_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>], lent:
 /// count (atomics cost B, Nano 2026-11-02): `e = Index(h, i)`, then
 /// `x = e`, `Forget(e)`, where `h` is a [`Ty::Held`] list. The hold
 /// keeps the list unchanged and alive, so its element is too; when `x`
-/// is assigned only there, never retained, and released on every path
+/// is assigned only there (not a parameter, whose caller's reference
+/// the first release drops), never retained, and released on every path
 /// while read only before the hold ends ([`released_while`], as a copy
 /// borrows in [`copies`]), the read borrows (`Rvalue::Item`) and `x`'s
 /// releases only null it.
@@ -301,7 +302,8 @@ fn item_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>]) {
         var,
         after,
     } = read;
-    if defined(f, var) != 1 || retained(f, var) != 0 {
+    let param = f.params.contains(&var);
+    if param || defined(f, var) != 1 || retained(f, var) != 0 {
         return;
     }
     let Some(sites) = released_while(f, var, list, (b, after), borrowed) else {

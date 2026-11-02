@@ -61,7 +61,17 @@ def checked(xs: list[str]) -> int:
     return len(xs)
 
 
+# A parameter reused as the loop's variable: its reads stay counted, so
+# its first release drops the caller's reference.
+def reused(s: str, xs: list[str]) -> int:
+    n = 0
+    for s in xs:
+        n += len(s)
+    return n
+
+
 words = ["ab", "c", "AB", "abab", "c"]
 print(total(words), longest_sorted(words), pairs(words))
 print(tagged(words))
 print(first_of(words), checked(words), checked(["a", ""]))
+print(reused("x" * 3, words))

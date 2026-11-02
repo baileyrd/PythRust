@@ -452,6 +452,21 @@ fn an_element_read_after_the_hold_or_through_another_name_is_counted() {
     }
 }
 
+/// A parameter reused as the loop's variable holds the caller's
+/// reference before the loop, which its first release (or the exit
+/// release, when the loop is empty) must drop: its element reads stay
+/// counted.
+#[test]
+fn a_parameter_reused_as_the_loop_variable_is_counted() {
+    let src = concat!(
+        "def f(s: str, rows: list[str]) -> int:\n",
+        "    for s in rows:\n        print(s)\n",
+        "    return 0\n",
+        "print(f('a' + 'b', ['c']))\n",
+    );
+    assert_eq!(held_item_reads(src), (0, 1));
+}
+
 /// A store takes its own count of what it stores, so an element stored
 /// in a value of another type (a tuple in a `list[tuple[str, int]]`)
 /// is still read without one, as `rc::borrows` lets a copy be.
@@ -479,6 +494,7 @@ fn the_for_items_fixture_reads_without_counts_where_it_says() {
         ("tagged", (1, 0)),
         ("first_of", (1, 0)),
         ("checked", (1, 0)),
+        ("reused", (0, 1)),
     ];
     for (name, reads) in want {
         assert_eq!(item_reads(func(&p, name)), reads, "{name}");
