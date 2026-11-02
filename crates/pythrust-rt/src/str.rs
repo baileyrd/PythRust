@@ -267,22 +267,23 @@ pub unsafe extern "C" fn pt_str_contains(hay: *const PtStr, needle: *const PtStr
 /// `str(n)` for an int.
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_str_from_int(n: i64) -> *mut PtStr {
-    into_ptr(PtStr::new(decimal(n)))
+    into_ptr(PtStr::new(decimal(n).into_boxed_str()))
 }
 
-/// `n` in decimal, allocated once at its exact length. `to_string` then
-/// `into` would shrink by `realloc`, which in glibc takes its arena's
+/// `n` in decimal, allocated once at its exact length, so boxing it does
+/// not reallocate. `to_string` then `into` would shrink by `realloc`, which in glibc takes its arena's
 /// lock where `malloc` and `free` mostly do not; tasks building strings
 /// at once wait on it (M6c step 4c, `docs/benchmarks.md`).
-fn decimal(n: i64) -> Box<str> {
+fn decimal(n: i64) -> String {
     let digits = n
         .unsigned_abs()
         .checked_ilog10()
         .map_or(1, |d| d as usize + 1);
     let mut text = String::with_capacity(digits + usize::from(n < 0));
-    // Writing to a `String` cannot fail.
+    // `String`'s `fmt::Write` never errors, and `i64`'s `Display` fails
+    // only if the writer does.
     let _ = write!(text, "{n}");
-    text.into_boxed_str()
+    text
 }
 
 /// `str(b)` for a bool: any nonzero byte is true.
@@ -378,9 +379,21 @@ mod tests {
 
     #[test]
     fn decimal_is_exact_at_the_bounds() {
-        for n in [0, 9, 10, -1, -10, 99, 100, i64::MAX, i64::MIN, i64::MIN + 1] {
+        let bounds = [
+            0,
+            9,
+            10,
+            99,
+            100,
+            999_999_999_999_999_999,
+            1_000_000_000_000_000_000,
+        ];
+        let negated = bounds.map(|n: i64| -n);
+        let extremes = [i64::MAX, i64::MIN, i64::MIN + 1];
+        for n in bounds.into_iter().chain(negated).chain(extremes) {
             let text = decimal(n);
-            assert_eq!(&*text, n.to_string(), "{n}");
+            assert_eq!(text, n.to_string(), "{n}");
+            assert_eq!(text.capacity(), text.len(), "{n}");
         }
     }
 

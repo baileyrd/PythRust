@@ -40,7 +40,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// Strings and sequences allocated and not yet freed. A debug runtime
+/// Strings, sequences and objects allocated and not yet freed. A debug runtime
 /// checks it is 0 when the program ends normally, so a leak fails the
 /// corpus tests. Only a debug runtime counts: one counter bumped by
 /// every allocation and free bounces between cores when tasks allocate
@@ -271,7 +271,7 @@ mod entry {
     }
 
     /// Runs the module, then flushes stdout. A debug runtime then
-    /// fails if any string or sequence leaked.
+    /// fails if any string, sequence or object leaked.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn main() -> i32 {

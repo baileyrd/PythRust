@@ -80,9 +80,18 @@ Two programs, each with a serial control that runs the same work by direct calls
 
 On these four cores, tasks run CPU-bound work 3.2x (`tasks_cpu`) and 3.5x (`tasks_alloc`) faster than the serial native build. CPython's threads are no faster than its serial run (the GIL), so the native task rows are 52x and 9x CPython's. These are the only speedups claimed: work that tasks split evenly, with nothing marked. A task walking a marked value is the other case, slower than serial ([Shared values](#shared-values-m6c)).
 
-`tasks_alloc` was first 4.4x *slower* than its serial run: 0.768 s (0.643 to 0.959) against 0.176 s (0.154 to 0.197), pinned to one core 0.28 s, so the cost was threads on different cores waiting on each other. Two causes, both fixed in this step, both measured:
+`tasks_alloc` was first 4.4x *slower* than its serial run: in the first run 0.768 s (0.643 to 0.959) against 0.176 s (0.154 to 0.197), pinned to one core 0.28 s, so most of the cost was threads on different cores waiting on each other. Two causes, both fixed in this step:
 
 - **A shared leak counter.** Every string, sequence and object allocation and free bumped one atomic counter (`LIVE`), which only a debug runtime reads, to fail leaking programs. Bumped from four cores at once, its cache line moved between them on every allocation. A release runtime no longer counts.
-- **`realloc` in `str(int)`.** `str(n)` formatted into a `String` and shrank it to a `Box<str>` by `realloc`. glibc's `malloc` and `free` mostly use a per-thread cache, but `realloc` takes the arena's lock, and `strace` showed the workers' futex waits inside it (1.3 s of system time per run). `str(n)` now allocates once at its exact length. A standalone Rust program doing `n.to_string().into()` on 8 threads shows the same: about 3x slower than serial, and faster than serial once the string is allocated at its exact length.
+- **`realloc` in `str(int)`.** `str(n)` formatted into a `String` and shrank it to a `Box<str>` by `realloc`. glibc's `malloc` and `free` mostly use a per-thread cache, but `realloc` takes the arena's lock, and `strace -f -k` showed the workers' futex waits with `realloc` on the stack, and `getrusage` without `strace` gave 1.3 s of system time per run. `str(n)` now allocates once at its exact length. A standalone Rust program doing `n.to_string().into()` on 8 threads shows the same: 4x to 6x slower than serial (in two sessions), and faster than serial once the string is allocated at its exact length.
 
-Other runtime functions that build a string through a `String` and shrink it, such as `str` of a float, may still `realloc`; they are not on these benchmarks' path.
+Each fix alone leaves the task run 3x to 4x slower than serial; it takes both (7 runs, median seconds):
+
+| Runtime | `tasks_alloc` | `tasks_alloc_serial` |
+|---|---:|---:|
+| neither fix | 0.702 (0.613 to 0.773) | 0.175 (0.139 to 0.197) |
+| counter only | 0.515 (0.485 to 0.602) | 0.128 (0.106 to 0.191) |
+| `str(int)` only | 0.548 (0.475 to 0.760) | 0.156 (0.127 to 0.183) |
+| both | 0.038 (0.034 to 0.049) | 0.133 (0.106 to 0.158) |
+
+Other runtime functions that build a string through a `String` and may shrink it still `realloc`: `str` of a float (`num::repr`), `repr` of a string (`pt_str_repr`) and the negative-exponent hint (`pow_hint`). They are not on these benchmarks' path. Single-threaded, writing an int into an exact-capacity `String` is 10 to 15% slower than `to_string` in a microbenchmark (std has a fast path); the serial row still improved, as it also lost the counter.
