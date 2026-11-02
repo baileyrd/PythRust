@@ -203,6 +203,11 @@ fn sx_stmt(s: &Stmt) -> String {
             let handlers = handlers.iter().map(sx_handler);
             format!("(try {}{})", sx_block(body), handlers.collect::<String>())
         }
+        StmtKind::With {
+            value,
+            binding,
+            body,
+        } => format!("(with {} {} {})", sx(value), binding.name, sx_block(body)),
     }
 }
 
@@ -914,7 +919,7 @@ fn try_except_errors() {
     let with_else =
         format!("{body} except ValueError : NL INDENT y NL DEDENT else : NL INDENT z NL DEDENT");
     assert_eq!(err(&with_else), "`else` on `try` is not supported yet");
-    let reserved = "'as' is reserved outside `except Name as e`";
+    let reserved = "'as' is allowed only in `except Name as e` and `with value as name`";
     assert_eq!(err("as = 1 NL"), reserved);
     assert_eq!(err("x = y as z NL"), reserved);
     assert_eq!(
@@ -1327,7 +1332,7 @@ fn import_comes_first_at_module_level() {
     assert_eq!(src_err("def f():\n    import sys\n"), late);
     assert_eq!(
         src_err("import json\n"),
-        "no module named `json`; the modules are: hashlib, os, sys; \
+        "no module named `json`; the modules are: concurrent.futures, hashlib, os, sys; \
          a Rust binding needs `--rust json=path`"
     );
     assert!(src_err("import sys.argv\n").contains("import the top-level module"));
@@ -1604,7 +1609,7 @@ fn a_binding_name_is_not_a_value() {
         err("import fastfs\ndef fastfs():\n    pass\n"),
         "`fastfs` names an imported Rust binding; choose another name"
     );
-    let msg = "no module named `fastfs`; the modules are: hashlib, os, sys; \
+    let msg = "no module named `fastfs`; the modules are: concurrent.futures, hashlib, os, sys; \
                a Rust binding needs `--rust fastfs=path`";
     assert_eq!(src_err("import fastfs\n"), msg);
 }

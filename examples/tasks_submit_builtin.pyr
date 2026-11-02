@@ -1,0 +1,12 @@
+# deviation: `submit` and `map` take the name of a function defined with `def` (M6c); CPython also takes builtins.
+# expect-exit: 1
+# expect-error: `submit` takes the name of a function defined with `def`
+import concurrent.futures
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print(ex.submit(len, [1, 2]).result())
+
+
+main()

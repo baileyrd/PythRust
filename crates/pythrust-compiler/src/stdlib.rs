@@ -49,7 +49,17 @@ pub const MODULES: &[ModuleDef] = &[
         vars: &[],
         funcs: &[StdFn::Sha256],
     },
+    // Imported as `import concurrent.futures` only (M6c).
+    ModuleDef {
+        name: "concurrent",
+        vars: &[],
+        funcs: &[StdFn::Executor],
+    },
 ];
+
+/// The one module a program imports by a dotted name: `concurrent`,
+/// whose names all sit under `concurrent.futures`.
+pub const DOTTED_IMPORT: (&str, &str) = ("concurrent", "futures");
 
 /// A runtime function behind a module name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -77,10 +87,13 @@ pub enum StdFn {
     /// `hashlib.sha256(data).hexdigest()` of `bytes`, one call: the hash
     /// object is not a value yet ([`StdFn::chain`]).
     Sha256,
+    /// `concurrent.futures.ThreadPoolExecutor()`: an executor, used only
+    /// as a `with` block's value (M6c).
+    Executor,
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 11] = [
+    pub const ALL: [StdFn; 12] = [
         StdFn::Argv,
         StdFn::Listdir,
         StdFn::Join,
@@ -92,6 +105,7 @@ impl StdFn {
         StdFn::Read,
         StdFn::Close,
         StdFn::Sha256,
+        StdFn::Executor,
     ];
 
     /// The builtin name stages call it by: the dotted name a program
@@ -110,6 +124,7 @@ impl StdFn {
             StdFn::Read => "BufferedReader.read",
             StdFn::Close => "BufferedReader.close",
             StdFn::Sha256 => "hashlib.sha256",
+            StdFn::Executor => "concurrent.futures.ThreadPoolExecutor",
         }
     }
 
@@ -145,7 +160,8 @@ impl StdFn {
             | StdFn::Isfile
             | StdFn::Islink
             | StdFn::Close
-            | StdFn::Sha256 => None,
+            | StdFn::Sha256
+            | StdFn::Executor => None,
         }
     }
 
@@ -193,7 +209,16 @@ impl ModuleDef {
 
 /// The importable module names, sorted, for messages.
 pub fn module_names() -> String {
-    let mut names: Vec<&str> = MODULES.iter().map(|m| m.name).collect();
+    let (top, sub) = DOTTED_IMPORT;
+    let dotted = format!("{top}.{sub}");
+    let shown = |m: &ModuleDef| {
+        if m.name == top {
+            dotted.as_str()
+        } else {
+            m.name
+        }
+    };
+    let mut names: Vec<&str> = MODULES.iter().map(shown).collect();
     names.sort_unstable();
     names.join(", ")
 }

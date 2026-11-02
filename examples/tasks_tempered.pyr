@@ -1,0 +1,19 @@
+# deviation: tempered code cannot use an executor until the `pause` check lands (M6c, Nano 2026-11-01); CPython runs it loosened.
+# expect-exit: 1
+# expect-error: tempered `squares` cannot use an executor
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+temper def squares(xs: list[int]) -> list[int]:
+    out: list[int] = []
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for r in ex.map(square, xs):
+            out.append(r)
+    return out
+
+
+print(squares([1, 2]))

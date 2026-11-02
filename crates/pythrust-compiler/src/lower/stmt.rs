@@ -86,6 +86,7 @@ impl FnBuilder<'_, '_> {
             } => self.for_stmt(target, iter, body, orelse),
             StmtKind::Raise(value) => self.raise_stmt(value, s.span),
             StmtKind::Try { body, handlers } => self.try_stmt(body, handlers),
+            StmtKind::With { .. } => Err(unsupported(s.span, "tasks (`concurrent.futures`)")),
         }
     }
 

@@ -156,7 +156,10 @@ impl<'a> Parser<'a> {
             return error(tok.span, msg);
         }
         if tok.kind == TokenKind::As {
-            return error(tok.span, "'as' is reserved outside `except Name as e`");
+            return error(
+                tok.span,
+                "'as' is allowed only in `except Name as e` and `with value as name`",
+            );
         }
         let found = describe(&tok.kind);
         error(tok.span, format!("expected {expected}, found {found}"))
@@ -226,6 +229,7 @@ impl<'a> Parser<'a> {
             TokenKind::While => self.while_stmt(),
             TokenKind::For => self.for_stmt(),
             TokenKind::Try => self.try_stmt(),
+            TokenKind::With => self.with_stmt(),
             TokenKind::Import => {
                 let msg = "`import` must come at module top level, before other statements";
                 Err(error(self.tok(0).span, msg))
@@ -528,6 +532,28 @@ impl<'a> Parser<'a> {
         }
         Ok(Stmt {
             kind: StmtKind::Try { body, handlers },
+            span: self.span_from(start),
+        })
+    }
+
+    /// `'with' expr 'as' NAME ':' block`. Inference checks that the
+    /// value is an executor, the one context manager so far.
+    fn with_stmt(&mut self) -> Result<Stmt> {
+        let start = self.bump().span;
+        let value = self.expr()?;
+        if !self.eat(&TokenKind::As) {
+            let msg = "`with` needs a name: write `with value as name:`";
+            return Err(error(self.tok(0).span, msg));
+        }
+        let binding = self.binding_name("a name to bind the value to")?;
+        self.expect(&TokenKind::Colon)?;
+        let body = self.block()?;
+        Ok(Stmt {
+            kind: StmtKind::With {
+                value,
+                binding,
+                body,
+            },
             span: self.span_from(start),
         })
     }
@@ -1284,6 +1310,7 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Raise => "raise",
         TokenKind::Import => "import",
         TokenKind::As => "as",
+        TokenKind::With => "with",
         TokenKind::Pipe => "|",
         TokenKind::Plus => "+",
         TokenKind::Minus => "-",

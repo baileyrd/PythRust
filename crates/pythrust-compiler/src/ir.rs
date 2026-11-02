@@ -143,7 +143,7 @@ pub enum View {
 }
 
 /// Index into [`Program::funcs`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FuncId(pub usize);
 
 /// Index into [`Program::globals`].
@@ -171,6 +171,11 @@ pub struct Program {
     /// The globals that hold module variables, by the variable's name;
     /// for diagnostics.
     pub global_names: BTreeMap<GlobalId, String>,
+    /// Functions lowered without their bodies, which use tasks (M6c)
+    /// lowering cannot express yet: analysis sees each as doing anything
+    /// to its arguments. Only [`crate::lower::lower_every`] makes them;
+    /// a program `build` compiles has none.
+    pub opaque: BTreeSet<FuncId>,
 }
 
 /// One monomorphic function. `blocks[0]` is the entry; `params` are the

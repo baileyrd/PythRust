@@ -1,0 +1,16 @@
+# deviation: executors, futures and `map`'s results stay in the function that made them (M6c, Nano 2026-11-01); CPython lets a future be returned.
+# expect-exit: 1
+# expect-error: `start` cannot return one
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def start(x: int):
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        return ex.submit(square, x)
+
+
+print(start(3).result())

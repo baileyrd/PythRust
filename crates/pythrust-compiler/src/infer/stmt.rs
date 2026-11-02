@@ -98,6 +98,18 @@ impl Checker {
                 self.block(body)?;
                 handlers.iter().try_for_each(|h| self.handler(h))
             }
+            StmtKind::With {
+                value,
+                binding,
+                body,
+            } => {
+                let t = self.expr(value)?;
+                let what = "`with` takes an executor: \
+                            `concurrent.futures.ThreadPoolExecutor()`";
+                self.expect(value.span, &Type::Executor, &t, what)?;
+                self.bind_name(&binding.name, binding.span, &Type::Executor)?;
+                self.block(body)
+            }
         }
     }
 

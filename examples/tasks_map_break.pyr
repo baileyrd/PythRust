@@ -1,0 +1,25 @@
+# deviation: `run` runs every task `map` started even when a `for` over its results is left early, and leaving the `with` waits for them; CPython cancels the tasks that have not started.
+# expect-exit: 1
+# Leaving the loop early. `run` has run every task by then, so the last
+# one's overflow (a fault, which checked integers make fatal) stops the
+# program before anything prints. CPython cancels that task, or runs it
+# without overflowing and drops its result, and prints both lines. The
+# fixture shows this deviation through another one, checked overflow.
+import concurrent.futures
+
+
+def step(i: int) -> int:
+    if i == 99999:
+        return i * i * i * i
+    return i
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for r in ex.map(step, range(100000)):
+            print("first", r)
+            break
+    print("after")
+
+
+main()

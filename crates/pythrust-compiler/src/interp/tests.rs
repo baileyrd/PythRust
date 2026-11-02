@@ -1609,3 +1609,67 @@ fn a_module_with_rust_stubs_runs_nothing() {
     assert_eq!(err, Err((DiagKind::Runtime, gap)));
     assert!(out.is_empty());
 }
+
+// ---- tasks (M6c) ------------------------------------------------------
+
+const TASKS: &str = "import concurrent.futures\n";
+
+#[test]
+fn a_task_counts_its_depth_from_zero() {
+    // `main` is 500 calls deep when it submits a task that recurses 990
+    // deep: fine, since each task starts from zero, as a thread does.
+    let src = format!(
+        "{TASKS}def rec(n):\n    if n == 0:\n        return 0\n    return 1 + rec(n - 1)\n\
+         def down(n):\n    if n > 0:\n        return down(n - 1)\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         return ex.submit(rec, 990).result()\nprint(down(500))\n"
+    );
+    assert_eq!(src_ok(&src), "990\n");
+    let over = src.replace("990", "1000");
+    assert!(src_fails(&over).contains("RecursionError"));
+}
+
+#[test]
+fn tasks_nested_without_end_are_a_fault() {
+    let src = format!(
+        "{TASKS}def nest(n):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         return ex.submit(nest, n + 1).result()\nprint(nest(0))\n"
+    );
+    assert_eq!(
+        src_fails(&src),
+        "RecursionError: tasks nest too deeply to run at submit"
+    );
+}
+
+#[test]
+fn a_fault_in_a_task_stops_the_program() {
+    let src = format!(
+        "{TASKS}def boom(x):\n    return [1][x]\n\
+         def main():\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         f = ex.submit(boom, 5)\n        print(\"never\")\nmain()\n"
+    );
+    // An index out of range is catchable: kept for `result()`, never
+    // taken, so dropped.
+    assert_eq!(src_ok(&src), "never\n");
+    let fatal = src.replace("[1][x]", "x * 9223372036854775807");
+    let got = src_fails(&fatal);
+    assert!(got.contains("OverflowError"), "{got}");
+}
+
+#[test]
+fn results_are_taken_once_and_raise_in_order() {
+    let src = format!(
+        "{TASKS}def f(x):\n    if x == 2:\n        raise ValueError(\"two\")\n    return x\n\
+         def main():\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         rs = ex.map(f, [1, 2, 3])\n        try:\n            for r in rs:\n                \
+         print(r)\n        except ValueError as e:\n            print(\"caught\", e)\n        \
+         print(list(rs))\n        rs = ex.map(f, [1, 3, 5])\n        print(3 in rs, list(rs))\n        \
+         print(3 in ex.map(f, [3, 2]), 4 in ex.map(f, [1, 3]))\n        \
+         print(list(ex.map(f, [1, 2])))\nmain()\n"
+    );
+    // As CPython: an exception ends `map`'s generator, and `in` takes
+    // results only up to a match.
+    let (out, err) = run_src(&src);
+    assert_eq!(out, "1\ncaught two\n[]\nTrue [5]\nTrue False\n");
+    assert_eq!(err.as_deref(), Some("ValueError: two"));
+}

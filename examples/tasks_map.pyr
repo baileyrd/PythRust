@@ -1,0 +1,58 @@
+# `ex.map(f, xs)` (M6c): one task per element, results in order; an
+# exception escaping a task is raised by the step that takes its
+# result, after the earlier ones; `list`, `sorted`, `set` and `in` take
+# results too. A task may start tasks of its own.
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    if x == 3:
+        raise ValueError("three")
+    return x * x
+
+
+def words(n: int) -> str:
+    return "w" * n
+
+
+def total(xs: list[int]) -> int:
+    t = 0
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for v in ex.map(square, xs):
+            t += v
+    return t
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for r in ex.map(square, [1, 2]):
+            print(r)
+        out = []
+        try:
+            for r in ex.map(square, [4, 5, 3, 6]):
+                out.append(r)
+        except ValueError as e:
+            print("caught", e, out)
+        rs = ex.map(square, [1, 3, 2])
+        try:
+            for r in rs:
+                print(r)
+        except ValueError:
+            print("an exception ends them:", list(rs))
+        rs = ex.map(square, [1, 2, 4])
+        print(4 in rs, list(rs))
+        print(list(ex.map(words, [3, 1, 2])))
+        print(sorted(ex.map(square, [5, 1, 4])))
+        print(sorted(set(ex.map(words, [1, 1, 2]))))
+        print(4 in ex.map(square, [1, 2]), 9 in ex.map(square, [1, 2]))
+        print(list(ex.map(square, [])))
+        results = ex.map(total, [[1, 2], [4], []])
+        for t in results:
+            print("total", t)
+        for t in results:
+            print("never: map's results are taken once")
+        else:
+            print("taken")
+
+
+main()

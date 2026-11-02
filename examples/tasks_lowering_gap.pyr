@@ -1,0 +1,24 @@
+# deviation: a program that uses tasks and that lowering cannot express is a compile error naming why, so its ownership checks are never skipped silently (M6c, Nano 2026-11-02); CPython runs it.
+# expect-exit: 1
+# expect-error: this program uses tasks, so its ownership checks cannot be skipped
+import concurrent.futures
+
+# `print` called before the `def` that shadows it: a lowering gap that,
+# without tasks, leaves the program to the conservative fallback.
+x = print(7)
+
+
+def print(n):
+    return 1
+
+
+def square(n: int) -> int:
+    return n * n
+
+
+def run(n: int) -> int:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        return ex.submit(square, n).result()
+
+
+run(2)
