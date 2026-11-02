@@ -433,6 +433,7 @@ impl<'a> Cx<'a> {
         let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret.unwrap_or(Ty::None));
         b.hints = hints.clone();
         b.caught = scope::caught(&f.body);
+        b.tasks_raise = b.raising_tasks(&f.body);
         if job.ret.is_none() {
             let sig = b.cx.types.func(&f.name.name);
             b.open_ret = Some(sig.map_or(Type::None, |sig| sig.ret.clone()));
@@ -683,6 +684,9 @@ struct FnBuilder<'c, 'a> {
     /// Where an exception no `try` here catches goes, created on first
     /// use: the exit block, or in the module's code [`Term::Uncaught`].
     unwind: Option<BlockId>,
+    /// Whether a task this body starts may raise: each step that takes
+    /// a task's result then may ([`FnBuilder::took_result`]).
+    tasks_raise: bool,
 }
 
 impl<'c, 'a> FnBuilder<'c, 'a> {
@@ -716,6 +720,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             unbinds: Vec::new(),
             caught: BTreeSet::new(),
             unwind: None,
+            tasks_raise: false,
         };
         b.cur = b.new_block();
         b.exit = b.new_block();

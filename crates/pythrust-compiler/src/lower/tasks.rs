@@ -4,14 +4,13 @@
 //! They lower as `run` runs them: each task to completion where it is
 //! submitted, a call of its function there. A future is its task's
 //! result, and `map`'s results are a list of them ([`super::concrete`]),
-//! so `fut.result()` reads the value. A task's exception leaves at the
-//! call, where `run` keeps it until the result is taken; the summaries
-//! analysis builds from loose bodies do not depend on which, and
-//! tempered code uses no executor.
+//! so `fut.result()` reads the value. The call neither raises nor ends
+//! the path: `run` keeps what escapes the task, and raises it where its
+//! result is taken ([`FnBuilder::took_result`]).
 
 use crate::ast::{Arg, Block, Expr, ExprKind, FuncDef, Ident};
 use crate::diag::Result;
-use crate::infer::Type;
+use crate::infer::{scope, Type};
 use crate::ir::{Inst, LocalId, Operand, Rvalue, Ty};
 use crate::span::Span;
 
@@ -42,7 +41,11 @@ impl<'a> FnBuilder<'_, 'a> {
         match (self.node_type(value.span)?, attr) {
             (Type::Executor, "submit") => self.submit(args, span).map(Some),
             (Type::Executor, "map") => self.map(args, span).map(Some),
-            (Type::Future(_), "result") => self.expr(value).map(Some),
+            (Type::Future(_), "result") => {
+                let v = self.expr(value)?;
+                self.took_result(span)?;
+                Ok(Some(v))
+            }
             _ => Ok(None),
         }
     }
@@ -58,7 +61,7 @@ impl<'a> FnBuilder<'_, 'a> {
         let Type::Future(node) = self.node_type(span)? else {
             return Err(internal(span, "`submit` is not a future"));
         };
-        self.call_def(def, slots, node, span)
+        Ok(self.emit_call(def, slots, node, span)?.0)
     }
 
     /// `ex.map(f, xs)`: a new list of `f(x)` for each `x` of `xs`, read
@@ -72,17 +75,17 @@ impl<'a> FnBuilder<'_, 'a> {
         let s = self.expr(&xs.value)?;
         let before = self.cur;
         let out = self.new_local(Ty::None);
+        // Released where the statement ends, or where a raise leaves it.
+        if let Some(pool) = self.pools.last_mut() {
+            pool.push(out);
+        }
         let looped = Looped::Map {
             f: &def.name.name,
             out,
             span,
         };
         self.for_value(&looped, s, xs.value.span)?;
-        let ty = self.ty_at(span)?;
-        self.locals[out.0] = ty;
-        if let Some(pool) = self.pools.last_mut() {
-            pool.push(out);
-        }
+        self.locals[out.0] = self.results_ty(span)?;
         let make = Inst::Assign {
             dest: out,
             value: Rvalue::NewSeq(Vec::new()),
@@ -90,6 +93,19 @@ impl<'a> FnBuilder<'_, 'a> {
         };
         self.blocks[before.0].insts.push(make);
         Ok(Operand::Local(out))
+    }
+
+    /// The type of `map`'s results at `span`. A result type no call
+    /// decided (`ex.map(f, ())` of a generic `f`) holds nothing, so any
+    /// slot type will do, as for `not []`.
+    fn results_ty(&mut self, span: Span) -> Result<Ty> {
+        let node = self.node_type(span)?;
+        let open = matches!(node, Type::Results(t) if matches!(**t, Type::Var(v)
+            if !self.subst.contains_key(&v) && !self.dead.contains_key(&v)));
+        match open {
+            true => Ok(self.cx.seqs.list(Ty::None)),
+            false => self.concrete(node, span),
+        }
     }
 
     /// One item `x` of `map`: `f(x)`, appended to `out`.
@@ -102,7 +118,7 @@ impl<'a> FnBuilder<'_, 'a> {
         let Type::Results(node) = self.node_type(span)? else {
             return Err(internal(span, "`map` gives no results"));
         };
-        let value = self.call_def(def, slots, node, span)?;
+        let (value, _) = self.emit_call(def, slots, node, span)?;
         let list = Operand::Local(out);
         self.emit(Inst::Append { list, value, span });
         Ok(())
@@ -124,5 +140,32 @@ impl<'a> FnBuilder<'_, 'a> {
             .get(name)
             .copied()
             .ok_or_else(|| unsupported(span, &what()))
+    }
+
+    /// Whether a task `body` starts may raise.
+    pub(super) fn raising_tasks(&self, body: &[crate::ast::Stmt]) -> bool {
+        let tasks = scope::exprs(body).into_iter().filter_map(scope::task_call);
+        tasks
+            .map(|(name, _, _)| name)
+            .any(|name| self.may_raise(name))
+    }
+
+    /// A step that takes a task's result at `span`: `fut.result()`, or
+    /// reading `map`'s results. Futures and `map`'s results stay in the
+    /// function that made them, so it may raise what any task the body
+    /// starts may, as `raises` counts it (D8).
+    pub(super) fn took_result(&mut self, span: Span) -> Result<()> {
+        if !self.tasks_raise {
+            return Ok(());
+        }
+        self.check_raised(span)
+    }
+
+    /// [`FnBuilder::took_result`] where `e` is `map`'s results.
+    pub(super) fn reads_results(&mut self, e: &Expr) -> Result<()> {
+        match self.node_type(e.span)? {
+            Type::Results(_) => self.took_result(e.span),
+            _ => Ok(()),
+        }
     }
 }

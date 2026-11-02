@@ -13,11 +13,13 @@ use super::{unsupported, FnBuilder, Loop};
 
 /// What a loop does with each item.
 pub(super) enum Looped<'s> {
-    /// A `for` statement's target, body and `else`.
+    /// A `for` statement's target, body and `else`; `takes` where it
+    /// reads `map`'s results, each step taking a task's result.
     For {
         target: &'s Target,
         body: &'s Block,
         orelse: &'s Block,
+        takes: Option<Span>,
     },
     /// `ex.map(f, xs)` (M6c): runs the task `f` on the item and appends
     /// its result to `out` ([`FnBuilder::map_item`]).
@@ -331,10 +333,12 @@ impl FnBuilder<'_, '_> {
         body: &Block,
         orelse: &Block,
     ) -> Result<()> {
+        let takes = matches!(self.node_type(iter.span)?, Type::Results(_)).then_some(iter.span);
         let looped = Looped::For {
             target,
             body,
             orelse,
+            takes,
         };
         if let Some(args) = self.range_args(iter) {
             let mut ops = Vec::new();
@@ -466,7 +470,15 @@ impl FnBuilder<'_, '_> {
         end: BlockId,
     ) -> Result<()> {
         match l {
-            Looped::For { target, body, .. } => {
+            Looped::For {
+                target,
+                body,
+                takes,
+                ..
+            } => {
+                if let Some(at) = takes {
+                    self.took_result(*at)?;
+                }
                 self.bind_iteration(target, next)?;
                 self.loop_body(body, latch, end)
             }

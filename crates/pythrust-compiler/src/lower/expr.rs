@@ -215,6 +215,9 @@ impl<'a> FnBuilder<'_, 'a> {
             let Some(r) = self.on_branch(right, i > 0)? else {
                 break;
             };
+            if let ast::CmpOp::In | ast::CmpOp::NotIn = op {
+                self.reads_results(right)?;
+            }
             let c = self.cmp(*op, l, r, span)?;
             self.assign(dest, Rvalue::Use(c), span);
             if i + 1 == rest.len() {
@@ -530,6 +533,9 @@ impl<'a> FnBuilder<'_, 'a> {
             ops.push(self.expr(&a.value)?);
         }
         let Some(def) = def else {
+            if matches!(name.as_str(), "list" | "sorted" | "set") {
+                args.iter().try_for_each(|a| self.reads_results(&a.value))?;
+            }
             return self.builtin(name, args, ops, span);
         };
         let slots = bind_params(def, args, ops)?;
@@ -539,13 +545,34 @@ impl<'a> FnBuilder<'_, 'a> {
 
     /// A call of `def` with `slots`, its arguments in parameter order
     /// (`None` where the default applies), whose result has type `node`.
-    pub(super) fn call_def(
+    fn call_def(
         &mut self,
         def: &'a FuncDef,
         slots: Vec<Option<Operand>>,
         node: &'a Type,
         span: Span,
     ) -> Result<Operand> {
+        let (result, id) = self.emit_call(def, slots, node, span)?;
+        if self.may_raise(&def.name.name) {
+            self.check_raised(span)?;
+        }
+        if self.cx.diverges.contains(&id) {
+            // Its result, of a settled type, is never there to use.
+            return Err(self.diverge(span));
+        }
+        Ok(result)
+    }
+
+    /// As [`FnBuilder::call_def`], but what it raises, or whether it
+    /// returns at all, is left to the caller: the result, and the
+    /// instance called.
+    pub(super) fn emit_call(
+        &mut self,
+        def: &'a FuncDef,
+        slots: Vec<Option<Operand>>,
+        node: &'a Type,
+        span: Span,
+    ) -> Result<(Operand, FuncId)> {
         let name = def.name.name.as_str();
         let mut bound = Vec::new();
         for (k, op) in slots.into_iter().enumerate() {
@@ -583,14 +610,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.emit(Inst::Forget(l));
             }
         }
-        if self.may_raise(name) {
-            self.check_raised(span)?;
-        }
-        if self.cx.diverges.contains(&id) {
-            // Its result, of a settled type, is never there to use.
-            return Err(self.diverge(span));
-        }
-        Ok(result)
+        Ok((result, id))
     }
 
     /// Abandons the expression being lowered: the path never gets past

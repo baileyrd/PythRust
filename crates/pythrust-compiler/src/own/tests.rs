@@ -1585,3 +1585,96 @@ fn known_unchecked_task_gaps_stay_listed() {
         );
     }
 }
+
+#[test]
+fn code_after_a_task_that_always_raises_is_checked() {
+    // `run` keeps the task's exception for `result()`, so the code after
+    // `submit` or `map` runs: it is not dead.
+    let raises = "def ok(n):\n    raise ValueError(\"x\")\n";
+    for start in ["fut = ex.submit(ok, 1)", "rs = ex.map(ok, [1])"] {
+        let src = format!(
+            "import concurrent.futures\n{ADD}{raises}def g() -> None:\n    rows: list[list[int]] = []\n    row = [1]\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        {start}\n        \
+             add(rows, row)\n        add(rows, row)\n    print(rows)\ng()\n"
+        );
+        assert!(mode_err(&src).0.contains("list(...)"), "{src}");
+    }
+}
+
+#[test]
+fn a_task_raises_where_its_result_is_taken() {
+    // The handler sees `b = a[0]`, which ran after `submit` and before
+    // the step that took the result raised.
+    let bad =
+        "def bad(n: int) -> int:\n    if n > 0:\n        raise ValueError(\"x\")\n    return n\n";
+    let takes = [
+        "fut = ex.submit(bad, k)\n            b = a[0]\n            print(fut.result())",
+        "rs = ex.map(bad, [k])\n            b = a[0]\n            for r in rs:\n                print(r)",
+        "rs = ex.map(bad, [k])\n            b = a[0]\n            print(list(rs))",
+        "rs = ex.map(bad, [k])\n            b = a[0]\n            print(1 in rs)",
+    ];
+    for take in takes {
+        let src = format!(
+            "import concurrent.futures\n{ADD}{bad}def g(k: int) -> None:\n    a: list[list[int]] = [[0]]\n    b = [1]\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        try:\n            {take}\n        \
+             except ValueError:\n            add(a, b)\n    print(a)\ng(1)\n"
+        );
+        assert!(mode_err(&src).0.contains("list(...)"), "{src}");
+    }
+}
+
+#[test]
+fn map_lowers_over_every_iterable() {
+    let id = "def same(x):\n    return x\n";
+    for xs in [
+        "{1: 2}",
+        "{1, 2}",
+        "{1: 2}.items()",
+        "range(3)",
+        "()",
+        "\"ab\"",
+        "(1, 2)",
+    ] {
+        let src = format!(
+            "import concurrent.futures\n{id}def run() -> None:\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+             print(list(ex.map(same, {xs})))\nrun()\n"
+        );
+        assert_eq!(analyzed(&src).precision, Precision::Precise, "{src}");
+        assert_eq!(checked(&src), Ok(()), "{src}");
+    }
+}
+
+#[test]
+fn a_task_default_and_a_nested_task_are_followed() {
+    let add =
+        "def add(n: int, acc: list[int] = []) -> int:\n    acc.append(n)\n    return len(acc)\n";
+    let src = format!(
+        "import concurrent.futures\n{add}def run() -> int:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         return ex.submit(add, 1).result() + len(list(ex.map(add, [2, 3])))\nprint(run())\n"
+    );
+    assert_eq!(analyzed(&src).precision, Precision::Precise);
+    assert_eq!(checked(&src), Ok(()));
+    // `outer` runs `grow` as a task of its own; `run` runs `outer`.
+    let grow = "def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return 0\n";
+    let outer = "def outer(xs: list[int]) -> int:\n    \
+                 with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+                 return ex.submit(grow, xs).result()\n";
+    let nested = task_over(
+        &format!("{grow}{outer}"),
+        "return ex.submit(outer, xs).result()",
+    );
+    assert_eq!(analyzed(&nested).funcs["run"].params[0].mode, Mode::Mut);
+}
+
+#[test]
+fn a5_holds_in_a_function_that_uses_tasks() {
+    let src = format!(
+        "import concurrent.futures\n{ADD}def sq(x: int) -> int:\n    return x * x\n\
+         def g() -> None:\n    row = [1]\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         print(ex.submit(sq, 2).result())\n        add([row], row)\ng()\n"
+    );
+    assert!(mode_err(&src).0.contains("list(...)"), "{src}");
+}
