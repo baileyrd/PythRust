@@ -109,6 +109,10 @@ enum Rt {
     SeqPush,
     SeqLen,
     SeqGet,
+    SeqHold,
+    SeqReleaseHeld,
+    SeqLenHeld,
+    SeqGetHeld,
     ListSet,
     SeqInc,
     SeqDec,
@@ -164,7 +168,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 85] = [
+    const ALL: [Rt; 89] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -198,6 +202,10 @@ impl Rt {
         Rt::SeqPush,
         Rt::SeqLen,
         Rt::SeqGet,
+        Rt::SeqHold,
+        Rt::SeqReleaseHeld,
+        Rt::SeqLenHeld,
+        Rt::SeqGetHeld,
         Rt::ListSet,
         Rt::SeqInc,
         Rt::SeqDec,
@@ -287,6 +295,10 @@ impl Rt {
             Rt::SeqPush => "pt_seq_push",
             Rt::SeqLen => "pt_seq_len",
             Rt::SeqGet => "pt_seq_get",
+            Rt::SeqHold => "pt_seq_hold",
+            Rt::SeqReleaseHeld => "pt_seq_release_held",
+            Rt::SeqLenHeld => "pt_seq_len_held",
+            Rt::SeqGetHeld => "pt_seq_get_held",
             Rt::ListSet => "pt_list_set",
             Rt::SeqInc => "pt_seq_inc",
             Rt::SeqDec => "pt_seq_dec",
@@ -371,10 +383,11 @@ impl Rt {
             Rt::IntParse => (vec![ptr, ptr], Some(I64)),
             Rt::SeqNew => (vec![ptr, ptr, I64], Some(ptr)),
             Rt::SeqPush => (vec![ptr, I64], None),
-            Rt::SeqLen => (vec![ptr], Some(I64)),
-            Rt::SeqGet => (vec![ptr, I64, ptr], Some(I64)),
+            Rt::SeqLen | Rt::SeqLenHeld => (vec![ptr], Some(I64)),
+            Rt::SeqGet | Rt::SeqGetHeld => (vec![ptr, I64, ptr], Some(I64)),
+            Rt::SeqHold => (vec![ptr], Some(ptr)),
             Rt::ListSet => (vec![ptr, I64, I64], Some(I8)),
-            Rt::SeqInc | Rt::SeqDec | Rt::WriteSeq => (vec![ptr], None),
+            Rt::SeqInc | Rt::SeqDec | Rt::SeqReleaseHeld | Rt::WriteSeq => (vec![ptr], None),
             Rt::SeqEq => (vec![ptr, ptr], Some(I8)),
             Rt::SeqCmp => (vec![ptr, ptr], Some(I64)),
             Rt::ListContains => (vec![ptr, I64], Some(I8)),
@@ -535,7 +548,8 @@ impl<'r> Codegen<'r> {
             | Ty::File
             | Ty::Exec
             | Ty::Future
-            | Ty::Results => self.ptr,
+            | Ty::Results
+            | Ty::Held(_) => self.ptr,
         }
     }
 
@@ -844,8 +858,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::Set(_)
             | Ty::View(_) => Rt::WriteSeq,
             Ty::Bytes | Ty::File => Rt::WriteObj,
-            Ty::Exec | Ty::Future | Ty::Results => {
-                return Err(backend("printing a task's handle".to_string()))
+            Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
+                return Err(backend(
+                    "printing a task's handle or a loop's hold".to_string(),
+                ))
             }
         };
         self.call_rt(rt, &[v]);
@@ -965,7 +981,12 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Concat(a, b) => self.rt_on(Rt::StrConcat, &[*a, *b]),
             Rvalue::Repeat(s, n) => self.rt_nonnull(Rt::StrRepeat, &[*s, *n], span, TOO_LARGE),
             Rvalue::Index(d, k) if is_table(self.func.ty(*d)) => self.dict_get(*d, *k, dest),
-            Rvalue::Index(s, i) if is_seq(self.func.ty(*s)) => self.item(*s, *i, dest, span),
+            Rvalue::Index(s, i) if is_seq(self.func.ty(*s)) => {
+                self.item(Rt::SeqGet, *s, *i, dest, span)
+            }
+            Rvalue::Index(s, i) if matches!(self.func.ty(*s), Ty::Held(_)) => {
+                self.item(Rt::SeqGetHeld, *s, *i, dest, span)
+            }
             Rvalue::Index(s, i) if self.func.ty(*s) == Ty::Range => self.range_item(*s, *i, span),
             Rvalue::Index(s, i) => self.str_item(*s, *i, span),
             Rvalue::Len(s)
@@ -975,6 +996,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             {
                 self.rt_on(Rt::SeqLen, &[*s])
             }
+            Rvalue::Len(s) if matches!(self.func.ty(*s), Ty::Held(_)) => {
+                self.rt_on(Rt::SeqLenHeld, &[*s])
+            }
+            Rvalue::Hold(s) => self.rt_on(Rt::SeqHold, &[*s]),
             Rvalue::Entry(t, i, part) => self.entry(*t, *i, *part, dest),
             Rvalue::View(d) => self.view(*d, self.func.locals[dest.0]),
             Rvalue::Contains { hay, needle } if is_table(self.func.ty(*hay)) => {
@@ -1061,8 +1086,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::View(_) => Rt::StrFromSeq,
             Ty::Bytes | Ty::File => Rt::ObjStr,
             Ty::Exc => Rt::ExcStr,
-            Ty::Exec | Ty::Future | Ty::Results => {
-                return Err(backend("`str` of a task's handle".to_string()))
+            Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
+                return Err(backend(
+                    "`str` of a task's handle or a loop's hold".to_string(),
+                ))
             }
             Ty::Str => {
                 self.call_rt(Rt::StrInc, &[v]);
@@ -1327,7 +1354,8 @@ fn is_table(ty: Ty) -> bool {
 }
 
 /// The runtime call taking a new reference to a `ty` value. An executor
-/// has one owner and is never copied.
+/// has one owner and is never copied. A loop's hold takes its list's
+/// reference before the hold starts, as any list's.
 fn rc_inc(types: &[Compound], ty: Ty) -> Result<Rt> {
     match counted(types, ty) {
         Ty::Str => Ok(Rt::StrInc),
@@ -1346,6 +1374,7 @@ fn rc_dec(types: &[Compound], ty: Ty) -> Rt {
         Ty::Bytes | Ty::File => Rt::ObjDec,
         Ty::Future => Rt::FutDec,
         Ty::Exec => Rt::ExecEnd,
+        Ty::Held(_) => Rt::SeqReleaseHeld,
         _ => Rt::SeqDec,
     }
 }

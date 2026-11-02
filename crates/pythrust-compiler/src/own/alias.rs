@@ -991,7 +991,7 @@ fn rvalue_operands(rv: &Rvalue) -> Vec<Operand> {
         Rvalue::Submit { exec, args, .. } => {
             std::iter::once(*exec).chain(args.iter().copied()).collect()
         }
-        Rvalue::TaskResult(a) | Rvalue::NextResult(a) => vec![*a],
+        Rvalue::TaskResult(a) | Rvalue::NextResult(a) | Rvalue::Hold(a) => vec![*a],
         Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
         Rvalue::StrLit(_)
         | Rvalue::Global(_)

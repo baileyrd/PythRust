@@ -108,6 +108,13 @@ pub enum Ty {
     /// value itself is always true. Only `build` makes one; analysis
     /// lowers `map`'s results as a list of the results.
     Results,
+    /// A `for` loop's own reference to the list `types[id]` it walks,
+    /// holding a read borrow of it for the whole loop
+    /// ([`Rvalue::Hold`]): its [`Rvalue::Len`] and [`Rvalue::Index`]
+    /// skip the list's borrow word, and releasing it drops the borrow,
+    /// then the reference. Only `build` makes one, for a loop whose
+    /// statements cannot change any list of that type (atomics cost A).
+    Held(TypeId),
 }
 
 impl Ty {
@@ -129,6 +136,7 @@ impl Ty {
                 | Ty::Exec
                 | Ty::Future
                 | Ty::Results
+                | Ty::Held(_)
         )
     }
 }
@@ -407,6 +415,9 @@ pub enum Rvalue {
     /// takes the next, waits for its task and gives its result, as
     /// [`Rvalue::TaskResult`]; when it raises, the rest are dropped.
     NextResult(Operand),
+    /// `t = Hold(t)`: starts a read borrow of the list `t` refers to,
+    /// keeping `t`'s reference, which makes `t` a [`Ty::Held`] local.
+    Hold(Operand),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

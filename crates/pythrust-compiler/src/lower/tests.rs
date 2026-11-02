@@ -1091,3 +1091,95 @@ fn tasks_lower_as_calls_for_analysis() {
         insts().any(|i| matches!(i, Inst::Append { list: Operand::Local(l), .. } if *l == out));
     assert!(appended, "each result is appended");
 }
+
+/// How many loops in `name` hold the list they walk, and how many
+/// list lengths and reads go through a hold (atomics cost A).
+fn holds(p: &Program, name: &str) -> (usize, usize) {
+    let f = func(p, name);
+    let held =
+        |op: &Operand| matches!(op, Operand::Local(l) if matches!(f.locals[l.0], Ty::Held(_)));
+    let insts = f.blocks.iter().flat_map(|b| &b.insts);
+    let rvalues: Vec<&Rvalue> = insts
+        .filter_map(|i| match i {
+            Inst::Assign { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect();
+    let made = rvalues
+        .iter()
+        .filter(|v| matches!(v, Rvalue::Hold(_)))
+        .count();
+    let reads = rvalues
+        .iter()
+        .filter(|v| matches!(v, Rvalue::Len(s) | Rvalue::Index(s, _) if held(s)))
+        .count();
+    (made, reads)
+}
+
+const WALK: &str = "def total(rows: list[str]) -> int:\n    n = 0\n    for s in rows:\n        n += len(s)\n    return n\n";
+
+#[test]
+fn a_loop_that_cannot_change_its_list_holds_it() {
+    let p = lowered(&format!("{WALK}print(total(['a', 'bc']))\n"));
+    assert_eq!(holds(&p, "total"), (1, 2));
+}
+
+#[test]
+fn a_loop_that_may_change_a_list_of_its_type_reads_each_item_borrowed() {
+    let bodies = [
+        "        rows.append(s)\n",
+        "        other.append(s)\n",
+        "        other[0] = s\n",
+        "        other = sorted(other)\n",
+        "        n += f(other)\n",
+    ];
+    for body in bodies {
+        let src = format!(
+            "def f(xs: list[str]) -> int:\n    return len(xs)\n\
+             def walk(rows: list[str], other: list[str]) -> int:\n    n = 0\n    for s in rows:\n{body}        n += 1\n        if n > 3:\n            break\n    return n\n\
+             xs = ['a']\nprint(walk(xs, xs))\n"
+        );
+        assert_eq!(holds(&lowered(&src), "walk"), (0, 0), "{body}");
+    }
+}
+
+#[test]
+fn changing_a_list_of_another_type_keeps_the_hold() {
+    let src = "def walk(rows: list[str], counts: list[int]) -> int:\n    for s in rows:\n        counts.append(len(s))\n        counts[0] = 1\n    return len(counts)\nprint(walk(['a'], [0]))\n";
+    assert_eq!(holds(&lowered(src), "walk"), (1, 2));
+}
+
+#[test]
+fn analysis_never_holds() {
+    let module =
+        parser::parse(&lexer::lex(&format!("{WALK}print(total(['a']))\n")).unwrap()).unwrap();
+    let types = infer::infer(&module).unwrap();
+    let p = super::lower_every(&module, &types).unwrap();
+    assert_eq!(holds(&p, "total"), (0, 0));
+}
+
+/// Pins which loops of the `for_hold` and `tasks_unmarked_walk` fixtures
+/// hold, so their runs test the paths they name.
+#[test]
+fn the_hold_fixtures_hold_where_they_say() {
+    let walk = lowered(include_str!("../../../../examples/tasks_unmarked_walk.pyr"));
+    assert_eq!(holds(&walk, "total").0, 1);
+    let p = lowered(include_str!("../../../../examples/for_hold.pyr"));
+    let held = [
+        ("total", 1),
+        ("pairs", 2),
+        ("first_long", 1),
+        ("stop_then_grow", 1),
+        ("raise_then_grow", 1),
+        ("fault_then_grow", 1),
+        ("other_type", 1),
+        ("log_size", 1),
+        ("first_sorted", 1),
+    ];
+    for (name, loops) in held {
+        assert_eq!(holds(&p, name).0, loops, "{name}");
+    }
+    for name in ["grow_while_walking", "call_in_body"] {
+        assert_eq!(holds(&p, name), (0, 0), "{name}");
+    }
+}

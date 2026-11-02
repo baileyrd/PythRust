@@ -493,6 +493,7 @@ impl<'a> FnBuilder<'_, 'a> {
             Ty::Bytes
             | Ty::Str
             | Ty::List(_)
+            | Ty::Held(_)
             | Ty::Tuple(_)
             | Ty::Range
             | Ty::Dict(_)
@@ -941,7 +942,7 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Bool => "bool",
         Ty::None => "NoneType",
         Ty::Str => "str",
-        Ty::List(_) => "list",
+        Ty::List(_) | Ty::Held(_) => "list",
         Ty::Tuple(_) => "tuple",
         Ty::Opt(_) => "optional",
         Ty::Range => "range",

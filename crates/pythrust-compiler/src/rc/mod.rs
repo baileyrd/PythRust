@@ -137,6 +137,7 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::Submit { .. }
         | Rvalue::TaskResult(_)
         | Rvalue::NextResult(_)
+        | Rvalue::Hold(_)
         | Rvalue::Concat(..)
         | Rvalue::Repeat(..)
         | Rvalue::Index(..)
@@ -561,7 +562,7 @@ fn operands(value: &Rvalue) -> Vec<Operand> {
         Rvalue::Submit { exec, args, .. } => {
             std::iter::once(*exec).chain(args.iter().copied()).collect()
         }
-        Rvalue::TaskResult(a) | Rvalue::NextResult(a) => vec![*a],
+        Rvalue::TaskResult(a) | Rvalue::NextResult(a) | Rvalue::Hold(a) => vec![*a],
         Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
         Rvalue::StrLit(_)
         | Rvalue::Global(_)
