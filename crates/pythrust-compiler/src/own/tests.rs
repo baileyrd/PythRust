@@ -1590,6 +1590,25 @@ fn rule_4_follows_lists_module_values_and_exceptions_hold() {
         let (msg, _) = mode_err(&src);
         assert!(msg.contains(want), "{msg}\n{src}");
     }
+    // An exception given as a parameter, or read from the module, may
+    // hold any list a parameter or module value is.
+    let param = "import concurrent.futures\n\
+def show(e):\n    return str(e)\n\
+def run(xs: list[int], e) -> None:\n    \
+with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(show, e)\n        xs.append(2)\n\
+ys = [1]\nrun(ys, ValueError(ys))\n";
+    let module = "import concurrent.futures\nxs = [1]\nsaved = ValueError(xs)\n\
+def show(n: int) -> str:\n    return str(saved)\n\
+def run() -> None:\n    \
+with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(show, 0)\n        xs.append(2)\n\
+run()\n";
+    for src in [param, module] {
+        let (msg, _) = mode_err(src);
+        assert!(
+            msg.contains("by a task until the `with` block ends"),
+            "{msg}\n{src}"
+        );
+    }
     // A list no module value or exception holds stays apart.
     let apart = rule4(&format!(
         "hold(ys)\n    {WITH}f = ex.submit(poke, 1)\n        xs.append(2)"

@@ -63,7 +63,7 @@ pub(super) fn check(program: &Program, summaries: &[Summary]) -> Result<()> {
 
 /// Per function, the module's values it reaches, with its callees'.
 struct World {
-    /// The globals holding a list it loads.
+    /// The globals holding a list or an exception it loads.
     lists: Vec<BTreeSet<GlobalId>>,
     /// The globals holding a file it loads.
     files: Vec<BTreeSet<GlobalId>>,
@@ -96,6 +96,8 @@ impl World {
             }
         }
         world.close(&callees);
+        // An exception may hold any list.
+        nested |= program.globals.iter().any(|t| holds(program, *t, Ty::Exc));
         if nested {
             world.widen(program);
         }
@@ -110,7 +112,7 @@ impl World {
         } = inst
         {
             let ty = program.globals[g.0];
-            if holds_list(program, ty) {
+            if module_value(program, ty) {
                 self.lists[i].insert(*g);
             }
             if holds(program, ty, Ty::File) {
@@ -139,12 +141,12 @@ impl World {
         }
     }
 
-    /// Every list global, for each function that loads one: the module's
-    /// values may hold one another.
+    /// Every global holding a list or an exception, for each function
+    /// that loads one: the module's values may hold one another.
     fn widen(&mut self, program: &Program) {
         let all: BTreeSet<GlobalId> = (0..program.globals.len())
             .map(GlobalId)
-            .filter(|g| holds_list(program, program.globals[g.0]))
+            .filter(|g| module_value(program, program.globals[g.0]))
             .collect();
         for lists in self.lists.iter_mut().filter(|l| !l.is_empty()) {
             *lists = all.clone();
@@ -412,7 +414,7 @@ impl<'a> Cx<'a> {
             Inst::Assign {
                 value: Rvalue::Global(g),
                 ..
-            } if holds_list(self.program, self.program.globals[g.0]) => {
+            } if module_value(self.program, self.program.globals[g.0]) => {
                 reads.insert(*g);
             }
             Inst::Assign {
@@ -434,10 +436,15 @@ impl<'a> Cx<'a> {
     /// one be held by a module value or an exception.
     fn reach(&self, ops: &[Operand]) -> Objs {
         let mut objs: Objs = ops.iter().flat_map(|a| self.flow.points_to(*a)).collect();
-        if ops.iter().any(|a| self.holds_exc(*a)) {
+        let exc = ops.iter().any(|a| self.holds_exc(*a));
+        if exc {
             objs.insert(Obj::World);
         }
         let mut touched = self.canon(self.flow.reachable(&objs));
+        if exc {
+            // An exception may hold any list a parameter is.
+            touched.insert(PARAMS);
+        }
         if touched.contains(&PARAMS) {
             touched.insert(Obj::World);
         }
@@ -540,6 +547,11 @@ fn party(
         changes_world,
         span,
     }
+}
+
+/// Whether a global of `ty` may hold a list: one does, or an exception.
+fn module_value(program: &Program, ty: Ty) -> bool {
+    holds_list(program, ty) || holds(program, ty, Ty::Exc)
 }
 
 /// Whether a value of `ty` is or holds a `want` (a file, an exception).
