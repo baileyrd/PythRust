@@ -1,6 +1,6 @@
 """Checks that CI's workflow parses and declares every job it should.
 
-Usage: python3 ci/check_jobs.py [.github/workflows/ci.yml]
+Usage: python3 ci/check_jobs.py [CI_YML [GUARD_YML]]
 
 A workflow GitHub cannot parse runs no jobs, and no jobs is not green
 (Nano, 2026-11-02, after #88's CI never ran). This runs from its own
@@ -61,24 +61,39 @@ def triggers(workflow: dict) -> list[str]:
     found = []
     if "pull_request" not in on:
         found.append("CI does not run on `pull_request`")
+    pr = on.get("pull_request") or {}
+    filters = sorted(set(pr) & {"paths", "paths-ignore", "branches", "branches-ignore"})
+    if filters:
+        found.append(f"`pull_request` is filtered by {filters}; it must run on every PR")
     push = on.get("push") or {}
     if "main" not in push.get("branches", []):
         found.append("CI does not run on pushes to `main`")
     return found
 
 
-def main(path: str) -> int:
-    """Prints each problem with ci.yml at `path`; 1 if there are any."""
+def load(path: str) -> object:
+    """The workflow at `path`; raises on a file that cannot be read."""
+    return yaml.load(Path(path).read_text(), Loader=StrictLoader)
+
+
+def main(path: str, guard: str | None = None) -> int:
+    """Prints each problem with ci.yml at `path`, and with the triggers of
+    the guard workflow at `guard`, which must also run on every PR; 1 if
+    there are any."""
+    found = []
     try:
-        workflow = yaml.load(Path(path).read_text(), Loader=StrictLoader)
+        found += [f"{path}: {p}" for p in problems(load(path))]
+        if guard is not None:
+            workflow = load(guard)
+            on = triggers(workflow) if isinstance(workflow, dict) else ["not a mapping"]
+            found += [f"{guard}: {p}" for p in on]
     except (OSError, yaml.YAMLError) as e:
-        print(f"{path}: cannot read: {e}")
-        return 1
-    found = problems(workflow)
+        found.append(f"cannot read: {e}")
     for p in found:
-        print(f"{path}: {p}")
+        print(p)
     return 1 if found else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else ".github/workflows/ci.yml"))
+    args = sys.argv[1:] or [".github/workflows/ci.yml", ".github/workflows/ci-jobs.yml"]
+    sys.exit(main(*args[:2]))

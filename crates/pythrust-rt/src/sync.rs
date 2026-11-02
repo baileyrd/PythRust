@@ -63,7 +63,7 @@ impl Count {
 
     pub(crate) fn inc(&self) {
         let v = self.0.load(Ordering::Relaxed);
-        if v & MARK == 0 {
+        if v & MARK == 0 || tsan::fault("nonatomic") {
             self.0.store(v + 1, Ordering::Relaxed);
             tsan::plain_write(&self.0);
         } else {
@@ -76,10 +76,10 @@ impl Count {
     /// frees it.
     pub(crate) fn dec(&self) -> bool {
         let v = self.0.load(Ordering::Relaxed);
-        if v & MARK == 0 {
+        if v & MARK == 0 || tsan::fault("nonatomic") {
             self.0.store(v - 1, Ordering::Relaxed);
             tsan::plain_write(&self.0);
-            return v == 1;
+            return v & !MARK == 1;
         }
         let last = self.0.fetch_sub(1, Ordering::Release) & !MARK == 1;
         if last {
@@ -116,9 +116,14 @@ fn acquire(count: &AtomicUsize) {
 pub(crate) mod tsan {
     use std::sync::atomic::AtomicUsize;
 
-    /// Whether `PYTHRUST_FAULT` names `name`: `unmarked` skips every mark
-    /// (`seq::pt_mark`), `outcome` has the worker change a task's result
-    /// count after handing it over (the race of M6c step 4a).
+    /// Whether `PYTHRUST_FAULT` names `name`:
+    /// - `unmarked` skips every mark (`seq::pt_mark`);
+    /// - `nonatomic` changes marked counts as if unmarked ([`Count`]);
+    /// - `outcome` has the worker change a task's result count after
+    ///   handing it over (the race of M6c step 4a);
+    /// - `late-free` has the worker drop one reference too many to a
+    ///   task's result after handing it over, so a result no one else
+    ///   holds is freed on the worker while the submitter takes it.
     #[cfg(pythrust_calibrate)]
     pub(crate) fn fault(name: &str) -> bool {
         static FAULT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();

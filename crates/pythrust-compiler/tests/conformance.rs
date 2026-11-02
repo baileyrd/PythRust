@@ -496,6 +496,7 @@ const NATIVE: &[&str] = &[
     "tasks_leave_block",
     "tasks_long_line",
     "tasks_partial_line",
+    "tasks_result_marked",
     "tasks_result_released",
     "tasks_submit",
     "tasks_unmarked",
@@ -1653,12 +1654,16 @@ fn native_matches_run_at_the_repr_limit() -> Res<()> {
 /// Races the detector must report, each injected into a runtime built
 /// with `--cfg pythrust_calibrate` by `PYTHRUST_FAULT`, on a program
 /// that is clean without it.
-const INJECTED: [(&str, &str); 2] = [
+const INJECTED: [(&str, &str); 4] = [
     // The worker changes a task's result count after handing it over:
-    // the freed-result race of M6c step 4a.
+    // the freed-result race of M6c step 4a, on an unmarked result.
     ("tasks_result_released", "outcome"),
+    // The worker frees a marked result after handing it over.
+    ("tasks_result_marked", "late-free"),
     // No value is marked, so two threads use unmarked counts and slots.
     ("tasks_unmarked", "unmarked"),
+    // Marked counts change by plain loads and stores.
+    ("tasks_unmarked", "nonatomic"),
 ];
 
 /// ThreadSanitizer's exit status for a run it reported a race in.

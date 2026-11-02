@@ -9,6 +9,7 @@ import check_jobs
 
 ROOT = Path(__file__).resolve().parent.parent
 CI = ROOT / ".github" / "workflows" / "ci.yml"
+GUARD = ROOT / ".github" / "workflows" / "ci-jobs.yml"
 
 
 def sound() -> dict:
@@ -22,7 +23,7 @@ def sound() -> dict:
 
 class Problems(unittest.TestCase):
     def test_the_repository_workflow_is_sound(self) -> None:
-        self.assertEqual(check_jobs.main(str(CI)), 0)
+        self.assertEqual(check_jobs.main(str(CI), str(GUARD)), 0)
 
     def test_a_sound_workflow_has_none(self) -> None:
         self.assertEqual(check_jobs.problems(sound()), [])
@@ -51,6 +52,19 @@ class Problems(unittest.TestCase):
         w = sound()
         del w[True]["pull_request"]
         self.assertEqual(check_jobs.problems(w), ["CI does not run on `pull_request`"])
+
+    def test_a_path_filter_is_one(self) -> None:
+        w = sound()
+        w[True]["pull_request"] = {"paths": ["crates/**"]}
+        found = check_jobs.problems(w)
+        self.assertEqual(len(found), 1)
+        self.assertIn("every PR", found[0])
+
+    def test_a_filtered_guard_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            guard = Path(d) / "ci-jobs.yml"
+            guard.write_text(GUARD.read_text().replace("  pull_request:\n", "  pull_request:\n    paths: [ci/**]\n"))
+            self.assertEqual(check_jobs.main(str(CI), str(guard)), 1)
 
     def test_a_job_without_a_runner_is_one(self) -> None:
         w = sound()

@@ -1,0 +1,21 @@
+# A task returning its argument, a temporary list: the result is marked,
+# and once the submitter's temporary is dropped the result is its only
+# holder. CI's race job also runs it against a runtime whose worker drops
+# that last reference after handing the result over
+# (`PYTHRUST_FAULT=late-free`), where ThreadSanitizer must report the
+# free racing the submitter's use.
+import concurrent.futures
+
+
+def same(xs: list[int]) -> list[int]:
+    return xs
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(same, [1, 2, 3])
+        ys = f.result()
+        print(ys, len(ys))
+
+
+main()

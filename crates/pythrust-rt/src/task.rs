@@ -107,17 +107,19 @@ impl PtFut {
             outcome.release(self.desc);
             return;
         }
-        let faulty = match &outcome {
-            Outcome::Value(v) if crate::sync::tsan::fault("outcome") => Some(*v),
-            _ => None,
+        let value = match &outcome {
+            Outcome::Value(v) => Some(*v),
+            Outcome::Raised(_) => None,
         };
-        if let Some(v) = faulty {
+        let touched = value.filter(|_| crate::sync::tsan::fault("outcome"));
+        let freed = value.filter(|_| crate::sync::tsan::fault("late-free"));
+        if let Some(v) = touched {
             seq::inc(self.desc, v);
         }
         done.outcome = Some(outcome);
         self.ready.notify_all();
         drop(done);
-        if let Some(v) = faulty {
+        if let Some(v) = touched.or(freed) {
             seq::dec(self.desc, v);
         }
     }
