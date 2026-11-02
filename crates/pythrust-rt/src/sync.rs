@@ -196,6 +196,34 @@ impl<T> Slot<T> {
         self.value.into_inner()
     }
 
+    /// Takes a read borrow that outlives this call, as a `for` loop's
+    /// hold on the list it walks (atomics cost A); [`Slot::unhold`] ends
+    /// it. Ends the program if a writer holds the slot.
+    pub(crate) fn hold(&self) {
+        std::mem::forget(self.borrow());
+    }
+
+    /// Ends a borrow [`Slot::hold`] took.
+    ///
+    /// # Safety
+    ///
+    /// The caller took it with [`Slot::hold`] and has not ended it.
+    pub(crate) unsafe fn unhold(&self) {
+        self.release_read();
+    }
+
+    /// The value, read under a borrow [`Slot::hold`] took: no borrow
+    /// word round trip, since no writer can enter while the hold lasts.
+    ///
+    /// # Safety
+    ///
+    /// The caller holds such a borrow for as long as the reference lives.
+    pub(crate) unsafe fn held(&self) -> &T {
+        // SAFETY: the caller's read borrow keeps every writer out, so
+        // only shared references to the value exist meanwhile.
+        unsafe { &*self.value.get() }
+    }
+
     /// Reads the value; ends the program if a writer holds it.
     pub(crate) fn borrow(&self) -> Ref<'_, T> {
         let s = self.state.load(Ordering::Relaxed);
