@@ -31,13 +31,12 @@ pub(super) fn check(module: &Module, defs: &[&FuncDef], types: &Types) -> Result
         .iter()
         .map(|f| (*f, points(&f.body, &pausing, types)))
         .collect();
-    let top = points(&module.body, &pausing, types);
+    let mut top = points(&module.body, &pausing, types);
+    top.extend(defaults(defs, &pausing, types));
     let all: Vec<&Point> = top.iter().chain(each.iter().flat_map(|(_, p)| p)).collect();
     covered(&module.pauses, &all)?;
-    let tempered = each.iter().filter(|(f, _)| f.mode == Mode::Tempered);
-    tempered
-        .map(|(f, mine)| marked(f, mine, &module.pauses))
-        .collect()
+    let mut tempered = each.iter().filter(|(f, _)| f.mode == Mode::Tempered);
+    tempered.try_for_each(|(f, mine)| marked(f, mine, &module.pauses))
 }
 
 /// The functions of `defs` that pause, directly or through a call.
@@ -71,11 +70,27 @@ fn points(block: &[Stmt], pausing: &BTreeSet<&str>, types: &Types) -> Vec<Point>
             span: e.span,
             what: "each step of this loop".to_string(),
         });
-    let waits = scope::exprs(block).into_iter().filter_map(|e| {
-        let what = wait(e, pausing, types)?;
-        Some(Point { span: e.span, what })
-    });
+    let waits = scope::exprs(block)
+        .into_iter()
+        .filter_map(|e| point(e, pausing, types));
     steps.chain(waits).collect()
+}
+
+/// The pause points in parameter defaults, which module-level code
+/// evaluates when the `def` runs.
+fn defaults(defs: &[&FuncDef], pausing: &BTreeSet<&str>, types: &Types) -> Vec<Point> {
+    let values = defs
+        .iter()
+        .flat_map(|f| &f.params)
+        .filter_map(|p| p.default.as_ref());
+    let exprs = values.flat_map(scope::tree);
+    exprs.filter_map(|e| point(e, pausing, types)).collect()
+}
+
+/// `e` as a pause point, if it is one.
+fn point(e: &Expr, pausing: &BTreeSet<&str>, types: &Types) -> Option<Point> {
+    let what = wait(e, pausing, types)?;
+    Some(Point { span: e.span, what })
 }
 
 /// How a diagnostic names `e`, if evaluating it waits on a task beyond
@@ -117,7 +132,8 @@ fn marked(f: &FuncDef, points: &[Point], pauses: &[Pause]) -> Result<()> {
         return Ok(());
     };
     let msg = format!(
-        "{} waits on a task; tempered `{}` marks it: write `pause` before it",
+        "{} waits on a task; tempered `{}` marks it: write `pause` before it, \
+         in parentheses if it is not the start of an expression",
         p.what, f.name.name
     );
     Err(error(p.span, msg))
@@ -244,6 +260,90 @@ temper def sq(x: int) -> int:\n    return x * x\n";
             }
         }
         rejects("x = pause 1\n", "nothing here can pause");
+    }
+
+    /// A marker inside parentheses covers them, the way around the parse
+    /// error for a marker that does not start an expression.
+    #[test]
+    fn a_marker_in_parentheses_covers_them() {
+        let bodies = [
+            "a = ex.submit(sq, 1)\nx = (pause a.result())",
+            "for r in (pause ex.map(sq, [1, 2])):\n    print(r)",
+            "a = ex.submit(sq, 1)\nprint(not (pause a.result()))",
+            "print([0] + (pause list(ex.map(sq, [1]))))",
+            "a = ex.submit(sq, 1)\nprint(((pause a.result())))",
+        ];
+        for body in bodies {
+            for temper in [false, true] {
+                assert_eq!(check(&main(temper, body)), Ok(()), "{body}");
+            }
+        }
+        rejects(
+            &main(false, "print([0] + pause list(ex.map(sq, [1])))"),
+            "`pause` covers a whole expression: put it first, or wrap",
+        );
+    }
+
+    /// More pause points: `set`, `in` in a `while` test, a future taken
+    /// from a list, and futures walked by a loop.
+    #[test]
+    fn other_pause_points_need_their_marker() {
+        let cases = [
+            (
+                "print(set(ex.map(sq, [1])))",
+                "print(pause set(ex.map(sq, [1])))",
+                "`set` of `map`'s results",
+            ),
+            (
+                "rs = ex.map(sq, [1])\nwhile 1 in rs:\n    pass",
+                "rs = ex.map(sq, [1])\nwhile pause 1 in rs:\n    pass",
+                "`in` on `map`'s results",
+            ),
+            (
+                "fs = [ex.submit(sq, 1)]\nprint(fs[0].result())",
+                "fs = [ex.submit(sq, 1)]\nprint(pause fs[0].result())",
+                "`result()`",
+            ),
+            (
+                "fs = [ex.submit(sq, 1)]\nfor f in fs:\n    print(f.result())",
+                "fs = [ex.submit(sq, 1)]\nfor f in fs:\n    print(pause f.result())",
+                "`result()`",
+            ),
+        ];
+        for (bare, marked, what) in cases {
+            rejects(&main(true, bare), &format!("{what} waits on a task"));
+            assert_eq!(check(&main(true, marked)), Ok(()), "{marked}");
+        }
+    }
+
+    /// Functions that call each other pause together; a function that
+    /// only submits another as a task does not pause through it.
+    #[test]
+    fn pausing_follows_calls_not_submits() {
+        let mutual = "temper def a(n: int) -> int:\n    if n == 0:\n        return pause b(1)\n    return 0\n\
+                      temper def b(n: int) -> int:\n    if n == 0:\n        return pause a(1)\n    return pause c()\n\
+                      temper def c() -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+                      return pause ex.submit(sq, 2).result()\n";
+        assert_eq!(check(mutual), Ok(()));
+        let bare = mutual.replacen("return pause b(1)", "return b(1)", 1);
+        rejects(&bare, "calling `b` waits on a task; tempered `a` marks it");
+        let waits = "temper def w(x: int) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+                     return pause ex.submit(sq, x).result()\n";
+        let submits = format!("{waits}{}", main(true, "ex.submit(w, 1)"));
+        assert_eq!(check(&submits), Ok(()));
+    }
+
+    /// Module code evaluates parameter defaults, so a marker there may
+    /// cover a call that pauses.
+    #[test]
+    fn a_default_may_hold_a_marked_call() {
+        let src =
+            "def g() -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+                   return ex.submit(sq, 2).result()\n\
+                   def h(x: int = pause g()) -> int:\n    return x\nprint(h())\n";
+        assert_eq!(check(src), Ok(()));
+        let empty = "def h(x: int = pause sq(2)) -> int:\n    return x\nprint(h())\n";
+        rejects(empty, "nothing here can pause");
     }
 
     /// Nested markers and a marker covering several points are accepted.

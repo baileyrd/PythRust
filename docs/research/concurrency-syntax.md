@@ -1,6 +1,6 @@
 # Research G.3: Pause marker and shared-lock syntax
 
-**Status: decided 2026-10-25.** Nano accepted both recommendations (B and B). `pause`, `shared` and `with` stay reserved until the features land, so phase-2 programs cannot use them as names.
+**Status: decided 2026-10-25.** Nano accepted both recommendations (B and B). `pause`, `shared` and `with` stayed reserved until their features landed, so phase-2 programs could not use them as names; `with` and `pause` became keywords with M6c, and `shared` stays reserved.
 
 ## Pause marker
 
@@ -18,7 +18,7 @@
 **Recommendation: B.** It marks the statement a reader needs to slow down for, without one marker per call. Rules:
 
 - `pause` takes an expression and must cover at least one pause point; a `pause` with none is an error ("nothing here can pause"), so markers do not rot.
-- Grammar sketch (not proposed for `grammar.md` until decided): `expr = 'pause' expr | or_expr ['if' or_expr 'else' expr]`. Like Python's `await`, it is a prefix keyword, but it binds loosely, covering the whole expression.
+- Grammar (now in `grammar.md`, M6c): `expr = 'pause' expr | or_expr ['if' or_expr 'else' expr]`. Like Python's `await`, it is a prefix keyword, but it binds loosely, covering the whole expression.
 - It composes with the shared lock: holding a `shared` lock across a pause point is an error in tempered code and a warning in loose code (latency and deadlock hazard).
 
 ## Shared-lock wrapper

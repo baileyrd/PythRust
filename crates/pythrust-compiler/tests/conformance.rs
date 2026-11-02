@@ -304,10 +304,17 @@ fn run_cpython(source: &Path) -> Res<Run> {
 fn strip_pauses(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
-    while let Some(at) = rest.find("pause ") {
+    while let Some(at) = rest.find("pause") {
         let before = rest[..at].chars().next_back();
-        let marker = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
-        let end = if marker { at + "pause ".len() } else { at + 1 };
+        let after = rest[at + "pause".len()..].chars().next();
+        let starts = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        let marker = starts && matches!(after, Some(' ' | '('));
+        let width = if after == Some(' ') {
+            "pause ".len()
+        } else {
+            "pause".len()
+        };
+        let end = if marker { at + width } else { at + 1 };
         out.push_str(&rest[..at]);
         if !marker {
             out.push_str(&rest[at..end]);
@@ -331,8 +338,9 @@ fn universal_newlines(stdout: String) -> String {
 /// parameter mode and `raises` clause removed, or `None` if it has none.
 /// `def` is top-level only, so the prefix always starts a line, a mode
 /// follows `(` or `, ` on its `def` line, and a clause ends that line. A
-/// marker is the word `pause` and a space, after a line's indent or a
-/// character that cannot end a name; no corpus string holds one.
+/// marker is the word `pause` followed by a space or `(`, after a line's
+/// indent or a character that cannot end a name; no corpus string holds
+/// one.
 fn loosen(src: &str) -> Option<String> {
     let lines: Vec<String> = src.lines().map(loosen_line).collect();
     let changed = lines.iter().zip(src.lines()).any(|(a, b)| a != b);

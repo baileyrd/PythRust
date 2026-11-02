@@ -1637,6 +1637,13 @@ fn pause_covers_the_expression_to_its_right() {
     assert_eq!(bare.kind, DiagKind::Parse);
     let ret = parse(&lex("def h():\n    return pause f(), 1\n").unwrap()).unwrap();
     assert_eq!(ret.pauses.len(), 1);
-    let after = parse(&lex("x = 1 + pause f()\n").unwrap()).unwrap_err();
-    assert_eq!(after.kind, DiagKind::Parse);
+    for src in ["x = 1 + pause f()\n", "x = not pause f()\n"] {
+        let after = parse(&lex(src).unwrap()).unwrap_err();
+        assert_eq!(after.kind, DiagKind::Parse);
+        assert!(after.message.contains("put it first, or wrap"), "{after}");
+    }
+    let wrapped = "x = not (pause f())\n";
+    let m = parse(&lex(wrapped).unwrap()).unwrap();
+    let covered = &wrapped[m.pauses[0].covers.start..m.pauses[0].covers.end];
+    assert_eq!(covered, "(pause f())");
 }

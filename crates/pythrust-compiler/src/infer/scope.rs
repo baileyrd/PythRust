@@ -195,6 +195,12 @@ fn own_exprs(s: &Stmt) -> Vec<&Expr> {
 }
 
 /// `e` and every expression inside it, outermost first.
+pub(crate) fn tree(e: &Expr) -> Vec<&Expr> {
+    let mut out = Vec::new();
+    subexprs(e, &mut out);
+    out
+}
+
 fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
     out.push(e);
     let parts: Vec<&Expr> = match &e.kind {

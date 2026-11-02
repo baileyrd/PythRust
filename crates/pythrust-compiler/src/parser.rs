@@ -982,6 +982,11 @@ impl<'a> Parser<'a> {
             TokenKind::LParen => return self.paren(),
             TokenKind::LBracket => return self.list(),
             TokenKind::LBrace => return self.braces(),
+            TokenKind::Pause => {
+                let msg = "`pause` covers a whole expression: put it first, or wrap \
+                           what it covers in parentheses: `(pause ...)`";
+                return Err(error(tok.span, msg));
+            }
             _ => return Err(self.unexpected("an expression")),
         };
         self.bump();
@@ -1003,10 +1008,19 @@ impl<'a> Parser<'a> {
         }
         let inner = self.expr_list()?;
         self.expect(&TokenKind::RParen)?;
+        let span = self.span_from(start);
+        self.widen_pauses(inner.span, span);
         Ok(Expr {
             kind: inner.kind,
-            span: self.span_from(start),
+            span,
         })
+    }
+
+    /// A parenthesized expression takes the parentheses' span, so a
+    /// marker that covered it covers them too (M6c).
+    fn widen_pauses(&mut self, inner: Span, outer: Span) {
+        let covering = self.pauses.iter_mut().filter(|p| p.covers == inner);
+        covering.for_each(|p| p.covers = outer);
     }
 
     fn list(&mut self) -> Result<Expr> {
