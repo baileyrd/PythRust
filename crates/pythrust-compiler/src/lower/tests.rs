@@ -964,10 +964,72 @@ return a.result() + len(list(rs))\n\
 print(run([1, 2]))\n";
 
 #[test]
-fn build_refuses_tasks() {
+fn build_refuses_map_for_now() {
     let (d, text) = rejected(TASKS);
-    assert!(d.message.contains("tasks (`concurrent.futures`)"), "{d}");
-    assert!(text.starts_with("with "), "{text}");
+    assert!(d.message.contains("`map` of tasks (M6c step 4b-2)"), "{d}");
+    assert!(text.starts_with("ex.map("), "{text}");
+}
+
+/// Submits `sq` in a loop it may leave by `break`, `return` or a raise.
+const SUBMITS: &str = "import concurrent.futures\n\
+def sq(x: int, s: str) -> int:\n    return x * x\n\
+def run(xs: list[int]) -> int:\n    t = 0\n    for x in xs:\n        \
+with concurrent.futures.ThreadPoolExecutor() as ex:\n            \
+f = ex.submit(sq, x, \"a\")\n            if x > 5:\n                break\n            \
+if x > 3:\n                return f.result()\n            t += int(\"7\") + f.result()\n    \
+return t\n\
+print(run([1, 2]))\n";
+
+#[test]
+fn build_runs_tasks_on_the_executor_of_their_block() {
+    let p = lowered(SUBMITS);
+    let sq = p.funcs.iter().position(|f| f.name == "sq").unwrap();
+    let run = p.funcs.iter().find(|f| f.name == "run").unwrap();
+    let insts = || run.blocks.iter().flat_map(|b| &b.insts);
+    let exec = insts().find_map(|i| match i {
+        Inst::Assign {
+            dest,
+            value: Rvalue::Std(crate::stdlib::StdFn::Executor, args),
+            ..
+        } if args.is_empty() => Some(*dest),
+        _ => None,
+    });
+    let exec = exec.expect("the `with` makes an executor");
+    assert_eq!(run.locals[exec.0], Ty::Exec);
+    let submit = insts().find_map(|i| match i {
+        Inst::Assign {
+            dest,
+            value:
+                Rvalue::Submit {
+                    exec: e,
+                    func,
+                    args,
+                },
+            ..
+        } => Some((*dest, *e, *func, args.clone())),
+        _ => None,
+    });
+    let (fut, e, func, args) = submit.expect("`submit` is a `Submit`");
+    assert_eq!((e, func.0, args.len()), (Operand::Local(exec), sq, 2));
+    assert_eq!(run.locals[fut.0], Ty::Future);
+    // Nothing calls `sq` on this thread.
+    let called =
+        insts().any(|i| matches!(i, Inst::Assign { value: Rvalue::Call(id, _), .. } if id.0 == sq));
+    assert!(!called);
+    let results = insts().filter(|i| {
+        matches!(
+            i,
+            Inst::Assign {
+                value: Rvalue::TaskResult(_),
+                ..
+            }
+        )
+    });
+    assert_eq!(results.count(), 2);
+    // Released where the block ends, at `break`, at `int`'s raise
+    // leaving the function, and at the exit `return` reaches.
+    let released = insts().filter(|i| matches!(i, Inst::Release(l) if *l == exec));
+    assert!(released.count() >= 3);
 }
 
 #[test]

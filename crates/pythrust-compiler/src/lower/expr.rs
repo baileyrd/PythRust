@@ -17,7 +17,10 @@ impl<'a> FnBuilder<'_, 'a> {
             ExprKind::Int(n) => Ok(Operand::Int(*n)),
             ExprKind::Bool(b) => Ok(Operand::Bool(*b)),
             ExprKind::None => Ok(Operand::None),
-            ExprKind::Name(name) => self.read(name, e.span),
+            ExprKind::Name(name) => match self.exec_local(name) {
+                Some(exec) => Ok(exec),
+                None => self.read(name, e.span),
+            },
             ExprKind::Unary { op, operand } => self.unary(*op, operand, e.span),
             ExprKind::Binary { op, left, right } => self.binary(*op, left, right, e.span),
             ExprKind::Logical { op, left, right } => self.logical(*op, left, right, e.span),
@@ -479,7 +482,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
-            Ty::Exc | Ty::File => Operand::Bool(true),
+            Ty::Exc | Ty::File | Ty::Exec | Ty::Future => Operand::Bool(true),
             Ty::Bytes
             | Ty::Str
             | Ty::List(_)
@@ -573,6 +576,28 @@ impl<'a> FnBuilder<'_, 'a> {
         node: &'a Type,
         span: Span,
     ) -> Result<(Operand, FuncId)> {
+        let (ops, id, ret) = self.call_operands(def, slots, node, span)?;
+        // The callee takes its arguments' references.
+        let owned: Vec<Operand> = ops.into_iter().map(|op| self.own(op, span)).collect();
+        let result = self.temp(ret, Rvalue::Call(id, owned.clone()), span);
+        for op in owned {
+            if let (Operand::Local(l), true) = (op, self.ty(op).is_rc()) {
+                self.emit(Inst::Forget(l));
+            }
+        }
+        Ok((result, id))
+    }
+
+    /// The arguments of a call of `def` with `slots`, defaults filled in
+    /// and fitted to its parameters, the instance it calls and that
+    /// instance's result type, `node` once settled.
+    pub(super) fn call_operands(
+        &mut self,
+        def: &'a FuncDef,
+        slots: Vec<Option<Operand>>,
+        node: &'a Type,
+        span: Span,
+    ) -> Result<(Vec<Operand>, FuncId, Ty)> {
         let name = def.name.name.as_str();
         let mut bound = Vec::new();
         for (k, op) in slots.into_iter().enumerate() {
@@ -602,15 +627,7 @@ impl<'a> FnBuilder<'_, 'a> {
             }
             false => self.open_call(def, tys, node, span)?,
         };
-        // The callee takes its arguments' references.
-        let owned: Vec<Operand> = ops.into_iter().map(|op| self.own(op, span)).collect();
-        let result = self.temp(ret, Rvalue::Call(id, owned.clone()), span);
-        for op in owned {
-            if let (Operand::Local(l), true) = (op, self.ty(op).is_rc()) {
-                self.emit(Inst::Forget(l));
-            }
-        }
-        Ok((result, id))
+        Ok((ops, id, ret))
     }
 
     /// Abandons the expression being lowered: the path never gets past
@@ -900,6 +917,8 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::View(_) => "dict view",
         Ty::Bytes => "bytes",
         Ty::File => "_io.BufferedReader",
+        Ty::Exec => "ThreadPoolExecutor",
+        Ty::Future => "Future",
         // Exceptions print by kind, which only the run time knows.
         Ty::Exc => "exception",
     }

@@ -1,0 +1,46 @@
+# Tasks taking a temporary string the worker frees, and giving each kind
+# of result: float, bool, None, tuple and Optional. CI's race job runs it
+# under ThreadSanitizer, which reported a false race here while the
+# runtime freed a marked value after a bare acquire fence it cannot see.
+import concurrent.futures
+
+
+def fl(x: float, b: bool, s: str) -> float:
+    if b:
+        return x * 2.5
+    return x + float(len(s))
+
+
+def bo(x: int) -> bool:
+    return x > 2
+
+
+def no(x: int) -> None:
+    pass
+
+
+def tu(x: int) -> tuple[int, str]:
+    return (x, str(x))
+
+
+def op(x: int) -> int | None:
+    if x > 1:
+        return x
+    return None
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(fl, -1.25, True, "abc")
+        b = ex.submit(fl, 3.5, False, "abc")
+        c = ex.submit(bo, 3)
+        d = ex.submit(bo, 1)
+        e = ex.submit(no, 1)
+        f = ex.submit(tu, 7)
+        g = ex.submit(op, 5)
+        h = ex.submit(op, 0)
+        print(a.result(), b.result(), c.result(), d.result(), e.result())
+        print(f.result(), g.result(), h.result())
+
+
+main()

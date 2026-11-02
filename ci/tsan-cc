@@ -1,0 +1,8 @@
+#!/bin/sh
+# `cc` for CI's race job, first on PATH: a native program linking the
+# ThreadSanitizer-instrumented runtime ($PYTHRUST_RT) is linked with the
+# detector's runtime; every other link (Cargo's own) is unchanged.
+case " $* " in
+  *" $PYTHRUST_RT "*) exec /usr/bin/cc -fsanitize=thread "$@" ;;
+  *) exec /usr/bin/cc "$@" ;;
+esac

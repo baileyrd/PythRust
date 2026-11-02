@@ -1,0 +1,52 @@
+# Leaving an executor's block any way waits for its tasks: at its end,
+# by `break`, `continue` or `return`, and by an exception, caught in the
+# same function or further out. Each task prints, so its line comes
+# before whatever follows the block. Nothing inside a block prints.
+import concurrent.futures
+
+
+def noisy(n: int) -> int:
+    print("task", n)
+    return n
+
+
+def loop(how: str) -> int:
+    t = 0
+    for i in range(3):
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            f = ex.submit(noisy, i)
+            if how == "break" and i == 1:
+                break
+            if how == "continue" and i == 1:
+                continue
+            if how == "return" and i == 1:
+                return f.result()
+            t += f.result()
+        print(how, "after block", i)
+    return t
+
+
+def raises(caught: bool) -> None:
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            ex.submit(noisy, 7)
+            raise ValueError("out")
+    except ValueError as e:
+        if not caught:
+            raise e
+        print("caught", e)
+
+
+def main() -> None:
+    print(loop("end"))
+    print(loop("break"))
+    print(loop("continue"))
+    print(loop("return"))
+    raises(True)
+    try:
+        raises(False)
+    except ValueError as e:
+        print("caught outside", e)
+
+
+main()

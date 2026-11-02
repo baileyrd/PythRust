@@ -988,6 +988,10 @@ fn rvalue_operands(rv: &Rvalue) -> Vec<Operand> {
         | Rvalue::NewSeq(args)
         | Rvalue::Std(_, args)
         | Rvalue::Rust(_, args) => args.clone(),
+        Rvalue::Submit { exec, args, .. } => {
+            std::iter::once(*exec).chain(args.iter().copied()).collect()
+        }
+        Rvalue::TaskResult(a) => vec![*a],
         Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
         Rvalue::StrLit(_)
         | Rvalue::Global(_)

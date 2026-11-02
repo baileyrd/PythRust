@@ -43,3 +43,23 @@ Before `rc::elide`, after it (#50), and after its follow-ups (cross-block copies
 | `tuples_baseline` | 0.081 | 0.081 | 0.081 |
 
 `sorting` gains about 5% from #50: `quicksort` borrows its list, so its recursive calls touch no count. `tuples` gains about 13% from the follow-ups, nearly all of it the runtime change: `pt_seq_dec` used to allocate a work list on every call, even when the count stayed above zero, and now allocates only when a freed sequence holds another. The rest is allocation (every `+`, `str()` and tuple is a runtime object) and runtime calls, which elision does not reach.
+
+## Shared values (M6c)
+
+A value a task can reach is *marked*, and its count and borrow word then change by atomic read-modify-writes; every other value keeps plain loads and stores (`sync.rs`). Same machine (4-core Xeon, shared container), release build.
+
+Per operation, one thread, uncontended (`cargo test --release -p pythrust-rt -- --ignored --nocapture atomics_cost`, three runs):
+
+| Operation | Unmarked ns | Marked ns |
+|---|---:|---:|
+| count `inc` then `dec` | 1.0 to 1.9 | 19.9 to 24.8 |
+| read borrow taken and dropped | 0.6 to 1.6 | 18.6 to 19.6 |
+
+On a program, 7 runs, median seconds (`bench/run.py`): `shared` gives one task a list of 200,000 strings to walk 40 times; `shared_baseline` calls the same function directly, so nothing is marked.
+
+| Benchmark | Native s | CPython s |
+|---|---:|---:|
+| `shared` | 0.430 (0.385 to 0.485) | 0.287 (0.253 to 0.425) |
+| `shared_baseline` | 0.122 (0.101 to 0.171) | 0.261 (0.213 to 0.433) |
+
+Here the task is slower than the serial run: the task version takes 3.5x as long as the direct call, about 38 ns more per element read: one borrow of the list and one count `inc`/`dec` of the string, all atomic, which the per-operation rows account for. That puts it behind CPython. The cost falls only on marked values: a value no task can reach takes the unmarked path, one load and a branch more than before marking existed (the 3% gate of step 2). Reducing it (borrowing a marked list once per loop rather than per read, or skipping the count of an element only read) is open. No speedup from tasks is claimed until step 4c measures CPU-bound tasks against the serial build and CPython threads.

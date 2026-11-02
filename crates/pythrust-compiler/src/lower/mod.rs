@@ -146,7 +146,7 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         instances: HashMap::new(),
         funcs: Vec::new(),
         queue: Vec::new(),
-        seqs: types::SeqTypes::default(),
+        seqs: types::SeqTypes::new(reach == Reach::Called),
         open: HashMap::new(),
         lowering: 0,
         waits: usize::MAX,
@@ -521,6 +521,7 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         }
         // As [`concrete`] gives them.
         Type::Executor => Ty::None,
+        Type::Future(_) if seqs.futures => Ty::Future,
         Type::Future(t) => settle(t, subst, bound, seqs),
         Type::Results(t) => {
             let elem = settle(t, subst, bound, seqs);
@@ -561,6 +562,9 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
             let fields = seqs.fields(ty).map(<[Ty]>::to_vec).unwrap_or_default();
             ts.len() == fields.len() && ts.iter().zip(fields).all(|(t, f)| bind(t, f, seqs, subst))
         }
+        // A future's result type never leaves its function, so only an
+        // analysis future, its result, binds it.
+        (Type::Future(_), Ty::Future) => true,
         (Type::Future(t), _) => bind(t, ty, seqs, subst),
         (Type::Results(t), Ty::List(_)) => seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst)),
         (Type::Set(t), Ty::Set(_)) | (Type::View(_, t), Ty::View(_)) => {
@@ -690,6 +694,9 @@ struct FnBuilder<'c, 'a> {
     /// Executor regions and task calls so far ([`Func::regions`]).
     regions: Vec<BTreeSet<BlockId>>,
     tasks: Vec<ir::Task>,
+    /// In `build`, the executors of the enclosing `with` blocks, by the
+    /// name each binds, innermost last.
+    execs: Vec<(String, LocalId)>,
 }
 
 impl<'c, 'a> FnBuilder<'c, 'a> {
@@ -726,6 +733,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             tasks_raise: false,
             regions: Vec::new(),
             tasks: Vec::new(),
+            execs: Vec::new(),
         };
         b.cur = b.new_block();
         b.exit = b.new_block();
@@ -990,11 +998,12 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::Exception => Ok(Ty::Exc),
         Type::Bytes => Ok(Ty::Bytes),
         Type::File => Ok(Ty::File),
-        // Tasks, for analysis ([`FnBuilder::task_call`]): an executor
-        // holds nothing, a future is its task's result, and `map`'s
-        // results are a list of them. `build` refuses the `with` that
-        // makes them all.
+        // Tasks ([`FnBuilder::task_call`]): the executor's variable holds
+        // nothing (its `with` statement owns it), a future is a handle in
+        // `build` and its task's result for analysis, and `map`'s results
+        // are a list of them.
         Type::Executor => Ok(Ty::None),
+        Type::Future(_) if seqs.futures => Ok(Ty::Future),
         Type::Future(t) => concrete(t, subst, seqs, span),
         Type::Results(t) => {
             let elem = concrete(t, subst, seqs, span)?;

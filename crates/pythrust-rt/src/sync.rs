@@ -63,8 +63,9 @@ impl Count {
 
     pub(crate) fn inc(&self) {
         let v = self.0.load(Ordering::Relaxed);
-        if v & MARK == 0 {
+        if v & MARK == 0 || tsan::fault("nonatomic") {
             self.0.store(v + 1, Ordering::Relaxed);
+            tsan::plain_write(&self.0);
         } else {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
@@ -75,16 +76,83 @@ impl Count {
     /// frees it.
     pub(crate) fn dec(&self) -> bool {
         let v = self.0.load(Ordering::Relaxed);
-        if v & MARK == 0 {
+        if v & MARK == 0 || tsan::fault("nonatomic") {
             self.0.store(v - 1, Ordering::Relaxed);
-            return v == 1;
+            tsan::plain_write(&self.0);
+            return v & !MARK == 1;
         }
         let last = self.0.fetch_sub(1, Ordering::Release) & !MARK == 1;
         if last {
-            fence(Ordering::Acquire);
+            acquire(&self.0);
         }
         last
     }
+}
+
+/// Orders every other thread's use of the object, released by its
+/// `dec`, before the caller frees it. A fence, but under ThreadSanitizer,
+/// which cannot see a standalone fence, an acquire load of the count, as
+/// std's `Arc` does there.
+fn acquire(count: &AtomicUsize) {
+    if cfg!(pythrust_tsan) {
+        count.load(Ordering::Acquire);
+    } else {
+        fence(Ordering::Acquire);
+    }
+}
+
+/// ThreadSanitizer's view of an unmarked count or borrow word. Its loads
+/// and stores are relaxed atomics, which the detector never reports, but
+/// they stand for plain read-modify-writes: two threads using one
+/// unmarked object is the race marking exists to prevent. Built with
+/// `--cfg pythrust_tsan` (CI's race job), each change, and each use of
+/// an idle slot's fast path, is reported to it as the plain write it
+/// stands for; otherwise this is nothing. The report follows the store,
+/// so the plain write is the latest of this thread's accesses the
+/// detector holds for the word.
+///
+/// Built with `--cfg pythrust_calibrate` as well, [`fault`] injects the
+/// bug `PYTHRUST_FAULT` names, so CI can check the detector reports it.
+pub(crate) mod tsan {
+    use std::sync::atomic::AtomicUsize;
+
+    /// Whether `PYTHRUST_FAULT` names `name`:
+    /// - `unmarked` skips every mark (`seq::pt_mark`);
+    /// - `nonatomic` changes marked counts as if unmarked ([`Count`]);
+    /// - `outcome` has the worker change a task's result count after
+    ///   handing it over (the race of M6c step 4a);
+    /// - `late-free` has the worker drop one reference too many to a
+    ///   task's result after handing it over, so a result no one else
+    ///   holds is freed on the worker while the submitter takes it.
+    #[cfg(pythrust_calibrate)]
+    pub(crate) fn fault(name: &str) -> bool {
+        static FAULT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        FAULT
+            .get_or_init(|| std::env::var("PYTHRUST_FAULT").ok())
+            .as_deref()
+            == Some(name)
+    }
+
+    #[cfg(not(pythrust_calibrate))]
+    pub(crate) const fn fault(_name: &str) -> bool {
+        false
+    }
+
+    #[cfg(pythrust_tsan)]
+    unsafe extern "C" {
+        /// ThreadSanitizer's hook for an uninstrumented 8-byte write.
+        fn __tsan_write8(addr: *mut std::ffi::c_void);
+    }
+
+    /// Reports a plain write of `word` to ThreadSanitizer.
+    #[cfg(pythrust_tsan)]
+    pub(super) fn plain_write(word: &AtomicUsize) {
+        // SAFETY: the hook only records the access; `word` is live.
+        unsafe { __tsan_write8(word.as_ptr().cast()) }
+    }
+
+    #[cfg(not(pythrust_tsan))]
+    pub(super) fn plain_write(_word: &AtomicUsize) {}
 }
 
 /// A borrow cell with `RefCell`'s API, safe to share once marked.
@@ -136,6 +204,7 @@ impl<T> Slot<T> {
         }
         if s & MARK == 0 {
             self.state.store(s + 1, Ordering::Relaxed);
+            tsan::plain_write(&self.state);
         } else {
             let prev = self.state.fetch_add(1, Ordering::Acquire);
             if prev & WRITER != 0 {
@@ -153,6 +222,7 @@ impl<T> Slot<T> {
         }
         if s & MARK == 0 {
             self.state.store(WRITER, Ordering::Relaxed);
+            tsan::plain_write(&self.state);
         } else if self
             .state
             .compare_exchange(MARK, MARK | WRITER, Ordering::Acquire, Ordering::Relaxed)
@@ -170,6 +240,7 @@ impl<T> Slot<T> {
         let s = self.state.load(Ordering::Relaxed);
         if s & MARK == 0 {
             self.state.store(s - 1, Ordering::Relaxed);
+            tsan::plain_write(&self.state);
         } else {
             self.state.fetch_sub(1, Ordering::Release);
         }
@@ -179,6 +250,7 @@ impl<T> Slot<T> {
         let s = self.state.load(Ordering::Relaxed);
         if s & MARK == 0 {
             self.state.store(0, Ordering::Relaxed);
+            tsan::plain_write(&self.state);
         } else {
             self.state.fetch_and(!WRITER, Ordering::Release);
         }
@@ -191,8 +263,14 @@ impl<T> Slot<T> {
 /// while the reference lives.
 impl<T: Copy> Slot<Vec<T>> {
     /// Whether this thread alone can reach the slot and nobody holds it.
+    /// The fast paths that follow use the value as this thread's alone,
+    /// so ThreadSanitizer is told of a plain write to the borrow word.
     fn idle(&self) -> bool {
-        self.state.load(Ordering::Relaxed) == 0
+        let idle = self.state.load(Ordering::Relaxed) == 0;
+        if idle {
+            tsan::plain_write(&self.state);
+        }
+        idle
     }
 
     /// Copies out the item at Python index `i` (negative counts from
@@ -345,6 +423,36 @@ impl<T> Drop for RefMut<'_, T> {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// What marking costs one thread, per operation: a count's `inc` and
+    /// `dec`, and a read borrow taken and dropped, unmarked against
+    /// marked, uncontended. Reported in the M6c step 4b PR; run with
+    /// `cargo test --release -p pythrust-rt -- --ignored --nocapture
+    /// atomics_cost`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn atomics_cost() {
+        const N: u32 = 50_000_000;
+        let ns = |f: &dyn Fn()| {
+            let start = std::time::Instant::now();
+            (0..N).for_each(|_| f());
+            start.elapsed().as_nanos() as f64 / f64::from(N)
+        };
+        for marked in [false, true] {
+            let count = Count::new();
+            let slot = Slot::new(0u64);
+            if marked {
+                count.mark();
+                slot.mark();
+            }
+            let counted = ns(&|| {
+                std::hint::black_box(&count).inc();
+                std::hint::black_box(&count).dec();
+            });
+            let borrowed = ns(&|| drop(std::hint::black_box(&slot).borrow()));
+            println!("marked {marked}: inc+dec {counted:.2} ns, borrow {borrowed:.2} ns");
+        }
+    }
 
     /// A slot the test marked before sharing it, as the ABI contract
     /// requires of every caller.
