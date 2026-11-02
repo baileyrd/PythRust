@@ -96,16 +96,14 @@ impl<'a> FnBuilder<'_, 'a> {
     }
 
     /// The type of `map`'s results at `span`. A result type no call
-    /// decided (`ex.map(f, ())` of a generic `f`) holds nothing, so any
-    /// slot type will do, as for `not []`.
+    /// decided (`ex.map(f, ())` of a generic `f`) holds nothing, so its
+    /// open parts take any slot type, as for `not []`.
     fn results_ty(&mut self, span: Span) -> Result<Ty> {
-        let node = self.node_type(span)?;
-        let open = matches!(node, Type::Results(t) if matches!(**t, Type::Var(v)
-            if !self.subst.contains_key(&v) && !self.dead.contains_key(&v)));
-        match open {
-            true => Ok(self.cx.seqs.list(Ty::None)),
-            false => self.concrete(node, span),
-        }
+        let Type::Results(t) = self.node_type(span)? else {
+            return Err(internal(span, "`map` gives no results"));
+        };
+        let elem = super::settle(t, &self.subst, &self.dead, &mut self.cx.seqs);
+        Ok(self.cx.seqs.list(elem))
     }
 
     /// One item `x` of `map`: `f(x)`, appended to `out`.

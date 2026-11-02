@@ -1635,14 +1635,27 @@ fn map_lowers_over_every_iterable() {
         "\"ab\"",
         "(1, 2)",
     ] {
-        let src = format!(
-            "import concurrent.futures\n{id}def run() -> None:\n    \
-             with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
-             print(list(ex.map(same, {xs})))\nrun()\n"
-        );
-        assert_eq!(analyzed(&src).precision, Precision::Precise, "{src}");
-        assert_eq!(checked(&src), Ok(()), "{src}");
+        assert_maps(id, "same", xs);
     }
+    // No call decides an empty map's result type, whatever its shape.
+    for f in [
+        "def same(x):\n    return (x * x, x * x)\n",
+        "def same(x):\n    return [x * x]\n",
+        "def same(x):\n    return {x * x: [x]}\n",
+    ] {
+        assert_maps(f, "same", "()");
+    }
+}
+
+/// `ex.map(f, xs)` with its results read, in an annotated function.
+fn assert_maps(def: &str, f: &str, xs: &str) {
+    let src = format!(
+        "import concurrent.futures\n{def}def run() -> None:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         print(list(ex.map({f}, {xs})))\nrun()\n"
+    );
+    assert_eq!(analyzed(&src).precision, Precision::Precise, "{src}");
+    assert_eq!(checked(&src), Ok(()), "{src}");
 }
 
 #[test]
