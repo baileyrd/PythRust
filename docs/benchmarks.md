@@ -104,7 +104,7 @@ The one-task row is now within the noise of the direct call, which gained too: i
 | CPython `fclone_tasks.py` | 0.991 (0.896 to 1.384) | 1.368 (1.271 to 1.601) | 1.555 (1.504 to 1.677) |
 | rusty_fclone | 0.081 (0.063 to 0.089) | 0.223 (0.189 to 0.242) | 0.261 (0.231 to 0.331) |
 
-On four cores the task build runs 2.7x, 3.1x and 3.6x faster than the serial native build; on one core its medians are 4%, 3% and 3% higher, within run-to-run spread. It still trails CPython's own threads on the large-file tree, where both are hash-bound; CPython's lead there comes in part from hashing with OpenSSL ([M6a](roadmap.md#phase-5-m6-plan): 1.2x to 1.5x our SHA-256 on this CPU), on threads that release the GIL; on the small-file trees CPython's threads are slower than its serial run. rusty_fclone is not like-for-like (partial hashing, xxh3), as in M6b. These are the author's timings on one VM.
+On one core the task build's ranges overlap the serial build's. On the large-file tree it trails CPython's own threads, where both are hash-bound; CPython's lead there comes in part from hashing with OpenSSL ([M6a](roadmap.md#phase-5-m6-plan): 1.2x to 1.5x our SHA-256 on this CPU), on threads that release the GIL; on the small-file trees CPython's threads are slower than its serial run. rusty_fclone is not like-for-like (partial hashing, xxh3), as in M6b. These are the author's timings on one VM.
 
 ## CPU-bound tasks (M6c step 4c)
 
