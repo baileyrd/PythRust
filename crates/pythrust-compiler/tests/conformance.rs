@@ -65,7 +65,7 @@ use std::time::{Duration, Instant};
 
 use pythrust_compiler::ir::{Func, Inst, LocalId, Program};
 use pythrust_compiler::own::{self, Precision};
-use pythrust_compiler::{infer, lexer, lower, parser, rc};
+use pythrust_compiler::{infer, lexer, lower, parser, rc, TokenKind};
 
 type Res<T> = std::result::Result<T, String>;
 
@@ -300,28 +300,22 @@ fn run_cpython(source: &Path) -> Res<Run> {
     Ok(got)
 }
 
-/// `line` without its `pause ` markers.
-fn strip_pauses(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(at) = rest.find("pause") {
-        let before = rest[..at].chars().next_back();
-        let after = rest[at + "pause".len()..].chars().next();
-        let starts = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
-        let marker = starts && matches!(after, Some(' ' | '('));
-        let width = if after == Some(' ') {
-            "pause ".len()
-        } else {
-            "pause".len()
-        };
-        let end = if marker { at + width } else { at + 1 };
-        out.push_str(&rest[..at]);
-        if !marker {
-            out.push_str(&rest[at..end]);
-        }
-        rest = &rest[end..];
+/// `src` without its `pause` markers: each `Pause` token the lexer
+/// finds, with the spaces after it, so strings and comments that say
+/// `pause` stay as written. A source the lexer rejects never reaches
+/// CPython as a passing program, so it is kept whole.
+fn strip_pauses(src: &str) -> String {
+    let Ok(tokens) = lexer::lex(src) else {
+        return src.to_string();
+    };
+    let mut out = String::with_capacity(src.len());
+    let mut from = 0;
+    for token in tokens.iter().filter(|t| t.kind == TokenKind::Pause) {
+        out.push_str(&src[from..token.span.start]);
+        let rest = &src[token.span.end..];
+        from = src.len() - rest.trim_start_matches(' ').len();
     }
-    out.push_str(rest);
+    out.push_str(&src[from..]);
     out
 }
 
@@ -337,19 +331,17 @@ fn universal_newlines(stdout: String) -> String {
 /// `src` as Python: each `temper ` prefix, `pause` marker, `mut`/`owned`
 /// parameter mode and `raises` clause removed, or `None` if it has none.
 /// `def` is top-level only, so the prefix always starts a line, a mode
-/// follows `(` or `, ` on its `def` line, and a clause ends that line. A
-/// marker is the word `pause` followed by a space or `(`, after a line's
-/// indent or a character that cannot end a name; no corpus string holds
-/// one.
+/// follows `(` or `, ` on its `def` line, and a clause ends that line.
+/// Markers go by token (`strip_pauses`), which keeps every line.
 fn loosen(src: &str) -> Option<String> {
-    let lines: Vec<String> = src.lines().map(loosen_line).collect();
+    let unpaused = strip_pauses(src);
+    let lines: Vec<String> = unpaused.lines().map(loosen_line).collect();
     let changed = lines.iter().zip(src.lines()).any(|(a, b)| a != b);
     changed.then(|| lines.join("\n") + "\n")
 }
 
 fn loosen_line(line: &str) -> String {
     let line = line.strip_prefix("temper ").unwrap_or(line);
-    let line = &strip_pauses(line);
     if !line.starts_with("def ") {
         return line.to_string();
     }
@@ -1018,6 +1010,29 @@ fn loosen_keeps_modes_inside_strings() {
         loosen("def f(s: str = \" raises X\") -> None:\n    pass\n"),
         None
     );
+}
+
+/// Only real `pause` tokens go: tightly delimited ones too, and the
+/// spaces after each; strings and comments that say `pause` stay.
+#[test]
+fn loosen_strips_pause_tokens_only() {
+    let src = "x = pause f()\ny = (pause g()) + pause(h())\nz = pause[k()][0]\n";
+    let want = "x = f()\ny = (g()) + (h())\nz = [k()][0]\n";
+    assert_eq!(loosen(src).as_deref(), Some(want));
+    let kept = [
+        "print(\"pause here\")\n",
+        "print('pause here', 'a pause(b)')\n",
+        "print(\"a \\\" pause b\", 'it\\'s pause[0]')\n",
+        "def f(x: str = \"pause here\") -> None:\n    pass\n",
+        "x = 1  # pause here\n",
+        "paused = 1\nunpause = paused\n",
+    ];
+    for src in kept {
+        assert_eq!(loosen(src), None, "{src}");
+    }
+    let mixed = "print(\"pause \", pause f())  # pause\n";
+    let want = "print(\"pause \", f())  # pause\n";
+    assert_eq!(loosen(mixed).as_deref(), Some(want));
 }
 
 #[test]
