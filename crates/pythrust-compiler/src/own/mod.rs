@@ -32,8 +32,8 @@ mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::ast::{Module, StmtKind};
-use crate::diag::{DiagKind, Diagnostic, Result};
+use crate::ast::{Mode as Temper, Module, StmtKind};
+use crate::diag::{DiagKind, Diagnostic, Result, Warning};
 use crate::infer::{Type, Types};
 use crate::ir::{Compound, FuncId, Program, Ty};
 use crate::lower;
@@ -220,6 +220,27 @@ pub fn check(module: &Module, analysis: &Analysis) -> Result<()> {
     }
     modes::check(module, analysis)?;
     calls::check(module, analysis)
+}
+
+/// A warning for each tempered function whose ownership checks
+/// [`Analysis::opaque`] skips (Nano, 2026-11-02). None can be one
+/// today: tempered code uses no executor and calls only tempered code,
+/// so this guards the rule if either changes before step 3b.
+pub fn warnings(module: &Module, analysis: &Analysis) -> Vec<Warning> {
+    let tempered = module.body.iter().filter_map(|s| match &s.kind {
+        StmtKind::FuncDef(f) if f.mode == Temper::Tempered => Some(f),
+        _ => None,
+    });
+    tempered
+        .filter(|f| analysis.opaque.contains(&f.name.name))
+        .map(|f| Warning {
+            span: f.name.span,
+            message: format!(
+                "ownership checks skipped for `{}`: it may reach tasks (pending 3b)",
+                f.name.name
+            ),
+        })
+        .collect()
 }
 
 /// A lowering gap is never an error, except in a program that uses

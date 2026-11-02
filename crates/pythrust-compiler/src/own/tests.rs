@@ -1,4 +1,4 @@
-use super::{analyze, check, modes, Analysis, Mode, Param, Precision, Strs};
+use super::{analyze, check, modes, warnings, Analysis, Mode, Param, Precision, Strs};
 use crate::ast::{Mode as Temper, ParamMode, StmtKind};
 use crate::diag::DiagKind;
 use crate::{infer, lexer, parser};
@@ -1479,4 +1479,98 @@ wrap(2)\ngrow([1])\n";
     // Without tasks, the same gap stays the conservative fallback.
     let plain = "x = print(7)\ndef print(n):\n    return 1\n";
     assert_eq!(checked(plain), Ok(()));
+}
+
+#[test]
+fn a_tempered_function_whose_checks_are_skipped_is_warned() {
+    // No program reaches this yet (tempered code uses no executor and
+    // calls only tempered code), so the skipped set is given by hand.
+    let src = "temper def f(xs: list[int]) -> int:\n    return len(xs)\n\
+               def g(xs: list[int]) -> int:\n    return len(xs)\nprint(f([1]), g([2]))\n";
+    let module = match lexer::lex(src).and_then(|t| parser::parse(&t)) {
+        Ok(m) => m,
+        Err(d) => panic!("parse failed: {d}"),
+    };
+    let mut a = analyzed(src);
+    assert_eq!(warnings(&module, &a), Vec::new());
+    a.opaque.extend(["f".to_string(), "g".to_string()]);
+    let got: Vec<String> = warnings(&module, &a)
+        .into_iter()
+        .map(|w| w.message)
+        .collect();
+    assert_eq!(
+        got,
+        ["ownership checks skipped for `f`: it may reach tasks (pending 3b)"]
+    );
+}
+
+/// One program per entry of grammar.md's known-unchecked list (M6c,
+/// Nano 2026-11-02), each passing every check until rule 4 refuses it.
+const UNCHECKED: [(&str, &str); 5] = [
+    (
+        "tasks-share-a-list",
+        "def add(xs: list[int], n: int) -> None:\n    xs.append(n)\n\
+         def main() -> None:\n    xs: list[int] = []\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         a = ex.submit(add, xs, 1)\n        b = ex.submit(add, xs, 2)\n        \
+         a.result()\n        b.result()\n    print(xs)\n",
+    ),
+    (
+        "tasks-alias-or-file",
+        "def same(xs: list[int]) -> list[int]:\n    return xs\n\
+         def main() -> None:\n    xs = [1]\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         ys = ex.submit(same, xs).result()\n        ys.append(2)\n    print(xs)\n",
+    ),
+    (
+        "tasks-alias-or-file",
+        "def size(f) -> int:\n    return len(f.read())\n\
+         def main() -> None:\n    f = open(\"p\", \"rb\")\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         print(ex.submit(size, f).result())\n",
+    ),
+    (
+        "tasks-map-changes",
+        "def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return len(xs)\n\
+         def main() -> None:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         print(list(ex.map(grow, [[1], [2]])))\n",
+    ),
+    (
+        "tasks-module-list",
+        "log: list[int] = []\n\
+         def note(n: int) -> None:\n    log.append(n)\n\
+         def main() -> None:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         a = ex.submit(note, 1)\n        b = ex.submit(note, 2)\n        \
+         a.result()\n        b.result()\n",
+    ),
+];
+
+#[test]
+fn known_unchecked_task_gaps_stay_listed() {
+    let grammar = include_str!("../../../../docs/grammar.md");
+    let listed: Vec<&str> = grammar
+        .split("`unchecked:")
+        .skip(1)
+        .filter_map(|rest| rest.split('`').next())
+        .collect();
+    for (id, body) in UNCHECKED {
+        assert!(
+            listed.contains(&id),
+            "`unchecked:{id}` left grammar.md: drop its program"
+        );
+        let src = format!("import concurrent.futures\n{body}main()\n");
+        assert_eq!(
+            checked(&src),
+            Ok(()),
+            "`unchecked:{id}` is checked now: remove it from grammar.md's known-unchecked list\n{src}"
+        );
+    }
+    for id in &listed {
+        assert!(
+            UNCHECKED.iter().any(|(u, _)| u == id),
+            "grammar.md lists `unchecked:{id}` with no program here"
+        );
+    }
 }

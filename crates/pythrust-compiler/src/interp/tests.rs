@@ -1673,3 +1673,20 @@ fn results_are_taken_once_and_raise_in_order() {
     assert_eq!(out, "1\ncaught two\n[]\nTrue [5]\nTrue False\n");
     assert_eq!(err.as_deref(), Some("ValueError: two"));
 }
+
+#[test]
+fn a_task_exception_waits_for_result() {
+    // Run at `submit`, but its exception is stored in the future and
+    // raised by `result()`, as CPython's threads do (Nano, 2026-11-02).
+    let src = format!(
+        "{TASKS}def f(x):\n    if x < 0:\n        raise ValueError(\"neg\")\n    return x\n\
+         def main():\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         bad = ex.submit(f, -1)\n        print(\"submitted\")\n        \
+         ok = ex.submit(f, 2)\n        print(ok.result())\n        \
+         try:\n            bad.result()\n        except ValueError as e:\n            \
+         print(\"at result:\", e)\n        bad.result()\nmain()\n"
+    );
+    let (out, err) = run_src(&src);
+    assert_eq!(out, "submitted\n2\nat result: neg\n");
+    assert_eq!(err.as_deref(), Some("ValueError: neg"));
+}
