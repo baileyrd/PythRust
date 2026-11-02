@@ -1,0 +1,20 @@
+# deviation: changing a list inside one a task reads is a compile error (rule 4, reach; M6c); CPython runs it.
+# expect-exit: 1
+# expect-error: is read by a task until the `with` block ends
+import concurrent.futures
+
+
+def total(rows: list[list[int]]) -> int:
+    return len(rows)
+
+
+def main() -> None:
+    rows = [[1], [2]]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(total, rows)
+        r = rows[0]
+        r.append(3)
+        print(f.result())
+
+
+main()

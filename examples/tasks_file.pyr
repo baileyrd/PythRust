@@ -1,0 +1,19 @@
+# deviation: no file reaches a task (M6c, Nano 2026-11-01); CPython runs it.
+# expect-exit: 1
+# expect-error: a file cannot reach a task: parameter `f` of `size` holds one
+import concurrent.futures
+import sys
+
+
+def size(f) -> int:
+    return len(f.read())
+
+
+def main() -> None:
+    f = open(sys.argv[0], "rb")
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print(ex.submit(size, f).result() > 0)
+    f.close()
+
+
+main()

@@ -124,6 +124,8 @@ fn after_copies(blocks: Vec<Block>) -> Func {
         names: Default::default(),
         borrowed: BTreeSet::new(),
         blocks,
+        regions: Vec::new(),
+        tasks: Vec::new(),
     };
     copies(&mut f, &[BTreeSet::new()]);
     f
@@ -288,6 +290,8 @@ fn a_local_set_on_some_path_keeps_its_release() {
                 term: Term::Return(Operand::None),
             },
         ],
+        regions: Vec::new(),
+        tasks: Vec::new(),
     };
     skip_null(&mut f);
     assert!(f.blocks[0].insts.is_empty());

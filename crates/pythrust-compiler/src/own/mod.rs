@@ -26,6 +26,7 @@ mod body;
 mod calls;
 mod modes;
 mod strs;
+mod tasks;
 
 #[cfg(test)]
 mod tests;
@@ -167,6 +168,8 @@ pub struct Analysis {
     /// present even when conservative.
     pub params: BTreeMap<String, Vec<Type>>,
     pub precision: Precision,
+    /// The first program rule 4 refuses between tasks (M6c).
+    pub tasks: Option<Diagnostic>,
 }
 
 /// Summarizes `module`, typed by `types`, including functions no code
@@ -192,6 +195,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
                 calls,
                 params: param_types(module, types),
                 precision: Precision::Precise,
+                tasks: tasks::check(&program, &summaries).err(),
             }
         }
         Err(gap) => Analysis {
@@ -202,6 +206,7 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
             calls: Vec::new(),
             params: param_types(module, types),
             precision: Precision::Conservative(gap),
+            tasks: None,
         },
     }
 }
@@ -213,7 +218,8 @@ pub fn check(module: &Module, analysis: &Analysis) -> Result<()> {
         unchecked(module, gap)?;
     }
     modes::check(module, analysis)?;
-    calls::check(module, analysis)
+    calls::check(module, analysis)?;
+    analysis.tasks.clone().map_or(Ok(()), Err)
 }
 
 /// A lowering gap is never an error, except in a program that uses

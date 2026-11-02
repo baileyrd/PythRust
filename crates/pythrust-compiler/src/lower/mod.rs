@@ -687,6 +687,9 @@ struct FnBuilder<'c, 'a> {
     /// Whether a task this body starts may raise: each step that takes
     /// a task's result then may ([`FnBuilder::took_result`]).
     tasks_raise: bool,
+    /// Executor regions and task calls so far ([`Func::regions`]).
+    regions: Vec<BTreeSet<BlockId>>,
+    tasks: Vec<ir::Task>,
 }
 
 impl<'c, 'a> FnBuilder<'c, 'a> {
@@ -721,6 +724,8 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             caught: BTreeSet::new(),
             unwind: None,
             tasks_raise: false,
+            regions: Vec::new(),
+            tasks: Vec::new(),
         };
         b.cur = b.new_block();
         b.exit = b.new_block();
@@ -772,6 +777,8 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             names: self.names.into_iter().map(|(n, v)| (v.local, n)).collect(),
             borrowed: BTreeSet::new(),
             blocks: blocks.collect(),
+            regions: self.regions,
+            tasks: self.tasks,
         }
     }
 

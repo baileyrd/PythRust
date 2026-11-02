@@ -1,0 +1,17 @@
+# deviation: `map` with a function that changes or keeps its parameter is a compile error (M6c, Nano 2026-11-01); CPython runs it.
+# expect-exit: 1
+# expect-error: `map` cannot run `grow`, which changes or keeps its parameter `xs`
+import concurrent.futures
+
+
+def grow(xs: list[int]) -> int:
+    xs.append(1)
+    return len(xs)
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print(list(ex.map(grow, [[1], [2]])))
+
+
+main()

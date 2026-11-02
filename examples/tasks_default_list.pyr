@@ -1,0 +1,19 @@
+# deviation: two tasks of a function that appends to its list default is a compile error (rule 4, M6c); CPython runs it.
+# expect-exit: 1
+# expect-error: two tasks of this block share a parameter's default, and one changes it
+import concurrent.futures
+
+
+def keep(n: int, acc: list[int] = []) -> int:
+    acc.append(n)
+    return len(acc)
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(keep, 1)
+        b = ex.submit(keep, 2)
+        print(a.result() + b.result())
+
+
+main()

@@ -155,7 +155,7 @@ pub struct GlobalId(pub usize);
 pub struct LocalId(pub usize);
 
 /// Index into [`Func::blocks`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId(pub usize);
 
 /// A whole program. `main` takes nothing and returns `None`: the
@@ -191,6 +191,21 @@ pub struct Func {
     /// `rc::elide` decides.
     pub borrowed: BTreeSet<LocalId>,
     pub blocks: Vec<Block>,
+    /// The blocks of each executor's `with` (M6c), for analysis; an
+    /// inner block's are among the outer's. Only
+    /// [`crate::lower::lower_every`] makes them.
+    pub regions: Vec<BTreeSet<BlockId>>,
+    /// The calls that run tasks, in the regions' blocks.
+    pub tasks: Vec<Task>,
+}
+
+/// A call that runs a task (M6c): `dest = f(args)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Task {
+    pub dest: LocalId,
+    /// Whether `map` makes it: one call that runs as many tasks as
+    /// there are elements.
+    pub map: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

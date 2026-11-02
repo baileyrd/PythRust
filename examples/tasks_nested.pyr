@@ -1,0 +1,24 @@
+# deviation: a task of a nested executor counts against the outer block's tasks (rule 4, M6c); CPython runs it.
+# expect-exit: 1
+# expect-error: two tasks of this block share `xs`, and one changes it
+import concurrent.futures
+
+
+def add(xs: list[int], n: int) -> None:
+    xs.append(n)
+
+
+def size(xs: list[int]) -> int:
+    return len(xs)
+
+
+def main() -> None:
+    xs = [1]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(add, xs, 2)
+        with concurrent.futures.ThreadPoolExecutor() as inner:
+            print(inner.submit(size, xs).result() > 0)
+    print(xs)
+
+
+main()

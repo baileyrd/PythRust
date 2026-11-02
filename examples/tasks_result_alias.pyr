@@ -1,0 +1,19 @@
+# deviation: a task's result sharing its argument counts as that argument, so changing it while the task may run is a compile error (rule 4, results; M6c); CPython runs it.
+# expect-exit: 1
+# expect-error: is read by a task until the `with` block ends
+import concurrent.futures
+
+
+def same(xs: list[int]) -> list[int]:
+    return xs
+
+
+def main() -> None:
+    xs = [1]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        ys = ex.submit(same, xs).result()
+        ys.append(2)
+    print(xs)
+
+
+main()

@@ -1,0 +1,19 @@
+# deviation: two tasks given one list, one changing it, is a compile error (rule 4, M6c); CPython runs it.
+# expect-exit: 1
+# expect-error: two tasks of this block share `xs`, and one changes it
+import concurrent.futures
+
+
+def add(xs: list[int], n: int) -> None:
+    xs.append(n)
+
+
+def main() -> None:
+    xs: list[int] = []
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(add, xs, 1)
+        b = ex.submit(add, xs, 2)
+    print(sorted(xs))
+
+
+main()

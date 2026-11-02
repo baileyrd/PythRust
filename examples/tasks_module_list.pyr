@@ -1,0 +1,21 @@
+# deviation: a task appending to a module list while another task of the block uses it is a compile error (rule 4, M6c); CPython runs it.
+# expect-exit: 1
+# expect-error: two tasks of this block share `log`, and one changes it
+import concurrent.futures
+
+
+log: list[int] = []
+
+
+def note(n: int) -> None:
+    log.append(n)
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(note, 1)
+        b = ex.submit(note, 2)
+    print(sorted(log))
+
+
+main()
