@@ -12,9 +12,6 @@
 #![allow(unsafe_code)] // The C ABI below; the logic above it is safe.
 
 use std::cmp::Ordering;
-use std::sync::atomic::Ordering::Relaxed;
-
-use crate::LIVE;
 
 /// A string object. Immutable; its count is atomic once marked (see
 /// `sync.rs`), when a task may reach it.
@@ -131,7 +128,7 @@ fn control_escape(c: char) -> String {
 }
 
 pub(crate) fn into_ptr(s: PtStr) -> *mut PtStr {
-    LIVE.fetch_add(1, Relaxed);
+    crate::live_inc();
     Box::into_raw(Box::new(s))
 }
 
@@ -191,7 +188,7 @@ pub unsafe extern "C" fn pt_str_dec(s: *mut PtStr) {
     // SAFETY: the last reference: `s` came from `Box::into_raw` and no
     // other reference remains.
     drop(unsafe { Box::from_raw(s) });
-    LIVE.fetch_sub(1, Relaxed);
+    crate::live_dec();
 }
 
 /// `a + b`.
