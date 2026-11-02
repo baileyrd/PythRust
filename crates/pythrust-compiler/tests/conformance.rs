@@ -42,6 +42,12 @@
 //!   runtime (`PYTHRUST_RT`, through `ci/tsan-cc`); a race report exits
 //!   66 and so fails the golden. Instrumented binaries skip the size gate.
 //!   CI's race job sets it on x86-64 Linux.
+//! - `PYTHRUST_TSAN_RUNS=n` with `PYTHRUST_TSAN=1`, runs each task program
+//!   `n` more times pinned to one CPU and `n` unpinned: a race shows only
+//!   on some schedules.
+//! - `PYTHRUST_CALIBRATE_RT` a ThreadSanitizer runtime built with
+//!   `--cfg pythrust_calibrate`; `the_race_detector_reports_injected_races`
+//!   then checks the detector reports each injected race.
 
 use std::fs;
 use std::io::Read;
@@ -492,6 +498,7 @@ const NATIVE: &[&str] = &[
     "tasks_partial_line",
     "tasks_result_released",
     "tasks_submit",
+    "tasks_unmarked",
     "tasks_values",
     "tempered",
     "tuple_loops",
@@ -985,9 +992,41 @@ fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
 /// programs exit 0 or 1, so it cannot be mistaken for theirs.
 const MEMCHECK_EXIT: i32 = 97;
 
-/// Whether `PYTHRUST_VALGRIND=1` asks for memcheck runs.
+/// Whether `PYTHRUST_TSAN=1` asks for ThreadSanitizer runs.
 fn tsan_requested() -> bool {
     std::env::var_os("PYTHRUST_TSAN").is_some_and(|v| v == "1")
+}
+
+/// The extra runs of each schedule `PYTHRUST_TSAN_RUNS` asks for; 0
+/// when unset.
+fn tsan_runs() -> Res<u32> {
+    match std::env::var("PYTHRUST_TSAN_RUNS") {
+        Err(_) => Ok(0),
+        Ok(n) => n
+            .parse()
+            .map_err(|e| format!("PYTHRUST_TSAN_RUNS={n}: {e}")),
+    }
+}
+
+/// Whether `case` runs tasks, so its schedule can vary between runs.
+fn uses_tasks(case: &Case) -> Res<bool> {
+    Ok(read(&case.source)?.contains("import concurrent.futures"))
+}
+
+/// `exe` run [`tsan_runs`] times pinned to one CPU and as many unpinned,
+/// each matching the golden; a race report (exit 66) fails it.
+fn tsan_repeats(case: &Case, exe: &Path) -> Res<Vec<String>> {
+    let mut failures = Vec::new();
+    for k in 0..tsan_runs()? {
+        let pinned = run(Command::new("taskset").args(["-c", "0"]).arg(exe), TIMEOUT)?;
+        let free = run(&mut Command::new(exe), TIMEOUT)?;
+        for (how, got) in [("pinned", pinned), ("unpinned", free)] {
+            if let Some(m) = mismatch(case, &got) {
+                failures.push(format!("{how} run {}: {m}", k + 2));
+            }
+        }
+    }
+    Ok(failures)
 }
 
 fn memcheck_requested() -> bool {
@@ -1131,6 +1170,9 @@ fn corpus_matches_native() -> Res<()> {
             }
         };
         let got = run(&mut Command::new(&exe), TIMEOUT)?;
+        if tsan_requested() && uses_tasks(&case)? {
+            failures.extend(tsan_repeats(&case, &exe)?);
+        }
         let failed = mismatch(&case, &got);
         let errored = failed.is_none() && got.status != 0;
         failures.extend(failed);
@@ -1606,6 +1648,77 @@ fn native_matches_run_at_the_repr_limit() -> Res<()> {
     cleanup(&dir)?;
     report(failures);
     Ok(())
+}
+
+/// Races the detector must report, each injected into a runtime built
+/// with `--cfg pythrust_calibrate` by `PYTHRUST_FAULT`, on a program
+/// that is clean without it.
+const INJECTED: [(&str, &str); 2] = [
+    // The worker changes a task's result count after handing it over:
+    // the freed-result race of M6c step 4a.
+    ("tasks_result_released", "outcome"),
+    // No value is marked, so two threads use unmarked counts and slots.
+    ("tasks_unmarked", "unmarked"),
+];
+
+/// ThreadSanitizer's exit status for a run it reported a race in.
+const TSAN_EXIT: i32 = 66;
+
+/// The race detector's calibration gate: with each fault of [`INJECTED`]
+/// it reports a race, and without it none. Runs pinned to one CPU,
+/// where both races show in every run. Needs `PYTHRUST_CALIBRATE_RT`
+/// (and `ci/tsan-cc` as `cc`); without it there is nothing to check.
+#[test]
+fn the_race_detector_reports_injected_races() -> Res<()> {
+    let Some(rt) = std::env::var_os("PYTHRUST_CALIBRATE_RT") else {
+        eprintln!("skipped: PYTHRUST_CALIBRATE_RT is not set");
+        return Ok(());
+    };
+    let dir = scratch("calibrate")?;
+    let mut failures = Vec::new();
+    for (name, fault) in INJECTED {
+        let exe = build_with_runtime(&corpus_dir()?.join(format!("{name}.pyr")), &dir, &rt)?;
+        for (injected, want) in [(fault, TSAN_EXIT), ("", 0)] {
+            let got = run(
+                Command::new("taskset")
+                    .args(["-c", "0"])
+                    .arg(&exe)
+                    .env("PYTHRUST_FAULT", injected)
+                    .env(
+                        "TSAN_OPTIONS",
+                        format!("halt_on_error=1 history_size=7 exitcode={TSAN_EXIT}"),
+                    ),
+                TIMEOUT,
+            )?;
+            if got.status != want {
+                failures.push(format!(
+                    "{name} with fault {injected:?}: exit {}, want {want}",
+                    got.status
+                ));
+            }
+        }
+    }
+    cleanup(&dir)?;
+    report(failures);
+    Ok(())
+}
+
+/// Builds a copy of `source` in `dir` against the runtime library `rt`.
+fn build_with_runtime(source: &Path, dir: &Path, rt: &std::ffi::OsStr) -> Res<PathBuf> {
+    let name = source.file_name().ok_or("source has no file name")?;
+    let copy = dir.join(name);
+    fs::copy(source, &copy).map_err(|e| format!("{}: {e}", source.display()))?;
+    let out = Command::new(pythrust_bin()?)
+        .env("PYTHRUST_RT", rt)
+        .arg("build")
+        .arg(&copy)
+        .output()
+        .map_err(|e| format!("cannot run pythrust build: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("{}: build failed:\n{stderr}", source.display()));
+    }
+    Ok(copy.with_extension(std::env::consts::EXE_EXTENSION))
 }
 
 /// Writes `src` as `<name>.pyr` under `dir/src` (building copies it
