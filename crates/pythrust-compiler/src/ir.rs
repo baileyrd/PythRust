@@ -415,8 +415,9 @@ pub enum Rvalue {
     /// takes the next, waits for its task and gives its result, as
     /// [`Rvalue::TaskResult`]; when it raises, the rest are dropped.
     NextResult(Operand),
-    /// `t = Hold(t)`: starts a read borrow of the list `t` refers to,
-    /// keeping `t`'s reference, which makes `t` a [`Ty::Held`] local.
+    /// `h = Hold(s)`: takes over local `s`'s reference to a list and
+    /// starts a read borrow of it, the value of the [`Ty::Held`] `h`;
+    /// `Forget(s)` follows.
     Hold(Operand),
 }
 

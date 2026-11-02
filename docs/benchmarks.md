@@ -93,7 +93,7 @@ Two programs, each with a serial control that runs the same work by direct calls
 | `shared` | 0.432 (0.390 to 0.512) | 0.255 (0.228 to 0.298) |
 | `shared_baseline` | 0.113 (0.089 to 0.168) | 0.254 (0.189 to 0.275) |
 
-On these four cores, tasks run CPU-bound work 3.2x (`tasks_cpu`) and 3.5x (`tasks_alloc`) faster than the serial native build; on one core they cost 14% and 44% more than it ([scaling](#cpu-bound-tasks-m6c-step-4c), below). CPython's threads are no faster than its serial run (the GIL), so the native task rows are 52x and 9x CPython's. These are the only speedups claimed: work that tasks split evenly, with nothing marked. The `shared` rows (from [Shared values](#shared-values-m6c), same run) are where tasks lose: one task walking a marked list takes 3.8x as long as the direct call, and is slower than CPython.
+On these four cores, tasks run CPU-bound work 3.2x (`tasks_cpu`) and 3.5x (`tasks_alloc`) faster than the serial native build; on one core they cost 14% and 44% more than it ([scaling](#cpu-bound-tasks-m6c-step-4c), below). CPython's threads are no faster than its serial run (the GIL), so the native task rows are 52x and 9x CPython's. These are the only speedups claimed: work that tasks split evenly, with nothing marked. The `shared` rows (from [Shared values](#shared-values-m6c), same run) are where tasks lose: one task walking a marked list takes 3.8x as long as the direct call, and is slower than CPython (before loops held their list; [after](#holding-a-list-per-loop-atomics-cost-a), CPython not re-measured).
 
 Scaling, by the cores the process may use (`taskset -c 0`, `0-1`, `0-3`), 7 runs, median seconds. The executor has no `max_workers` yet, so the pool follows the cores: `min(32, cpus + 4)`, 5, 6 and 8 workers.
 

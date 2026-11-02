@@ -1354,14 +1354,14 @@ fn is_table(ty: Ty) -> bool {
 }
 
 /// The runtime call taking a new reference to a `ty` value. An executor
-/// has one owner and is never copied. A loop's hold takes its list's
-/// reference before the hold starts, as any list's.
+/// has one owner and is never copied, nor is a loop's hold.
 fn rc_inc(types: &[Compound], ty: Ty) -> Result<Rt> {
     match counted(types, ty) {
         Ty::Str => Ok(Rt::StrInc),
         Ty::Bytes | Ty::File => Ok(Rt::ObjInc),
         Ty::Future => Ok(Rt::FutInc),
         Ty::Exec => Err(backend("copying an executor".to_string())),
+        Ty::Held(_) => Err(backend("copying a loop's hold".to_string())),
         _ => Ok(Rt::SeqInc),
     }
 }
