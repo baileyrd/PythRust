@@ -387,3 +387,116 @@ fn every_instruction_but_a_read_or_the_exit_release_keeps() {
     assert!(!keeps(&copy(1, 0), p, false));
     assert!(!keeps(&assign(Rvalue::Len(Operand::Local(p))), p, false));
 }
+
+/// Element reads of `f`'s held loops: (borrowed, counted).
+fn item_reads(f: &Func) -> (usize, usize) {
+    let held =
+        |op: &Operand| matches!(op, Operand::Local(l) if matches!(f.locals[l.0], Ty::Held(_)));
+    let borrowed = count(f, |i| {
+        matches!(
+            i,
+            Inst::Assign {
+                value: Rvalue::Item(..),
+                ..
+            }
+        )
+    });
+    let counted = count(
+        f,
+        |i| matches!(i, Inst::Assign { value: Rvalue::Index(s, _), .. } if held(s)),
+    );
+    (borrowed, counted)
+}
+
+const READ_ONLY: &str = "def total(rows: list[str]) -> int:\n    n = 0\n    for s in rows:\n        n += len(s)\n    return n\n";
+
+#[test]
+fn a_held_loop_reads_an_element_only_read_without_counting_it() {
+    let p = elided(&format!("{READ_ONLY}print(total(['a', 'bc']))\n"));
+    let f = func(&p, "total");
+    assert_eq!(item_reads(f), (1, 0));
+    let releases_of_items = count(
+        f,
+        |i| matches!(i, Inst::Release(l) if f.locals[l.0] == Ty::Str),
+    );
+    assert_eq!(releases_of_items, 0);
+}
+
+/// `f`'s element reads of held loops, asserting it holds one.
+fn held_item_reads(src: &str) -> (usize, usize) {
+    let p = elided(src);
+    let f = func(&p, "f");
+    assert!(f.locals.iter().any(|t| matches!(t, Ty::Held(_))), "{src}");
+    item_reads(f)
+}
+
+#[test]
+fn an_element_read_after_the_hold_or_through_another_name_is_counted() {
+    let bodies = [
+        // Read after the loop, when the hold has ended.
+        (
+            "s = ''\n    for s in rows:\n        pass\n    return len(s)\n",
+            "int",
+        ),
+        // Copied to another name.
+        (
+            "t = ''\n    for s in rows:\n        t = s\n    return len(t)\n",
+            "int",
+        ),
+        // Returned.
+        ("for s in rows:\n        return s\n    return ''\n", "str"),
+    ];
+    for (body, ret) in bodies {
+        let src = format!("def f(rows: list[str]) -> {ret}:\n    {body}print(f(['a']))\n");
+        assert_eq!(held_item_reads(&src), (0, 1), "{body}");
+    }
+}
+
+/// A parameter reused as the loop's variable holds the caller's
+/// reference before the loop, which its first release (or the exit
+/// release, when the loop is empty) must drop: its element reads stay
+/// counted.
+#[test]
+fn a_parameter_reused_as_the_loop_variable_is_counted() {
+    let src = concat!(
+        "def f(s: str, rows: list[str]) -> int:\n",
+        "    for s in rows:\n        print(s)\n",
+        "    return 0\n",
+        "print(f('a' + 'b', ['c']))\n",
+    );
+    assert_eq!(held_item_reads(src), (0, 1));
+}
+
+/// A store takes its own count of what it stores, so an element stored
+/// in a value of another type (a tuple in a `list[tuple[str, int]]`)
+/// is still read without one, as `rc::borrows` lets a copy be.
+#[test]
+fn an_element_stored_elsewhere_is_read_without_a_count() {
+    let src = concat!(
+        "def f(rows: list[str]) -> int:\n",
+        "    out: list[tuple[str, int]] = []\n",
+        "    for s in rows:\n        out.append((s, 1))\n",
+        "    return len(out)\n",
+        "print(f(['a']))\n",
+    );
+    assert_eq!(held_item_reads(src), (1, 0));
+}
+
+/// Pins which element reads of the `for_items` fixture go uncounted, so
+/// its native run tests the paths it names.
+#[test]
+fn the_for_items_fixture_reads_without_counts_where_it_says() {
+    let p = elided(include_str!("../../../../examples/for_items.pyr"));
+    let want = [
+        ("total", (1, 0)),
+        ("longest_sorted", (1, 0)),
+        ("pairs", (2, 0)),
+        ("tagged", (1, 0)),
+        ("first_of", (1, 0)),
+        ("checked", (1, 0)),
+        ("reused", (0, 1)),
+    ];
+    for (name, reads) in want {
+        assert_eq!(item_reads(func(&p, name)), reads, "{name}");
+    }
+}

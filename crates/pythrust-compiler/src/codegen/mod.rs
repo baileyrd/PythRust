@@ -113,6 +113,7 @@ enum Rt {
     SeqReleaseHeld,
     SeqLenHeld,
     SeqGetHeld,
+    SeqItemHeld,
     ListSet,
     SeqInc,
     SeqDec,
@@ -168,7 +169,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 89] = [
+    const ALL: [Rt; 90] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -206,6 +207,7 @@ impl Rt {
         Rt::SeqReleaseHeld,
         Rt::SeqLenHeld,
         Rt::SeqGetHeld,
+        Rt::SeqItemHeld,
         Rt::ListSet,
         Rt::SeqInc,
         Rt::SeqDec,
@@ -299,6 +301,7 @@ impl Rt {
             Rt::SeqReleaseHeld => "pt_seq_release_held",
             Rt::SeqLenHeld => "pt_seq_len_held",
             Rt::SeqGetHeld => "pt_seq_get_held",
+            Rt::SeqItemHeld => "pt_seq_item_held",
             Rt::ListSet => "pt_list_set",
             Rt::SeqInc => "pt_seq_inc",
             Rt::SeqDec => "pt_seq_dec",
@@ -384,7 +387,7 @@ impl Rt {
             Rt::SeqNew => (vec![ptr, ptr, I64], Some(ptr)),
             Rt::SeqPush => (vec![ptr, I64], None),
             Rt::SeqLen | Rt::SeqLenHeld => (vec![ptr], Some(I64)),
-            Rt::SeqGet | Rt::SeqGetHeld => (vec![ptr, I64, ptr], Some(I64)),
+            Rt::SeqGet | Rt::SeqGetHeld | Rt::SeqItemHeld => (vec![ptr, I64, ptr], Some(I64)),
             Rt::SeqHold => (vec![ptr], Some(ptr)),
             Rt::ListSet => (vec![ptr, I64, I64], Some(I8)),
             Rt::SeqInc | Rt::SeqDec | Rt::SeqReleaseHeld | Rt::WriteSeq => (vec![ptr], None),
@@ -987,6 +990,12 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Index(s, i) if matches!(self.func.ty(*s), Ty::Held(_)) => {
                 self.item(Rt::SeqGetHeld, *s, *i, dest, span)
             }
+            Rvalue::Item(s, i) if matches!(self.func.ty(*s), Ty::Held(_)) => {
+                self.item(Rt::SeqItemHeld, *s, *i, dest, span)
+            }
+            Rvalue::Item(..) => Err(backend(
+                "an uncounted element read of a list no loop holds".to_string(),
+            )),
             Rvalue::Index(s, i) if self.func.ty(*s) == Ty::Range => self.range_item(*s, *i, span),
             Rvalue::Index(s, i) => self.str_item(*s, *i, span),
             Rvalue::Len(s)
@@ -1333,6 +1342,7 @@ fn raises_inline(value: &Rvalue) -> bool {
     matches!(
         value,
         Rvalue::Index(..)
+            | Rvalue::Item(..)
             | Rvalue::Int(IntOp::FloorDiv | IntOp::Mod, ..)
             | Rvalue::Float(
                 FloatOp::Div | FloatOp::IntDiv | FloatOp::FloorDiv | FloatOp::Mod,

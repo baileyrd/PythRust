@@ -1,0 +1,77 @@
+# Elements a held loop only reads are read without a count (atomics cost
+# B); the list the loop holds keeps them alive. The loop over a temporary
+# frees it, and its elements, when the loop ends; an element stored in
+# another value keeps a count of its own and outlives the list.
+
+
+def total(xs: list[str]) -> int:
+    n = 0
+    for s in xs:
+        n += len(s)
+    return n
+
+
+def longest_sorted(xs: list[str]) -> int:
+    best = 0
+    for s in sorted(xs):
+        if len(s) > best:
+            best = len(s)
+    return best
+
+
+def pairs(xs: list[str]) -> int:
+    n = 0
+    for a in xs:
+        for b in xs:
+            if a + b == b + a and a != b:
+                n += 1
+    return n
+
+
+def fresh(xs: list[str]) -> list[str]:
+    out: list[str] = []
+    for x in xs:
+        out.append(x + "!")
+    return out
+
+
+def tagged(xs: list[str]) -> list[tuple[str, int]]:
+    out: list[tuple[str, int]] = []
+    for s in sorted(fresh(xs)):
+        out.append((s, len(s)))
+    return out
+
+
+def first_of(xs: list[str]) -> int:
+    k = 0
+    for s in xs:
+        if s == "AB":
+            break
+        k += 1
+    return k
+
+
+def checked(xs: list[str]) -> int:
+    try:
+        for s in xs:
+            if s == "":
+                raise ValueError("empty")
+    except ValueError:
+        return -1
+    return len(xs)
+
+
+# A parameter reused as the loop's variable: its reads stay counted, so
+# its first release drops the caller's reference.
+def reused(s: str, xs: list[str]) -> int:
+    n = 0
+    for s in xs:
+        n += len(s)
+    return n
+
+
+words = ["ab", "c", "AB", "abab", "c"]
+print(total(words), longest_sorted(words), pairs(words))
+print(tagged(words))
+print(first_of(words), checked(words), checked(["a", ""]))
+print(reused("x" * 3, words), reused("y" * 2, []))

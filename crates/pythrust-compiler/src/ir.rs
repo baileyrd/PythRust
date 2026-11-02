@@ -419,6 +419,11 @@ pub enum Rvalue {
     /// starts a read borrow of it, the value of the [`Ty::Held`] `h`;
     /// `Forget(s)` follows.
     Hold(Operand),
+    /// `s[i]` of a [`Ty::Held`] list `s`, borrowed: no reference of its
+    /// own, valid while the hold lasts. Only `rc::elide` makes one, for
+    /// an element its loop variable only reads during the hold (atomics
+    /// cost B).
+    Item(Operand, Operand),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -562,6 +567,7 @@ impl Rvalue {
             | Rvalue::Concat(a, b)
             | Rvalue::Repeat(a, b)
             | Rvalue::Index(a, b)
+            | Rvalue::Item(a, b)
             | Rvalue::Entry(a, b, _)
             | Rvalue::Float(_, a, b)
             | Rvalue::IntPow(a, b) => vec![*a, *b],
