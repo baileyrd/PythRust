@@ -1,0 +1,9 @@
+8 6 def 14
+2 ['ab', 'c', 'def', 'gh', 'def!']
+7 ['ab', 'c', 'def', 'gh', 'def!', 'boom', 'after boom']
+50 7
+5
+7
+3 26
+3 boom
+4 ['x', 'yz', 'w']

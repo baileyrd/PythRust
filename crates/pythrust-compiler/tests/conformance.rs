@@ -416,6 +416,7 @@ const NATIVE: &[&str] = &[
     "dict_views",
     "dicts",
     "fibonacci",
+    "for_hold",
     "empty_tuple_loop",
     "exception_hierarchy",
     "exception_hierarchy_uncaught",
@@ -521,6 +522,7 @@ const NATIVE: &[&str] = &[
     "tasks_result_released",
     "tasks_submit",
     "tasks_unmarked",
+    "tasks_unmarked_walk",
     "tasks_values",
     "tempered",
     "tuple_loops",
@@ -1711,7 +1713,7 @@ fn native_matches_run_at_the_repr_limit() -> Res<()> {
 /// Races the detector must report, each injected into a runtime built
 /// with `--cfg pythrust_calibrate` by `PYTHRUST_FAULT`, on a program
 /// that is clean without it.
-const INJECTED: [(&str, &str); 4] = [
+const INJECTED: [(&str, &str); 5] = [
     // The worker changes a task's result count after handing it over:
     // the freed-result race of M6c step 4a, on an unmarked result.
     ("tasks_result_released", "outcome"),
@@ -1719,6 +1721,9 @@ const INJECTED: [(&str, &str); 4] = [
     ("tasks_result_marked", "late-free"),
     // No value is marked, so two threads use unmarked counts and slots.
     ("tasks_unmarked", "unmarked"),
+    // As above, with both threads walking the list in held `for` loops:
+    // the holds are the only shared writes.
+    ("tasks_unmarked_walk", "unmarked"),
     // Marked counts change by plain loads and stores.
     ("tasks_unmarked", "nonatomic"),
 ];
