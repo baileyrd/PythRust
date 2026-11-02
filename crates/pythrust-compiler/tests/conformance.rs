@@ -1173,6 +1173,7 @@ fn native_golden(case: Case) -> Res<Result<Case, String>> {
 }
 
 /// A task whose executor cannot start a thread, when none is running.
+#[cfg(target_os = "linux")]
 const THREAD_REFUSED: &str = "\
 import concurrent.futures
 
