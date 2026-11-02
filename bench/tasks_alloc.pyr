@@ -1,0 +1,24 @@
+# Allocating tasks (M6c step 4c): eight tasks through `ex.map`, each
+# making and dropping 400,000 strings with `str()`. Each task makes its
+# own values, so nothing is marked, but every string is a malloc and a
+# free from several threads at once. tasks_alloc_serial.pyr runs the
+# same work in turn.
+import concurrent.futures
+
+
+def build(seed: int) -> int:
+    n = 0
+    for i in range(400000):
+        n += len(str(seed * 1000000 + i))
+    return n
+
+
+def main() -> None:
+    total = 0
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for t in ex.map(build, range(8)):
+            total += t
+    print(total)
+
+
+main()

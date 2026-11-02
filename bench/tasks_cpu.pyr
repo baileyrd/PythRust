@@ -1,0 +1,34 @@
+# CPU-bound tasks (M6c step 4c): Collatz step counts for 1..800,000 in
+# eight chunks, one task each through `ex.map`. Only ints cross to the
+# workers, so nothing is marked. tasks_cpu_serial.pyr runs the same
+# chunks in turn; CPython runs this file on its threads, under the GIL.
+import concurrent.futures
+
+
+def steps(n: int) -> int:
+    count = 0
+    while n != 1:
+        if n % 2 == 0:
+            n = n // 2
+        else:
+            n = 3 * n + 1
+        count += 1
+    return count
+
+
+def chunk(start: int) -> int:
+    total = 0
+    for i in range(start, start + 100000):
+        total += steps(i)
+    return total
+
+
+def main() -> None:
+    total = 0
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for t in ex.map(chunk, range(1, 800001, 100000)):
+            total += t
+    print(total)
+
+
+main()

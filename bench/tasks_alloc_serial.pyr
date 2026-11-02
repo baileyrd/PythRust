@@ -1,0 +1,16 @@
+# Control for tasks_alloc.pyr: the same eight builds, called in turn.
+def build(seed: int) -> int:
+    n = 0
+    for i in range(400000):
+        n += len(str(seed * 1000000 + i))
+    return n
+
+
+def main() -> None:
+    total = 0
+    for seed in range(8):
+        total += build(seed)
+    print(total)
+
+
+main()
