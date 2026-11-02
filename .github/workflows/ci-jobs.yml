@@ -1,0 +1,21 @@
+name: CI jobs
+
+# CI's workflow parses and declares every expected job. It lives apart
+# from ci.yml so it still runs, and fails, when ci.yml cannot be parsed:
+# a workflow GitHub cannot parse runs no jobs, and no jobs is not green.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  jobs-declared:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install --quiet pyyaml
+      - run: python3 ci/check_jobs.py .github/workflows/ci.yml
+      - run: python3 -m unittest discover -s ci

@@ -69,17 +69,20 @@ jobs:
   race:
     # Data races in native programs and in the runtime's concurrency
     # tests, under ThreadSanitizer. The runtime and std are instrumented
-    # (nightly, `-Zbuild-std`); `--cfg pythrust_tsan` reports each
-    # unmarked count change as the plain write it stands for (`sync.rs`),
-    # so two threads changing one unmarked count is a reported race.
+    # (nightly, `-Zbuild-std`); `--cfg pythrust_tsan` reports each change
+    # of an unmarked count or borrow word, and each use of an idle slot's
+    # fast path, as the plain write it stands for (`sync.rs`), so two
+    # threads using one unmarked value is a reported race.
     # Cranelift's generated code is not instrumented: what it reads and
     # writes itself (module values, the thread's context) is unchecked.
-    # x86-64 Linux only: MSVC has no ThreadSanitizer, and AArch64 Linux
-    # and macOS are not wired up.
+    # `history_size=7` keeps enough of each thread's past accesses that a
+    # race against an old one is reported, not dropped for want of its
+    # stack. x86-64 Linux only: MSVC has no ThreadSanitizer, and AArch64
+    # Linux and macOS are not wired up.
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-Zsanitizer=thread --cfg pythrust_tsan"
-      TSAN_OPTIONS: "halt_on_error=1"
+      TSAN_OPTIONS: "halt_on_error=1 history_size=7"
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal && rustup toolchain install nightly --profile minimal --component rust-src && rustup default stable
@@ -90,11 +93,24 @@ jobs:
       # conformance harness uses to find its own target directory.
       # `ci/tsan-cc` as `cc` links the detector into native programs.
       - run: mkdir -p "$RUNNER_TEMP/tsan-bin" && ln -s "$PWD/ci/tsan-cc" "$RUNNER_TEMP/tsan-bin/cc" && echo "$RUNNER_TEMP/tsan-bin" >> "$GITHUB_PATH"
+      # Each task program runs 5 more times pinned to one CPU and 5
+      # unpinned: a race shows only on some schedules.
       - run: cargo test --locked --test conformance corpus_matches_native
         env:
           RUSTFLAGS: ""
           PYTHRUST_TSAN: "1"
+          PYTHRUST_TSAN_RUNS: "5"
           PYTHRUST_RT: ${{ runner.temp }}/tsan/x86_64-unknown-linux-gnu/debug/libpythrust_rt.a
+      # Calibration gate: a runtime that injects the race `PYTHRUST_FAULT`
+      # names (the freed-result race of step 4a; values never marked)
+      # must be reported, pinned to one CPU, and be clean without it.
+      - run: cargo +nightly build --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir "$RUNNER_TEMP/calibrate"
+        env:
+          RUSTFLAGS: "-Zsanitizer=thread --cfg pythrust_tsan --cfg pythrust_calibrate"
+      - run: cargo test --locked --test conformance the_race_detector_reports_injected_races
+        env:
+          RUSTFLAGS: ""
+          PYTHRUST_CALIBRATE_RT: ${{ runner.temp }}/calibrate/x86_64-unknown-linux-gnu/debug/libpythrust_rt.a
 
   rust-version:
     # The oldest toolchain a program calling Rust bindings builds with:
@@ -110,3 +126,20 @@ jobs:
           printf 'import probe\nprint(probe.double(21), probe.half(5.0))\n' > "$RUNNER_TEMP/main.pyr"
           RUSTUP_TOOLCHAIN=1.88.0 ./target/debug/pythrust build --rust probe=crates/pythrust-compiler/tests/rust/probe "$RUNNER_TEMP/main.pyr"
           test "$("$RUNNER_TEMP/main")" = "42 2.5"
+
+  all:
+    # One check standing for every job above: it fails unless each
+    # succeeded, every `check` platform included. A job that was skipped
+    # or cancelled is not a pass. `ci/check_jobs.py` (the "CI jobs"
+    # workflow) checks that this list names every job.
+    needs: [check, memcheck, miri, race, rust-version]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do test "$r" = success; done
+          test "$(echo $RESULTS | wc -w)" -eq 5
