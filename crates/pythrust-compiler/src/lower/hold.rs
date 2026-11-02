@@ -110,6 +110,7 @@ fn runs_unseen(value: &Rvalue) -> bool {
         | Rvalue::Concat(..)
         | Rvalue::Repeat(..)
         | Rvalue::Index(..)
+        | Rvalue::Item(..)
         | Rvalue::Len(_)
         | Rvalue::Entry(..)
         | Rvalue::View(_)

@@ -421,6 +421,7 @@ const NATIVE: &[&str] = &[
     "for_hold_exits",
     "for_hold_raise",
     "for_hold_uncaught",
+    "for_items",
     "empty_tuple_loop",
     "exception_hierarchy",
     "exception_hierarchy_uncaught",

@@ -18,6 +18,9 @@
 //!    holds one (it borrows `x`'s: both operations go, the `for`
 //!    snapshot of a variable among them), or when `x` is never read
 //!    again (it takes `x`'s: the `Retain` becomes `Forget(x)`).
+//!    `items`: an element a held loop moves into its variable, which
+//!    is only read while the hold lasts, is read without a count, the
+//!    way a copy borrows (atomics cost B).
 //! 3. `skip_null`: a `Retain` or `Release` of a local that is null on
 //!    every path to it (never assigned, moved out or released) does
 //!    nothing, so it goes.
@@ -36,13 +39,14 @@ mod tests;
 
 use std::collections::{BTreeSet, HashSet};
 
-use crate::ir::{Block, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term};
+use crate::ir::{Block, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
 
 /// `program` with the refcount operations it does not need removed.
 pub fn elide(mut program: Program) -> Program {
     let borrowed = borrow(&mut program);
     for f in &mut program.funcs {
         copies(f, &borrowed);
+        items(f, &borrowed);
         skip_null(f);
     }
     program
@@ -141,6 +145,7 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::Concat(..)
         | Rvalue::Repeat(..)
         | Rvalue::Index(..)
+        | Rvalue::Item(..)
         | Rvalue::Len(_)
         | Rvalue::Entry(..)
         | Rvalue::View(_)
@@ -264,6 +269,93 @@ fn copy_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>], lent:
     }
 }
 
+/// Reads each element a held loop moves into its variable without a
+/// count (atomics cost B, Nano 2026-11-02): `e = Index(h, i)`, then
+/// `x = e`, `Forget(e)`, where `h` is a [`Ty::Held`] list. The hold
+/// keeps the list unchanged and alive, so its element is too; when `x`
+/// is assigned only there, never retained, and released on every path
+/// while read only before the hold ends ([`released_while`], as a copy
+/// borrows in [`copies`]), the read borrows (`Rvalue::Item`) and `x`'s
+/// releases only null it.
+fn items(f: &mut Func, borrowed: &[BTreeSet<usize>]) {
+    let reads: Vec<(usize, usize)> = f
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(b, block)| (0..block.insts.len()).map(move |k| (b, k)))
+        .collect();
+    for (b, k) in reads {
+        item_at(f, b, k, borrowed);
+    }
+}
+
+/// Makes the element read at block `b`, index `k`, borrow, if [`items`]
+/// allows.
+fn item_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>]) {
+    let Some(read) = moved_item(f, &f.blocks[b].insts, k) else {
+        return;
+    };
+    let MovedItem {
+        list,
+        index,
+        var,
+        after,
+    } = read;
+    if defined(f, var) != 1 || retained(f, var) != 0 {
+        return;
+    }
+    let Some(sites) = released_while(f, var, list, (b, after), borrowed) else {
+        return;
+    };
+    sites
+        .into_iter()
+        .for_each(|(sb, si)| f.blocks[sb].insts[si] = Inst::Forget(var));
+    if let Inst::Assign { value, .. } = &mut f.blocks[b].insts[k] {
+        *value = Rvalue::Item(Operand::Local(list), index);
+    }
+}
+
+/// A held loop's element read, `e = Index(list, index)`, whose next
+/// mention of `e` moves it into `var`: `var = e`, then `Forget(e)`,
+/// which ends just before `after`.
+struct MovedItem {
+    list: LocalId,
+    index: Operand,
+    var: LocalId,
+    after: usize,
+}
+
+/// The [`MovedItem`] at `insts[k]`, for a counted element.
+fn moved_item(f: &Func, insts: &[Inst], k: usize) -> Option<MovedItem> {
+    let Some(Inst::Assign {
+        dest: e,
+        value: Rvalue::Index(Operand::Local(list), index),
+        ..
+    }) = insts.get(k)
+    else {
+        return None;
+    };
+    if !matches!(f.locals[list.0], Ty::Held(_)) || !f.locals[e.0].is_rc() {
+        return None;
+    }
+    let bind = k + 1 + insts[k + 1..].iter().position(|i| i.mentions(*e))?;
+    let Some(Inst::Assign {
+        dest: var,
+        value: Rvalue::Use(from),
+        ..
+    }) = insts.get(bind)
+    else {
+        return None;
+    };
+    let moved = *from == Operand::Local(*e) && insts.get(bind + 1) == Some(&Inst::Forget(*e));
+    moved.then_some(MovedItem {
+        list: *list,
+        index: *index,
+        var: *var,
+        after: bind + 2,
+    })
+}
+
 /// Where a copy `a` of `x`, from `at` on, is released: the `Release(a)`
 /// ending every path, if `a` is defined and retained only once, is
 /// never moved or reassigned on the way, and is read only while nothing
@@ -279,14 +371,35 @@ fn borrows(
     at: (usize, usize),
     borrowed: &[BTreeSet<usize>],
 ) -> Option<Vec<(usize, usize)>> {
-    let all = f.blocks.iter().flat_map(|b| &b.insts);
-    let defs = all
-        .clone()
-        .filter(|i| matches!(i, Inst::Assign { dest, .. } if *dest == a));
-    let retains = all.filter(|i| **i == Inst::Retain(a));
-    if defs.count() != 1 || retains.count() != 1 {
+    if defined(f, a) != 1 || retained(f, a) != 1 {
         return None;
     }
+    released_while(f, a, x, at, borrowed)
+}
+
+/// How many assignments to `a` `f` has.
+fn defined(f: &Func, a: LocalId) -> usize {
+    let all = f.blocks.iter().flat_map(|b| &b.insts);
+    all.filter(|i| matches!(i, Inst::Assign { dest, .. } if *dest == a))
+        .count()
+}
+
+/// How many `Retain(a)` `f` has.
+fn retained(f: &Func, a: LocalId) -> usize {
+    let all = f.blocks.iter().flat_map(|b| &b.insts);
+    all.filter(|i| **i == Inst::Retain(a)).count()
+}
+
+/// The walk of [`borrows`], without its conditions on how `a` is made:
+/// the `Release(a)` ending every path from `at`, if `a` is never moved
+/// on the way and is read only while nothing has ended `x`.
+fn released_while(
+    f: &Func,
+    a: LocalId,
+    x: LocalId,
+    at: (usize, usize),
+    borrowed: &[BTreeSet<usize>],
+) -> Option<Vec<(usize, usize)>> {
     let copied = f.blocks.iter().flat_map(|b| &b.insts).any(
         |i| matches!(i, Inst::Assign { value: Rvalue::Use(Operand::Local(l)), .. } if *l == a),
     );
