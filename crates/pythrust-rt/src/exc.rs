@@ -152,6 +152,47 @@ fn set_pending(exc: *mut PtSeq, head: &'static [u8], tail: &'static [u8]) {
     }
 }
 
+/// What escaped a task (M6c): its exception, holding a reference, and
+/// the diagnostic of where it was raised. The worker that ran the task
+/// hands it to the task's future, after which only the submitter
+/// touches it.
+pub(crate) struct Raised(Pending);
+
+impl Raised {
+    /// Makes the exception pending on this thread, with a new reference.
+    pub(crate) fn raise_again(&self) {
+        let exc = self.0.exc as *mut PtSeq;
+        // SAFETY: a kept exception is live and owns its reference.
+        unsafe { seq::pt_seq_inc(exc) };
+        set_pending(exc, self.0.head, self.0.tail);
+    }
+
+    /// Drops the exception's reference.
+    pub(crate) fn release(self) {
+        // SAFETY: a kept exception is live and owns its reference.
+        unsafe { seq::pt_seq_dec(self.0.exc as *mut PtSeq) };
+    }
+}
+
+/// Takes this thread's pending exception, if any, leaving none.
+pub(crate) fn take_raised() -> Option<Raised> {
+    set_flag(false);
+    PENDING.with_borrow_mut(Option::take).map(Raised)
+}
+
+/// This thread's context, ready for a task: it counts calls from zero,
+/// as each of CPython's threads does.
+pub(crate) fn start_task() -> *const PtCtx {
+    CTX.with(|c| c.depth.store(0, Ordering::Relaxed));
+    pt_ctx()
+}
+
+/// Raises a `ValueError` with no argument on this thread.
+#[cfg(test)]
+pub(crate) fn raise_value_error() {
+    set_pending(seq::new_seq(b"x0", Vec::new()), b"", b"");
+}
+
 /// Reads a diagnostic part the compiler stored.
 ///
 /// # Safety

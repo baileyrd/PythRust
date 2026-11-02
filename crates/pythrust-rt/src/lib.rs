@@ -2,8 +2,8 @@
 //! generating inline. Output buffering, `print` formatting, runtime
 //! error exits, strings ([`str`]), lists and tuples ([`seq`]), dicts and sets ([`table`]), ranges
 //! ([`range`]), numbers ([`num`]), exceptions ([`exc`]), bytes and files
-//! ([`obj`]), the `sys` and `os` modules ([`sys`], [`os`]), and what
-//! Rust binding shims call ([`abi`]).
+//! ([`obj`]), the `sys` and `os` modules ([`sys`], [`os`]), tasks
+//! ([`task`]), and what Rust binding shims call ([`abi`]).
 //!
 //! The C ABI surface is the project's `unsafe`, with one exception
 //! inside the runtime, the borrow cell in `sync.rs`. Each exported
@@ -30,6 +30,7 @@ pub mod str;
 mod sync;
 pub mod sys;
 pub mod table;
+pub mod task;
 
 use std::io::{self, Write};
 use std::sync::atomic::AtomicUsize;
@@ -97,6 +98,38 @@ fn drain(out: &mut Vec<u8>) {
         let _ = writeln!(io::stderr(), "pythrust: cannot write to stdout: {err}");
         std::process::exit(1);
     }
+}
+
+/// Moves this thread's unfinished line to stdout's buffer: a task's
+/// worker does so when the task ends, so its output is not held back
+/// until the worker next prints a line end.
+fn publish_line() {
+    LINE.with_borrow_mut(|line| {
+        let Some(mut out) = publish(line, &OUT) else {
+            return;
+        };
+        if out.len() >= FLUSH_AT {
+            drain(&mut out);
+        }
+    });
+}
+
+/// Moves all of `line` to `out`, giving back `out` still locked when
+/// there was anything to move.
+fn publish<'a>(line: &mut Vec<u8>, out: &'a Mutex<Vec<u8>>) -> Option<MutexGuard<'a, Vec<u8>>> {
+    if line.is_empty() {
+        return None;
+    }
+    let mut out = out.lock().unwrap_or_else(PoisonError::into_inner);
+    out.append(line);
+    Some(out)
+}
+
+/// Ends the program with the runtime error `msg`, like [`pt_fail`].
+fn fail_with(msg: &str) -> ! {
+    flush();
+    let _ = writeln!(io::stderr(), "pythrust: {msg}");
+    std::process::exit(1)
 }
 
 /// Writes this thread's pending line and everything buffered to stdout.
@@ -244,6 +277,16 @@ fn leak_status(check: bool, live: usize) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tasks_unfinished_line_is_published_whole() {
+        let out = Mutex::new(b"a\n".to_vec());
+        let mut line = b"b c".to_vec();
+        assert!(publish(&mut line, &out).is_some());
+        assert!(line.is_empty());
+        assert!(publish(&mut line, &out).is_none());
+        assert_eq!(*out.lock().unwrap(), b"a\nb c");
+    }
 
     #[test]
     fn leaks_fail_only_when_checked() {

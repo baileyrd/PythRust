@@ -51,6 +51,19 @@ jobs:
         env:
           PYTHRUST_VALGRIND: "1"
 
+  miri:
+    # The runtime's own unsafe (the borrow cell, `sync.rs`) and its
+    # threads (the task pool, `task.rs`) under Miri, which checks their
+    # tests for undefined behaviour, data races and leaks. Slots hold
+    # pointers as integers, hence permissive provenance.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly --profile minimal --component miri && cargo +nightly miri setup
+      - run: cargo +nightly miri test --locked -p pythrust-rt -- sync:: task::
+        env:
+          MIRIFLAGS: "-Zmiri-permissive-provenance"
+
   rust-version:
     # The oldest toolchain a program calling Rust bindings builds with:
     # every such build compiles `pythrust-rt` with the user's toolchain,
