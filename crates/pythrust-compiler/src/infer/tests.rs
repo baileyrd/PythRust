@@ -2357,6 +2357,26 @@ fn calls_check_against_the_stub() {
 }
 
 #[test]
+fn a_binding_function_is_not_a_task_yet() {
+    // Nano, 2026-11-02: not until an app needs it.
+    let src = "import fastfs\nimport concurrent.futures\ndef main() -> None:\n    \
+               with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+               print(ex.submit(fastfs.add, 1, 2).result())\n        \
+               print(list(ex.map(fastfs.file_xxh3, [\"p\"])))\nmain()\n";
+    let got = with_fastfs(src).err().unwrap_or_default();
+    assert!(
+        got.contains("cannot run the Rust binding function `fastfs.add`"),
+        "{got}"
+    );
+    let mapped = src.replace("print(ex.submit(fastfs.add, 1, 2).result())\n        ", "");
+    let got = with_fastfs(&mapped).err().unwrap_or_default();
+    assert!(
+        got.contains("`map` cannot run the Rust binding function `fastfs.file_xxh3`"),
+        "{got}"
+    );
+}
+
+#[test]
 fn a_stub_raises_what_it_declares() {
     let types = with_fastfs("import fastfs\nfastfs.add(1, 2)\n").unwrap_or_else(|e| panic!("{e}"));
     let escapes = |n: &str| {

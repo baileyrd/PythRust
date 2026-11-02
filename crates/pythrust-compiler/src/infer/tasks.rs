@@ -84,6 +84,15 @@ impl Checker {
         let ExprKind::Name(name) = &arg.value.kind else {
             return Err(not_def());
         };
+        // A binding's name is dotted, as no `def`'s is. Not a task until
+        // an app needs one (Nano, 2026-11-02).
+        if name.contains('.') && self.funcs.contains_key(name) {
+            let msg = format!(
+                "`{method}` cannot run the Rust binding function `{name}` yet; \
+                 call it directly instead"
+            );
+            return Err(error(arg.value.span, msg));
+        }
         let variable = self.frame.locals.contains_key(name) || self.globals.contains_key(name);
         let sig = match self.funcs.get(name).cloned() {
             _ if variable => return Err(not_def()),
