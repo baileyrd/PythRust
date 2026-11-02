@@ -18,12 +18,14 @@
 
 use crate::sync::{Count, Ref, Slot};
 use std::cmp::Ordering;
+use std::sync::atomic::Ordering::Relaxed;
 
 use crate::obj::{self, PtObj};
 use crate::range::Range;
 use crate::str::{self as pstr, PtStr};
 use crate::table::{self, Index};
 use crate::task::{self, PtFut};
+use crate::LIVE;
 
 /// A list or tuple object.
 #[derive(Debug)]
@@ -249,7 +251,7 @@ fn drop_one(p: u64, todo: &mut Vec<u64>) {
     // SAFETY: the last reference: `p` came from `Box::into_raw` and no
     // other reference remains.
     let owned = unsafe { Box::from_raw(p as *mut PtSeq) };
-    crate::live_dec();
+    LIVE.fetch_sub(1, Relaxed);
     for (k, v) in owned.items.into_inner().into_iter().enumerate() {
         dec_into(slot(owned.desc, k), v, todo);
     }
@@ -725,7 +727,7 @@ pub unsafe extern "C" fn pt_seq_new(desc: *const u8, len: usize, cap: i64) -> *m
 /// takes; a dict or set gets an empty index, so `items` must be empty.
 pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
     let index = matches!(kind(desc), Kind::Dict | Kind::Set).then(Box::default);
-    crate::live_inc();
+    LIVE.fetch_add(1, Relaxed);
     Box::into_raw(Box::new(PtSeq {
         rc: Count::new(),
         desc,

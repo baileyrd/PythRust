@@ -37,31 +37,12 @@ pub mod task;
 
 use std::io::{self, Write};
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// Strings, sequences and objects allocated and not yet freed. A debug runtime
+/// Strings and sequences allocated and not yet freed. A debug runtime
 /// checks it is 0 when the program ends normally, so a leak fails the
-/// corpus tests. Only a debug runtime counts: one counter bumped by
-/// every allocation and free bounces between cores when tasks allocate
-/// at once (M6c step 4c, `docs/benchmarks.md`).
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-
-/// Counts one allocation in [`LIVE`], in a debug runtime.
-#[inline]
-pub(crate) fn live_inc() {
-    if cfg!(debug_assertions) {
-        LIVE.fetch_add(1, Relaxed);
-    }
-}
-
-/// Counts one free in [`LIVE`], in a debug runtime.
-#[inline]
-pub(crate) fn live_dec() {
-    if cfg!(debug_assertions) {
-        LIVE.fetch_sub(1, Relaxed);
-    }
-}
+/// corpus tests.
+pub(crate) static LIVE: AtomicUsize = AtomicUsize::new(0);
 
 /// Flush threshold for buffered stdout.
 const FLUSH_AT: usize = 1 << 16;
@@ -271,7 +252,7 @@ mod entry {
     }
 
     /// Runs the module, then flushes stdout. A debug runtime then
-    /// fails if any string, sequence or object leaked.
+    /// fails if any string or sequence leaked.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn main() -> i32 {
@@ -279,7 +260,10 @@ mod entry {
         // nothing; the compiler emits it with exactly that signature.
         unsafe { pythrust_main(super::exc::pt_ctx()) };
         super::flush();
-        super::leak_status(cfg!(debug_assertions), super::LIVE.load(super::Relaxed))
+        super::leak_status(
+            cfg!(debug_assertions),
+            super::LIVE.load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 }
 
