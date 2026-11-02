@@ -1,0 +1,34 @@
+# Tasks reading module lists through a helper while the submitter reads
+# them too: both are marked before the first task is queued. CI's race
+# job runs it under ThreadSanitizer.
+import concurrent.futures
+
+DATA: list[int] = [1, 2, 3, 4]
+NAMES: list[str] = ["a", "b"]
+
+
+def helper(k: int) -> int:
+    return DATA[k % 4] + len(NAMES[k % 2])
+
+
+def work(k: int) -> int:
+    t = 0
+    for i in range(2000):
+        t += helper(i + k)
+    return t
+
+
+def main() -> None:
+    total = 0
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        futs = []
+        for k in range(16):
+            futs.append(ex.submit(work, k))
+        for i in range(2000):
+            total += DATA[i % 4]
+        for f in futs:
+            total += f.result()
+    print(total)
+
+
+main()

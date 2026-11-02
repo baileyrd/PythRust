@@ -1,0 +1,44 @@
+# Tasks with Optional, default and generic arguments, a default list and a
+# module string among them: each crosses marked. CI's race job runs it
+# under ThreadSanitizer.
+import concurrent.futures
+
+TAG: str = "t"
+
+
+def opt(xs: list[int] | None, s: str | None = None) -> int:
+    if xs is None:
+        return -1
+    if s is None:
+        return len(xs)
+    return len(xs) + len(s)
+
+
+def nop() -> list[float]:
+    return [1.5, 2.5]
+
+
+def gen(x):
+    return [x, x]
+
+
+def deflt(n: int, s: str = "dd", xs: list[str] = ["q"]) -> str:
+    return s * n + xs[0] + TAG
+
+
+def main() -> None:
+    xs = [1, 2]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(opt, xs)
+        b = ex.submit(opt, None)
+        c = ex.submit(opt, [5, 6, 7], "zz")
+        d = ex.submit(nop)
+        e = ex.submit(gen, "s")
+        f = ex.submit(gen, 3)
+        g = ex.submit(deflt, 2)
+        h = ex.submit(deflt, 1, "x" + TAG)
+        print(a.result(), b.result(), c.result(), d.result())
+        print(e.result(), f.result(), g.result(), h.result())
+
+
+main()

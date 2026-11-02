@@ -20,7 +20,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId as ClifFunc, Linkage, Module};
 
 use super::seq::{from_slot, to_slot};
-use super::{backend, module_err, rc_fns, Codegen, FnGen, Rt};
+use super::{backend, module_err, rc_dec, rc_inc, Codegen, FnGen, Rt};
 use crate::diag::Result;
 use crate::ir::{FuncId, GlobalId, Inst, LocalId, Operand, Program, Rvalue};
 
@@ -106,8 +106,7 @@ impl Codegen<'_> {
             if !func.borrowed.contains(p) {
                 continue;
             }
-            let (_, dec) = rc_fns(&program.types, func.locals[p.0]);
-            let id = self.rt[dec.symbol()];
+            let id = self.rt[rc_dec(&program.types, func.locals[p.0]).symbol()];
             let dec = self.module.declare_func_in_func(id, b.func);
             b.ins().call(dec, &[slot]);
         }
@@ -132,7 +131,12 @@ impl FnGen<'_, '_, '_> {
             .thunks
             .get(&func)
             .ok_or_else(|| backend("a task without a thunk".to_string()))?;
-        let reads = self.cg.reads.get(&func).cloned().unwrap_or_default();
+        let reads = self
+            .cg
+            .reads
+            .get(&func)
+            .cloned()
+            .ok_or_else(|| backend("a task without its module values".to_string()))?;
         for g in reads {
             self.mark_global(g)?;
         }
@@ -140,7 +144,7 @@ impl FnGen<'_, '_, '_> {
         for op in args {
             slots.push(self.cross(*op)?);
         }
-        let packed = self.pack(&slots);
+        let packed = self.pack(&slots)?;
         let exec = self.operand(exec);
         let fref = self.cg.module.declare_func_in_func(thunk, self.b.func);
         let thunk = self.b.ins().func_addr(self.cg.ptr, fref);
@@ -166,7 +170,7 @@ impl FnGen<'_, '_, '_> {
         }
         let (desc, len) = self.descriptor(ty)?;
         self.call_rt(Rt::Mark, &[desc, len, slot]);
-        let (inc, _) = rc_fns(self.types, ty);
+        let inc = rc_inc(self.types, ty)?;
         let v = self.operand(op);
         self.call_rt(inc, &[v]);
         Ok(slot)
@@ -188,17 +192,18 @@ impl FnGen<'_, '_, '_> {
     }
 
     /// `slots` in a frame array, its address; null for none.
-    fn pack(&mut self, slots: &[Value]) -> Value {
+    fn pack(&mut self, slots: &[Value]) -> Result<Value> {
         if slots.is_empty() {
-            return self.b.ins().iconst(self.cg.ptr, 0);
+            return Ok(self.b.ins().iconst(self.cg.ptr, 0));
         }
-        let size = u32::try_from(8 * slots.len()).unwrap_or(u32::MAX);
+        let size = u32::try_from(8 * slots.len())
+            .map_err(|_| backend("too many task arguments".to_string()))?;
         let data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, 3);
         let ss = self.b.create_sized_stack_slot(data);
         for (k, v) in slots.iter().enumerate() {
             self.b.ins().stack_store(self.cg.ptr, *v, ss, 8 * k as i32);
         }
-        self.b.ins().stack_addr(self.cg.ptr, ss, 0)
+        Ok(self.b.ins().stack_addr(self.cg.ptr, ss, 0))
     }
 
     fn ret_of(&self, func: FuncId) -> Result<crate::ir::Ty> {

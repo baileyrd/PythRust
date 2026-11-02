@@ -5,7 +5,7 @@
 use cranelift_codegen::ir::{InstBuilder, Value};
 
 use super::seq::descriptor;
-use super::{backend, rc_fns, FnGen, Rt};
+use super::{backend, rc_inc, FnGen, Rt};
 use crate::diag::Result;
 use crate::ir::{Compound, LocalId, Operand, Ty};
 use crate::span::Span;
@@ -26,7 +26,7 @@ impl FnGen<'_, '_, '_> {
             Ty::None => Ok(self.b.ins().iconst(self.cg.ptr, 0)),
             p if p.is_rc() => {
                 let s = self.operand(v);
-                self.call_rt(rc_fns(self.types, p).0, &[s]);
+                self.call_rt(rc_inc(self.types, p)?, &[s]);
                 Ok(s)
             }
             _ => {
@@ -50,7 +50,7 @@ impl FnGen<'_, '_, '_> {
             return self.field(v, 0, dest);
         }
         let s = self.operand(v);
-        self.call_rt(rc_fns(self.types, present).0, &[s]);
+        self.call_rt(rc_inc(self.types, present)?, &[s]);
         Ok(s)
     }
 

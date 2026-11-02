@@ -83,9 +83,21 @@ impl Count {
         }
         let last = self.0.fetch_sub(1, Ordering::Release) & !MARK == 1;
         if last {
-            fence(Ordering::Acquire);
+            acquire(&self.0);
         }
         last
+    }
+}
+
+/// Orders every other thread's use of the object, released by its
+/// `dec`, before the caller frees it. A fence, but under ThreadSanitizer,
+/// which cannot see a standalone fence, an acquire load of the count, as
+/// std's `Arc` does there.
+fn acquire(count: &AtomicUsize) {
+    if cfg!(pythrust_tsan) {
+        count.load(Ordering::Acquire);
+    } else {
+        fence(Ordering::Acquire);
     }
 }
 

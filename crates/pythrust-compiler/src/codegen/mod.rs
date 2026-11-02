@@ -715,16 +715,13 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 }
                 self.write_text(*end, b'\n');
             }
-            Inst::Retain(l) if self.func.locals[l.0] == Ty::Exec => {
-                return Err(backend("copying an executor".to_string()));
-            }
             Inst::Retain(l) => {
-                let (inc, _) = rc_fns(self.types, self.func.locals[l.0]);
+                let inc = rc_inc(self.types, self.func.locals[l.0])?;
                 let s = self.b.use_var(self.vars[l.0]);
                 self.call_rt(inc, &[s]);
             }
             Inst::Release(l) => {
-                let (_, dec) = rc_fns(self.types, self.func.locals[l.0]);
+                let dec = rc_dec(self.types, self.func.locals[l.0]);
                 let s = self.b.use_var(self.vars[l.0]);
                 self.call_rt(dec, &[s]);
                 self.forget(*l);
@@ -787,11 +784,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             self.b.ins().store(flags, v, addr, 0);
             return Ok(());
         }
-        let (inc, dec) = rc_fns(self.types, ty);
+        let inc = rc_inc(self.types, ty)?;
         self.call_rt(inc, &[v]);
         let old = self.b.ins().load(self.cg.ptr, flags, addr, 0);
         self.b.ins().store(flags, v, addr, 0);
-        self.call_rt(dec, &[old]);
+        self.call_rt(rc_dec(self.types, ty), &[old]);
         Ok(())
     }
 
@@ -1005,7 +1002,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                     .ins()
                     .load(self.cg.clif_ty(ty), MemFlagsData::trusted(), addr, 0);
                 if ty.is_rc() {
-                    self.call_rt(rc_fns(self.types, ty).0, &[v]);
+                    self.call_rt(rc_inc(self.types, ty)?, &[v]);
                 }
                 Ok(v)
             }
@@ -1311,21 +1308,38 @@ fn is_table(ty: Ty) -> bool {
 
 /// The runtime functions adding and dropping a reference to a `ty`. An
 /// optional's are its present type's, or a sequence's for a boxed one.
-fn rc_fns(types: &[Compound], ty: Ty) -> (Rt, Rt) {
-    let ty = match ty {
+/// The runtime call taking a new reference to a `ty` value. An executor
+/// has one owner and is never copied.
+fn rc_inc(types: &[Compound], ty: Ty) -> Result<Rt> {
+    match counted(types, ty) {
+        Ty::Str => Ok(Rt::StrInc),
+        Ty::Bytes | Ty::File => Ok(Rt::ObjInc),
+        Ty::Future => Ok(Rt::FutInc),
+        Ty::Exec => Err(backend("copying an executor".to_string())),
+        _ => Ok(Rt::SeqInc),
+    }
+}
+
+/// The runtime call dropping a reference to a `ty` value; an executor's
+/// one reference ends it.
+fn rc_dec(types: &[Compound], ty: Ty) -> Rt {
+    match counted(types, ty) {
+        Ty::Str => Rt::StrDec,
+        Ty::Bytes | Ty::File => Rt::ObjDec,
+        Ty::Future => Rt::FutDec,
+        Ty::Exec => Rt::ExecEnd,
+        _ => Rt::SeqDec,
+    }
+}
+
+/// The type whose count a `ty` value carries: an optional's present type.
+fn counted(types: &[Compound], ty: Ty) -> Ty {
+    match ty {
         Ty::Opt(id) => match types.get(id.0) {
             Some(Compound::Opt(present)) => *present,
             _ => ty,
         },
         _ => ty,
-    };
-    match ty {
-        Ty::Str => (Rt::StrInc, Rt::StrDec),
-        Ty::Bytes | Ty::File => (Rt::ObjInc, Rt::ObjDec),
-        Ty::Future => (Rt::FutInc, Rt::FutDec),
-        // Never copied: `Retain` of one is refused.
-        Ty::Exec => (Rt::ExecEnd, Rt::ExecEnd),
-        _ => (Rt::SeqInc, Rt::SeqDec),
     }
 }
 
