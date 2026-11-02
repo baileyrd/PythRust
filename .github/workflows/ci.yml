@@ -83,15 +83,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal && rustup toolchain install nightly --profile minimal --component rust-src && rustup default stable
-      - run: cargo +nightly build --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir target/tsan
-      - run: "cargo +nightly test --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir target/tsan --lib -- task:: sync::"
+      - run: cargo +nightly build --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir "$RUNNER_TEMP/tsan"
+      - run: "cargo +nightly test --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir $RUNNER_TEMP/tsan --lib -- task:: sync::"
+      # The instrumented runtime lives outside `target/`: a build there
+      # first would leave `target/` without the `CACHEDIR.TAG` the
+      # conformance harness uses to find its own target directory.
       # `ci/tsan-cc` as `cc` links the detector into native programs.
       - run: mkdir -p "$RUNNER_TEMP/tsan-bin" && ln -s "$PWD/ci/tsan-cc" "$RUNNER_TEMP/tsan-bin/cc" && echo "$RUNNER_TEMP/tsan-bin" >> "$GITHUB_PATH"
       - run: cargo test --locked --test conformance corpus_matches_native
         env:
           RUSTFLAGS: ""
           PYTHRUST_TSAN: "1"
-          PYTHRUST_RT: ${{ github.workspace }}/target/tsan/x86_64-unknown-linux-gnu/debug/libpythrust_rt.a
+          PYTHRUST_RT: ${{ runner.temp }}/tsan/x86_64-unknown-linux-gnu/debug/libpythrust_rt.a
 
   rust-version:
     # The oldest toolchain a program calling Rust bindings builds with:
