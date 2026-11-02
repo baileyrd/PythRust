@@ -15,7 +15,9 @@ def sound() -> dict:
     jobs = {j: {} for j in check_jobs.EXPECTED_JOBS}
     jobs["check"] = {"strategy": {"matrix": {"os": sorted(check_jobs.EXPECTED_OS)}}}
     jobs["all"] = {"needs": sorted(check_jobs.EXPECTED_JOBS - {"all"})}
-    return {"jobs": jobs}
+    for body in jobs.values():
+        body["runs-on"] = "ubuntu-latest"
+    return {True: {"push": {"branches": ["main"]}, "pull_request": None}, "jobs": jobs}
 
 
 class Problems(unittest.TestCase):
@@ -42,8 +44,24 @@ class Problems(unittest.TestCase):
         self.assertEqual(len(check_jobs.problems(w)), 1)
 
     def test_no_jobs_is_one(self) -> None:
-        self.assertEqual(check_jobs.problems({"on": "push"}), ["the workflow has no `jobs` mapping"])
+        self.assertEqual(check_jobs.problems({True: "push"}), ["the workflow has no `jobs` mapping"])
         self.assertEqual(len(check_jobs.problems(None)), 1)
+
+    def test_a_missing_trigger_is_one(self) -> None:
+        w = sound()
+        del w[True]["pull_request"]
+        self.assertEqual(check_jobs.problems(w), ["CI does not run on `pull_request`"])
+
+    def test_a_job_without_a_runner_is_one(self) -> None:
+        w = sound()
+        w["jobs"]["miri"] = {"runs_on": "ubuntu-latest"}
+        self.assertEqual(check_jobs.problems(w), ["job `miri` has no `runs-on`"])
+
+    def test_a_duplicate_job_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            dup = Path(d) / "ci.yml"
+            dup.write_text(CI.read_text() + "\n  race:\n    runs-on: ubuntu-latest\n")
+            self.assertEqual(check_jobs.main(str(dup)), 1)
 
     def test_unparsable_yaml_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:

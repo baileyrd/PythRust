@@ -108,8 +108,8 @@ fn acquire(count: &AtomicUsize) {
 /// `--cfg pythrust_tsan` (CI's race job), each change, and each use of
 /// an idle slot's fast path, is reported to it as the plain write it
 /// stands for; otherwise this is nothing. The report follows the store,
-/// so the plain write is the detector's last record of this thread's
-/// access, not the relaxed store, which it never reports against.
+/// so the plain write is the latest of this thread's accesses the
+/// detector holds for the word.
 ///
 /// Built with `--cfg pythrust_calibrate` as well, [`fault`] injects the
 /// bug `PYTHRUST_FAULT` names, so CI can check the detector reports it.

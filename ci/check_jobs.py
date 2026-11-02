@@ -12,6 +12,23 @@ from pathlib import Path
 
 import yaml
 
+class StrictLoader(yaml.SafeLoader):
+    """PyYAML's safe loader, but a duplicate key is an error, as GitHub
+    treats it, not a silent overwrite."""
+
+
+def _mapping(loader: StrictLoader, node: yaml.MappingNode) -> dict:
+    keys = [loader.construct_object(k) for k, _ in node.value]
+    for k in keys:
+        if keys.count(k) > 1:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"duplicate key {k!r}", node.start_mark
+            )
+    return loader.construct_mapping(node)
+
+
+StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
+
 EXPECTED_JOBS = {"check", "memcheck", "miri", "race", "rust-version", "all"}
 EXPECTED_OS = {"ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "windows-latest"}
 GATE = "all"
@@ -22,7 +39,8 @@ def problems(workflow: object) -> list[str]:
     if not isinstance(workflow, dict) or not isinstance(workflow.get("jobs"), dict):
         return ["the workflow has no `jobs` mapping"]
     jobs: dict = workflow["jobs"]
-    found = []
+    found = triggers(workflow)
+    found += [f"job `{j}` has no `runs-on`" for j, body in jobs.items() if "runs-on" not in body]
     if set(jobs) != EXPECTED_JOBS:
         found.append(f"jobs are {sorted(jobs)}, expected {sorted(EXPECTED_JOBS)}")
     os = jobs.get("check", {}).get("strategy", {}).get("matrix", {}).get("os", [])
@@ -34,10 +52,25 @@ def problems(workflow: object) -> list[str]:
     return found
 
 
+def triggers(workflow: dict) -> list[str]:
+    """Whether CI runs on pull requests and on pushes to main. YAML 1.1
+    reads the bare key `on` as true."""
+    on = workflow.get("on", workflow.get(True))
+    if not isinstance(on, dict):
+        return ["`on` is not a mapping of triggers"]
+    found = []
+    if "pull_request" not in on:
+        found.append("CI does not run on `pull_request`")
+    push = on.get("push") or {}
+    if "main" not in push.get("branches", []):
+        found.append("CI does not run on pushes to `main`")
+    return found
+
+
 def main(path: str) -> int:
     """Prints each problem with ci.yml at `path`; 1 if there are any."""
     try:
-        workflow = yaml.safe_load(Path(path).read_text())
+        workflow = yaml.load(Path(path).read_text(), Loader=StrictLoader)
     except (OSError, yaml.YAMLError) as e:
         print(f"{path}: cannot read: {e}")
         return 1
