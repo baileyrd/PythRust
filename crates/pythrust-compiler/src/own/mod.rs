@@ -33,7 +33,7 @@ mod tests;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{Module, StmtKind};
-use crate::diag::{Diagnostic, Result};
+use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::infer::{Type, Types};
 use crate::ir::{Compound, FuncId, Program, Ty};
 use crate::lower;
@@ -215,6 +215,13 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
 /// Holds `module` to `analysis`: written modes (D2), then calls to
 /// tempered functions (A5). Only precise analyses are checked.
 pub fn check(module: &Module, analysis: &Analysis) -> Result<()> {
+    // A lowering gap is never an error, but for a shape of task code the
+    // language refuses rather than leave the program unchecked.
+    if let Precision::Conservative(gap) = &analysis.precision {
+        if gap.kind != DiagKind::Backend {
+            return Err(gap.clone());
+        }
+    }
     modes::check(module, analysis)?;
     calls::check(module, analysis)
 }

@@ -1,0 +1,18 @@
+# deviation: a generic function using tasks whose result type only its body decides is a compile error until tasks lower to the IR, even when a caller discards the result (M6c, Nano 2026-11-02); CPython runs it.
+# expect-exit: 1
+# expect-error: annotate `task`'s parameters and result
+import concurrent.futures
+
+
+def task(x):
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        pass
+    return x * x
+
+
+def wrap(x):
+    task(x)
+    return x
+
+
+print(wrap(2))

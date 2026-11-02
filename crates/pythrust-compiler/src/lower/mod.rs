@@ -431,10 +431,11 @@ impl<'a> Cx<'a> {
 
     fn instance_attempt(&mut self, job: &Job<'a>, hints: &Hints) -> Result<Attempt<Body>> {
         let f = job.def;
-        if let (Reach::Every, Some(ret)) = (self.reach, job.ret) {
-            if !scope::withs(&f.body).is_empty() {
-                return Ok(Attempt::Done(self.opaque_body(job, ret)));
-            }
+        if self.reach == Reach::Every && !scope::withs(&f.body).is_empty() {
+            let Some(ret) = job.ret else {
+                return Err(open_task_result(f));
+            };
+            return Ok(Attempt::Done(self.opaque_body(job, ret)));
         }
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
@@ -1050,6 +1051,22 @@ pub(super) fn unsupported(span: Span, what: &str) -> Diagnostic {
         span,
         message: format!("the native backend does not support {what} yet"),
         kind: DiagKind::Backend,
+    }
+}
+
+/// A generic function using tasks whose result type only its body
+/// decides: analysis cannot see that body until tasks lower (M6c step
+/// 3b), and Nano chose a named error over checking nothing (2026-11-02).
+/// [`crate::own::check`] reports it.
+fn open_task_result(f: &FuncDef) -> Diagnostic {
+    let name = &f.name.name;
+    Diagnostic {
+        span: f.name.span,
+        message: format!(
+            "`{name}` uses tasks, and only its body decides its result type, which the \
+             ownership checks cannot see yet; annotate `{name}`'s parameters and result"
+        ),
+        kind: DiagKind::Type,
     }
 }
 

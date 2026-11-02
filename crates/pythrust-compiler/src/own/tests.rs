@@ -1402,6 +1402,13 @@ fn tasks_leave_the_other_functions_checked() {
          def go() -> None:\n    xs = [1]\n    two(xs, xs)\ngo()\n"
     );
     assert!(mode_err(&shared).0.contains("list(...)"), "{shared}");
+    let both = format!(
+        "{TASKS}temper def f(mut a: list[int]) -> int:\n    b = a\n    b.append(1)\n    return len(a)\nprint(f([1]))\n"
+    );
+    assert!(
+        mode_err(&both).0.contains("copy instead of sharing it"),
+        "{both}"
+    );
     let a = analyzed(TASKS);
     assert_eq!(a.precision, Precision::Precise);
     assert!(a.opaque.contains("called") && a.opaque.contains("unused"));
@@ -1423,26 +1430,33 @@ def keep(mut xs: list[int]) -> None:\n    run(xs)\nkeep([1])\n";
 }
 
 #[test]
-fn a_generic_task_function_with_an_open_result_falls_back() {
-    // `run`'s result type comes only from its body, which lowering cannot
-    // express yet, so the whole program stays conservative until tasks
-    // lower (step 3b), and `grow` goes unchecked.
-    let src = "import concurrent.futures\n\
+fn a_generic_task_function_with_an_open_result_is_an_error() {
+    // `run`'s result type comes only from its body, which ownership
+    // checks cannot see until tasks lower (step 3b): a named error, not a
+    // silent fallback (Nano, 2026-11-02).
+    let used = "import concurrent.futures\n\
 def dbl(n):\n    return n * n\n\
 def run(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
 return ex.submit(dbl, x).result()\n\
 def outer(y):\n    return run(y) + 1\n\
 temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
 print(outer(2))\ngrow([0])\n";
-    conservative(src);
-    assert_eq!(checked(src), Ok(()));
-    let called = src.replace("return run(y) + 1", "return 1");
-    assert!(mode_err(&called).0.contains("write `mut xs`"));
-    // A discarded result leaves it open too.
     let discarded = "import concurrent.futures\n\
 def task(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        pass\n    return x * x\n\
 def wrap(x):\n    task(x)\n    return x\n\
 temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
 wrap(2)\ngrow([1])\n";
-    conservative(discarded);
+    for (src, name) in [(used, "run"), (discarded, "task")] {
+        let (msg, at) = mode_err(src);
+        assert_eq!(at, name, "{msg}");
+        assert!(
+            msg.contains(&format!("annotate `{name}`'s parameters and result")),
+            "{msg}"
+        );
+    }
+    // The fix it names: annotated, it lowers, and `grow` is checked.
+    let annotated = used.replace("def run(x):", "def run(x: int) -> int:");
+    assert!(mode_err(&annotated).0.contains("write `mut xs`"));
+    let annotated = discarded.replace("def task(x):", "def task(x: int) -> int:");
+    assert!(mode_err(&annotated).0.contains("write `mut xs`"));
 }
