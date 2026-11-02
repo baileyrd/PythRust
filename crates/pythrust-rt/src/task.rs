@@ -1,27 +1,32 @@
 //! Tasks (M6c, `docs/research/concurrency.md`): an executor's pool of
 //! worker threads, and the futures its tasks complete.
 //!
-//! An executor starts workers as tasks arrive, one OS thread per task
-//! running at once, up to the machine's parallelism; leaving the `with`
-//! block ([`pt_exec_end`]) waits for every task and joins them. A task
-//! is a compiled thunk that unpacks its arguments, calls the task's
-//! function on the worker with the worker's own context, and returns
-//! the result's slot. The worker keeps what escaped (a pending
+//! An executor starts a worker when a task arrives and none is idle, up
+//! to CPython's default `min(32, cpus + 4)` (Decided 2); leaving the
+//! `with` block ([`pt_exec_end`]) waits for every task and joins them.
+//! A task is a compiled thunk that unpacks its arguments, calls the
+//! task's function on the worker with the worker's own context, and
+//! returns the result's slot. The worker keeps what escaped (a pending
 //! exception) instead, and publishes the task's unfinished output line,
 //! so every task's output reaches stdout when it ends.
 //!
 //! What crosses threads, and why no count is shared unmarked:
-//! - The arguments the thunk reads are marked by the submitter first
-//!   (`pt_mark`), so the worker's count operations on them are atomic.
-//! - A result, or an escaped exception, the worker made is reached by
-//!   the worker alone until it completes the future, and by the
-//!   submitter alone after: the future's lock orders the worker's last
-//!   step before the submitter's first, so plain counts suffice.
-//! - The future is the one value both threads hold at once; it is an
-//!   `Arc`, so its count is atomic, and generated code never touches
-//!   its fields.
+//! - The arguments the thunk reads, and the module values it loads, are
+//!   marked by the submitter first (`pt_mark`), so every thread's count
+//!   operations on them are atomic.
+//! - A task's outcome (its result, or the exception that escaped it),
+//!   when the worker made it, is unmarked: the worker reaches it alone
+//!   until it completes the future, and the submitter alone after. The
+//!   future's lock orders the worker's last step before the
+//!   submitter's first. The submitter also drops it: the worker stores
+//!   it under the lock and never touches it again, except when the
+//!   submitter dropped every handle first and so never saw it.
+//! - The future itself is held by both threads at once. Its memory is
+//!   an `Arc`, so that count is atomic; its handles, which generated
+//!   code counts, are the submitter's alone.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 
@@ -39,7 +44,14 @@ pub type Thunk = unsafe extern "C" fn(ctx: *const PtCtx, args: *const u64) -> u6
 /// `RecursionError`.
 const STACK: usize = 8 << 20;
 
-/// How a task ended.
+/// CPython's `ThreadPoolExecutor()` default: `min(32, cpus + 4)`.
+fn default_workers(cpus: usize) -> usize {
+    (cpus + 4).min(32)
+}
+
+/// How a task ended. Its values cross threads by hand (the module's
+/// doc): `Pending` keeps the exception as an address, so the compiler
+/// checks nothing about sending it.
 enum Outcome {
     /// Its result's slot, holding a reference.
     Value(u64),
@@ -47,12 +59,32 @@ enum Outcome {
     Raised(exc::Raised),
 }
 
+impl Outcome {
+    fn release(self, desc: &[u8]) {
+        match self {
+            Outcome::Value(v) => seq::dec(desc, v),
+            Outcome::Raised(r) => r.release(),
+        }
+    }
+}
+
+/// A future's state, under its lock.
+#[derive(Default)]
+struct Done {
+    outcome: Option<Outcome>,
+    /// The submitter dropped every handle; the worker releases the
+    /// outcome itself.
+    abandoned: bool,
+}
+
 /// A task's result, shared by the worker that completes it and the
 /// submitter that takes it.
 pub struct PtFut {
     /// The result's type descriptor, for its references.
     desc: &'static [u8],
-    done: Mutex<Option<Outcome>>,
+    /// Handles generated code holds, all on the submitter's thread.
+    handles: AtomicUsize,
+    done: Mutex<Done>,
     ready: Condvar,
 }
 
@@ -60,13 +92,22 @@ impl PtFut {
     fn new(desc: &'static [u8]) -> PtFut {
         PtFut {
             desc,
-            done: Mutex::new(None),
+            handles: AtomicUsize::new(1),
+            done: Mutex::default(),
             ready: Condvar::new(),
         }
     }
 
+    /// Stores how the task ended; releases it here if nobody will take
+    /// it.
     fn complete(&self, outcome: Outcome) {
-        *lock(&self.done) = Some(outcome);
+        let mut done = lock(&self.done);
+        if done.abandoned {
+            drop(done);
+            outcome.release(self.desc);
+            return;
+        }
+        done.outcome = Some(outcome);
         self.ready.notify_all();
     }
 
@@ -74,7 +115,7 @@ impl PtFut {
     fn wait<R>(&self, take: impl FnOnce(&Outcome) -> R) -> R {
         let mut done = lock(&self.done);
         loop {
-            if let Some(outcome) = done.as_ref() {
+            if let Some(outcome) = done.outcome.as_ref() {
                 return take(outcome);
             }
             done = self
@@ -83,16 +124,22 @@ impl PtFut {
                 .unwrap_or_else(PoisonError::into_inner);
         }
     }
-}
 
-impl Drop for PtFut {
-    fn drop(&mut self) {
-        let outcome = self.done.get_mut().unwrap_or_else(PoisonError::into_inner);
-        match outcome.take() {
-            Some(Outcome::Value(v)) => seq::dec(self.desc, v),
-            Some(Outcome::Raised(r)) => r.release(),
-            None => {}
+    /// Drops one handle; the last releases the outcome on this, the
+    /// submitter's, thread, or leaves it to the worker if not yet
+    /// there.
+    fn drop_handle(&self) -> bool {
+        if self.handles.fetch_sub(1, Ordering::Relaxed) != 1 {
+            return false;
         }
+        let mut done = lock(&self.done);
+        let outcome = done.outcome.take();
+        done.abandoned = outcome.is_none();
+        drop(done);
+        if let Some(outcome) = outcome {
+            outcome.release(self.desc);
+        }
+        true
     }
 }
 
@@ -122,38 +169,52 @@ impl Job {
     }
 }
 
-/// The tasks an executor has not started.
+/// The tasks an executor has not started, and its idle workers.
 #[derive(Default)]
 struct Queue {
-    state: Mutex<(VecDeque<Job>, bool)>,
+    state: Mutex<State>,
     ready: Condvar,
 }
 
+#[derive(Default)]
+struct State {
+    jobs: VecDeque<Job>,
+    idle: usize,
+    closed: bool,
+}
+
 impl Queue {
-    fn push(&self, job: Job) {
-        lock(&self.state).0.push_back(job);
+    /// Queues `job`; whether a worker is idle to take it.
+    fn push(&self, job: Job) -> bool {
+        let mut state = lock(&self.state);
+        state.jobs.push_back(job);
+        let idle = state.idle >= state.jobs.len();
+        drop(state);
         self.ready.notify_one();
+        idle
     }
 
     /// The next task, or `None` once the queue is closed and empty.
     fn next(&self) -> Option<Job> {
         let mut state = lock(&self.state);
         loop {
-            if let Some(job) = state.0.pop_front() {
+            if let Some(job) = state.jobs.pop_front() {
                 return Some(job);
             }
-            if state.1 {
+            if state.closed {
                 return None;
             }
+            state.idle += 1;
             state = self
                 .ready
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
+            state.idle -= 1;
         }
     }
 
     fn close(&self) {
-        lock(&self.state).1 = true;
+        lock(&self.state).closed = true;
         self.ready.notify_all();
     }
 }
@@ -174,7 +235,8 @@ impl PtExec {
         }
     }
 
-    /// Queues a task, starting a worker for it while under the limit.
+    /// Queues a task, starting a worker for it when none is idle and
+    /// the pool is under its limit.
     fn submit(&mut self, thunk: Thunk, args: Vec<u64>, desc: &'static [u8]) -> Arc<PtFut> {
         let fut = Arc::new(PtFut::new(desc));
         let job = Job {
@@ -182,11 +244,21 @@ impl PtExec {
             args,
             fut: Arc::clone(&fut),
         };
-        self.queue.push(job);
-        if self.workers.len() < self.limit {
-            self.workers.push(spawn(Arc::clone(&self.queue)));
+        let idle = self.queue.push(job);
+        if !idle && self.workers.len() < self.limit {
+            self.grow();
         }
         fut
+    }
+
+    /// Starts a worker. Should the system refuse a thread, the workers
+    /// already running take the task; with none, the program ends.
+    fn grow(&mut self) {
+        match spawn(Arc::clone(&self.queue)) {
+            Ok(w) => self.workers.push(w),
+            Err(_) if !self.workers.is_empty() => {}
+            Err(err) => crate::fail_with(&format!("cannot start a task's thread: {err}")),
+        }
     }
 
     /// Waits for every task and joins the workers.
@@ -201,42 +273,39 @@ impl PtExec {
 }
 
 /// Starts a worker on `queue`.
-fn spawn(queue: Arc<Queue>) -> JoinHandle<()> {
+fn spawn(queue: Arc<Queue>) -> std::io::Result<JoinHandle<()>> {
     let work = move || {
         while let Some(job) = queue.next() {
             job.run();
         }
     };
-    match thread::Builder::new().stack_size(STACK).spawn(work) {
-        Ok(handle) => handle,
-        Err(err) => crate::fail_with(&format!("cannot start a task's thread: {err}")),
-    }
+    thread::Builder::new().stack_size(STACK).spawn(work)
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// `ThreadPoolExecutor()`: a new executor, as many workers at most as
-/// the machine runs threads at once.
+/// `ThreadPoolExecutor()`: a new executor.
 #[allow(unsafe_code)] // SAFETY: no arguments; the result is owned by the caller.
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_exec_new() -> *mut PtExec {
-    let limit = thread::available_parallelism().map_or(1, usize::from);
-    Box::into_raw(Box::new(PtExec::new(limit)))
+    let cpus = thread::available_parallelism().map_or(1, usize::from);
+    Box::into_raw(Box::new(PtExec::new(default_workers(cpus))))
 }
 
 /// `ex.submit(...)`, or one task of `ex.map(...)`: queues `thunk` with
-/// a copy of `args[..n]`, giving a new future whose result has type
-/// `desc[..len]`.
+/// a copy of `args[..n]`, giving a new future (one handle) whose result
+/// has type `desc[..len]`.
 ///
 /// # Safety
 ///
-/// `exec` is a live executor this thread made; `args` points to `n`
-/// slots, each holding a reference the task takes, of values marked
-/// (`pt_mark`) with everything they reach; `thunk` reads exactly
-/// those slots; `desc` points to `len` bytes of the compiler's
-/// read-only descriptor data.
+/// `exec` is a live executor this thread made. `args` points to `n`
+/// slots (it may dangle when `n` is 0), each holding a reference the
+/// task takes. `thunk` reads exactly those slots and the module values
+/// and defaults in its function's read set, and every one of these
+/// values was marked (`pt_mark`) with everything it reaches. `desc`
+/// points to `len` bytes of the compiler's read-only descriptor data.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_submit(
@@ -247,14 +316,13 @@ pub unsafe extern "C" fn pt_submit(
     desc: *const u8,
     len: usize,
 ) -> *const PtFut {
-    // SAFETY: guaranteed by the caller, see above.
-    let (exec, args, desc) = unsafe {
-        (
-            &mut *exec,
-            std::slice::from_raw_parts(args, n).to_vec(),
-            std::slice::from_raw_parts(desc, len),
-        )
+    let args = match n {
+        0 => Vec::new(),
+        // SAFETY: guaranteed by the caller, see above.
+        _ => unsafe { std::slice::from_raw_parts(args, n) }.to_vec(),
     };
+    // SAFETY: guaranteed by the caller, see above.
+    let (exec, desc) = unsafe { (&mut *exec, std::slice::from_raw_parts(desc, len)) };
     Arc::into_raw(exec.submit(thunk, args, desc))
 }
 
@@ -263,7 +331,7 @@ pub unsafe extern "C" fn pt_submit(
 ///
 /// # Safety
 ///
-/// `fut` is a live future.
+/// `fut` is a live future this thread holds a handle to.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_result(fut: *const PtFut) -> u64 {
@@ -281,32 +349,39 @@ pub unsafe extern "C" fn pt_result(fut: *const PtFut) -> u64 {
     })
 }
 
-/// Adds a reference to a future.
+/// Adds a handle to a future.
 ///
 /// # Safety
 ///
-/// `fut` is a live future.
+/// `fut` is a live future this thread holds a handle to.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_fut_inc(fut: *const PtFut) {
-    // SAFETY: guaranteed by the caller; `fut` came from `Arc::into_raw`.
-    unsafe { Arc::increment_strong_count(fut) };
+    // SAFETY: guaranteed by the caller.
+    let fut = unsafe { &*fut };
+    fut.handles.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Drops a reference to a future; the last one drops its result.
+/// Drops a handle to a future; the last one releases its outcome here.
 ///
 /// # Safety
 ///
-/// `fut` is a live future, and the caller's reference is not used again.
+/// `fut` is a live future this thread holds a handle to, which is not
+/// used again.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_fut_dec(fut: *const PtFut) {
-    // SAFETY: guaranteed by the caller; `fut` came from `Arc::into_raw`.
-    unsafe { Arc::decrement_strong_count(fut) };
+    // SAFETY: guaranteed by the caller.
+    let last = unsafe { &*fut }.drop_handle();
+    if last {
+        // SAFETY: the handles together held the one `Arc` reference
+        // `pt_submit` gave out with `Arc::into_raw`.
+        unsafe { Arc::decrement_strong_count(fut) };
+    }
 }
 
-/// Leaving the executor's `with` block: waits for every task it
-/// started, then frees it.
+/// Leaving the executor's `with` block, however it is left: waits for
+/// every task it started, then frees it.
 ///
 /// # Safety
 ///
@@ -320,14 +395,18 @@ pub unsafe extern "C" fn pt_exec_end(exec: *mut PtExec) {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)] // The tests drive the C ABI as generated code does.
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use crate::seq::PtSeq;
+    use crate::str::{self as pstr, PtStr};
+    use std::sync::atomic::AtomicU64;
 
     const INT: &[u8] = b"i";
+    const STR: &[u8] = b"s";
+    const LIST: &[u8] = b"li";
 
     /// Adds its two integer arguments.
-    #[allow(unsafe_code)]
     unsafe extern "C" fn add(_ctx: *const PtCtx, args: *const u64) -> u64 {
         // SAFETY: submitted with two slots.
         let args = unsafe { std::slice::from_raw_parts(args, 2) };
@@ -335,78 +414,214 @@ mod tests {
     }
 
     /// Raises a `ValueError` with no message.
-    #[allow(unsafe_code)]
     unsafe extern "C" fn fails(_ctx: *const PtCtx, _args: *const u64) -> u64 {
         exc::raise_value_error();
         0
     }
 
+    /// A new string.
+    unsafe extern "C" fn text(_ctx: *const PtCtx, _args: *const u64) -> u64 {
+        pstr::into_ptr(PtStr::new("ab".into())) as u64
+    }
+
+    /// Reads its list argument, then drops the reference it was given.
+    unsafe extern "C" fn read_list(_ctx: *const PtCtx, args: *const u64) -> u64 {
+        // SAFETY: submitted with one live list, whose reference it owns.
+        unsafe {
+            let xs = *args as *mut PtSeq;
+            let n = seq::pt_seq_len(xs);
+            seq::pt_seq_dec(xs);
+            n as u64
+        }
+    }
+
     static SEEN: AtomicU64 = AtomicU64::new(0);
 
     /// Records its argument.
-    #[allow(unsafe_code)]
     unsafe extern "C" fn note(_ctx: *const PtCtx, args: *const u64) -> u64 {
         // SAFETY: submitted with one slot.
-        let n = unsafe { *args };
-        SEEN.fetch_add(n, Ordering::Relaxed);
+        SEEN.fetch_add(unsafe { *args }, Ordering::Relaxed);
         0
     }
 
-    #[allow(unsafe_code)]
-    fn submit(exec: &mut PtExec, thunk: Thunk, args: &[u64]) -> Arc<PtFut> {
-        exec.submit(thunk, args.to_vec(), INT)
+    fn submit(exec: *mut PtExec, thunk: Thunk, args: &[u64], desc: &'static [u8]) -> *const PtFut {
+        // SAFETY: the test's executor, slots and descriptor are live.
+        unsafe {
+            pt_submit(
+                exec,
+                thunk,
+                args.as_ptr(),
+                args.len(),
+                desc.as_ptr(),
+                desc.len(),
+            )
+        }
     }
 
-    #[allow(unsafe_code)]
-    fn result(fut: &Arc<PtFut>) -> u64 {
-        // SAFETY: the test holds the future.
-        unsafe { pt_result(Arc::as_ptr(fut)) }
+    fn result(fut: *const PtFut) -> u64 {
+        // SAFETY: the test holds a handle.
+        unsafe { pt_result(fut) }
+    }
+
+    fn drop_fut(fut: *const PtFut) {
+        // SAFETY: the test's handle, not used again.
+        unsafe { pt_fut_dec(fut) }
+    }
+
+    fn end(exec: *mut PtExec) {
+        // SAFETY: the test's executor, not used again.
+        unsafe { pt_exec_end(exec) }
+    }
+
+    /// Takes the exception `result()` raised again, checking it is a
+    /// `ValueError`.
+    fn caught() -> *mut PtSeq {
+        assert_eq!(exc::pt_pending_is(1 << exc::VALUE_ERROR), 1);
+        let e = exc::pt_catch();
+        assert!(!e.is_null());
+        e
+    }
+
+    #[test]
+    fn the_default_pool_is_cpythons() {
+        assert_eq!(
+            (default_workers(1), default_workers(8), default_workers(64)),
+            (5, 12, 32)
+        );
     }
 
     #[test]
     fn tasks_give_their_results() {
-        let mut exec = PtExec::new(2);
-        let futs: Vec<Arc<PtFut>> = (0..8).map(|n| submit(&mut exec, add, &[n, 10])).collect();
-        let got: Vec<u64> = futs.iter().map(result).collect();
+        let exec = pt_exec_new();
+        let futs: Vec<*const PtFut> = (0..8).map(|n| submit(exec, add, &[n, 10], INT)).collect();
+        let got: Vec<u64> = futs.iter().map(|f| result(*f)).collect();
         assert_eq!(got, (10..18).collect::<Vec<u64>>());
-        assert!(exec.workers.len() <= 2);
-        exec.end();
+        futs.into_iter().for_each(drop_fut);
+        end(exec);
     }
 
     #[test]
     fn leaving_the_block_waits_for_every_task() {
-        let mut exec = PtExec::new(3);
+        let exec = Box::into_raw(Box::new(PtExec::new(3)));
         let before = SEEN.load(Ordering::Relaxed);
         for _ in 0..5 {
-            drop(submit(&mut exec, note, &[1]));
+            drop_fut(submit(exec, note, &[1], INT));
         }
-        exec.end();
+        end(exec);
         assert_eq!(SEEN.load(Ordering::Relaxed) - before, 5);
     }
 
     #[test]
     fn what_escapes_a_task_is_raised_by_each_result() {
-        let mut exec = PtExec::new(1);
-        let fut = submit(&mut exec, fails, &[]);
+        let exec = pt_exec_new();
+        let fut = submit(exec, fails, &[], INT);
         for _ in 0..2 {
-            assert_eq!(result(&fut), 0);
-            assert_eq!(exc::pt_pending_is(1 << exc::VALUE_ERROR), 1);
-            let e = exc::pt_catch();
-            assert!(!e.is_null());
-            #[allow(unsafe_code)]
+            assert_eq!(result(fut), 0);
             // SAFETY: `pt_catch` gave this thread the reference.
-            unsafe {
-                seq::pt_seq_dec(e)
-            };
+            unsafe { seq::pt_seq_dec(caught()) };
         }
-        exec.end();
+        drop_fut(fut);
+        end(exec);
     }
 
-    /// Under Miri, a leak of the exception fails the test.
+    /// The worker drops nothing a submitter may still count: here the
+    /// exception, raised again and then used after the future's last
+    /// handle went. Under Miri a race or a leak fails it.
     #[test]
-    fn a_dropped_futures_exception_is_released() {
-        let mut exec = PtExec::new(1);
-        drop(submit(&mut exec, fails, &[]));
-        exec.end();
+    fn an_outcome_taken_is_released_on_the_submitters_thread() {
+        let exec = pt_exec_new();
+        for _ in 0..50 {
+            let fut = submit(exec, fails, &[], INT);
+            assert_eq!(result(fut), 0);
+            let e = caught();
+            let copy = submit(exec, text, &[], STR);
+            let s = result(copy) as *mut PtStr;
+            drop_fut(fut);
+            drop_fut(copy);
+            // SAFETY: this thread holds a reference to each.
+            unsafe {
+                assert_eq!((*e).rc.get(), 1);
+                assert_eq!(pstr::borrow(s).text(), "ab");
+                seq::pt_seq_inc(e);
+                seq::pt_seq_dec(e);
+                seq::pt_seq_dec(e);
+                pstr::pt_str_dec(s);
+            }
+        }
+        end(exec);
+    }
+
+    /// A future dropped before its task ends leaves the outcome to the
+    /// worker. Under Miri a leak fails it.
+    #[test]
+    fn an_abandoned_outcome_is_released_by_the_worker() {
+        let exec = pt_exec_new();
+        drop_fut(submit(exec, fails, &[], INT));
+        drop_fut(submit(exec, text, &[], STR));
+        end(exec);
+    }
+
+    #[test]
+    fn handles_count_until_the_last() {
+        let exec = pt_exec_new();
+        let fut = submit(exec, add, &[1, 2], INT);
+        // SAFETY: the test holds a handle.
+        unsafe { pt_fut_inc(fut) };
+        drop_fut(fut);
+        assert_eq!(result(fut), 3);
+        drop_fut(fut);
+        end(exec);
+    }
+
+    /// Tasks on several workers count a marked argument at once.
+    #[test]
+    fn a_marked_argument_is_counted_by_every_worker() {
+        let exec = Box::into_raw(Box::new(PtExec::new(4)));
+        let xs = seq::new_seq(LIST, vec![1, 2]);
+        seq::mark(LIST, xs as u64);
+        let futs: Vec<*const PtFut> = (0..8)
+            .map(|_| {
+                // SAFETY: `xs` is live; the task takes this reference.
+                unsafe { seq::pt_seq_inc(xs) };
+                submit(exec, read_list, &[xs as u64], INT)
+            })
+            .collect();
+        assert!(futs.iter().all(|f| result(*f) == 2));
+        futs.into_iter().for_each(drop_fut);
+        end(exec);
+        // SAFETY: the test's own reference, the last.
+        unsafe {
+            assert_eq!((*xs).rc.get(), 1);
+            seq::pt_seq_dec(xs);
+        }
+    }
+
+    /// One worker runs a failing task, then one that succeeds: nothing
+    /// pending carries over.
+    #[test]
+    fn a_worker_starts_each_task_clean() {
+        let exec = Box::into_raw(Box::new(PtExec::new(1)));
+        let bad = submit(exec, fails, &[], INT);
+        let good = submit(exec, add, &[2, 3], INT);
+        assert_eq!(result(good), 5);
+        assert_eq!(exc::pt_pending_is(u32::MAX), 0);
+        drop_fut(bad);
+        drop_fut(good);
+        end(exec);
+    }
+
+    /// A task's unfinished line is published when the task ends.
+    #[test]
+    fn a_task_publishes_its_unfinished_line() {
+        crate::write(b"partial");
+        let fut = Arc::new(PtFut::new(INT));
+        let job = Job {
+            thunk: note,
+            args: vec![0],
+            fut: Arc::clone(&fut),
+        };
+        job.run();
+        assert!(crate::LINE.with_borrow(Vec::is_empty));
+        drop_fut(Arc::into_raw(fut));
     }
 }
