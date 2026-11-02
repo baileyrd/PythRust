@@ -334,7 +334,7 @@ fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>, h
 /// set, or a scalar, which has nothing to mark.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_mark(desc: *const u8, len: usize, v: u64) {
-    if v == 0 {
+    if v == 0 || crate::sync::tsan::fault("unmarked") {
         return;
     }
     // SAFETY: guaranteed by the caller.

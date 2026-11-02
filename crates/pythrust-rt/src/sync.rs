@@ -64,8 +64,8 @@ impl Count {
     pub(crate) fn inc(&self) {
         let v = self.0.load(Ordering::Relaxed);
         if v & MARK == 0 {
-            tsan::plain_write(&self.0);
             self.0.store(v + 1, Ordering::Relaxed);
+            tsan::plain_write(&self.0);
         } else {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
@@ -77,8 +77,8 @@ impl Count {
     pub(crate) fn dec(&self) -> bool {
         let v = self.0.load(Ordering::Relaxed);
         if v & MARK == 0 {
-            tsan::plain_write(&self.0);
             self.0.store(v - 1, Ordering::Relaxed);
+            tsan::plain_write(&self.0);
             return v == 1;
         }
         let last = self.0.fetch_sub(1, Ordering::Release) & !MARK == 1;
@@ -101,14 +101,37 @@ fn acquire(count: &AtomicUsize) {
     }
 }
 
-/// ThreadSanitizer's view of an unmarked count. Its load and store are
-/// relaxed atomics, which the detector never reports, but they stand
-/// for a plain read-modify-write: two threads changing one unmarked
-/// count is the race marking exists to prevent. Built with
-/// `--cfg pythrust_tsan` (CI's race job), each is reported to it as the
-/// plain write it stands for; otherwise this is nothing.
-mod tsan {
+/// ThreadSanitizer's view of an unmarked count or borrow word. Its loads
+/// and stores are relaxed atomics, which the detector never reports, but
+/// they stand for plain read-modify-writes: two threads using one
+/// unmarked object is the race marking exists to prevent. Built with
+/// `--cfg pythrust_tsan` (CI's race job), each change, and each use of
+/// an idle slot's fast path, is reported to it as the plain write it
+/// stands for; otherwise this is nothing. The report follows the store,
+/// so the plain write is the detector's last record of this thread's
+/// access, not the relaxed store, which it never reports against.
+///
+/// Built with `--cfg pythrust_calibrate` as well, [`fault`] injects the
+/// bug `PYTHRUST_FAULT` names, so CI can check the detector reports it.
+pub(crate) mod tsan {
     use std::sync::atomic::AtomicUsize;
+
+    /// Whether `PYTHRUST_FAULT` names `name`: `unmarked` skips every mark
+    /// (`seq::pt_mark`), `outcome` has the worker change a task's result
+    /// count after handing it over (the race of M6c step 4a).
+    #[cfg(pythrust_calibrate)]
+    pub(crate) fn fault(name: &str) -> bool {
+        static FAULT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        FAULT
+            .get_or_init(|| std::env::var("PYTHRUST_FAULT").ok())
+            .as_deref()
+            == Some(name)
+    }
+
+    #[cfg(not(pythrust_calibrate))]
+    pub(crate) const fn fault(_name: &str) -> bool {
+        false
+    }
 
     #[cfg(pythrust_tsan)]
     unsafe extern "C" {
@@ -176,6 +199,7 @@ impl<T> Slot<T> {
         }
         if s & MARK == 0 {
             self.state.store(s + 1, Ordering::Relaxed);
+            tsan::plain_write(&self.state);
         } else {
             let prev = self.state.fetch_add(1, Ordering::Acquire);
             if prev & WRITER != 0 {
@@ -193,6 +217,7 @@ impl<T> Slot<T> {
         }
         if s & MARK == 0 {
             self.state.store(WRITER, Ordering::Relaxed);
+            tsan::plain_write(&self.state);
         } else if self
             .state
             .compare_exchange(MARK, MARK | WRITER, Ordering::Acquire, Ordering::Relaxed)
@@ -210,6 +235,7 @@ impl<T> Slot<T> {
         let s = self.state.load(Ordering::Relaxed);
         if s & MARK == 0 {
             self.state.store(s - 1, Ordering::Relaxed);
+            tsan::plain_write(&self.state);
         } else {
             self.state.fetch_sub(1, Ordering::Release);
         }
@@ -219,6 +245,7 @@ impl<T> Slot<T> {
         let s = self.state.load(Ordering::Relaxed);
         if s & MARK == 0 {
             self.state.store(0, Ordering::Relaxed);
+            tsan::plain_write(&self.state);
         } else {
             self.state.fetch_and(!WRITER, Ordering::Release);
         }
@@ -231,8 +258,14 @@ impl<T> Slot<T> {
 /// while the reference lives.
 impl<T: Copy> Slot<Vec<T>> {
     /// Whether this thread alone can reach the slot and nobody holds it.
+    /// The fast paths that follow use the value as this thread's alone,
+    /// so ThreadSanitizer is told of a plain write to the borrow word.
     fn idle(&self) -> bool {
-        self.state.load(Ordering::Relaxed) == 0
+        let idle = self.state.load(Ordering::Relaxed) == 0;
+        if idle {
+            tsan::plain_write(&self.state);
+        }
+        idle
     }
 
     /// Copies out the item at Python index `i` (negative counts from

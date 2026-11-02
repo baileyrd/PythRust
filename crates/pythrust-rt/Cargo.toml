@@ -19,4 +19,4 @@ crate-type = ["staticlib", "rlib"]
 [lints.rust]
 # Set by CI's race job, which builds this crate under ThreadSanitizer
 # (`sync.rs`'s `tsan`).
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(pythrust_tsan)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(pythrust_tsan)", "cfg(pythrust_calibrate)"] }

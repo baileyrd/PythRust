@@ -107,8 +107,19 @@ impl PtFut {
             outcome.release(self.desc);
             return;
         }
+        let faulty = match &outcome {
+            Outcome::Value(v) if crate::sync::tsan::fault("outcome") => Some(*v),
+            _ => None,
+        };
+        if let Some(v) = faulty {
+            seq::inc(self.desc, v);
+        }
         done.outcome = Some(outcome);
         self.ready.notify_all();
+        drop(done);
+        if let Some(v) = faulty {
+            seq::dec(self.desc, v);
+        }
     }
 
     /// Waits for the task; runs `take` on how it ended.
