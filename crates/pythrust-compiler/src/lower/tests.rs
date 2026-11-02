@@ -1183,6 +1183,7 @@ fn the_hold_fixtures_hold_where_they_say() {
         assert_eq!(holds(&p, name), (0, 0), "{name}");
     }
 }
+
 /// Pins which loops of the held-loop exit, alias and raise fixtures
 /// hold.
 #[test]

@@ -121,8 +121,8 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
 }
 
 /// Whether `value` takes over local `p`'s reference: a call's argument
-/// is owned, and a loop's hold takes its list's. Every other rvalue borrows its operands and gives a new
-/// reference.
+/// is owned, and a loop's hold takes its list's. Every other rvalue
+/// borrows its operands and gives a new reference.
 fn takes(value: &Rvalue, p: LocalId) -> bool {
     match value {
         Rvalue::Call(_, args) => args.contains(&Operand::Local(p)),
