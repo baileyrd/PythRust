@@ -1,5 +1,6 @@
 # deviation: `run` runs every task `map` started even when a `for` over its results is left early, and leaving the `with` waits for them; CPython cancels the tasks that have not started.
 # expect-exit: 1
+# native-unjoined: the last task's overflow ends the program while workers still run
 # Leaving the loop early. Every task still runs before the `with` is
 # left, so the last one's overflow (a fault, which checked integers make
 # fatal) stops the program before anything prints, whenever that task

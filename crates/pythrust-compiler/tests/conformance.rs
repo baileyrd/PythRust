@@ -25,6 +25,9 @@
 //!   alone: the golden holds CPython's (and `run`'s) output, and
 //!   `<name>.native.out` the native program's, which is required to
 //!   differ from it, so a stale native deviation fails.
+//! - `# native-unjoined: why` a fault in a task ends the native program
+//!   without joining the executor's workers, so ThreadSanitizer runs it
+//!   with `report_thread_leaks=0`; it needs a nonzero `expect-exit`.
 //! - `# expect-error: text` the program must fail `check` (lex, parse,
 //!   infer) with a diagnostic containing `text`; it implies exit 1. Every
 //!   other program must pass `check`. `corpus_checks` asserts both.
@@ -41,9 +44,8 @@
 //! - `PYTHRUST_TSAN=1` native programs link a ThreadSanitizer-instrumented
 //!   runtime (`PYTHRUST_RT`, through `ci/tsan-cc`); a race report exits
 //!   66 and so fails the golden. Instrumented binaries skip the size gate.
-//!   A program expected to fail runs with `report_thread_leaks=0`: a
-//!   runtime error exits without joining the workers. CI's race job sets
-//!   it on x86-64 Linux.
+//!   A program marked `native-unjoined` runs with `report_thread_leaks=0`.
+//!   CI's race job sets it on x86-64 Linux.
 //! - `PYTHRUST_TSAN_RUNS=n` with `PYTHRUST_TSAN=1`, runs each task program
 //!   `n` more times pinned to one CPU and `n` unpinned: a race shows only
 //!   on some schedules.
@@ -76,6 +78,8 @@ struct Expect {
     check_error: Option<String>,
     /// Why native code alone deviates, if it does.
     native_deviation: Option<String>,
+    /// Why the native program ends without joining its workers, if so.
+    unjoined: Option<String>,
 }
 
 /// One corpus program and its golden stdout.
@@ -97,6 +101,7 @@ const EXIT: &str = "# expect-exit:";
 const DEVIATION: &str = "# deviation:";
 const NATIVE_DEVIATION: &str = "# native-deviation:";
 const ERROR: &str = "# expect-error:";
+const UNJOINED: &str = "# native-unjoined:";
 
 /// Reads directives from the leading `#` comment block of `src`.
 fn parse_expect(src: &str) -> Res<Expect> {
@@ -104,6 +109,7 @@ fn parse_expect(src: &str) -> Res<Expect> {
     let mut deviation: Option<String> = None;
     let mut check_error: Option<String> = None;
     let mut native_deviation: Option<String> = None;
+    let mut unjoined: Option<String> = None;
     for line in src.lines().take_while(|l| l.starts_with('#')) {
         if let Some(v) = line.strip_prefix(EXIT) {
             let n = v
@@ -118,17 +124,23 @@ fn parse_expect(src: &str) -> Res<Expect> {
         } else if let Some(v) = line.strip_prefix(NATIVE_DEVIATION) {
             let why = text(v, NATIVE_DEVIATION)?;
             set_once(&mut native_deviation, why, NATIVE_DEVIATION)?;
+        } else if let Some(v) = line.strip_prefix(UNJOINED) {
+            set_once(&mut unjoined, text(v, UNJOINED)?, UNJOINED)?;
         }
     }
     let status = status.unwrap_or(0);
     if check_error.is_some() && status != 1 {
         return Err(format!("{ERROR} needs {EXIT} 1"));
     }
+    if unjoined.is_some() && status == 0 {
+        return Err(format!("{UNJOINED} needs a nonzero {EXIT}"));
+    }
     Ok(Expect {
         status,
         deviation,
         check_error,
         native_deviation,
+        unjoined,
     })
 }
 
@@ -1045,10 +1057,11 @@ fn tsan_repeats(case: &Case, exe: &Path) -> Res<Vec<String>> {
 }
 
 /// A command running `case`'s native program `exe`, `pinned` to one
-/// CPU or not. A runtime error exits without joining the executor's
+/// CPU or not. A fault in a task exits without joining the executor's
 /// workers, as it exits without releasing, so under ThreadSanitizer a
-/// case expected to fail does not report them as leaked threads; one
-/// that exits cleanly still must have joined them.
+/// case marked `native-unjoined` does not report them as leaked
+/// threads; every other case must have joined them, even one an
+/// uncaught exception ends, since leaving the `with` joins them.
 fn native(case: &Case, exe: &Path, pinned: bool) -> Command {
     let mut cmd = match pinned {
         true => {
@@ -1058,7 +1071,7 @@ fn native(case: &Case, exe: &Path, pinned: bool) -> Command {
         }
         false => Command::new(exe),
     };
-    if tsan_requested() && case.expect.status != 0 {
+    if tsan_requested() && case.expect.unjoined.is_some() {
         let options = std::env::var("TSAN_OPTIONS").unwrap_or_default();
         cmd.env("TSAN_OPTIONS", format!("{options} report_thread_leaks=0"));
     }
@@ -1895,6 +1908,7 @@ fn expect_defaults() {
         deviation: None,
         check_error: None,
         native_deviation: None,
+        unjoined: None,
     };
     assert_eq!(parse_expect("print(1)\n"), Ok(want()));
     assert_eq!(parse_expect(""), Ok(want()));
@@ -1902,12 +1916,13 @@ fn expect_defaults() {
 
 #[test]
 fn expect_reads_directives() {
-    let src = "# a plain comment\n# expect-exit: 1\n# deviation: checked overflow\n# expect-error: overflow\n# native-deviation: lines\nx = 1\n";
+    let src = "# a plain comment\n# expect-exit: 1\n# deviation: checked overflow\n# expect-error: overflow\n# native-deviation: lines\n# native-unjoined: a fault\nx = 1\n";
     let want = Expect {
         status: 1,
         deviation: Some("checked overflow".to_string()),
         check_error: Some("overflow".to_string()),
         native_deviation: Some("lines".to_string()),
+        unjoined: Some("a fault".to_string()),
     };
     assert_eq!(parse_expect(src), Ok(want));
 }
@@ -1924,6 +1939,7 @@ fn expect_rejects_bad_directives() {
     assert!(parse_expect("# expect-exit: 1\n# expect-exit: 2\n").is_err());
     assert!(parse_expect("# deviation:\n").is_err());
     assert!(parse_expect("# native-deviation:\n").is_err());
+    assert!(parse_expect("# native-unjoined: a fault\n").is_err());
     assert!(parse_expect("# deviation: a\n# deviation: b\n").is_err());
     assert!(parse_expect("# expect-error:\n# expect-exit: 1\n").is_err());
     assert!(parse_expect("# expect-error: x\n").is_err());
@@ -1940,6 +1956,7 @@ fn mismatch_reports_status_and_stdout() {
             deviation: None,
             check_error: None,
             native_deviation: None,
+            unjoined: None,
         },
     };
     let ok = Run {
@@ -1969,6 +1986,7 @@ fn memcheck_fails_closed() {
             deviation: None,
             check_error: None,
             native_deviation: None,
+            unjoined: None,
         },
     };
     let ran = |stdout: &str, status: i32| -> Res<Run> {

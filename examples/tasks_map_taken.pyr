@@ -1,6 +1,7 @@
 # `map`'s results are an iterator (M6c): taken once, in order, and
 # true even when empty or used up. `in` takes results up to the first
-# match; an exception a task raised ends them. A result never taken
+# match; an exception a task raised ends them. A loop keeps the results
+# it started with when their name is rebound. A result never taken
 # drops its exception. Results of any type, over any iterable.
 import concurrent.futures
 
@@ -45,6 +46,19 @@ def main() -> None:
             print(p)
         print(list(ex.map(scaled, range(3))))
         print(list(ex.map(scaled, {4: "x", 5: "y"})))
+        rs = ex.map(square, [1, 3, 2])
+        try:
+            print(sorted(rs))
+        except ValueError as e:
+            print("caught", e, list(rs))
+        rs = ex.map(square, [1, 2])
+        for r in rs:
+            print("rebound", r)
+            rs = ex.map(square, [4])
+        print(list(rs))
+        rs = ex.map(square, [1, 2])
+        others = ex.map(square, [5])
+        print(list(rs or others), list(others))
         ps = ex.map(pair, ["x", "y"])
         for p in ps:
             p.append("!")

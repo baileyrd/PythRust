@@ -554,7 +554,8 @@ impl<'a> FnBuilder<'_, 'a> {
     }
 
     /// `list`, `sorted` or `set`: in `build`, `map`'s results are taken
-    /// into a new list first, which is `list`'s result itself.
+    /// into a new list first, which is `list`'s result itself and which
+    /// `sorted` sorts in place.
     fn results_builtin(
         &mut self,
         name: &str,
@@ -567,10 +568,14 @@ impl<'a> FnBuilder<'_, 'a> {
         };
         let at = args.get(k).map_or(span, |a| a.value.span);
         ops[k] = self.drain_results(ops[k], at)?;
-        if name == "list" {
-            return Ok(ops[k]);
+        match name {
+            "list" => Ok(ops[k]),
+            "sorted" => {
+                self.emit(Inst::Sort(ops[k]));
+                Ok(ops[k])
+            }
+            _ => self.builtin(name, args, ops, span),
         }
-        self.builtin(name, args, ops, span)
     }
 
     /// A call of `def` with `slots`, its arguments in parameter order
