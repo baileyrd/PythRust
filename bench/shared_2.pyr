@@ -1,0 +1,29 @@
+# 2 tasks read one list of strings, 20 passes each: the 40 passes of
+# shared.pyr split 2 ways, so the tasks contend for the list and strings
+# (atomics cost, Nano 2026-11-02).
+import concurrent.futures
+
+
+def total(rows: list[str], passes: int) -> int:
+    n = 0
+    for k in range(passes):
+        for s in rows:
+            n += len(s)
+    return n
+
+
+def main() -> None:
+    rows = []
+    for i in range(200000):
+        rows.append(str(i))
+    t = 0
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        fs = []
+        for j in range(2):
+            fs.append(ex.submit(total, rows, 20))
+        for f in fs:
+            t += f.result()
+    print(t)
+
+
+main()
