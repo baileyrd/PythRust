@@ -95,16 +95,18 @@ impl FnGen<'_, '_, '_> {
         from_slot(&mut self.b, v, want)
     }
 
-    /// `s[i]` on a list, into `dest`.
+    /// `s[i]` on a list, into `dest`, by `get`: [`Rt::SeqGet`], or
+    /// [`Rt::SeqGetHeld`] under a loop's hold.
     pub(super) fn item(
         &mut self,
+        get: Rt,
         s: Operand,
         i: Operand,
         dest: LocalId,
         span: Span,
     ) -> Result<Value> {
         let (s, i) = (self.operand(s), self.operand(i));
-        let (v, status) = self.with_status(Rt::SeqGet, &[s, i])?;
+        let (v, status) = self.with_status(get, &[s, i])?;
         self.raise_on(status, ExcKind::Index, LIST_INDEX, span)?;
         Ok(self.unslot(v, self.func.locals[dest.0]))
     }
@@ -223,7 +225,13 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
             out.push_str("lu");
             return Ok(());
         }
-        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id) => {
+        Ty::List(id)
+        | Ty::Held(id)
+        | Ty::Tuple(id)
+        | Ty::Opt(id)
+        | Ty::Dict(id)
+        | Ty::Set(id)
+        | Ty::View(id) => {
             let compound = types
                 .get(id.0)
                 .ok_or_else(|| backend("an unknown sequence type".to_string()))?;

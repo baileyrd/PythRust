@@ -1,0 +1,123 @@
+# A `for` loop whose body cannot change its list holds one read borrow
+# for the whole loop on the native backend (atomics cost A); a loop that
+# may change it borrows per read and sees what is appended. Every way out
+# of a held loop (end, break, return, an exception) releases the hold, so
+# the list can change afterwards.
+import concurrent.futures
+
+
+def total(xs: list[str]) -> int:
+    n = 0
+    for s in xs:
+        n += len(s)
+    return n
+
+
+def pairs(xs: list[str]) -> int:
+    n = 0
+    for a in xs:
+        for b in xs:
+            if a < b:
+                n += 1
+    return n
+
+
+def first_long(xs: list[str]) -> str:
+    for s in xs:
+        if len(s) > 2:
+            return s
+    return ""
+
+
+def stop_then_grow(xs: list[str], stop: str) -> int:
+    n = 0
+    for s in xs:
+        if s == stop:
+            break
+        n += 1
+    xs.append(stop + "!")
+    return n
+
+
+def raise_then_grow(xs: list[str]) -> int:
+    try:
+        for s in xs:
+            if s == "boom":
+                raise ValueError(s)
+    except ValueError as e:
+        xs.append("after " + str(e))
+    return len(xs)
+
+
+def fault_then_grow(xs: list[str], k: int) -> int:
+    try:
+        for s in xs:
+            k = k // (len(s) - 1)
+    except ZeroDivisionError:
+        xs.append("zero")
+    return k
+
+
+def grow_while_walking(xs: list[str]) -> int:
+    alias = xs
+    for s in xs:
+        if len(s) < 3:
+            alias.append(s + "++")
+    return len(xs)
+
+
+def bump(xs: list[str]) -> int:
+    xs[0] = xs[0] + "."
+    return len(xs[0])
+
+
+def call_in_body(xs: list[str]) -> int:
+    n = 0
+    for s in xs:
+        n += bump(xs) + len(s)
+    return n
+
+
+def other_type(xs: list[str], counts: list[int]) -> int:
+    for s in xs:
+        counts.append(len(s))
+    return len(counts)
+
+
+LOG: list[str] = ["x"]
+
+
+def log_size() -> int:
+    n = 0
+    for s in LOG:
+        n += len(s)
+    return n
+
+
+def first_sorted(xs: list[str]) -> str:
+    for s in sorted(xs):
+        if s > "b":
+            return s
+    return ""
+
+
+def in_tasks(xs: list[str]) -> int:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(total, xs)
+        b = ex.submit(pairs, xs)
+        return a.result() + b.result()
+
+
+words = ["ab", "c", "def", "gh"]
+print(total(words), pairs(words), first_long(words), in_tasks(words))
+print(stop_then_grow(words, "def"), words)
+words.append("boom")
+print(raise_then_grow(words), words)
+print(fault_then_grow(["abc", "xy", "q", "z"], 100), fault_then_grow(["a"], 7))
+print(grow_while_walking(["a", "bcd", "e"]))
+print(call_in_body(["p", "q"]))
+print(other_type(["x", "yz"], [9]), total(words))
+LOG.append("yz")
+print(log_size(), first_sorted(words))
+LOG.append("w")
+print(log_size(), LOG)

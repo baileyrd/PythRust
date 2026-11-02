@@ -11,6 +11,7 @@ mod exc;
 mod expr;
 mod faults;
 mod globals;
+mod hold;
 mod opt;
 mod seq;
 mod stmt;

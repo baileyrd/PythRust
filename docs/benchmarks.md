@@ -62,7 +62,20 @@ On a program, 7 runs, median seconds (`bench/run.py`): `shared` gives one task a
 | `shared` | 0.430 (0.385 to 0.485) | 0.287 (0.253 to 0.425) |
 | `shared_baseline` | 0.122 (0.101 to 0.171) | 0.261 (0.213 to 0.433) |
 
-Here the task is slower than the serial run: the task version takes 3.5x as long as the direct call, about 38 ns more per element read: one borrow of the list and one count `inc`/`dec` of the string, all atomic, which the per-operation rows account for. That puts it behind CPython. The cost falls only on marked values: a value no task can reach takes the unmarked path, one load and a branch more than before marking existed (the 3% gate of step 2). Reducing it (borrowing a marked list once per loop rather than per read, or skipping the count of an element only read) is open. Step 4c measured CPU-bound tasks against the serial build and CPython threads ([below](#cpu-bound-tasks-m6c-step-4c)).
+Here the task is slower than the serial run: the task version takes 3.5x as long as the direct call, about 38 ns more per element read: one borrow of the list and one count `inc`/`dec` of the string, all atomic, which the per-operation rows account for. That puts it behind CPython. The cost falls only on marked values: a value no task can reach takes the unmarked path, one load and a branch more than before marking existed (the 3% gate of step 2). Borrowing a marked list once per loop rather than per read is done ([below](#holding-a-list-per-loop-atomics-cost-a)); skipping the count of an element only read is next. Step 4c measured CPU-bound tasks against the serial build and CPython threads ([below](#cpu-bound-tasks-m6c-step-4c)).
+
+### Holding a list per loop (atomics cost A)
+
+A `for` loop whose body cannot change its list holds one read borrow of it for the whole loop, not one per `len` and read ([native.md](native.md#strings-lists-and-tuples)). `shared_2` and `shared_4` split `shared`'s 40 passes over its list between two and four tasks on the same list. Same machine, release build, by the cores the process may use (`taskset -c 0`, `0-1`, `0-3`), 7 runs, median seconds; before is `main` at 83b2fce, built and run in the same session as after.
+
+| Benchmark | Before, 1 core | Before, 2 cores | Before, 4 cores | After, 1 core | After, 2 cores | After, 4 cores |
+|---|---:|---:|---:|---:|---:|---:|
+| `shared` (1 task) | 0.451 (0.436 to 0.482) | 0.482 (0.344 to 0.517) | 0.466 (0.452 to 0.501) | 0.175 (0.169 to 0.218) | 0.203 (0.163 to 0.215) | 0.204 (0.180 to 0.235) |
+| `shared_2` | 0.445 (0.366 to 0.483) | 1.896 (1.410 to 2.087) | 2.015 (1.675 to 2.495) | 0.196 (0.186 to 0.226) | 0.130 (0.118 to 0.155) | 0.127 (0.115 to 0.152) |
+| `shared_4` | 0.444 (0.345 to 0.494) | 1.880 (1.499 to 2.393) | 2.773 (2.254 to 3.134) | 0.157 (0.138 to 0.201) | 0.123 (0.114 to 0.158) | 0.098 (0.080 to 0.104) |
+| `shared_baseline` | 0.123 (0.114 to 0.149) | 0.133 (0.120 to 0.163) | 0.125 (0.099 to 0.135) | 0.110 (0.100 to 0.122) | 0.112 (0.110 to 0.142) | 0.120 (0.108 to 0.141) |
+
+Before, tasks on one list on more than one core were 4x to 6x slower than on one core: every read changed the list's one borrow word, so its cache line moved between the cores on every read. After, a loop changes that word twice. One task still takes about 1.6x as long as the direct call: each string's count `inc`/`dec` stays atomic (option B, next).
 
 ## CPU-bound tasks (M6c step 4c)
 
@@ -80,7 +93,7 @@ Two programs, each with a serial control that runs the same work by direct calls
 | `shared` | 0.432 (0.390 to 0.512) | 0.255 (0.228 to 0.298) |
 | `shared_baseline` | 0.113 (0.089 to 0.168) | 0.254 (0.189 to 0.275) |
 
-On these four cores, tasks run CPU-bound work 3.2x (`tasks_cpu`) and 3.5x (`tasks_alloc`) faster than the serial native build; on one core they cost 14% and 44% more than it ([scaling](#cpu-bound-tasks-m6c-step-4c), below). CPython's threads are no faster than its serial run (the GIL), so the native task rows are 52x and 9x CPython's. These are the only speedups claimed: work that tasks split evenly, with nothing marked. The `shared` rows (from [Shared values](#shared-values-m6c), same run) are where tasks lose: one task walking a marked list takes 3.8x as long as the direct call, and is slower than CPython.
+On these four cores, tasks run CPU-bound work 3.2x (`tasks_cpu`) and 3.5x (`tasks_alloc`) faster than the serial native build; on one core they cost 14% and 44% more than it ([scaling](#cpu-bound-tasks-m6c-step-4c), below). CPython's threads are no faster than its serial run (the GIL), so the native task rows are 52x and 9x CPython's. These are the only speedups claimed: work that tasks split evenly, with nothing marked. The `shared` rows (from [Shared values](#shared-values-m6c), same run) are where tasks lose: one task walking a marked list takes 3.8x as long as the direct call, and is slower than CPython (before loops held their list; [after](#holding-a-list-per-loop-atomics-cost-a), CPython not re-measured).
 
 Scaling, by the cores the process may use (`taskset -c 0`, `0-1`, `0-3`), 7 runs, median seconds. The executor has no `max_workers` yet, so the pool follows the cores: `min(32, cpus + 4)`, 5, 6 and 8 workers.
 

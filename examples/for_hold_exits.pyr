@@ -1,0 +1,121 @@
+# Held loops inside if, while and other loops, left by return, break and
+# continue, including from an else clause, each followed by a change to
+# the list (atomics cost A).
+def in_if(xs: list[int], c: bool) -> int:
+    n = 0
+    if c:
+        for x in xs:
+            n += x
+        xs.append(n)
+    return len(xs)
+
+
+def in_while(xs: list[int]) -> int:
+    k = 0
+    while k < 2:
+        for x in xs:
+            k += 0
+        xs.append(k)
+        k += 1
+    return len(xs)
+
+
+def nested_return(xs: list[int]) -> int:
+    for a in xs:
+        for b in xs:
+            if a + b == 5:
+                return a * b
+    return -1
+
+
+def else_clause(xs: list[int]) -> int:
+    for x in xs:
+        if x > 100:
+            break
+    else:
+        xs.append(7)
+    return len(xs)
+
+
+def else_plain(xs: list[int]) -> int:
+    n = 0
+    for x in xs:
+        n += x
+    else:
+        n += 1
+    xs.append(n)
+    return len(xs)
+
+
+def outer_continue(xs: list[int]) -> int:
+    n = 0
+    for a in xs:
+        for b in xs:
+            if b == 2:
+                continue
+            if b == 3:
+                break
+            n += b
+        if a == 1:
+            continue
+        n += a
+    xs.append(n)
+    return n
+
+
+ys = [1, 2, 3, 4]
+print(in_if(ys, True), in_if(ys, False), ys)
+print(in_while(ys), ys)
+print(nested_return(ys))
+ys.append(0)
+print(else_clause(ys), else_plain(ys), ys)
+print(outer_continue([1, 2, 3]))
+for v in ys:
+    print(v)
+ys.append(99)
+total = 0
+for v in ys:
+    for w in ys:
+        total += w
+ys.append(total)
+print(ys)
+
+
+def f(xs: list[int]) -> int:
+    n = 0
+    for a in [1, 2, 3]:
+        for x in xs:
+            n += x
+        else:
+            if a == 2:
+                break
+            continue
+    xs.append(n)
+    return n
+
+
+def g(xs: list[int]) -> int:
+    n = 0
+    while n < 50:
+        for x in xs:
+            n += x
+        else:
+            n += 1
+            if n > 20:
+                break
+        xs.append(1)
+    return n
+
+
+def h(xs: list[int]) -> int:
+    for x in xs:
+        pass
+    else:
+        return len(xs)
+    return -1
+
+
+zs = [1, 2]
+print(f(zs), zs, g(zs), zs, h(zs))
+zs.append(3)
+print(zs)

@@ -391,6 +391,7 @@ fn source(program: &Program, ty: Ty) -> Type {
         Ty::Exec => Type::Executor,
         Ty::Future => Type::Future(Box::new(Type::None)),
         Ty::Results => Type::Results(Box::new(Type::None)),
+        Ty::Held(id) => compound_source(program, Ty::List(id)),
         Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_) => {
             compound_source(program, ty)
         }

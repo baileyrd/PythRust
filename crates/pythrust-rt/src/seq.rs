@@ -801,6 +801,76 @@ pub unsafe extern "C" fn pt_seq_get(s: *const PtSeq, i: i64, status: *mut u8) ->
     v
 }
 
+/// Makes the caller's reference `s` to a list a `for` loop's hold
+/// (atomics cost A): it also holds a read borrow, so [`pt_seq_len_held`]
+/// and [`pt_seq_get_held`] skip the borrow word. [`pt_seq_release_held`]
+/// ends both. Ends the program if a writer holds `s`.
+///
+/// # Safety
+///
+/// `s` is a live list the caller holds a reference to.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_seq_hold(s: *const PtSeq) -> *const PtSeq {
+    // SAFETY: guaranteed by the caller.
+    unsafe { seq(s as u64) }.items.hold();
+    s
+}
+
+/// Ends a hold [`pt_seq_hold`] made: drops its borrow, then its
+/// reference. Null is ignored.
+///
+/// # Safety
+///
+/// `s` is null or a hold the caller gives up.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_seq_release_held(s: *mut PtSeq) {
+    if s.is_null() {
+        return;
+    }
+    // SAFETY: a live hold, by the caller's guarantee; the borrow is its.
+    unsafe { seq(s as u64).items.unhold() };
+    // SAFETY: the hold's reference, which the caller gives up.
+    unsafe { pt_seq_dec(s) };
+}
+
+/// `len(s)` under a hold.
+///
+/// # Safety
+///
+/// `s` is a hold from [`pt_seq_hold`] that has not ended.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_seq_len_held(s: *const PtSeq) -> i64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    // SAFETY: the caller's hold is a read borrow of `s.items`.
+    let n = unsafe { s.items.held() }.len() / table::stride(s.desc);
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// `s[i]` under a hold, as [`pt_seq_get`].
+///
+/// # Safety
+///
+/// `s` is a hold from [`pt_seq_hold`] that has not ended, and `status`
+/// points to a writable byte.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_seq_get_held(s: *const PtSeq, i: i64, status: *mut u8) -> u64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    // SAFETY: the caller's hold is a read borrow of `s.items`.
+    let items = unsafe { s.items.held() };
+    let Some(k) = position(i, items.len()) else {
+        // SAFETY: guaranteed by the caller.
+        unsafe { report(status, 1) };
+        return 0;
+    };
+    let v = items[k];
+    inc(slot(s.desc, k), v);
+    // SAFETY: guaranteed by the caller.
+    unsafe { report(status, 0) };
+    v
+}
+
 /// `s[i] = v` on a list: adds a reference to `v`'s target and drops the
 /// old slot's. Gives 1, changing nothing, when `i` is out of range, else
 /// 0.
@@ -1136,6 +1206,76 @@ mod tests {
         }
         // SAFETY: all threads are done; both still live.
         unsafe {
+            assert_eq!(seq(inner as u64).rc.get(), 9);
+            assert_eq!(seq(outer as u64).rc.get(), 1);
+            pt_seq_dec(outer);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn a_hold_reads_without_borrowing_and_ends_free() {
+        let inner = make(b"li", &[4]);
+        let list = make(b"lli", &[inner as u64, inner as u64]);
+        let mut status = 9;
+        // SAFETY: `list` lives until the last dec; the hold ends before.
+        unsafe {
+            // The loop's own reference, which the hold keeps.
+            seq(list as u64).rc.inc();
+            let h = pt_seq_hold(list) as *mut PtSeq;
+            assert_eq!(h, list);
+            assert_eq!(seq(list as u64).rc.get(), 2);
+            assert!(!seq(list as u64).items.is_free());
+            assert_eq!(pt_seq_len_held(h), 2);
+            let got = pt_seq_get_held(h, -1, &mut status);
+            assert_eq!((got, status), (inner as u64, 0));
+            assert_eq!(seq(inner as u64).rc.get(), 4);
+            pt_seq_dec(got as *mut PtSeq);
+            assert_eq!(pt_seq_get_held(h, 2, &mut status), 0);
+            assert_eq!(status, 1);
+            // An ordinary read nests inside the hold.
+            assert_eq!(pt_seq_len(list), 2);
+            pt_seq_release_held(h);
+            pt_seq_release_held(std::ptr::null_mut());
+            assert!(seq(list as u64).items.is_free());
+            assert_eq!(seq(list as u64).rc.get(), 1);
+            pt_seq_dec(list);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn marked_holds_survive_concurrent_readers() {
+        let inner = make(b"li", &[7, 8, 9]);
+        let outer = make(b"lli", &[inner as u64; 8]);
+        mark(b"lli", outer as u64);
+        let p = outer as usize;
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let outer = p as *const PtSeq;
+                    let mut status = 0;
+                    // SAFETY: `outer` stays live until every thread is
+                    // joined; each thread's hold ends before it does.
+                    unsafe {
+                        seq(outer as u64).rc.inc();
+                        let h = pt_seq_hold(outer) as *mut PtSeq;
+                        for k in 0..if cfg!(miri) { 40 } else { 10_000 } {
+                            let got = pt_seq_get_held(h, k % pt_seq_len_held(h), &mut status);
+                            assert_eq!(status, 0);
+                            pt_seq_dec(got as *mut PtSeq);
+                        }
+                        pt_seq_release_held(h);
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            assert!(t.join().is_ok());
+        }
+        // SAFETY: all threads are done; both still live.
+        unsafe {
+            assert!(seq(outer as u64).items.is_free());
             assert_eq!(seq(inner as u64).rc.get(), 9);
             assert_eq!(seq(outer as u64).rc.get(), 1);
             pt_seq_dec(outer);

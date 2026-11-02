@@ -445,9 +445,11 @@ impl FnBuilder<'_, '_> {
 
     /// `for x in s` over a string, list or tuple: by index, re-reading the
     /// length each time as Python does, so appending in the body extends
-    /// the loop. The loop holds its own reference to `s`.
+    /// the loop. The loop holds its own reference to `s`, and for a list
+    /// its body cannot change, a read borrow of it too ([`super::hold`]).
     fn for_seq(&mut self, l: &Looped, s: Operand, item: Ty, span: Span) -> Result<()> {
         let s = self.own(s, span);
+        let (setup, first) = (self.cur, self.blocks.len());
         let counter = self.new_local(Ty::Int);
         self.assign(counter, Rvalue::Use(Operand::Int(0)), span);
         let cur = Operand::Local(counter);
@@ -473,7 +475,9 @@ impl FnBuilder<'_, '_> {
         let next = Rvalue::Int(IntOp::Add, cur, Operand::Int(1));
         self.assign(counter, next, span);
         self.terminate(Term::Goto(head));
-        self.finish_loop(l, other, end)
+        self.finish_loop(l, other, end)?;
+        self.hold_if_unchanged(s, setup, counter, first, span);
+        Ok(())
     }
 
     /// Binds a loop target to the value `next` gives, as a statement of

@@ -108,6 +108,13 @@ pub enum Ty {
     /// value itself is always true. Only `build` makes one; analysis
     /// lowers `map`'s results as a list of the results.
     Results,
+    /// A `for` loop's own reference to the list `types[id]` it walks,
+    /// holding a read borrow of it for the whole loop
+    /// ([`Rvalue::Hold`]): its [`Rvalue::Len`] and [`Rvalue::Index`]
+    /// skip the list's borrow word, and releasing it drops the borrow,
+    /// then the reference. Only `build` makes one, for a loop whose
+    /// statements cannot change any list of that type (atomics cost A).
+    Held(TypeId),
 }
 
 impl Ty {
@@ -129,6 +136,7 @@ impl Ty {
                 | Ty::Exec
                 | Ty::Future
                 | Ty::Results
+                | Ty::Held(_)
         )
     }
 }
@@ -407,6 +415,10 @@ pub enum Rvalue {
     /// takes the next, waits for its task and gives its result, as
     /// [`Rvalue::TaskResult`]; when it raises, the rest are dropped.
     NextResult(Operand),
+    /// `h = Hold(s)`: takes over local `s`'s reference to a list and
+    /// starts a read borrow of it, the value of the [`Ty::Held`] `h`;
+    /// `Forget(s)` follows.
+    Hold(Operand),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -521,6 +533,72 @@ impl Program {
             | Ty::Set(id)
             | Ty::View(id) => self.types.get(id.0),
             _ => None,
+        }
+    }
+}
+
+impl Rvalue {
+    /// The operands an rvalue reads.
+    pub fn operands(&self) -> Vec<Operand> {
+        match self {
+            Rvalue::Use(a)
+            | Rvalue::Neg(a)
+            | Rvalue::Len(a)
+            | Rvalue::ToStr(a)
+            | Rvalue::CopyList(a)
+            | Rvalue::View(a)
+            | Rvalue::Field(a, _)
+            | Rvalue::Wrap(a)
+            | Rvalue::Unwrap(a)
+            | Rvalue::IsNone(a)
+            | Rvalue::ToFloat(a)
+            | Rvalue::BoolToInt(a)
+            | Rvalue::FloatToInt(a)
+            | Rvalue::ParseFloat(a)
+            | Rvalue::ParseInt(a) => vec![*a],
+            Rvalue::Int(_, a, b)
+            | Rvalue::Cmp(_, a, b)
+            | Rvalue::AddOverflows(a, b)
+            | Rvalue::Concat(a, b)
+            | Rvalue::Repeat(a, b)
+            | Rvalue::Index(a, b)
+            | Rvalue::Entry(a, b, _)
+            | Rvalue::Float(_, a, b)
+            | Rvalue::IntPow(a, b) => vec![*a, *b],
+            Rvalue::Contains { hay, needle } => vec![*hay, *needle],
+            Rvalue::Call(_, args)
+            | Rvalue::NewSeq(args)
+            | Rvalue::Std(_, args)
+            | Rvalue::Rust(_, args) => args.clone(),
+            Rvalue::Submit { exec, args, .. } => {
+                std::iter::once(*exec).chain(args.iter().copied()).collect()
+            }
+            Rvalue::TaskResult(a) | Rvalue::NextResult(a) | Rvalue::Hold(a) => vec![*a],
+            Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
+            Rvalue::StrLit(_)
+            | Rvalue::Global(_)
+            | Rvalue::Raised
+            | Rvalue::PendingIs(_)
+            | Rvalue::Catch => Vec::new(),
+        }
+    }
+}
+
+impl Inst {
+    /// Whether this instruction names local `l` anywhere.
+    pub fn mentions(&self, l: LocalId) -> bool {
+        let local = |op: &Operand| *op == Operand::Local(l);
+        match self {
+            Inst::Assign { dest, value, .. } => *dest == l || value.operands().iter().any(local),
+            Inst::Print { args, sep, end } => args.iter().chain(sep).chain(end).any(local),
+            Inst::Retain(x) | Inst::Release(x) | Inst::Forget(x) => *x == l,
+            Inst::Append { list, value, .. } => local(list) || local(value),
+            Inst::SetGlobal { value, .. } => local(value),
+            Inst::DropGlobal(_) => false,
+            Inst::SetItem {
+                list, index, value, ..
+            } => [list, index, value].into_iter().any(local),
+            Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => local(exc),
         }
     }
 }

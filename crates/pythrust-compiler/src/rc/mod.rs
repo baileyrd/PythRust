@@ -121,11 +121,12 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
 }
 
 /// Whether `value` takes over local `p`'s reference: a call's argument
-/// is owned. Every other rvalue borrows its operands and gives a new
-/// reference.
+/// is owned, and a loop's hold takes its list's. Every other rvalue
+/// borrows its operands and gives a new reference.
 fn takes(value: &Rvalue, p: LocalId) -> bool {
     match value {
         Rvalue::Call(_, args) => args.contains(&Operand::Local(p)),
+        Rvalue::Hold(a) => *a == Operand::Local(p),
         Rvalue::Use(_)
         | Rvalue::Int(..)
         | Rvalue::Neg(_)
@@ -201,7 +202,7 @@ fn release_after_calls(block: &mut Block, borrowed: &[BTreeSet<usize>]) {
             .collect();
         for a in locals {
             let rest = &mut block.insts[k + 1..];
-            if let Some(i) = rest.iter_mut().find(|i| mentions(i, a)) {
+            if let Some(i) = rest.iter_mut().find(|i| i.mentions(a)) {
                 *i = Inst::Release(a);
             }
         }
@@ -301,7 +302,7 @@ fn borrows(
                 released = true;
                 break;
             }
-            let read = mentions(i, a);
+            let read = i.mentions(a);
             if read && (gives_up(i, a, borrowed) || !alive) {
                 return None;
             }
@@ -344,12 +345,12 @@ fn last_use(f: &Func, x: LocalId, at: (usize, usize)) -> bool {
                 break;
             }
             if let Inst::Assign { dest, value, .. } = i {
-                if *dest == x && !operands(value).contains(&Operand::Local(x)) {
+                if *dest == x && !value.operands().contains(&Operand::Local(x)) {
                     ended = true;
                     break;
                 }
             }
-            if mentions(i, x) {
+            if i.mentions(x) {
                 return false;
             }
         }
@@ -370,7 +371,7 @@ fn last_use(f: &Func, x: LocalId, at: (usize, usize)) -> bool {
 /// The index of the assignment that last made `a` a plain copy of a
 /// local, and that local, if `a`'s last mention before is it.
 fn copied_from(before: &[Inst], a: LocalId) -> Option<(usize, LocalId)> {
-    let k = before.iter().rposition(|i| mentions(i, a))?;
+    let k = before.iter().rposition(|i| i.mentions(a))?;
     match &before[k] {
         Inst::Assign {
             dest,
@@ -506,67 +507,5 @@ fn gives_up(inst: &Inst, l: LocalId, borrowed: &[BTreeSet<usize>]) -> bool {
 
 /// The first instruction in `insts` that names `l`.
 fn next_mention(insts: &[Inst], l: LocalId) -> Option<&Inst> {
-    insts.iter().find(|i| mentions(i, l))
-}
-
-/// Whether `inst` names local `l` anywhere.
-fn mentions(inst: &Inst, l: LocalId) -> bool {
-    let local = |op: &Operand| *op == Operand::Local(l);
-    match inst {
-        Inst::Assign { dest, value, .. } => *dest == l || operands(value).iter().any(local),
-        Inst::Print { args, sep, end } => args.iter().chain(sep).chain(end).any(local),
-        Inst::Retain(x) | Inst::Release(x) | Inst::Forget(x) => *x == l,
-        Inst::Append { list, value, .. } => local(list) || local(value),
-        Inst::SetGlobal { value, .. } => local(value),
-        Inst::DropGlobal(_) => false,
-        Inst::SetItem {
-            list, index, value, ..
-        } => [list, index, value].into_iter().any(local),
-        Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => local(exc),
-    }
-}
-
-/// The operands an rvalue reads.
-fn operands(value: &Rvalue) -> Vec<Operand> {
-    match value {
-        Rvalue::Use(a)
-        | Rvalue::Neg(a)
-        | Rvalue::Len(a)
-        | Rvalue::ToStr(a)
-        | Rvalue::CopyList(a)
-        | Rvalue::View(a)
-        | Rvalue::Field(a, _)
-        | Rvalue::Wrap(a)
-        | Rvalue::Unwrap(a)
-        | Rvalue::IsNone(a)
-        | Rvalue::ToFloat(a)
-        | Rvalue::BoolToInt(a)
-        | Rvalue::FloatToInt(a)
-        | Rvalue::ParseFloat(a)
-        | Rvalue::ParseInt(a) => vec![*a],
-        Rvalue::Int(_, a, b)
-        | Rvalue::Cmp(_, a, b)
-        | Rvalue::AddOverflows(a, b)
-        | Rvalue::Concat(a, b)
-        | Rvalue::Repeat(a, b)
-        | Rvalue::Index(a, b)
-        | Rvalue::Entry(a, b, _)
-        | Rvalue::Float(_, a, b)
-        | Rvalue::IntPow(a, b) => vec![*a, *b],
-        Rvalue::Contains { hay, needle } => vec![*hay, *needle],
-        Rvalue::Call(_, args)
-        | Rvalue::NewSeq(args)
-        | Rvalue::Std(_, args)
-        | Rvalue::Rust(_, args) => args.clone(),
-        Rvalue::Submit { exec, args, .. } => {
-            std::iter::once(*exec).chain(args.iter().copied()).collect()
-        }
-        Rvalue::TaskResult(a) | Rvalue::NextResult(a) => vec![*a],
-        Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
-        Rvalue::StrLit(_)
-        | Rvalue::Global(_)
-        | Rvalue::Raised
-        | Rvalue::PendingIs(_)
-        | Rvalue::Catch => Vec::new(),
-    }
+    insts.iter().find(|i| i.mentions(l))
 }
