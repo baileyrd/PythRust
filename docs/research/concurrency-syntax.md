@@ -47,3 +47,4 @@ Two points for Nano either way:
 1. Pause marker: B, an expression-covering `pause <expr>` that must cover at least one pause point.
 2. Shared lock: B, a builtin type `shared[T]` built with `shared(v)`, not a keyword.
 3. Inside `with x as n:` on a shared value, `n` writes through. Listed as a deviation from Python when it lands.
+4. Where the marker goes, and the `shared[T]` rules left open here, are decided in [concurrency.md](concurrency.md#the-rest-of-m6c-decided-nano-2026-11-02) (Nano, 2026-11-02).

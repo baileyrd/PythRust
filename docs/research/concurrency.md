@@ -93,9 +93,33 @@ fclone-lite hashes each size group's candidates through an executor. Its groups 
 
 M:N parking, `async`/`await`, process pools, `threading` and its locks, cancellation and timeouts, `Future.done()`/`add_done_callback`/`as_completed`, and handing Pythrust values to Rust threads ([rust-interop.md](rust-interop.md#threads) keeps that closed). A task may call an M6b binding; the binding's "calling thread" is then the worker.
 
+## The rest of M6c (decided, Nano 2026-11-02)
+
+The fclone-lite driver and `pause` are built now. `shared[T]` and channels are parked until a program needs them; the rules below are decided and wait for that program.
+
+**`pause`** ([concurrency-syntax.md](concurrency-syntax.md#pause-marker)):
+
+- Leaving an executor's `with` block needs no marker: the block's end is visible.
+- `for r in pause ex.map(f, xs):` marks every step of the loop; `pause list(ex.map(f, xs))` marks a call that consumes the results. `ex.map(...)` and `ex.submit(...)` themselves do not pause.
+- `fut.result()` is a pause point, so tempered code writes `pause fut.result()`.
+- Once the check lands, tempered code may use executors.
+
+**`shared[T]`** (parked):
+
+- `shared(v)` moves `v`: `v` is a fresh value, or a local not used afterwards and not aliased.
+- A list, dict or set read out of a shared value cannot outlive its `with` block; ints, floats, bools, strings and copies may.
+- Two shared locks held at once in loose code draw a warning with no way to silence it; tempered code rejects it, since acquiring a lock is a pause point.
+- A shared value lives in locals and task arguments only. Widen this when a program needs it.
+
+**Channels** (parked):
+
+- `run` refuses by name at a `get` that would wait forever, because the producer has not been submitted yet. This is a listed deviation.
+- `shutdown()` and `queue.ShutDown` are included. `ShutDown` extends the exception hierarchy, so it is proposed as a subclass of `Exception`, as in CPython 3.13, and Nano confirms before it is added.
+- No queue at module level in this cut.
+
 ## Risks
 
-- **Channels under rule 5.** A task waiting on a queue that a later task feeds would hang under run-at-submit. When channels land, `run` either refuses that shape by name or gains a small cooperative scheduler; the choice goes to Nano with that step.
+- **Channels under rule 5.** A task waiting on a queue that a later task feeds would hang under run-at-submit. `run` refuses that shape by name at the `get` (decided, Nano 2026-11-02; [above](#the-rest-of-m6c-decided-nano-2026-11-02)).
 - **The gate is below wall-time noise.** benchmarks.md's shared-container timings vary by more than 3%, so the gate is measured in instruction counts (`valgrind --tool=cachegrind`, `Ir`), with wall time reported beside it. If marking misses the gate, the fallback is atomic counts only in programs that import `concurrent.futures`, chosen per build.
 - **Memcheck does not see races.** The threaded corpus also runs under a race detector (ThreadSanitizer, or Helgrind/DRD where TSan is unavailable), and the runtime's stress tests run under Miri where they can.
 - **Rule reach.** Rule 4 may reject more CPython programs than expected; the front-end step's corpus measures this before native work starts.
