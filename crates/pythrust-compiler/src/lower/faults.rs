@@ -9,12 +9,13 @@
 //! nonzero literal, an index into anything but a tuple, and unpacking
 //! anything but a tuple fault, as do any `.read()` (a file's, whatever
 //! the receiver's inferred type) and any call to `open`; a call by name to a function that faults
-//! does too, closed over the call graph.
+//! does too, closed over the call graph, and so does a body that
+//! starts a task of one (`submit` or `map`), which takes its results.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{BinOp, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind, UnaryOp};
-use crate::infer::{Type, Types};
+use crate::infer::{scope, Type, Types};
 
 /// The functions in `defs` that may leave a catchable fault pending.
 pub(super) fn faulting<'a>(
@@ -135,6 +136,11 @@ impl<'a> Sites<'a> {
         match &e.kind {
             ExprKind::Call { func, args } => {
                 args.iter().for_each(|a| self.expr(&a.value));
+                // A task's fault is pending where its result is taken,
+                // in this body (M6c).
+                if let Some((name, _, _)) = scope::task_call(e) {
+                    self.calls.insert(name);
+                }
                 match &func.kind {
                     ExprKind::Name(name) => {
                         self.faults |= name == "open";

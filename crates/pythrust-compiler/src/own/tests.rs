@@ -1678,3 +1678,22 @@ fn a5_holds_in_a_function_that_uses_tasks() {
     );
     assert!(mode_err(&src).0.contains("list(...)"), "{src}");
 }
+
+#[test]
+fn a_task_fault_reaches_the_callers_handler() {
+    // `bad` may divide by zero, a fault no `raises` set holds: the
+    // wrapper taking its result may leave it pending for `g`'s handler.
+    let takes = [
+        "return ex.submit(bad, n).result()",
+        "return len(list(ex.map(bad, [n])))",
+    ];
+    for take in takes {
+        let src = format!(
+            "import concurrent.futures\n{ADD}def bad(n: int) -> int:\n    return 1 // n\n\
+             def wrapper(n: int) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        {take}\n\
+             def g(k: int) -> None:\n    a: list[list[int]] = [[0]]\n    b = a[0]\n    try:\n        \
+             print(wrapper(k))\n    except ZeroDivisionError:\n        add(a, b)\ng(0)\n"
+        );
+        assert!(mode_err(&src).0.contains("list(...)"), "{src}");
+    }
+}
