@@ -1,0 +1,17 @@
+import concurrent.futures
+
+
+def double(n):
+    return n * n
+
+
+def run(x):
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        return ex.submit(double, x).result()
+
+
+def outer(y):
+    return run(y) + 1
+
+
+print(outer(2))

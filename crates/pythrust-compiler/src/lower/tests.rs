@@ -955,3 +955,44 @@ fn ownership_stays_precise_around_stub_calls() {
         .unwrap_or_default();
     assert!(err.contains("write `mut xs`"), "{err}");
 }
+
+const TASKS: &str = "import concurrent.futures\n\
+def sq(x: int) -> int:\n    return x * x\n\
+def run(xs: list[int]) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+a = ex.submit(sq, 3)\n        rs = ex.map(sq, xs)\n        \
+return a.result() + len(list(rs))\n\
+print(run([1, 2]))\n";
+
+#[test]
+fn build_refuses_tasks() {
+    let (d, text) = rejected(TASKS);
+    assert!(d.message.contains("tasks (`concurrent.futures`)"), "{d}");
+    assert!(text.starts_with("with "), "{text}");
+}
+
+#[test]
+fn tasks_lower_as_calls_for_analysis() {
+    let module = parser::parse(&lexer::lex(TASKS).unwrap()).unwrap();
+    let types = infer::infer(&module).unwrap();
+    let p = super::lower_every(&module, &types).unwrap();
+    let sq = p.funcs.iter().position(|f| f.name == "sq").unwrap();
+    let run = p.funcs.iter().find(|f| f.name == "run").unwrap();
+    let insts = || run.blocks.iter().flat_map(|b| &b.insts);
+    let calls = insts()
+        .filter(|i| matches!(i, Inst::Assign { value: Rvalue::Call(id, _), .. } if id.0 == sq));
+    // One for `submit`, one in `map`'s loop.
+    assert_eq!(calls.count(), 2);
+    let made = insts().find_map(|i| match i {
+        Inst::Assign {
+            dest,
+            value: Rvalue::NewSeq(items),
+            ..
+        } if items.is_empty() => Some(*dest),
+        _ => None,
+    });
+    let out = made.expect("`map` makes its results list");
+    assert!(matches!(run.locals[out.0], Ty::List(_)));
+    let appended =
+        insts().any(|i| matches!(i, Inst::Append { list: Operand::Local(l), .. } if *l == out));
+    assert!(appended, "each result is appended");
+}

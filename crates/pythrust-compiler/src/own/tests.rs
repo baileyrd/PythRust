@@ -1,4 +1,4 @@
-use super::{analyze, check, modes, warnings, Analysis, Mode, Param, Precision, Strs};
+use super::{analyze, check, modes, Analysis, Mode, Param, Precision, Strs};
 use crate::ast::{Mode as Temper, ParamMode, StmtKind};
 use crate::diag::DiagKind;
 use crate::{infer, lexer, parser};
@@ -1409,31 +1409,71 @@ fn tasks_leave_the_other_functions_checked() {
         mode_err(&both).0.contains("copy instead of sharing it"),
         "{both}"
     );
-    let a = analyzed(TASKS);
-    assert_eq!(a.precision, Precision::Precise);
-    assert!(a.opaque.contains("called") && a.opaque.contains("unused"));
-    assert!(!a.opaque.contains("sq"));
+    assert_eq!(analyzed(TASKS).precision, Precision::Precise);
+}
+
+/// `run` submits `f` over `xs` and reads the result.
+fn task_over(f: &str, body: &str) -> String {
+    format!(
+        "import concurrent.futures\n{f}\
+         def run(xs: list[int]) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         {body}\nprint(run([1]))\n"
+    )
 }
 
 #[test]
-fn a_function_that_reaches_a_task_body_is_not_diagnosed() {
-    // `keep` passes `xs` to `run`, whose body nothing summarizes yet: its
-    // written `mut` may be too weak, but nothing can tell.
+fn a_task_body_is_summarized_where_it_is_submitted() {
+    // Tasks lower as calls (M6c step 3b): what a task does to an
+    // argument is what the submitter does to it.
+    let add = "def add(xs: list[int], n: int) -> int:\n    xs.append(n)\n    return n\n";
+    let len = "def size(xs: list[int]) -> int:\n    return len(xs)\n";
+    let changed = analyzed(&task_over(add, "return ex.submit(add, xs, 1).result()"));
+    assert_eq!(changed.precision, Precision::Precise);
+    assert_eq!(changed.funcs["run"].params[0].mode, Mode::Mut);
+    let read = analyzed(&task_over(len, "return ex.submit(size, xs).result()"));
+    assert_eq!(read.funcs["run"].params[0].mode, Mode::Read);
+    let futs = "fs = [ex.submit(size, xs)]\n        fs.append(ex.submit(add, xs, 2))\n        \
+                return fs[0].result() + fs[1].result()";
+    let both = analyzed(&task_over(&format!("{add}{len}"), futs));
+    assert_eq!(both.funcs["run"].params[0].mode, Mode::Mut);
+}
+
+#[test]
+fn map_runs_its_function_on_each_element() {
+    let sq = "def sq(x: int) -> int:\n    return x * x\n";
+    let mapped = analyzed(&task_over(sq, "return len(list(ex.map(sq, xs)))"));
+    assert_eq!(mapped.precision, Precision::Precise);
+    assert_eq!(mapped.funcs["run"].params[0].mode, Mode::Read);
+    let keep = "kept: list[list[int]] = []\n\
+                def hold(row: list[int]) -> int:\n    kept.append(row)\n    return 0\n";
+    let src = format!(
+        "import concurrent.futures\n{keep}\
+         def run(rows: list[list[int]]) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         return len(list(ex.map(hold, rows)))\nprint(run([[1]]))\n"
+    );
+    assert_eq!(analyzed(&src).funcs["run"].params[0].mode, Mode::Owned);
+}
+
+#[test]
+fn a_mode_a_task_function_writes_is_checked() {
+    // Before step 3b, a function reaching a task body was not diagnosed:
+    // `run` writes `mut`, but its task keeps `xs`.
     let src = "import concurrent.futures\n\
-def sq(x: int) -> int:\n    return x * x\n\
-def run(xs: list[int]) -> None:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
-print(ex.submit(sq, len(xs)).result())\n\
-def keep(mut xs: list[int]) -> None:\n    run(xs)\nkeep([1])\n";
-    assert_eq!(checked(src), Ok(()));
-    let a = analyzed(src);
-    assert!(a.opaque.contains("keep"), "{:?}", a.opaque);
+kept: list[list[int]] = []\n\
+def hold(xs: list[int]) -> int:\n    kept.append(xs)\n    return 0\n\
+def run(mut xs: list[int]) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+return ex.submit(hold, xs).result()\n\
+print(run([1]))\n";
+    let (msg, at) = mode_err(src);
+    assert_eq!(at, "xs", "{msg}");
+    assert!(msg.contains("`run`") && msg.contains("owned"), "{msg}");
 }
 
 #[test]
-fn a_generic_task_function_with_an_open_result_is_an_error() {
-    // `run`'s result type comes only from its body, which ownership
-    // checks cannot see until tasks lower (step 3b): a named error, not a
-    // silent fallback (Nano, 2026-11-02).
+fn a_generic_task_function_lowers_with_its_result() {
+    // Once a named error (an open result only the body decides); a task
+    // body lowers now, so the generic function is analyzed and the rest
+    // of the program checked.
     let used = "import concurrent.futures\n\
 def dbl(n):\n    return n * n\n\
 def run(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
@@ -1446,19 +1486,13 @@ def task(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        p
 def wrap(x):\n    task(x)\n    return x\n\
 temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
 wrap(2)\ngrow([1])\n";
-    for (src, name) in [(used, "run"), (discarded, "task")] {
-        let (msg, at) = mode_err(src);
-        assert_eq!(at, name, "{msg}");
-        assert!(
-            msg.contains(&format!("annotate `{name}`'s parameters and result")),
-            "{msg}"
+    for src in [used, discarded] {
+        assert_eq!(analyzed(src).precision, Precision::Precise, "{src}");
+        assert_eq!(
+            mode_err(src).0,
+            "tempered `grow` changes `xs` in place; write `mut xs`"
         );
     }
-    // The fix it names: annotated, it lowers, and `grow` is checked.
-    let annotated = used.replace("def run(x):", "def run(x: int) -> int:");
-    assert!(mode_err(&annotated).0.contains("write `mut xs`"));
-    let annotated = discarded.replace("def task(x):", "def task(x: int) -> int:");
-    assert!(mode_err(&annotated).0.contains("write `mut xs`"));
 }
 
 #[test]
@@ -1479,29 +1513,6 @@ wrap(2)\ngrow([1])\n";
     // Without tasks, the same gap stays the conservative fallback.
     let plain = "x = print(7)\ndef print(n):\n    return 1\n";
     assert_eq!(checked(plain), Ok(()));
-}
-
-#[test]
-fn a_tempered_function_whose_checks_are_skipped_is_warned() {
-    // No program reaches this yet (tempered code uses no executor and
-    // calls only tempered code), so the skipped set is given by hand.
-    let src = "temper def f(xs: list[int]) -> int:\n    return len(xs)\n\
-               def g(xs: list[int]) -> int:\n    return len(xs)\nprint(f([1]), g([2]))\n";
-    let module = match lexer::lex(src).and_then(|t| parser::parse(&t)) {
-        Ok(m) => m,
-        Err(d) => panic!("parse failed: {d}"),
-    };
-    let mut a = analyzed(src);
-    assert_eq!(warnings(&module, &a), Vec::new());
-    a.opaque.extend(["f".to_string(), "g".to_string()]);
-    let got: Vec<String> = warnings(&module, &a)
-        .into_iter()
-        .map(|w| w.message)
-        .collect();
-    assert_eq!(
-        got,
-        ["ownership checks skipped for `f`: it may reach tasks (pending 3b)"]
-    );
 }
 
 /// One program per entry of grammar.md's known-unchecked list (M6c,
@@ -1572,5 +1583,130 @@ fn known_unchecked_task_gaps_stay_listed() {
             UNCHECKED.iter().any(|(u, _)| u == id),
             "grammar.md lists `unchecked:{id}` with no program here"
         );
+    }
+}
+
+#[test]
+fn code_after_a_task_that_always_raises_is_checked() {
+    // `run` keeps the task's exception for `result()`, so the code after
+    // `submit` or `map` runs: it is not dead.
+    let raises = "def ok(n):\n    raise ValueError(\"x\")\n";
+    for start in ["fut = ex.submit(ok, 1)", "rs = ex.map(ok, [1])"] {
+        let src = format!(
+            "import concurrent.futures\n{ADD}{raises}def g() -> None:\n    rows: list[list[int]] = []\n    row = [1]\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        {start}\n        \
+             add(rows, row)\n        add(rows, row)\n    print(rows)\ng()\n"
+        );
+        assert!(mode_err(&src).0.contains("list(...)"), "{src}");
+    }
+}
+
+#[test]
+fn a_task_raises_where_its_result_is_taken() {
+    // The handler sees `b = a[0]`, which ran after `submit` and before
+    // the step that took the result raised.
+    let bad =
+        "def bad(n: int) -> int:\n    if n > 0:\n        raise ValueError(\"x\")\n    return n\n";
+    let takes = [
+        "fut = ex.submit(bad, k)\n            b = a[0]\n            print(fut.result())",
+        "rs = ex.map(bad, [k])\n            b = a[0]\n            for r in rs:\n                print(r)",
+        "rs = ex.map(bad, [k])\n            b = a[0]\n            print(list(rs))",
+        "rs = ex.map(bad, [k])\n            b = a[0]\n            print(1 in rs)",
+    ];
+    for take in takes {
+        let src = format!(
+            "import concurrent.futures\n{ADD}{bad}def g(k: int) -> None:\n    a: list[list[int]] = [[0]]\n    b = [1]\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        try:\n            {take}\n        \
+             except ValueError:\n            add(a, b)\n    print(a)\ng(1)\n"
+        );
+        assert!(mode_err(&src).0.contains("list(...)"), "{src}");
+    }
+}
+
+#[test]
+fn map_lowers_over_every_iterable() {
+    let id = "def same(x):\n    return x\n";
+    for xs in [
+        "{1: 2}",
+        "{1, 2}",
+        "{1: 2}.items()",
+        "range(3)",
+        "()",
+        "\"ab\"",
+        "(1, 2)",
+    ] {
+        assert_maps(id, "same", xs);
+    }
+    // No call decides an empty map's result type, whatever its shape.
+    for f in [
+        "def same(x):\n    return (x * x, x * x)\n",
+        "def same(x):\n    return [x * x]\n",
+        "def same(x):\n    return {x * x: [x]}\n",
+    ] {
+        assert_maps(f, "same", "()");
+    }
+}
+
+/// `ex.map(f, xs)` with its results read, in an annotated function.
+fn assert_maps(def: &str, f: &str, xs: &str) {
+    let src = format!(
+        "import concurrent.futures\n{def}def run() -> None:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         print(list(ex.map({f}, {xs})))\nrun()\n"
+    );
+    assert_eq!(analyzed(&src).precision, Precision::Precise, "{src}");
+    assert_eq!(checked(&src), Ok(()), "{src}");
+}
+
+#[test]
+fn a_task_default_and_a_nested_task_are_followed() {
+    let add =
+        "def add(n: int, acc: list[int] = []) -> int:\n    acc.append(n)\n    return len(acc)\n";
+    let src = format!(
+        "import concurrent.futures\n{add}def run() -> int:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         return ex.submit(add, 1).result() + len(list(ex.map(add, [2, 3])))\nprint(run())\n"
+    );
+    assert_eq!(analyzed(&src).precision, Precision::Precise);
+    assert_eq!(checked(&src), Ok(()));
+    // `outer` runs `grow` as a task of its own; `run` runs `outer`.
+    let grow = "def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return 0\n";
+    let outer = "def outer(xs: list[int]) -> int:\n    \
+                 with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+                 return ex.submit(grow, xs).result()\n";
+    let nested = task_over(
+        &format!("{grow}{outer}"),
+        "return ex.submit(outer, xs).result()",
+    );
+    assert_eq!(analyzed(&nested).funcs["run"].params[0].mode, Mode::Mut);
+}
+
+#[test]
+fn a5_holds_in_a_function_that_uses_tasks() {
+    let src = format!(
+        "import concurrent.futures\n{ADD}def sq(x: int) -> int:\n    return x * x\n\
+         def g() -> None:\n    row = [1]\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         print(ex.submit(sq, 2).result())\n        add([row], row)\ng()\n"
+    );
+    assert!(mode_err(&src).0.contains("list(...)"), "{src}");
+}
+
+#[test]
+fn a_task_fault_reaches_the_callers_handler() {
+    // `bad` may divide by zero, a fault no `raises` set holds: the
+    // wrapper taking its result may leave it pending for `g`'s handler.
+    let takes = [
+        "return ex.submit(bad, n).result()",
+        "return len(list(ex.map(bad, [n])))",
+    ];
+    for take in takes {
+        let src = format!(
+            "import concurrent.futures\n{ADD}def bad(n: int) -> int:\n    return 1 // n\n\
+             def wrapper(n: int) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        {take}\n\
+             def g(k: int) -> None:\n    a: list[list[int]] = [[0]]\n    b = a[0]\n    try:\n        \
+             print(wrapper(k))\n    except ZeroDivisionError:\n        add(a, b)\ng(0)\n"
+        );
+        assert!(mode_err(&src).0.contains("list(...)"), "{src}");
     }
 }

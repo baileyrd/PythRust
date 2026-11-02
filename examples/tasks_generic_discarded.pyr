@@ -1,0 +1,15 @@
+import concurrent.futures
+
+
+def task(x):
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        pass
+    return x * x
+
+
+def wrap(x):
+    task(x)
+    return x
+
+
+print(wrap(2))
