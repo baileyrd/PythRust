@@ -303,12 +303,11 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        self.bind_iteration(l.target, |b| b.entry(t, cur, part, span))?;
-        self.loop_body(l.body, latch, end)?;
+        self.iteration(l, |b| b.entry(t, cur, part, span), latch, end)?;
         self.switch_to(latch);
         self.assign(counter, Rvalue::Int(IntOp::Add, cur, Operand::Int(1)), span);
         self.terminate(Term::Goto(head));
-        self.finish_loop(l.orelse, other, end)
+        self.finish_loop(l, other, end)
     }
 
     /// The key of entry `i` of dict or set `t`, a new temporary.

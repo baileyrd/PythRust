@@ -495,7 +495,12 @@ impl<'a> FnBuilder<'_, 'a> {
     fn call(&mut self, func: &Expr, args: &[Arg], span: Span) -> Result<Operand> {
         let name = match &func.kind {
             ExprKind::Name(name) => name,
-            ExprKind::Attr { value, attr } => return self.method(value, &attr.name, args, span),
+            ExprKind::Attr { value, attr } => {
+                if let Some(op) = self.task_call(value, &attr.name, args, span)? {
+                    return Ok(op);
+                }
+                return self.method(value, &attr.name, args, span);
+            }
             _ => return Err(unsupported(span, "calling this kind of expression")),
         };
         let mut def = self.cx.defs.get(name.as_str()).copied();
@@ -527,8 +532,23 @@ impl<'a> FnBuilder<'_, 'a> {
         let Some(def) = def else {
             return self.builtin(name, args, ops, span);
         };
+        let slots = bind_params(def, args, ops)?;
+        let node = self.node_type(span)?;
+        self.call_def(def, slots, node, span)
+    }
+
+    /// A call of `def` with `slots`, its arguments in parameter order
+    /// (`None` where the default applies), whose result has type `node`.
+    pub(super) fn call_def(
+        &mut self,
+        def: &'a FuncDef,
+        slots: Vec<Option<Operand>>,
+        node: &'a Type,
+        span: Span,
+    ) -> Result<Operand> {
+        let name = def.name.name.as_str();
         let mut bound = Vec::new();
-        for (k, op) in bind_params(def, args, ops)?.into_iter().enumerate() {
+        for (k, op) in slots.into_iter().enumerate() {
             bound.push(match op {
                 Some(op) => op,
                 None => self.default_arg(def, k, span)?,
@@ -548,10 +568,9 @@ impl<'a> FnBuilder<'_, 'a> {
         // In generic code a call's node type may hold variables only the
         // callee's body decides; its instance then does, and binds them
         // here for the nodes that share them.
-        let node = self.node_type(span)?;
         let (id, ret) = match super::is_closed(node, &self.subst) {
             true => {
-                let ret = self.ty_at(span)?;
+                let ret = self.concrete(node, span)?;
                 (self.cx.instance(def, tys, ret, span)?, ret)
             }
             false => self.open_call(def, tys, node, span)?,
@@ -869,7 +888,11 @@ fn type_name(ty: Ty) -> &'static str {
 /// `ops`, the values of `args`, in `def`'s parameter order: positional
 /// first, then keywords by name; `None` where the default applies.
 /// Inference rejected every other shape.
-fn bind_params(def: &FuncDef, args: &[Arg], ops: Vec<Operand>) -> Result<Vec<Option<Operand>>> {
+pub(super) fn bind_params(
+    def: &FuncDef,
+    args: &[Arg],
+    ops: Vec<Operand>,
+) -> Result<Vec<Option<Operand>>> {
     let mut slots: Vec<Option<Operand>> = vec![None; def.params.len()];
     for (next, (a, op)) in args.iter().zip(ops).enumerate() {
         let k = match &a.name {

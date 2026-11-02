@@ -15,6 +15,7 @@ mod opt;
 mod seq;
 mod stmt;
 mod table;
+mod tasks;
 mod types;
 mod vars;
 
@@ -151,7 +152,6 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         waits: usize::MAX,
         diverges: HashSet::new(),
         reach,
-        opaque: BTreeSet::new(),
     };
     let main = cx.reserve();
     let func = with_hints(|hints| {
@@ -190,7 +190,6 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         types: cx.seqs.into_vec(),
         globals,
         global_names,
-        opaque: cx.opaque,
     })
 }
 
@@ -221,8 +220,6 @@ struct Cx<'a> {
     /// needs their own result first.
     diverges: HashSet<FuncId>,
     reach: Reach,
-    /// Instances lowered without their bodies ([`Program::opaque`]).
-    opaque: BTreeSet<FuncId>,
 }
 
 /// An instance waiting to be lowered.
@@ -431,12 +428,6 @@ impl<'a> Cx<'a> {
 
     fn instance_attempt(&mut self, job: &Job<'a>, hints: &Hints) -> Result<Attempt<Body>> {
         let f = job.def;
-        if self.reach == Reach::Every && !scope::withs(&f.body).is_empty() {
-            let Some(ret) = job.ret else {
-                return Err(open_task_result(f));
-            };
-            return Ok(Attempt::Done(self.opaque_body(job, ret)));
-        }
         let mut scope = scope::assigned(&f.body);
         scope.extend(f.params.iter().map(|p| p.name.name.clone()));
         let mut b = FnBuilder::new(self, job.subst.clone(), scope, job.ret.unwrap_or(Ty::None));
@@ -467,21 +458,6 @@ impl<'a> Cx<'a> {
         let skipped = b.skipped;
         let func = b.finish(&f.name.name, params);
         Ok(Attempt::Done(Body::Lowered(func, skipped)))
-    }
-}
-
-impl<'a> Cx<'a> {
-    /// An instance whose body uses tasks, for analysis: its parameters
-    /// and an unreachable body ([`Program::opaque`]). One whose result
-    /// type only its body decides stays a lowering gap.
-    fn opaque_body(&mut self, job: &Job<'a>, ret: Ty) -> Body {
-        let f = job.def;
-        let mut b = FnBuilder::new(self, job.subst.clone(), BTreeSet::new(), ret);
-        let params: Vec<LocalId> = job.args.iter().map(|ty| b.new_local(*ty)).collect();
-        b.terminate(Term::Unreachable);
-        let func = b.finish(&f.name.name, params);
-        self.opaque.insert(job.id);
-        Body::Lowered(func, false)
     }
 }
 
@@ -542,9 +518,13 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
             let item = settle(t, subst, bound, seqs);
             seqs.view(ir_view(*view), item)
         }
-        // Never a result: they stay in the function that made them, and
-        // a function using them does not lower.
-        Type::Executor | Type::Future(_) | Type::Results(_) => Ty::None,
+        // As [`concrete`] gives them.
+        Type::Executor => Ty::None,
+        Type::Future(t) => settle(t, subst, bound, seqs),
+        Type::Results(t) => {
+            let elem = settle(t, subst, bound, seqs);
+            seqs.list(elem)
+        }
     }
 }
 
@@ -580,6 +560,8 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
             let fields = seqs.fields(ty).map(<[Ty]>::to_vec).unwrap_or_default();
             ts.len() == fields.len() && ts.iter().zip(fields).all(|(t, f)| bind(t, f, seqs, subst))
         }
+        (Type::Future(t), _) => bind(t, ty, seqs, subst),
+        (Type::Results(t), Ty::List(_)) => seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst)),
         (Type::Set(t), Ty::Set(_)) | (Type::View(_, t), Ty::View(_)) => {
             seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst))
         }
@@ -594,7 +576,8 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         | (Type::Range, Ty::Range)
         | (Type::Exception, Ty::Exc)
         | (Type::Bytes, Ty::Bytes)
-        | (Type::File, Ty::File) => true,
+        | (Type::File, Ty::File)
+        | (Type::Executor, Ty::None) => true,
         _ => false,
     }
 }
@@ -995,8 +978,15 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::Exception => Ok(Ty::Exc),
         Type::Bytes => Ok(Ty::Bytes),
         Type::File => Ok(Ty::File),
-        Type::Executor | Type::Future(_) | Type::Results(_) => {
-            Err(unsupported(span, "tasks (`concurrent.futures`)"))
+        // Tasks, for analysis ([`FnBuilder::task_call`]): an executor
+        // holds nothing, a future is its task's result, and `map`'s
+        // results are a list of them. `build` refuses the `with` that
+        // makes them all.
+        Type::Executor => Ok(Ty::None),
+        Type::Future(t) => concrete(t, subst, seqs, span),
+        Type::Results(t) => {
+            let elem = concrete(t, subst, seqs, span)?;
+            Ok(seqs.list(elem))
         }
         // Open parts, as in `{}` or `set()` nothing constrains: the
         // table stays empty, so any slot type will do.
@@ -1051,22 +1041,6 @@ pub(super) fn unsupported(span: Span, what: &str) -> Diagnostic {
         span,
         message: format!("the native backend does not support {what} yet"),
         kind: DiagKind::Backend,
-    }
-}
-
-/// A generic function using tasks whose result type only its body
-/// decides: analysis cannot see that body until tasks lower (M6c step
-/// 3b), and Nano chose a named error over checking nothing (2026-11-02).
-/// [`crate::own::check`] reports it.
-fn open_task_result(f: &FuncDef) -> Diagnostic {
-    let name = &f.name.name;
-    Diagnostic {
-        span: f.name.span,
-        message: format!(
-            "`{name}` uses tasks, and only its body decides its result type, which the \
-             ownership checks cannot see yet; annotate `{name}`'s parameters and result"
-        ),
-        kind: DiagKind::Type,
     }
 }
 

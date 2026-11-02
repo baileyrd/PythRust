@@ -11,11 +11,21 @@ use crate::span::Span;
 use super::table::Part;
 use super::{unsupported, FnBuilder, Loop};
 
-/// A `for` loop's parts other than what it iterates.
-pub(super) struct Looped<'s> {
-    pub(super) target: &'s Target,
-    pub(super) body: &'s Block,
-    pub(super) orelse: &'s Block,
+/// What a loop does with each item.
+pub(super) enum Looped<'s> {
+    /// A `for` statement's target, body and `else`.
+    For {
+        target: &'s Target,
+        body: &'s Block,
+        orelse: &'s Block,
+    },
+    /// `ex.map(f, xs)` (M6c): runs the task `f` on the item and appends
+    /// its result to `out` ([`FnBuilder::map_item`]).
+    Map {
+        f: &'s str,
+        out: LocalId,
+        span: Span,
+    },
 }
 
 /// A generic function's result type that no `return` decides first.
@@ -86,7 +96,7 @@ impl FnBuilder<'_, '_> {
             } => self.for_stmt(target, iter, body, orelse),
             StmtKind::Raise(value) => self.raise_stmt(value, s.span),
             StmtKind::Try { body, handlers } => self.try_stmt(body, handlers),
-            StmtKind::With { .. } => Err(unsupported(s.span, "tasks (`concurrent.futures`)")),
+            StmtKind::With { binding, body, .. } => self.with_stmt(binding, body, s.span),
         }
     }
 
@@ -321,7 +331,7 @@ impl FnBuilder<'_, '_> {
         body: &Block,
         orelse: &Block,
     ) -> Result<()> {
-        let looped = Looped {
+        let looped = Looped::For {
             target,
             body,
             orelse,
@@ -348,12 +358,17 @@ impl FnBuilder<'_, '_> {
             return self.for_table(&looped, d, part, iter.span);
         }
         let s = self.expr(iter)?;
+        self.for_value(&looped, s, iter.span)
+    }
+
+    /// A loop over the value `s`, already evaluated.
+    pub(super) fn for_value(&mut self, l: &Looped, s: Operand, span: Span) -> Result<()> {
         if let Ty::Dict(_) | Ty::Set(_) = self.ty(s) {
-            return self.for_table(&looped, s, Part::Key, iter.span);
+            return self.for_table(l, s, Part::Key, span);
         }
         if self.ty(s) == Ty::Range {
-            let bounds = [0, 1, 2].map(|k| self.temp(Ty::Int, Rvalue::Field(s, k), iter.span));
-            return self.for_range(&looped, bounds.into(), iter.span);
+            let bounds = [0, 1, 2].map(|k| self.temp(Ty::Int, Rvalue::Field(s, k), span));
+            return self.for_range(l, bounds.into(), span);
         }
         if self
             .cx
@@ -363,21 +378,24 @@ impl FnBuilder<'_, '_> {
         {
             // `for x in ()`: the body never runs, so its target is never
             // bound and keeps whatever it held; only `else` runs.
-            return self.block(orelse);
+            return match l {
+                Looped::For { orelse, .. } => self.block(orelse),
+                Looped::Map { .. } => Ok(()),
+            };
         }
         let item = match self.ty(s) {
             Ty::Str => Ty::Str,
-            ty @ Ty::List(_) => self.slot_ty(ty, 0, iter.span)?,
+            ty @ Ty::List(_) => self.slot_ty(ty, 0, span)?,
             ty @ Ty::View(_) => self.cx.seqs.elem(ty).unwrap_or(Ty::None),
-            ty @ Ty::Tuple(_) => self.tuple_item(ty, iter.span)?,
+            ty @ Ty::Tuple(_) => self.tuple_item(ty, span)?,
             _ => {
                 return Err(unsupported(
-                    iter.span,
+                    span,
                     "`for` over anything but `range(...)`, a string, a list or a tuple",
                 ))
             }
         };
-        self.for_seq(&looped, s, item, iter.span)
+        self.for_seq(l, s, item, span)
     }
 
     /// The one field type of a non-empty tuple `for` iterates: inference
@@ -410,13 +428,17 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        self.bind_iteration(l.target, |b| Ok(b.temp(item, Rvalue::Index(s, cur), span)))?;
-        self.loop_body(l.body, latch, end)?;
+        self.iteration(
+            l,
+            |b| Ok(b.temp(item, Rvalue::Index(s, cur), span)),
+            latch,
+            end,
+        )?;
         self.switch_to(latch);
         let next = Rvalue::Int(IntOp::Add, cur, Operand::Int(1));
         self.assign(counter, next, span);
         self.terminate(Term::Goto(head));
-        self.finish_loop(l.orelse, other, end)
+        self.finish_loop(l, other, end)
     }
 
     /// Binds a loop target to the value `next` gives, as a statement of
@@ -434,15 +456,37 @@ impl FnBuilder<'_, '_> {
         })
     }
 
-    /// Lowers the `else` of a loop in `other`, then continues at `end`.
-    pub(super) fn finish_loop(
+    /// One iteration of `l`: binds the item `next` gives and runs the
+    /// body, which continues at `latch` or leaves for `end`.
+    pub(super) fn iteration(
         &mut self,
-        orelse: &Block,
-        other: BlockId,
+        l: &Looped,
+        next: impl FnOnce(&mut Self) -> Result<Operand>,
+        latch: BlockId,
         end: BlockId,
     ) -> Result<()> {
+        match l {
+            Looped::For { target, body, .. } => {
+                self.bind_iteration(target, next)?;
+                self.loop_body(body, latch, end)
+            }
+            Looped::Map { f, out, span } => {
+                self.pooled_stmt(|b| {
+                    let x = next(b)?;
+                    b.map_item(f, *out, x, *span)
+                })?;
+                self.terminate(Term::Goto(latch));
+                Ok(())
+            }
+        }
+    }
+
+    /// Lowers the `else` of a loop in `other`, then continues at `end`.
+    pub(super) fn finish_loop(&mut self, l: &Looped, other: BlockId, end: BlockId) -> Result<()> {
         self.switch_to(other);
-        self.block(orelse)?;
+        if let Looped::For { orelse, .. } = l {
+            self.block(orelse)?;
+        }
         self.terminate(Term::Goto(end));
         self.switch_to(end);
         Ok(())
@@ -472,8 +516,7 @@ impl FnBuilder<'_, '_> {
             orelse: other,
         });
         self.switch_to(enter);
-        self.bind_iteration(l.target, |_| Ok(cur))?;
-        self.loop_body(l.body, latch, end)?;
+        self.iteration(l, |_| Ok(cur), latch, end)?;
         self.switch_to(latch);
         let over = self.temp(Ty::Bool, Rvalue::AddOverflows(cur, step), iter_span);
         self.terminate(Term::Branch {
@@ -484,7 +527,7 @@ impl FnBuilder<'_, '_> {
         self.switch_to(step_on);
         self.assign(counter, Rvalue::Int(IntOp::Add, cur, step), iter_span);
         self.terminate(Term::Goto(head));
-        self.finish_loop(l.orelse, other, end)
+        self.finish_loop(l, other, end)
     }
 
     /// The arguments of `iter` if it is a call to the builtin `range`.

@@ -146,14 +146,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (module, types, skipped) = match front(&src, &rust) {
+    let (module, types) = match front(&src, &rust) {
         Ok(checked) => checked,
         Err(diag) => {
             eprint!("{}", sources.render(&diag));
             return ExitCode::FAILURE;
         }
     };
-    for w in types.warnings().iter().chain(&skipped) {
+    for w in types.warnings() {
         eprint!("{}", sources.render_warning(w));
     }
     match inv.command {
@@ -233,15 +233,13 @@ fn parse_args(args: &[String]) -> Result<Invocation<'_>, String> {
 
 /// The checks `run`, `check` and `build` share: lex, parse, infer, and
 /// check ownership over every function. All finish before anything runs.
-/// `import` may name one of `rust`. Also the ownership checks' warnings.
-fn front(src: &str, rust: &[Binding]) -> pythrust_compiler::Result<(Module, Types, Vec<Warning>)> {
+/// `import` may name one of `rust`.
+fn front(src: &str, rust: &[Binding]) -> pythrust_compiler::Result<(Module, Types)> {
     let tokens = lexer::lex(src)?;
     let module = parser::parse_with(&tokens, rust)?;
     let types = infer::infer(&module)?;
-    let analysis = own::analyze(&module, &types);
-    own::check(&module, &analysis)?;
-    let skipped = own::warnings(&module, &analysis);
-    Ok((module, types, skipped))
+    own::check(&module, &own::analyze(&module, &types))?;
+    Ok((module, types))
 }
 
 /// Flushes program output; a failure (say, a closed pipe) is a runtime error.
@@ -678,7 +676,7 @@ mod tests {
     /// then the program for `run`.
     fn exec(command: Command, src: &str) -> (pythrust_compiler::Result<()>, String) {
         let mut out = Vec::new();
-        let result = front(src, &[]).and_then(|(module, types, _)| match command {
+        let result = front(src, &[]).and_then(|(module, types)| match command {
             Command::Run => interp::run(&module, &types, &["f.pyr".to_string()], &mut out),
             Command::Check | Command::Build => Ok(()),
         });
@@ -686,7 +684,7 @@ mod tests {
     }
 
     fn compiled(src: &str) -> pythrust_compiler::Result<Vec<u8>> {
-        let (module, types, _) = front(src, &[])?;
+        let (module, types) = front(src, &[])?;
         compile(&Sources::new("f.pyr", src), &module, &types)
     }
 
@@ -735,7 +733,7 @@ mod tests {
     #[test]
     fn checks_pass_with_warnings_and_render_them_at_the_clause() {
         let src = "def f(n: int) -> int raises Exception:\n    return n\n";
-        let (_, types, _) = front(src, &[]).unwrap();
+        let (_, types) = front(src, &[]).unwrap();
         let [w] = types.warnings() else {
             panic!("{:?}", types.warnings());
         };
