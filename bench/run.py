@@ -43,7 +43,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=5)
     runs = parser.parse_args().runs
-    head = f"{'benchmark':<16} {'native s (min-max)':>24} {'cpython s (min-max)':>25}"
+    head = f"{'benchmark':<20} {'native s (min-max)':>24} {'cpython s (min-max)':>25}"
     print(f"{head} {'speedup':>8}")
     with tempfile.TemporaryDirectory() as tmp:
         for src in sorted((ROOT / "bench").glob("*.pyr")):
@@ -55,7 +55,7 @@ def main() -> None:
             if out != expected:
                 raise SystemExit(f"{src.name}: native output differs from CPython")
             speedup = statistics.median(cpython) / statistics.median(native)
-            print(f"{src.stem:<16} {spread(native):>24} {spread(cpython):>25} {speedup:>7.1f}x")
+            print(f"{src.stem:<20} {spread(native):>24} {spread(cpython):>25} {speedup:>7.1f}x")
 
 
 if __name__ == "__main__":

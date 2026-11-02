@@ -1,0 +1,27 @@
+# Control for tasks_cpu.pyr: the same eight chunks, called in turn.
+def steps(n: int) -> int:
+    count = 0
+    while n != 1:
+        if n % 2 == 0:
+            n = n // 2
+        else:
+            n = 3 * n + 1
+        count += 1
+    return count
+
+
+def chunk(start: int) -> int:
+    total = 0
+    for i in range(start, start + 100000):
+        total += steps(i)
+    return total
+
+
+def main() -> None:
+    total = 0
+    for start in range(1, 800001, 100000):
+        total += chunk(start)
+    print(total)
+
+
+main()

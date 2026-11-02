@@ -13,13 +13,11 @@
 use crate::sync::{Count, Slot};
 use std::fs;
 use std::io::{self, Read};
-use std::sync::atomic::Ordering::Relaxed;
 
 use crate::exc::VALUE_ERROR;
 use crate::os::{site, Site};
 use crate::sha256;
 use crate::str::{self as pstr, PtStr};
-use crate::LIVE;
 
 /// A bytes or file object.
 #[derive(Debug)]
@@ -39,7 +37,7 @@ enum Obj {
 }
 
 fn into_ptr(obj: Obj) -> *mut PtObj {
-    LIVE.fetch_add(1, Relaxed);
+    crate::live_inc();
     Box::into_raw(Box::new(PtObj {
         rc: Count::new(),
         obj,
@@ -209,7 +207,7 @@ pub unsafe extern "C" fn pt_obj_dec(p: *mut PtObj) {
     // SAFETY: the last reference: `p` came from `Box::into_raw` and no
     // other reference remains.
     drop(unsafe { Box::from_raw(p) });
-    LIVE.fetch_sub(1, Relaxed);
+    crate::live_dec();
 }
 
 /// `len(b)` of bytes.

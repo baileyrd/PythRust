@@ -1,0 +1,16 @@
+# deviation: `ThreadPoolExecutor` takes no arguments, so `max_workers` is a compile error (M6c); CPython sizes its pool by it.
+# expect-exit: 1
+# expect-error: `concurrent.futures.ThreadPoolExecutor` got an unexpected keyword argument `max_workers`
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        print(ex.submit(square, 3).result())
+
+
+main()

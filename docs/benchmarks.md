@@ -62,4 +62,51 @@ On a program, 7 runs, median seconds (`bench/run.py`): `shared` gives one task a
 | `shared` | 0.430 (0.385 to 0.485) | 0.287 (0.253 to 0.425) |
 | `shared_baseline` | 0.122 (0.101 to 0.171) | 0.261 (0.213 to 0.433) |
 
-Here the task is slower than the serial run: the task version takes 3.5x as long as the direct call, about 38 ns more per element read: one borrow of the list and one count `inc`/`dec` of the string, all atomic, which the per-operation rows account for. That puts it behind CPython. The cost falls only on marked values: a value no task can reach takes the unmarked path, one load and a branch more than before marking existed (the 3% gate of step 2). Reducing it (borrowing a marked list once per loop rather than per read, or skipping the count of an element only read) is open. No speedup from tasks is claimed until step 4c measures CPU-bound tasks against the serial build and CPython threads.
+Here the task is slower than the serial run: the task version takes 3.5x as long as the direct call, about 38 ns more per element read: one borrow of the list and one count `inc`/`dec` of the string, all atomic, which the per-operation rows account for. That puts it behind CPython. The cost falls only on marked values: a value no task can reach takes the unmarked path, one load and a branch more than before marking existed (the 3% gate of step 2). Reducing it (borrowing a marked list once per loop rather than per read, or skipping the count of an element only read) is open. Step 4c measured CPU-bound tasks against the serial build and CPython threads ([below](#cpu-bound-tasks-m6c-step-4c)).
+
+## CPU-bound tasks (M6c step 4c)
+
+Two programs, each with a serial control that runs the same work by direct calls, all four valid Python, in `bench/`. Same machine (4 cores, so 8 workers by default), release build, CPython 3.13 (with the GIL), 7 runs, median seconds (`bench/run.py`). CPython runs each file as is, so the task rows are CPython's own `ThreadPoolExecutor`.
+
+- `tasks_cpu`: Collatz step counts for 1..800,000 in eight chunks, one task each through `ex.map`. Only ints cross to the workers, so nothing is marked.
+- `tasks_alloc`: eight tasks, each making and dropping 400,000 strings with `str()`. Each task makes its own values, so nothing is marked; every string is a malloc and a free.
+
+| Benchmark | Native s | CPython s |
+|---|---:|---:|
+| `tasks_cpu` | 0.141 (0.128 to 0.155) | 7.380 (7.042 to 7.714) |
+| `tasks_cpu_serial` | 0.457 (0.435 to 0.513) | 6.454 (6.401 to 6.752) |
+| `tasks_alloc` | 0.038 (0.034 to 0.049) | 0.343 (0.319 to 0.411) |
+| `tasks_alloc_serial` | 0.133 (0.106 to 0.158) | 0.324 (0.275 to 0.371) |
+| `shared` | 0.432 (0.390 to 0.512) | 0.255 (0.228 to 0.298) |
+| `shared_baseline` | 0.113 (0.089 to 0.168) | 0.254 (0.189 to 0.275) |
+
+On these four cores, tasks run CPU-bound work 3.2x (`tasks_cpu`) and 3.5x (`tasks_alloc`) faster than the serial native build; on one core they cost 14% and 44% more than it ([scaling](#cpu-bound-tasks-m6c-step-4c), below). CPython's threads are no faster than its serial run (the GIL), so the native task rows are 52x and 9x CPython's. These are the only speedups claimed: work that tasks split evenly, with nothing marked. The `shared` rows (from [Shared values](#shared-values-m6c), same run) are where tasks lose: one task walking a marked list takes 3.8x as long as the direct call, and is slower than CPython.
+
+Scaling, by the cores the process may use (`taskset -c 0`, `0-1`, `0-3`), 7 runs, median seconds. The executor has no `max_workers` yet, so the pool follows the cores: `min(32, cpus + 4)`, 5, 6 and 8 workers.
+
+| Benchmark | 1 core | 2 cores | 4 cores |
+|---|---:|---:|---:|
+| `tasks_cpu` | 0.528 (0.505 to 0.576) | 0.291 (0.250 to 0.364) | 0.140 (0.134 to 0.157) |
+| `tasks_cpu_serial` | 0.462 (0.365 to 0.523) | 0.466 (0.393 to 0.501) | 0.482 (0.381 to 0.520) |
+| `tasks_alloc` | 0.156 (0.136 to 0.233) | 0.093 (0.073 to 0.099) | 0.055 (0.039 to 0.061) |
+| `tasks_alloc_serial` | 0.108 (0.107 to 0.109) | 0.144 (0.130 to 0.232) | 0.148 (0.130 to 0.209) |
+| `shared` | 0.444 (0.349 to 0.455) | 0.458 (0.397 to 0.571) | 0.454 (0.358 to 0.469) |
+| `shared_baseline` | 0.114 (0.098 to 0.118) | 0.133 (0.101 to 0.159) | 0.133 (0.098 to 0.178) |
+
+`tasks_cpu` gains 1.8x from one core to two and 2.1x from two to four; on one core it costs 14% more than serial (eight chunks time-sliced over five threads). `tasks_alloc` gains 1.7x per doubling, and on one core costs 44% more than serial. `shared` is one task, so cores do not help it: its cost is the atomics, not the threads.
+
+`tasks_alloc` was first 4.4x *slower* than its serial run: in the first run 0.768 s (0.643 to 0.959) against 0.176 s (0.154 to 0.197), pinned to one core 0.28 s, so most of the cost was threads on different cores waiting on each other. Two causes, both fixed in this step:
+
+- **A shared leak counter.** Every string, sequence and object allocation and free bumped one atomic counter (`LIVE`), which only a debug runtime reads, to fail leaking programs. Bumped from four cores at once, its cache line moved between them on every allocation. A release runtime no longer counts.
+- **`realloc` in `str(int)`.** `str(n)` formatted into a `String` and shrank it to a `Box<str>` by `realloc`. glibc's `malloc` and `free` mostly use a per-thread cache, but `realloc` takes the arena's lock, and `strace -f -k` showed the workers' futex waits with `realloc` on the stack, and `getrusage` without `strace` gave 1.3 s of system time per run. `str(n)` now allocates once at its exact length. A standalone Rust program doing `n.to_string().into()` on 8 threads shows the same: 4x to 6x slower than serial (in two sessions), and faster than serial once the string is allocated at its exact length.
+
+Each fix alone leaves the task run 3x to 4x slower than serial; it takes both (7 runs, median seconds):
+
+| Runtime | `tasks_alloc` | `tasks_alloc_serial` |
+|---|---:|---:|
+| neither fix | 0.702 (0.613 to 0.773) | 0.175 (0.139 to 0.197) |
+| counter only | 0.515 (0.485 to 0.602) | 0.128 (0.106 to 0.191) |
+| `str(int)` only | 0.548 (0.475 to 0.760) | 0.156 (0.127 to 0.183) |
+| both | 0.038 (0.034 to 0.049) | 0.133 (0.106 to 0.158) |
+
+Other runtime functions that build a string through a `String` and may shrink it still `realloc`: `str` of a float (`num::repr`), `repr` of a string (`pt_str_repr`) and the negative-exponent hint (`pow_hint`). They are not on these benchmarks' path. Single-threaded, writing an int into an exact-capacity `String` is 10 to 15% slower than `to_string` in a microbenchmark (std has a fast path); the serial row still improved, as it also lost the counter.
