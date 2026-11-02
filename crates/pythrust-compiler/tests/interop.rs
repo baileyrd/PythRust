@@ -51,19 +51,14 @@ impl Drop for Scratch {
         if let Err(e) = fs::remove_dir_all(&self.0) {
             eprintln!("cannot remove {}: {e}", self.0.display());
         }
-        // The process's directory goes with its last test; while another
-        // test still holds one, it is not empty and stays.
-        if let Some(parent) = self.0.parent() {
-            let _ = fs::remove_dir(parent);
-        }
     }
 }
 
-/// A fresh directory for `test`.
+/// A fresh directory for `test`, flat in the temp dir: no parent shared
+/// with other tests, so none is created or removed under a test running
+/// beside it.
 fn scratch(test: &str) -> Scratch {
-    let dir = std::env::temp_dir()
-        .join(format!("pythrust-interop-{}", std::process::id()))
-        .join(test);
+    let dir = std::env::temp_dir().join(format!("pythrust-interop-{}-{test}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     Scratch(dir)
@@ -83,23 +78,16 @@ fn a_scratch_directory_goes_when_its_test_passes() {
 
 #[test]
 fn a_failing_tests_scratch_directory_stays() {
-    let path = std::thread::spawn(|| {
-        let dir = scratch("stays");
-        let path = dir.to_path_buf();
-        let held = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _dir = dir;
-            panic!("the test fails");
-        }));
-        assert!(held.is_err());
-        path
-    })
-    .join()
-    .unwrap();
+    let dir = scratch("stays");
+    let path = dir.to_path_buf();
+    // Unwinds as a failed assertion does, without the panic message.
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _dir = dir;
+        std::panic::resume_unwind(Box::new("the test fails"));
+    }));
+    assert!(failed.is_err());
     assert!(path.exists(), "{}", path.display());
     fs::remove_dir_all(&path).unwrap();
-    if let Some(parent) = path.parent() {
-        let _ = fs::remove_dir(parent);
-    }
 }
 
 /// The committed probe binding.
