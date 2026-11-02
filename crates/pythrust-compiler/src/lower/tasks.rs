@@ -1,31 +1,40 @@
-//! Tasks (M6c), for analysis only: `build` refuses the `with` that
-//! makes an executor until native tasks land (`docs/native.md`).
+//! Tasks (M6c), two ways.
 //!
-//! They lower as `run` runs them: each task to completion where it is
-//! submitted, a call of its function there. A future is its task's
-//! result, and `map`'s results are a list of them ([`super::concrete`]),
-//! so `fut.result()` reads the value. The call neither raises nor ends
-//! the path: `run` keeps what escapes the task, and raises it where its
-//! result is taken ([`FnBuilder::took_result`]).
+//! For analysis they lower as `run` runs them: each task to completion
+//! where it is submitted, a call of its function there. A future is its
+//! task's result, and `map`'s results are a list of them
+//! ([`super::concrete`]), so `fut.result()` reads the value. The call
+//! neither raises nor ends the path: `run` keeps what escapes the task,
+//! and raises it where its result is taken ([`FnBuilder::took_result`]).
+//!
+//! For `build` they run on the executor's workers (`docs/native.md`):
+//! the `with` statement owns an [`Ty::Exec`] temporary, released (which
+//! waits for every task) however the block is left; `submit` gives a
+//! [`Ty::Future`] ([`Rvalue::Submit`]) and `result()` waits for it
+//! ([`Rvalue::TaskResult`]). `map` is not native yet (M6c step 4b-2).
 
 use crate::ast::{Arg, Block, Expr, ExprKind, FuncDef, Ident};
 use crate::diag::Result;
 use crate::infer::{scope, Type};
 use crate::ir::{BlockId, Inst, LocalId, Operand, Rvalue, Task, Term, Ty};
 use crate::span::Span;
+use crate::stdlib::StdFn;
+
+/// Why `build` refuses `ex.map(...)` for now.
+const MAP_GAP: &str = "`map` of tasks (M6c step 4b-2)";
 
 use super::expr::bind_params;
 use super::stmt::Looped;
 use super::{internal, unsupported, FnBuilder, Reach};
 
 impl<'a> FnBuilder<'_, 'a> {
-    /// `with ThreadPoolExecutor() as ex: body`. The executor holds
-    /// nothing, and making it does nothing analysis sees.
+    /// `with ThreadPoolExecutor() as ex: body`. The variable holds
+    /// nothing, and for analysis making the executor does nothing.
     pub(super) fn with_stmt(&mut self, binding: &Ident, body: &Block, span: Span) -> Result<()> {
-        if self.cx.reach == Reach::Called {
-            return Err(unsupported(span, "tasks (`concurrent.futures`)"));
-        }
         self.write(&binding.name, Operand::None, binding.span)?;
+        if self.cx.reach == Reach::Called {
+            return self.native_with(binding, body, span);
+        }
         // The region is the blocks the body makes, from a fresh one; the
         // code after it goes on in another.
         let start = self.new_block();
@@ -40,6 +49,31 @@ impl<'a> FnBuilder<'_, 'a> {
         Ok(())
     }
 
+    /// [`FnBuilder::with_stmt`] for `build`: the executor is a temporary
+    /// of the `with` statement, so its end, and a `break`, `continue`,
+    /// `return` or raise leaving the block, releases it.
+    fn native_with(&mut self, binding: &Ident, body: &Block, span: Span) -> Result<()> {
+        let make = Rvalue::Std(StdFn::Executor, Vec::new());
+        let Operand::Local(exec) = self.temp(Ty::Exec, make, span) else {
+            return Err(internal(span, "an executor without a local"));
+        };
+        self.execs.push((binding.name.clone(), exec));
+        let lowered = self.block(body);
+        self.execs.pop();
+        lowered
+    }
+
+    /// The executor `ex` names, in `build`.
+    fn exec_named(&self, ex: &Expr) -> Result<Operand> {
+        let ExprKind::Name(name) = &ex.kind else {
+            return Err(internal(ex.span, "an executor that is not a name"));
+        };
+        let found = self.execs.iter().rev().find(|(n, _)| n == name);
+        found
+            .map(|(_, l)| Operand::Local(*l))
+            .ok_or_else(|| internal(ex.span, "an executor outside its `with` block"))
+    }
+
     /// `ex.submit(f, *args)`, `ex.map(f, xs)` or `fut.result()`; `None`
     /// for any other method.
     pub(super) fn task_call(
@@ -49,7 +83,17 @@ impl<'a> FnBuilder<'_, 'a> {
         args: &[Arg],
         span: Span,
     ) -> Result<Option<Operand>> {
+        let native = self.cx.reach == Reach::Called;
         match (self.node_type(value.span)?, attr) {
+            (Type::Executor, "submit") if native => self.native_submit(value, args, span).map(Some),
+            (Type::Executor, "map") if native => Err(unsupported(span, MAP_GAP)),
+            (Type::Future(_), "result") if native => {
+                let fut = self.expr(value)?;
+                let ty = self.ty_at(span)?;
+                let v = self.temp(ty, Rvalue::TaskResult(fut), span);
+                self.took_result(span)?;
+                Ok(Some(v))
+            }
             (Type::Executor, "submit") => self.submit(args, span).map(Some),
             (Type::Executor, "map") => self.map(args, span).map(Some),
             (Type::Future(_), "result") => {
@@ -59,6 +103,23 @@ impl<'a> FnBuilder<'_, 'a> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// `ex.submit(f, *args)` in `build`: a new future of the task.
+    fn native_submit(&mut self, ex: &Expr, args: &[Arg], span: Span) -> Result<Operand> {
+        let def = self.task_def(args, span)?;
+        let exec = self.exec_named(ex)?;
+        let mut ops = Vec::new();
+        for a in &args[1..] {
+            ops.push(self.expr(&a.value)?);
+        }
+        let slots = bind_params(def, &args[1..], ops)?;
+        let Type::Future(node) = self.node_type(span)? else {
+            return Err(internal(span, "`submit` is not a future"));
+        };
+        let (args, func, _) = self.call_operands(def, slots, node, span)?;
+        let submit = Rvalue::Submit { exec, func, args };
+        Ok(self.temp(Ty::Future, submit, span))
     }
 
     /// `ex.submit(f, *args)`: `f(*args)`, its result the future.

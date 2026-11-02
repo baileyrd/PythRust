@@ -4,6 +4,7 @@
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{types, InstBuilder, MemFlagsData, Value};
+use cranelift_frontend::FunctionBuilder;
 
 use super::{backend, FnGen, Rt};
 use crate::diag::Result;
@@ -85,22 +86,13 @@ impl FnGen<'_, '_, '_> {
     /// `op` as a slot.
     pub(super) fn slot(&mut self, op: Operand) -> Value {
         let v = self.operand(op);
-        match self.func.ty(op) {
-            Ty::Float => self.b.ins().bitcast(types::I64, MemFlagsData::new(), v),
-            Ty::Bool | Ty::None => self.b.ins().uextend(types::I64, v),
-            ty if self.cg.clif_ty(ty) != types::I64 => self.b.ins().uextend(types::I64, v),
-            _ => v,
-        }
+        to_slot(&mut self.b, v)
     }
 
     /// A slot as a value of `ty`.
     pub(super) fn unslot(&mut self, v: Value, ty: Ty) -> Value {
         let want = self.cg.clif_ty(ty);
-        match want {
-            types::I64 => v,
-            types::F64 => self.b.ins().bitcast(types::F64, MemFlagsData::new(), v),
-            _ => self.b.ins().ireduce(want, v),
-        }
+        from_slot(&mut self.b, v, want)
     }
 
     /// `s[i]` on a list, into `dest`.
@@ -195,6 +187,24 @@ impl FnGen<'_, '_, '_> {
     }
 }
 
+/// `v` as a 64-bit slot: a float as its bits, a narrower int widened.
+pub(super) fn to_slot(b: &mut FunctionBuilder, v: Value) -> Value {
+    match b.func.dfg.value_type(v) {
+        types::I64 => v,
+        types::F64 => b.ins().bitcast(types::I64, MemFlagsData::new(), v),
+        _ => b.ins().uextend(types::I64, v),
+    }
+}
+
+/// Slot `v` as a value of Cranelift type `want`.
+pub(super) fn from_slot(b: &mut FunctionBuilder, v: Value, want: types::Type) -> Value {
+    match want {
+        types::I64 => v,
+        types::F64 => b.ins().bitcast(types::F64, MemFlagsData::new(), v),
+        _ => b.ins().ireduce(want, v),
+    }
+}
+
 /// Appends the runtime descriptor of `ty`: see `pythrust-rt/src/seq.rs`.
 pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result<()> {
     let code = match ty {
@@ -206,6 +216,8 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::Range => 'r',
         Ty::Exc => 'x',
         Ty::Bytes | Ty::File => 'y',
+        Ty::Future => 'u',
+        Ty::Exec => return Err(backend("an executor in a value".to_string())),
         Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id) => {
             let compound = types
                 .get(id.0)

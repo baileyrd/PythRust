@@ -10,9 +10,20 @@ use crate::ir::{Compound, Ty, TypeId, View};
 pub(super) struct SeqTypes {
     all: Vec<Compound>,
     ids: HashMap<Compound, TypeId>,
+    /// Whether a future is a [`Ty::Future`], as `build` runs tasks, or
+    /// its task's result, as analysis does ([`super::tasks`]).
+    pub(super) futures: bool,
 }
 
 impl SeqTypes {
+    /// No types yet; `futures` as [`SeqTypes::futures`].
+    pub(super) fn new(futures: bool) -> Self {
+        SeqTypes {
+            futures,
+            ..SeqTypes::default()
+        }
+    }
+
     pub(super) fn list(&mut self, elem: Ty) -> Ty {
         Ty::List(self.intern(Compound::List(elem)))
     }

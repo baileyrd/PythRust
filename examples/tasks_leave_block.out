@@ -1,0 +1,25 @@
+task 0
+end after block 0
+task 1
+end after block 1
+task 2
+end after block 2
+3
+task 0
+break after block 0
+task 1
+0
+task 0
+continue after block 0
+task 1
+task 2
+continue after block 2
+2
+task 0
+return after block 0
+task 1
+1
+task 7
+caught out
+task 7
+caught outside out

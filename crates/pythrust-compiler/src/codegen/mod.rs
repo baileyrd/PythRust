@@ -36,6 +36,7 @@ mod num;
 mod opt;
 mod seq;
 mod stdlib;
+mod task;
 
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
@@ -60,9 +61,12 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
     let mut cg = Codegen::new(render)?;
     cg.declare_globals(&program.globals)?;
     let ids = cg.declare(program)?;
+    cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+    cg.declare_thunks(program)?;
     for (func, id) in program.funcs.iter().zip(&ids) {
         cg.define(func, *id, &ids, &program.types)?;
     }
+    cg.define_thunks(program, &ids)?;
     cg.module
         .finish()
         .emit()
@@ -148,10 +152,17 @@ enum Rt {
     FileRead,
     FileClose,
     Sha256Hex,
+    Mark,
+    ExecNew,
+    ExecEnd,
+    Submit,
+    TaskResult,
+    FutInc,
+    FutDec,
 }
 
 impl Rt {
-    const ALL: [Rt; 76] = [
+    const ALL: [Rt; 83] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -228,6 +239,13 @@ impl Rt {
         Rt::FileRead,
         Rt::FileClose,
         Rt::Sha256Hex,
+        Rt::Mark,
+        Rt::ExecNew,
+        Rt::ExecEnd,
+        Rt::Submit,
+        Rt::TaskResult,
+        Rt::FutInc,
+        Rt::FutDec,
     ];
 
     fn symbol(self) -> &'static str {
@@ -308,6 +326,13 @@ impl Rt {
             Rt::FileRead => "pt_file_read",
             Rt::FileClose => "pt_file_close",
             Rt::Sha256Hex => "pt_sha256_hex",
+            Rt::Mark => "pt_mark",
+            Rt::ExecNew => "pt_exec_new",
+            Rt::ExecEnd => "pt_exec_end",
+            Rt::Submit => "pt_submit",
+            Rt::TaskResult => "pt_result",
+            Rt::FutInc => "pt_fut_inc",
+            Rt::FutDec => "pt_fut_dec",
         }
     }
 
@@ -376,6 +401,11 @@ impl Rt {
             Rt::ObjEq => (vec![ptr, ptr], Some(I8)),
             Rt::ObjStr | Rt::Sha256Hex => (vec![ptr], Some(ptr)),
             Rt::Open | Rt::FileRead => (vec![ptr; 5], Some(ptr)),
+            Rt::Mark => (vec![ptr, ptr, I64], None),
+            Rt::ExecNew => (vec![], Some(ptr)),
+            Rt::ExecEnd | Rt::FutInc | Rt::FutDec => (vec![ptr], None),
+            Rt::Submit => (vec![ptr; 6], Some(ptr)),
+            Rt::TaskResult => (vec![ptr], Some(I64)),
         }
     }
 }
@@ -389,6 +419,12 @@ struct Codegen<'r> {
     ptr: types::Type,
     /// `ir::Program::globals`: each a zeroed, module-private word.
     globals: Vec<(DataId, Ty)>,
+    /// Each function's result type, by `ir::FuncId`.
+    rets: Vec<Ty>,
+    /// The thunk of each function a task runs ([`task`]).
+    thunks: HashMap<ir::FuncId, ClifFunc>,
+    /// The module values each such function's tasks may reach.
+    reads: task::Reads,
 }
 
 impl<'r> Codegen<'r> {
@@ -414,6 +450,9 @@ impl<'r> Codegen<'r> {
             bytes: HashMap::new(),
             ptr,
             globals: Vec::new(),
+            rets: Vec::new(),
+            thunks: HashMap::new(),
+            reads: HashMap::new(),
         };
         for rt in Rt::ALL {
             let mut sig = cg.module.make_signature();
@@ -487,7 +526,9 @@ impl<'r> Codegen<'r> {
             | Ty::Set(_)
             | Ty::View(_)
             | Ty::Bytes
-            | Ty::File => self.ptr,
+            | Ty::File
+            | Ty::Exec
+            | Ty::Future => self.ptr,
         }
     }
 
@@ -674,6 +715,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 }
                 self.write_text(*end, b'\n');
             }
+            Inst::Retain(l) if self.func.locals[l.0] == Ty::Exec => {
+                return Err(backend("copying an executor".to_string()));
+            }
             Inst::Retain(l) => {
                 let (inc, _) = rc_fns(self.types, self.func.locals[l.0]);
                 let s = self.b.use_var(self.vars[l.0]);
@@ -792,6 +836,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::Set(_)
             | Ty::View(_) => Rt::WriteSeq,
             Ty::Bytes | Ty::File => Rt::WriteObj,
+            Ty::Exec | Ty::Future => return Err(backend("printing a task's handle".to_string())),
         };
         self.call_rt(rt, &[v]);
         Ok(())
@@ -978,6 +1023,8 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Raised => Ok(self.pending_flag()),
             Rvalue::PendingIs(classes) => self.pending_is(classes),
             Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
+            Rvalue::Submit { exec, func, args } => self.submit(*exec, *func, args),
+            Rvalue::TaskResult(fut) => self.task_result(*fut, dest),
         }
     }
 
@@ -999,6 +1046,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::View(_) => Rt::StrFromSeq,
             Ty::Bytes | Ty::File => Rt::ObjStr,
             Ty::Exc => Rt::ExcStr,
+            Ty::Exec | Ty::Future => return Err(backend("`str` of a task's handle".to_string())),
             Ty::Str => {
                 self.call_rt(Rt::StrInc, &[v]);
                 return Ok(v);
@@ -1274,6 +1322,9 @@ fn rc_fns(types: &[Compound], ty: Ty) -> (Rt, Rt) {
     match ty {
         Ty::Str => (Rt::StrInc, Rt::StrDec),
         Ty::Bytes | Ty::File => (Rt::ObjInc, Rt::ObjDec),
+        Ty::Future => (Rt::FutInc, Rt::FutDec),
+        // Never copied: `Retain` of one is refused.
+        Ty::Exec => (Rt::ExecEnd, Rt::ExecEnd),
         _ => (Rt::SeqInc, Rt::SeqDec),
     }
 }

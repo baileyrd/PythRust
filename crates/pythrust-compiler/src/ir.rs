@@ -93,6 +93,14 @@ pub enum Ty {
     /// A reference-counted file open for reading bytes (M6a); dropping
     /// its last reference closes it.
     File,
+    /// An executor's pool of workers (M6c), owned by the one temporary
+    /// of its `with` block: releasing it waits for every task it started.
+    /// Never copied, stored or printed. Only `build` makes one.
+    Exec,
+    /// A task's future (M6c): a reference-counted handle, held only by
+    /// the function that submitted the task and its local lists. Only
+    /// `build` makes one; analysis lowers a future as its result.
+    Future,
 }
 
 impl Ty {
@@ -111,6 +119,8 @@ impl Ty {
                 | Ty::View(_)
                 | Ty::Bytes
                 | Ty::File
+                | Ty::Exec
+                | Ty::Future
         )
     }
 }
@@ -370,6 +380,18 @@ pub enum Rvalue {
     /// The pending exception, which there is, with its reference; none
     /// is pending after.
     Catch,
+    /// `exec.submit(func, *args)` (M6c): a new future of the task that
+    /// calls `func` with `args` on one of `exec`'s workers. The operands
+    /// are borrowed; the task gets references of its own.
+    Submit {
+        exec: Operand,
+        func: FuncId,
+        args: Vec<Operand>,
+    },
+    /// `fut.result()`: waits for the task, then gives its result, a new
+    /// value of the destination's type, or raises again what escaped it
+    /// (pending, giving null or 0).
+    TaskResult(Operand),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

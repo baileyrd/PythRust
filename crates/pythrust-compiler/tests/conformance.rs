@@ -21,6 +21,10 @@
 //! - `# deviation: why` a documented deviation from Python (see
 //!   `docs/grammar.md`). The golden holds Pythrust's output, and CPython is
 //!   required to differ, so a stale deviation fails.
+//! - `# native-deviation: why` a documented deviation of native code
+//!   alone: the golden holds CPython's (and `run`'s) output, and
+//!   `<name>.native.out` the native program's, which is required to
+//!   differ from it, so a stale native deviation fails.
 //! - `# expect-error: text` the program must fail `check` (lex, parse,
 //!   infer) with a diagnostic containing `text`; it implies exit 1. Every
 //!   other program must pass `check`. `corpus_checks` asserts both.
@@ -34,6 +38,10 @@
 //! - `PYTHRUST_VALGRIND=1` also run every native program under valgrind's
 //!   memcheck, failing on invalid reads, writes and frees (use-after-free)
 //!   and on definitely lost blocks. CI sets it on x86-64 Linux. The instrumented run must also match the golden.
+//! - `PYTHRUST_TSAN=1` native programs link a ThreadSanitizer-instrumented
+//!   runtime (`PYTHRUST_RT`, through `ci/tsan-cc`); a race report exits
+//!   66 and so fails the golden. Instrumented binaries skip the size gate.
+//!   CI's race job sets it on x86-64 Linux.
 
 use std::fs;
 use std::io::Read;
@@ -55,6 +63,8 @@ struct Expect {
     deviation: Option<String>,
     /// Substring of the compile error `check` must report, if any.
     check_error: Option<String>,
+    /// Why native code alone deviates, if it does.
+    native_deviation: Option<String>,
 }
 
 /// One corpus program and its golden stdout.
@@ -74,6 +84,7 @@ struct Run {
 
 const EXIT: &str = "# expect-exit:";
 const DEVIATION: &str = "# deviation:";
+const NATIVE_DEVIATION: &str = "# native-deviation:";
 const ERROR: &str = "# expect-error:";
 
 /// Reads directives from the leading `#` comment block of `src`.
@@ -81,6 +92,7 @@ fn parse_expect(src: &str) -> Res<Expect> {
     let mut status: Option<i32> = None;
     let mut deviation: Option<String> = None;
     let mut check_error: Option<String> = None;
+    let mut native_deviation: Option<String> = None;
     for line in src.lines().take_while(|l| l.starts_with('#')) {
         if let Some(v) = line.strip_prefix(EXIT) {
             let n = v
@@ -92,6 +104,9 @@ fn parse_expect(src: &str) -> Res<Expect> {
             set_once(&mut deviation, text(v, DEVIATION)?, DEVIATION)?;
         } else if let Some(v) = line.strip_prefix(ERROR) {
             set_once(&mut check_error, text(v, ERROR)?, ERROR)?;
+        } else if let Some(v) = line.strip_prefix(NATIVE_DEVIATION) {
+            let why = text(v, NATIVE_DEVIATION)?;
+            set_once(&mut native_deviation, why, NATIVE_DEVIATION)?;
         }
     }
     let status = status.unwrap_or(0);
@@ -102,6 +117,7 @@ fn parse_expect(src: &str) -> Res<Expect> {
         status,
         deviation,
         check_error,
+        native_deviation,
     })
 }
 
@@ -467,6 +483,13 @@ const NATIVE: &[&str] = &[
     "str_repeat_error",
     "strings",
     "sys_argv",
+    "tasks_generic",
+    "tasks_generic_discarded",
+    "tasks_leave_block",
+    "tasks_long_line",
+    "tasks_partial_line",
+    "tasks_result_released",
+    "tasks_submit",
     "tempered",
     "tuple_loops",
     "tuples",
@@ -491,15 +514,12 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a generic function storing a bool key into an int-keyed table: `run` cannot \
          always tell the table is int-keyed, so `build` refuses rather than differ",
     ),
-    ("tasks_generic", TASKS_GAP),
-    ("tasks_generic_discarded", TASKS_GAP),
     ("tasks_map", TASKS_GAP),
     ("tasks_map_break", TASKS_GAP),
-    ("tasks_submit", TASKS_GAP),
 ];
 
-/// Why `build` refuses tasks: native tasks are M6c's next step.
-const TASKS_GAP: &str = "tasks: native tasks are M6c's step after the front end";
+/// Why `build` refuses `map`: native `map` is M6c step 4b-2.
+const TASKS_GAP: &str = "`map`: native `map` follows native `submit` (M6c step 4b-2)";
 
 const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";
 
@@ -963,6 +983,10 @@ fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
 const MEMCHECK_EXIT: i32 = 97;
 
 /// Whether `PYTHRUST_VALGRIND=1` asks for memcheck runs.
+fn tsan_requested() -> bool {
+    std::env::var_os("PYTHRUST_TSAN").is_some_and(|v| v == "1")
+}
+
 fn memcheck_requested() -> bool {
     std::env::var_os("PYTHRUST_VALGRIND").is_some_and(|v| v == "1")
 }
@@ -1093,7 +1117,16 @@ fn corpus_matches_native() -> Res<()> {
                 "{name}: builds now; move it from `NATIVE_GAPS` to `NATIVE`"
             ));
         }
-        failures.extend(oversized(&exe)?);
+        if !tsan_requested() {
+            failures.extend(oversized(&exe)?);
+        }
+        let case = match native_golden(case)? {
+            Ok(c) => c,
+            Err(stale) => {
+                failures.push(stale);
+                continue;
+            }
+        };
         let got = run(&mut Command::new(&exe), TIMEOUT)?;
         let failed = mismatch(&case, &got);
         let errored = failed.is_none() && got.status != 0;
@@ -1114,6 +1147,81 @@ fn corpus_matches_native() -> Res<()> {
         }
     }
     report(failures);
+    Ok(())
+}
+
+/// The case native code must match: `case` itself, or for a native
+/// deviation the same with `<name>.native.out` as its golden. That
+/// golden must still differ from CPython's, else the deviation is
+/// stale: the error.
+fn native_golden(case: Case) -> Res<Result<Case, String>> {
+    let Some(why) = &case.expect.native_deviation else {
+        return Ok(Ok(case));
+    };
+    let stdout = read(&case.source.with_extension("native.out"))?;
+    if stdout == case.stdout {
+        let stale = format!(
+            "{}: native code agrees with CPython; stale native deviation: {why}",
+            case.source.display()
+        );
+        return Ok(Err(stale));
+    }
+    Ok(Ok(Case { stdout, ..case }))
+}
+
+/// A task whose executor cannot start a thread, when none is running.
+const THREAD_REFUSED: &str = "\
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def main() -> None:
+    print(\"before\")
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            print(ex.submit(square, 3).result())
+    except Exception as e:
+        print(\"caught\", e)
+
+
+main()
+";
+
+/// The thread-refusal deviation (grammar.md, M6c): when the system will
+/// start no thread for an executor with none, the native program ends,
+/// where CPython raises a `RuntimeError` the program may catch. Under an
+/// 8 MiB address-space limit a worker's 8 MiB stack cannot be mapped.
+/// Should the program ever print "caught", the deviation is stale.
+/// Linux alone enforces `ulimit -v`.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refused_thread_ends_the_program() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("refused")?;
+    let exe = native_case(&dir, "thread_refused", THREAD_REFUSED)?;
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg("ulimit -v 8192 && exec \"$0\"")
+        .arg(&exe)
+        .output()
+        .map_err(|e| format!("cannot run sh: {e}"))?;
+    cleanup(&dir)?;
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(
+        (out.status.code(), stdout.as_ref()),
+        (Some(1), "before\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("pythrust: cannot start a task's thread"),
+        "{stderr}"
+    );
     Ok(())
 }
 
@@ -1552,9 +1660,29 @@ fn corpus_is_complete() -> Res<()> {
     assert!(cases.iter().any(|c| c.expect.deviation.is_some()));
     for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
-        let orphan =
-            path.extension().is_some_and(|x| x == "out") && !path.with_extension("pyr").exists();
-        assert!(!orphan, "golden without a program: {}", path.display());
+        if path.extension().is_none_or(|x| x != "out") {
+            continue;
+        }
+        // `<name>.out`, or a native deviation's `<name>.native.out`.
+        let stem = path.with_extension("");
+        let native = stem.extension().is_some_and(|x| x == "native");
+        let program = match native {
+            true => stem.with_extension("pyr"),
+            false => path.with_extension("pyr"),
+        };
+        assert!(
+            program.exists(),
+            "golden without a program: {}",
+            path.display()
+        );
+        if native {
+            let declared = load_expect(&program)?.native_deviation.is_some();
+            assert!(
+                declared,
+                "native golden without `{NATIVE_DEVIATION}`: {}",
+                path.display()
+            );
+        }
     }
     Ok(())
 }
@@ -1584,6 +1712,7 @@ fn expect_defaults() {
         status: 0,
         deviation: None,
         check_error: None,
+        native_deviation: None,
     };
     assert_eq!(parse_expect("print(1)\n"), Ok(want()));
     assert_eq!(parse_expect(""), Ok(want()));
@@ -1591,11 +1720,12 @@ fn expect_defaults() {
 
 #[test]
 fn expect_reads_directives() {
-    let src = "# a plain comment\n# expect-exit: 1\n# deviation: checked overflow\n# expect-error: overflow\nx = 1\n";
+    let src = "# a plain comment\n# expect-exit: 1\n# deviation: checked overflow\n# expect-error: overflow\n# native-deviation: lines\nx = 1\n";
     let want = Expect {
         status: 1,
         deviation: Some("checked overflow".to_string()),
         check_error: Some("overflow".to_string()),
+        native_deviation: Some("lines".to_string()),
     };
     assert_eq!(parse_expect(src), Ok(want));
 }
@@ -1611,6 +1741,7 @@ fn expect_rejects_bad_directives() {
     assert!(parse_expect("# expect-exit: one\n").is_err());
     assert!(parse_expect("# expect-exit: 1\n# expect-exit: 2\n").is_err());
     assert!(parse_expect("# deviation:\n").is_err());
+    assert!(parse_expect("# native-deviation:\n").is_err());
     assert!(parse_expect("# deviation: a\n# deviation: b\n").is_err());
     assert!(parse_expect("# expect-error:\n# expect-exit: 1\n").is_err());
     assert!(parse_expect("# expect-error: x\n").is_err());
@@ -1626,6 +1757,7 @@ fn mismatch_reports_status_and_stdout() {
             status: 0,
             deviation: None,
             check_error: None,
+            native_deviation: None,
         },
     };
     let ok = Run {
@@ -1654,6 +1786,7 @@ fn memcheck_fails_closed() {
             status,
             deviation: None,
             check_error: None,
+            native_deviation: None,
         },
     };
     let ran = |stdout: &str, status: i32| -> Res<Run> {

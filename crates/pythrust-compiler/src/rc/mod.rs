@@ -133,6 +133,8 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::StrLit(_)
         | Rvalue::Std(..)
         | Rvalue::Rust(..)
+        | Rvalue::Submit { .. }
+        | Rvalue::TaskResult(_)
         | Rvalue::Concat(..)
         | Rvalue::Repeat(..)
         | Rvalue::Index(..)
@@ -553,6 +555,10 @@ fn operands(value: &Rvalue) -> Vec<Operand> {
         | Rvalue::NewSeq(args)
         | Rvalue::Std(_, args)
         | Rvalue::Rust(_, args) => args.clone(),
+        Rvalue::Submit { exec, args, .. } => {
+            std::iter::once(*exec).chain(args.iter().copied()).collect()
+        }
+        Rvalue::TaskResult(a) => vec![*a],
         Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
         Rvalue::StrLit(_)
         | Rvalue::Global(_)
