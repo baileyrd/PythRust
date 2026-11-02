@@ -342,7 +342,9 @@ pub unsafe extern "C" fn pt_submit(
 ///
 /// # Safety
 ///
-/// `fut` is a live future this thread holds a handle to.
+/// `fut` is a live future this thread holds a handle to, and this is
+/// the thread that submitted its task: handles, and the outcome they
+/// release, are that thread's alone.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_result(fut: *const PtFut) -> u64 {
@@ -364,7 +366,9 @@ pub unsafe extern "C" fn pt_result(fut: *const PtFut) -> u64 {
 ///
 /// # Safety
 ///
-/// `fut` is a live future this thread holds a handle to.
+/// `fut` is a live future this thread holds a handle to, and this is
+/// the thread that submitted its task: handles, and the outcome they
+/// release, are that thread's alone.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_fut_inc(fut: *const PtFut) {
@@ -379,7 +383,7 @@ pub unsafe extern "C" fn pt_fut_inc(fut: *const PtFut) {
 /// # Safety
 ///
 /// `fut` is null or a live future this thread holds a handle to, which
-/// is not used again.
+/// is not used again, and this is the thread that submitted its task.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_fut_dec(fut: *const PtFut) {
@@ -454,6 +458,21 @@ mod tests {
             n as u64
         }
     }
+
+    /// Returns its list argument: the result is the marked argument.
+    unsafe extern "C" fn same(_ctx: *const PtCtx, args: *const u64) -> u64 {
+        // SAFETY: submitted with one live list, whose reference it owns.
+        unsafe { *args }
+    }
+
+    /// A new list holding its list argument: a fresh, unmarked result
+    /// that holds a marked child.
+    unsafe extern "C" fn wrap(_ctx: *const PtCtx, args: *const u64) -> u64 {
+        // SAFETY: submitted with one live list, whose reference it owns.
+        seq::new_seq(NESTED, vec![unsafe { *args }]) as u64
+    }
+
+    const NESTED: &[u8] = b"lli";
 
     static SEEN: AtomicU64 = AtomicU64::new(0);
 
@@ -621,6 +640,37 @@ mod tests {
     fn null_executors_and_futures_are_nothing() {
         end(std::ptr::null_mut());
         drop_fut(std::ptr::null());
+    }
+
+    /// Outcomes that alias a marked argument: the argument itself, and a
+    /// fresh list holding it, each taken or abandoned. The submitter
+    /// and the workers count the argument at once. Under Miri a race, a
+    /// leak or a double free fails it.
+    #[test]
+    fn outcomes_holding_a_marked_argument_are_released_once() {
+        let exec = Box::into_raw(Box::new(PtExec::new(4)));
+        let xs = seq::new_seq(LIST, vec![1, 2]);
+        seq::mark(LIST, xs as u64);
+        let mut futs = Vec::new();
+        for (thunk, desc) in [(same as Thunk, LIST), (wrap, NESTED)].repeat(4) {
+            // SAFETY: `xs` is live; the task takes this reference.
+            unsafe { seq::pt_seq_inc(xs) };
+            futs.push((submit(exec, thunk, &[xs as u64], desc), desc));
+        }
+        for (k, (fut, desc)) in futs.into_iter().enumerate() {
+            if k % 4 < 2 {
+                let got = result(fut);
+                assert!(got != 0);
+                seq::dec(desc, got);
+            }
+            drop_fut(fut);
+        }
+        end(exec);
+        // SAFETY: the test's own reference, the last.
+        unsafe {
+            assert_eq!((*xs).rc.get(), 1);
+            seq::pt_seq_dec(xs);
+        }
     }
 
     /// Tasks on several workers count a marked argument at once.

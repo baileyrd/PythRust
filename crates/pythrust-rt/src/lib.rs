@@ -13,8 +13,11 @@
 //! tested.
 //!
 //! Every ABI caller also guarantees, beyond each item's `# Safety`, that
-//! an object reaches another thread only after `pt_mark` has marked it
-//! (M6c): an unmarked object takes no atomic steps.
+//! an object it gives another thread is marked by `pt_mark` first (M6c):
+//! an unmarked object takes no atomic steps. The one other crossing is
+//! the runtime's own: a task's outcome, made unmarked on a worker, goes
+//! whole to the submitter under the future's lock, and only one thread
+//! ever touches it at a time ([`task`]).
 
 #![deny(unsafe_code)]
 
