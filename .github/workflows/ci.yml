@@ -66,6 +66,33 @@ jobs:
         env:
           MIRIFLAGS: "-Zmiri-permissive-provenance -Zmiri-many-seeds=0..8"
 
+  race:
+    # Data races in native programs and in the runtime's concurrency
+    # tests, under ThreadSanitizer. The runtime and std are instrumented
+    # (nightly, `-Zbuild-std`); `--cfg pythrust_tsan` reports each
+    # unmarked count change as the plain write it stands for (`sync.rs`),
+    # so two threads changing one unmarked count is a reported race.
+    # Cranelift's generated code is not instrumented: what it reads and
+    # writes itself (module values, the thread's context) is unchecked.
+    # x86-64 Linux only: MSVC has no ThreadSanitizer, and AArch64 Linux
+    # and macOS are not wired up.
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-Zsanitizer=thread --cfg pythrust_tsan"
+      TSAN_OPTIONS: "halt_on_error=1"
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal && rustup toolchain install nightly --profile minimal --component rust-src && rustup default stable
+      - run: cargo +nightly build --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir target/tsan
+      - run: "cargo +nightly test --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir target/tsan --lib -- task:: sync::"
+      # `ci/tsan-cc` as `cc` links the detector into native programs.
+      - run: mkdir -p "$RUNNER_TEMP/tsan-bin" && ln -s "$PWD/ci/tsan-cc" "$RUNNER_TEMP/tsan-bin/cc" && echo "$RUNNER_TEMP/tsan-bin" >> "$GITHUB_PATH"
+      - run: cargo test --locked --test conformance corpus_matches_native
+        env:
+          RUSTFLAGS: ""
+          PYTHRUST_TSAN: "1"
+          PYTHRUST_RT: ${{ github.workspace }}/target/tsan/x86_64-unknown-linux-gnu/debug/libpythrust_rt.a
+
   rust-version:
     # The oldest toolchain a program calling Rust bindings builds with:
     # every such build compiles `pythrust-rt` with the user's toolchain,

@@ -1,0 +1,19 @@
+# native-deviation: a thread's unfinished line (`end=""`) reaches stdout when the line ends or its task does, so it may come out after output CPython would print later (M6c, Nano 2026-11-01).
+# The main thread's unfinished line is held while a task prints a whole
+# one, so natively the task's line comes first.
+import concurrent.futures
+
+
+def shout(n: int) -> int:
+    print("task", n)
+    return n
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print("main, unfinished:", end=" ")
+        r = ex.submit(shout, 1).result()
+        print("finished", r)
+
+
+main()

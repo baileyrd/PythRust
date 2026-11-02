@@ -1,0 +1,22 @@
+# A task's result taken, then its future dropped at once, many times: the
+# outcome is released on the submitting thread, never by the worker while
+# the submitter still counts it (the freed-result race of M6c step 4a).
+# CI's race job runs it under ThreadSanitizer, which reported that race
+# against the runtime before the fix.
+import concurrent.futures
+
+
+def word(n: int) -> str:
+    return "w" * n
+
+
+def main() -> None:
+    kept = []
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for i in range(500):
+            s = ex.submit(word, i % 4).result()
+            kept.append(s)
+    print(len(kept), kept[0], kept[1], kept[2], kept[3], kept[-1])
+
+
+main()

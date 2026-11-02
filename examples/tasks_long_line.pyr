@@ -1,0 +1,21 @@
+# native-deviation: an unfinished line of 64 KiB or more is published in pieces, so output from another thread may land inside it, where CPython keeps a line's writes in order with other threads' (M6c, Nano 2026-11-02).
+# The main thread's unfinished line reaches 64 KiB, so that much is
+# published; the "y" after it is held while a task prints a whole line,
+# which so lands between them.
+import concurrent.futures
+
+
+def shout(n: int) -> int:
+    print("task", n)
+    return n
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print("x" * 65536, end="")
+        print("y", end="")
+        r = ex.submit(shout, 1).result()
+        print("end", r)
+
+
+main()

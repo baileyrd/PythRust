@@ -1,0 +1,24 @@
+# One task reads a list of strings it was given: submitting marks the list
+# and every string, so each count change and list borrow in `total` is
+# atomic. shared_baseline.pyr is the same work called directly, unmarked;
+# the gap is the cost of atomics on a real program (M6c step 4).
+import concurrent.futures
+
+
+def total(rows: list[str]) -> int:
+    n = 0
+    for k in range(40):
+        for s in rows:
+            n += len(s)
+    return n
+
+
+def main() -> None:
+    rows = []
+    for i in range(200000):
+        rows.append(str(i))
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print(ex.submit(total, rows).result())
+
+
+main()
