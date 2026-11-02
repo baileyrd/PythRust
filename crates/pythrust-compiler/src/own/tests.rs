@@ -1598,6 +1598,47 @@ fn rule_4_follows_lists_module_values_and_exceptions_hold() {
 }
 
 #[test]
+fn rule_4_counts_parameters_as_one_list_with_module_values() {
+    // A caller may pass one list twice, or a module list.
+    let run = |params: &str, body: &str| {
+        format!("{PARTIES}def run({params}) -> None:\n    {WITH}{body}\nrun(log, log)\n")
+    };
+    let cases = [
+        (
+            "xs: list[int], ys: list[int]",
+            "f = ex.submit(add, xs, 1)\n        print(len(ys))",
+            "a parameter is changed by a task until the `with` block ends",
+        ),
+        (
+            "xs: list[int], ys: list[int]",
+            "f = ex.submit(add, xs, 1)\n        print(len(log))",
+            "`log` is changed by a task until the `with` block ends",
+        ),
+        (
+            "xs: list[int], ys: list[int]",
+            "print(list(ex.map(size, [xs])))\n        ys.append(9)",
+            "a parameter is read by a task until the `with` block ends",
+        ),
+    ];
+    for (params, body, want) in cases {
+        let src = run(params, body);
+        let (msg, _) = mode_err(&src);
+        assert!(msg.contains(want), "{msg}\n{src}");
+    }
+    // Reading parameters, or changing a local list, stays accepted.
+    let reads = run(
+        "xs: list[int], ys: list[int]",
+        "f = ex.submit(size, xs)\n        print(len(ys), len(log))",
+    );
+    assert_eq!(checked(&reads), Ok(()), "{reads}");
+    let local = run(
+        "xs: list[int], ys: list[int]",
+        "out: list[int] = []\n        for n in ex.map(size, [xs, ys]):\n            out.append(n)",
+    );
+    assert_eq!(checked(&local), Ok(()), "{local}");
+}
+
+#[test]
 fn rule_4_accepts_parties_that_share_nothing_changed() {
     let cases = [
         "a = ex.submit(size, xs)\n        b = ex.submit(size, xs)\n        print(len(xs), a.result())",

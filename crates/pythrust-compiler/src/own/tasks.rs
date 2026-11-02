@@ -17,6 +17,9 @@
 //! that a module value or an exception may hold is the module's too:
 //! touching it reads the globals the function loads, changing it
 //! changes the module's values, and an exception reaches all of them.
+//! A caller may pass one list as two arguments, or a module list, so
+//! the parameters' lists are one list, and the module's (pending
+//! Nano's pick).
 //!
 //! No file reaches a task: not in its arguments' types, nor in a module
 //! variable or default it reads. `map` runs no function that changes or
@@ -41,8 +44,9 @@ pub(super) fn check(program: &Program, summaries: &[Summary]) -> Result<()> {
             continue;
         }
         let flow = body::settle(program, func, summaries);
-        let mut held = flow.reachable(&Objs::from([Obj::World]));
+        let mut held = canon(flow.reachable(&Objs::from([Obj::World])));
         held.remove(&Obj::World);
+        held.insert(PARAMS);
         let cx = Cx {
             program,
             summaries,
@@ -349,9 +353,10 @@ impl<'a> Cx<'a> {
     /// The party a task is.
     fn task(&self, c: &Call) -> Party {
         let touched = self.reach(c.args);
-        let changed = self
-            .flow
-            .passed(c.args, &self.summaries[c.callee].params, Mode::Mut);
+        let changed = canon(
+            self.flow
+                .passed(c.args, &self.summaries[c.callee].params, Mode::Mut),
+        );
         let mut reads = self.world.lists[c.callee].clone();
         if touched.contains(&Obj::World) {
             reads.extend(self.world.lists[self.index].iter().copied());
@@ -398,7 +403,7 @@ impl<'a> Cx<'a> {
     /// The party one of the submitter's instructions is.
     fn inst(&self, inst: &Inst, span: Span) -> Party {
         let touched = self.reach(&inst_operands(inst));
-        let changed = changes(self.flow, inst);
+        let changed = canon(changes(self.flow, inst));
         let mut reads = BTreeSet::new();
         let mut changes_world = self.changes_world(&changed);
         match inst {
@@ -430,7 +435,7 @@ impl<'a> Cx<'a> {
         if ops.iter().any(|a| self.holds_exc(*a)) {
             objs.insert(Obj::World);
         }
-        let mut touched = self.flow.reachable(&objs);
+        let mut touched = canon(self.flow.reachable(&objs));
         if touched.iter().any(|o| self.held.contains(o)) {
             touched.insert(Obj::World);
         }
@@ -462,14 +467,12 @@ impl<'a> Cx<'a> {
         name.map_or_else(|| "a parameter's default".to_string(), |n| format!("`{n}`"))
     }
 
-    /// A source variable that may be `o`, preferring a parameter, else
-    /// one that may hold it.
+    /// "a parameter", or a source variable that may be `o`, else one
+    /// that may hold it.
     fn list_name(&self, o: Obj) -> String {
         let func = self.func;
-        if let Obj::Param(i) = o {
-            if let Some(n) = func.params.get(i).and_then(|p| func.names.get(p)) {
-                return format!("`{n}`");
-            }
+        if o == PARAMS {
+            return "a parameter".to_string();
         }
         let is = |l: LocalId| self.flow.points_to(Operand::Local(l)).contains(&o);
         if let Some((_, n)) = func.names.iter().find(|(l, _)| is(**l)) {
@@ -482,6 +485,15 @@ impl<'a> Cx<'a> {
         let holder = func.names.iter().find(|(l, _)| holds(**l));
         holder.map_or_else(|| "a list".to_string(), |(_, n)| format!("a list in `{n}`"))
     }
+}
+
+/// The one list every parameter's list is, to rule 4.
+const PARAMS: Obj = Obj::Param(0);
+
+/// `objs`, each parameter's list as [`PARAMS`].
+fn canon(objs: Objs) -> Objs {
+    let param = |o: Obj| matches!(o, Obj::Param(_)).then_some(PARAMS).unwrap_or(o);
+    objs.into_iter().map(param).collect()
 }
 
 /// A party, the module's values left to `reads` and `changes_world`.
