@@ -11,7 +11,18 @@ pub struct Module {
     pub body: Vec<Stmt>,
     /// The functions of the Rust bindings the module imports (M6b).
     pub stubs: Vec<StubDef>,
+    /// Every `pause <expr>` (M6c), in source order. The marker changes
+    /// nothing a program does, so the expression it covers stands in the
+    /// tree alone and only the `pause` check reads these.
+    pub pauses: Vec<Pause>,
     pub span: Span,
+}
+
+/// A `pause` marker (M6c): the keyword, and the expression it covers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pause {
+    pub keyword: Span,
+    pub covers: Span,
 }
 
 /// A Rust binding (M6b): the name `import` brings in and the functions

@@ -8,9 +8,8 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{ExprKind, FuncDef, Mode, TypeExpr};
+use crate::ast::{FuncDef, Mode, TypeExpr};
 use crate::diag::Result;
-use crate::stdlib::StdFn;
 
 use super::{error, scope, Type, Types};
 
@@ -22,31 +21,9 @@ pub(super) fn check(defs: &[&FuncDef], types: &Types) -> Result<()> {
         .collect();
     for f in defs.iter().filter(|f| f.mode == Mode::Tempered) {
         signature(f, types)?;
-        executors(f)?;
         calls(f, &modes)?;
     }
     Ok(())
-}
-
-/// No executor in tempered code until the `pause` check lands (M6c,
-/// Nano 2026-11-01), so that check cannot break a tempered program
-/// accepted before it.
-fn executors(f: &FuncDef) -> Result<()> {
-    let executor = StdFn::Executor.name();
-    let found = scope::exprs(&f.body).into_iter().find(|e| {
-        let made = matches!(&e.kind, ExprKind::Call { func, .. }
-            if matches!(&func.kind, ExprKind::Name(n) if n == executor));
-        made || scope::task_call(e).is_some()
-    });
-    let Some(e) = found else {
-        return Ok(());
-    };
-    let msg = format!(
-        "tempered `{}` cannot use an executor until the `pause` check lands; \
-         leave it loose",
-        f.name.name
-    );
-    Err(error(e.span, msg))
 }
 
 /// D1: each parameter, then the return, has a complete annotation.

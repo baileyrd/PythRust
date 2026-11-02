@@ -707,18 +707,12 @@ def keep(fut):\n    pass\n";
     }
 
     #[test]
-    fn no_executor_at_module_level_or_in_tempered_code() {
+    fn no_executor_at_module_level() {
         let top = format!("{HEAD}with concurrent.futures.ThreadPoolExecutor() as ex:\n    pass\n");
         let got = program(&top).err().unwrap_or_default();
         assert!(
             got.contains("an executor at module level is not supported"),
             "{got}"
         );
-        let tempered = format!(
-            "{HEAD}temper def t() -> None:\n    \
-             with concurrent.futures.ThreadPoolExecutor() as ex:\n        pass\n"
-        );
-        let got = program(&tempered).err().unwrap_or_default();
-        assert!(got.contains("tempered `t` cannot use an executor"), "{got}");
     }
 }

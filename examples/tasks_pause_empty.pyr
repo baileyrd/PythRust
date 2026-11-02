@@ -1,0 +1,17 @@
+# deviation: a `pause` must cover a wait on a task (M6c); `submit` waits for nothing, so CPython runs this with the marker removed.
+# expect-exit: 1
+# expect-error: nothing here can pause
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = pause ex.submit(square, 2)
+        print(f.result())
+
+
+main()

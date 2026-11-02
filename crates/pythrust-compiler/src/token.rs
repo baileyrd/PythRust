@@ -54,6 +54,8 @@ pub enum TokenKind {
     Import,
     /// `with`, only around an executor (M6c).
     With,
+    /// `pause`, marking an expression that waits on a task (M6c).
+    Pause,
 
     // Arithmetic operators.
     Plus,

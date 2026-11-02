@@ -300,6 +300,24 @@ fn run_cpython(source: &Path) -> Res<Run> {
     Ok(got)
 }
 
+/// `line` without its `pause ` markers.
+fn strip_pauses(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find("pause ") {
+        let before = rest[..at].chars().next_back();
+        let marker = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        let end = if marker { at + "pause ".len() } else { at + 1 };
+        out.push_str(&rest[..at]);
+        if !marker {
+            out.push_str(&rest[at..end]);
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Undoes text-mode stdout's newline translation: CPython on Windows
 /// writes each `\n` as `\r\n`. Pythrust writes `\n` everywhere.
 fn universal_newlines(stdout: String) -> String {
@@ -309,10 +327,12 @@ fn universal_newlines(stdout: String) -> String {
     }
 }
 
-/// `src` as Python: each `temper ` prefix, `mut`/`owned` parameter mode
-/// and `raises` clause removed, or `None` if it has none. `def` is
-/// top-level only, so the prefix always starts a line, a mode follows
-/// `(` or `, ` on its `def` line, and a clause ends that line.
+/// `src` as Python: each `temper ` prefix, `pause` marker, `mut`/`owned`
+/// parameter mode and `raises` clause removed, or `None` if it has none.
+/// `def` is top-level only, so the prefix always starts a line, a mode
+/// follows `(` or `, ` on its `def` line, and a clause ends that line. A
+/// marker is the word `pause` and a space, after a line's indent or a
+/// character that cannot end a name; no corpus string holds one.
 fn loosen(src: &str) -> Option<String> {
     let lines: Vec<String> = src.lines().map(loosen_line).collect();
     let changed = lines.iter().zip(src.lines()).any(|(a, b)| a != b);
@@ -321,6 +341,7 @@ fn loosen(src: &str) -> Option<String> {
 
 fn loosen_line(line: &str) -> String {
     let line = line.strip_prefix("temper ").unwrap_or(line);
+    let line = &strip_pauses(line);
     if !line.starts_with("def ") {
         return line.to_string();
     }
@@ -521,6 +542,7 @@ const NATIVE: &[&str] = &[
     "tasks_map",
     "tasks_map_break",
     "tasks_map_taken",
+    "tasks_pause",
     "tasks_long_line",
     "tasks_partial_line",
     "tasks_result_marked",

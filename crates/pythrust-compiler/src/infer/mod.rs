@@ -15,6 +15,7 @@
 
 mod builtins;
 mod expr;
+mod pause;
 mod raises;
 pub(crate) mod scope;
 mod solve;
@@ -98,6 +99,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     let mut types = c.finish();
     tasks::check(module, &defs, &types)?;
     temper::check(&defs, &types)?;
+    pause::check(module, &defs, &types)?;
     (types.raises, types.warnings) = raises::check(module, &defs, &types)?;
     Ok(types)
 }

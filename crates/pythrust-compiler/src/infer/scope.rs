@@ -148,7 +148,8 @@ impl Blocks {
     }
 }
 
-fn within(inner: Span, outer: Span) -> bool {
+/// Whether `inner` lies inside `outer`.
+pub(crate) fn within(inner: Span, outer: Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
 }
 
@@ -259,6 +260,17 @@ pub(crate) fn withs(block: &[Stmt]) -> Vec<With<'_>> {
                 body,
                 span: s.span,
             });
+        }
+    });
+    out
+}
+
+/// The iterable of every `for` in `block`, nested ones included (M6c).
+pub(crate) fn for_iters(block: &[Stmt]) -> Vec<&Expr> {
+    let mut out = Vec::new();
+    walk(block, &mut |s| {
+        if let StmtKind::For { iter, .. } = &s.kind {
+            out.push(iter);
         }
     });
     out

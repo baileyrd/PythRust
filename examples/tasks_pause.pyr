@@ -1,0 +1,42 @@
+# Tempered code with tasks (M6c): each wait on a task is marked `pause`
+# (`result()`, each step of a loop over `map`'s results, `list` of them,
+# a call to a function that waits); leaving the block needs no marker.
+# CPython runs the program with the markers removed.
+import concurrent.futures
+
+
+temper def square(x: int) -> int:
+    return x * x
+
+
+temper def first(xs: list[int]) -> int:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(square, xs[0])
+        return pause f.result()
+
+
+temper def total(xs: list[int]) -> int:
+    t = 0
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for v in pause ex.map(square, xs):
+            t += v
+    return t
+
+
+temper def squares(xs: list[int]) -> list[int]:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        return pause list(ex.map(square, xs))
+
+
+temper def started(xs: list[int]) -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        ex.submit(square, xs[0])
+
+
+temper def report(xs: list[int]) -> None:
+    print(pause first(xs), pause total(xs), pause squares(xs))
+    pause started(xs)
+
+
+pause report([1, 2, 3])
+report([4])
