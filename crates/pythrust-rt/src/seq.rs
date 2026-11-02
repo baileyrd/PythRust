@@ -24,6 +24,7 @@ use crate::obj::{self, PtObj};
 use crate::range::Range;
 use crate::str::{self as pstr, PtStr};
 use crate::table::{self, Index};
+use crate::task::{self, PtFut};
 use crate::LIVE;
 
 /// A list or tuple object.
@@ -56,6 +57,10 @@ pub(crate) enum Kind {
     View,
     /// Bytes or a file ([`crate::obj`]).
     Obj,
+    /// A task's future ([`crate::task`]): only a local list of the
+    /// function that submitted the tasks holds one, so it is never
+    /// marked, compared, hashed or printed.
+    Fut,
 }
 
 pub(crate) fn kind(desc: &[u8]) -> Kind {
@@ -73,6 +78,7 @@ pub(crate) fn kind(desc: &[u8]) -> Kind {
         Some(b'e') => Kind::Set,
         Some(b'v') => Kind::View,
         Some(b'y') => Kind::Obj,
+        Some(b'u') => Kind::Fut,
         _ => Kind::Int,
     }
 }
@@ -178,6 +184,8 @@ pub(crate) fn inc(desc: &[u8], v: u64) {
         Kind::Str => unsafe { pstr::pt_str_inc(v as *const PtStr) },
         // SAFETY: an object slot holds a live object.
         Kind::Obj => unsafe { obj::pt_obj_inc(v as *const PtObj) },
+        // SAFETY: a future slot holds a handle to a live future.
+        Kind::Fut => unsafe { task::pt_fut_inc(v as *const PtFut) },
         // SAFETY: a sequence slot holds a live sequence.
         Kind::List
         | Kind::Tuple
@@ -207,6 +215,8 @@ fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
         Kind::Str => unsafe { pstr::pt_str_dec(v as *mut PtStr) },
         // SAFETY: an object slot owns a reference to a live object.
         Kind::Obj => unsafe { obj::pt_obj_dec(v as *mut PtObj) },
+        // SAFETY: a future slot owns a handle to a live future.
+        Kind::Fut => unsafe { task::pt_fut_dec(v as *const PtFut) },
         Kind::List
         | Kind::Tuple
         | Kind::Range
@@ -320,9 +330,13 @@ fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>, h
 /// # Safety
 ///
 /// `desc` points to `len` bytes of the compiler's read-only descriptor
-/// data; `v` is a live value of that type.
+/// data; `v` is a live value of that type, or 0: a module value not yet
+/// set, or a scalar, which has nothing to mark.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_mark(desc: *const u8, len: usize, v: u64) {
+    if v == 0 {
+        return;
+    }
     // SAFETY: guaranteed by the caller.
     let desc: &'static [u8] = unsafe { std::slice::from_raw_parts(desc, len) };
     mark(desc, v);
@@ -372,9 +386,14 @@ pub(crate) fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
         Kind::Bool | Kind::None => Some(a.cmp(&b)),
         // Python cannot order `None`, ranges or exceptions; the compiler
         // never asks.
-        Kind::Opt | Kind::Range | Kind::Exc | Kind::Dict | Kind::Set | Kind::View | Kind::Obj => {
-            None
-        }
+        Kind::Opt
+        | Kind::Range
+        | Kind::Exc
+        | Kind::Dict
+        | Kind::Set
+        | Kind::View
+        | Kind::Obj
+        | Kind::Fut => None,
     }
 }
 
@@ -505,6 +524,8 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>, hel
         Kind::Dict | Kind::Set => show_table(unsafe { seq(v) }, out, todo, held),
         // SAFETY: as above.
         Kind::View => show_view(unsafe { seq(v) }, out, todo, held),
+        // Inference never lets a future be printed.
+        Kind::Fut => out.push_str("<Future>"),
     }
 }
 

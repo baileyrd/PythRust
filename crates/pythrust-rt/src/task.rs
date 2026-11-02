@@ -374,14 +374,18 @@ pub unsafe extern "C" fn pt_fut_inc(fut: *const PtFut) {
 }
 
 /// Drops a handle to a future; the last one releases its outcome here.
+/// Null (a local never bound) is nothing.
 ///
 /// # Safety
 ///
-/// `fut` is a live future this thread holds a handle to, which is not
-/// used again.
+/// `fut` is null or a live future this thread holds a handle to, which
+/// is not used again.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_fut_dec(fut: *const PtFut) {
+    if fut.is_null() {
+        return;
+    }
     // SAFETY: guaranteed by the caller.
     let last = unsafe { &*fut }.drop_handle();
     if last {
@@ -392,14 +396,19 @@ pub unsafe extern "C" fn pt_fut_dec(fut: *const PtFut) {
 }
 
 /// Leaving the executor's `with` block, however it is left: waits for
-/// every task it started, then frees it.
+/// every task it started, then frees it. Null (a block left before
+/// its executor was made) is nothing.
 ///
 /// # Safety
 ///
-/// `exec` came from [`pt_exec_new`] on this thread and is not used again.
+/// `exec` is null or came from [`pt_exec_new`] on this thread, and is
+/// not used again.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pt_exec_end(exec: *mut PtExec) {
+    if exec.is_null() {
+        return;
+    }
     // SAFETY: guaranteed by the caller.
     let exec = unsafe { Box::from_raw(exec) };
     exec.end();
@@ -582,6 +591,36 @@ mod tests {
         assert_eq!(result(fut), 3);
         drop_fut(fut);
         end(exec);
+    }
+
+    /// A list of futures (`lu`) counts its handles: copying one in adds
+    /// a handle, and freeing the list drops each. Under Miri a leak or a
+    /// double free fails it.
+    #[test]
+    fn a_list_of_futures_holds_their_handles() {
+        const FUTS: &[u8] = b"lu";
+        let exec = pt_exec_new();
+        let fut = submit(exec, add, &[2, 3], INT);
+        let futs = seq::new_seq(FUTS, Vec::new());
+        // SAFETY: a live list of futures, and the test's live handle.
+        unsafe { seq::pt_seq_push(futs, fut as u64) };
+        drop_fut(fut);
+        let mut status = 0u8;
+        // SAFETY: a live list of futures, and a writable status byte.
+        let got = unsafe { seq::pt_seq_get(futs, 0, &mut status) } as *const PtFut;
+        assert_eq!((status, result(got)), (0, 5));
+        drop_fut(got);
+        // SAFETY: the test's reference to the list, the last.
+        unsafe { seq::pt_seq_dec(futs) };
+        end(exec);
+    }
+
+    /// Leaving a block before its executor was made, or dropping a
+    /// future local never bound, is nothing.
+    #[test]
+    fn null_executors_and_futures_are_nothing() {
+        end(std::ptr::null_mut());
+        drop_fut(std::ptr::null());
     }
 
     /// Tasks on several workers count a marked argument at once.

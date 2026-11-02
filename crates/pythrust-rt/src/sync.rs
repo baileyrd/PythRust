@@ -64,6 +64,7 @@ impl Count {
     pub(crate) fn inc(&self) {
         let v = self.0.load(Ordering::Relaxed);
         if v & MARK == 0 {
+            tsan::plain_write(&self.0);
             self.0.store(v + 1, Ordering::Relaxed);
         } else {
             self.0.fetch_add(1, Ordering::Relaxed);
@@ -76,6 +77,7 @@ impl Count {
     pub(crate) fn dec(&self) -> bool {
         let v = self.0.load(Ordering::Relaxed);
         if v & MARK == 0 {
+            tsan::plain_write(&self.0);
             self.0.store(v - 1, Ordering::Relaxed);
             return v == 1;
         }
@@ -85,6 +87,32 @@ impl Count {
         }
         last
     }
+}
+
+/// ThreadSanitizer's view of an unmarked count. Its load and store are
+/// relaxed atomics, which the detector never reports, but they stand
+/// for a plain read-modify-write: two threads changing one unmarked
+/// count is the race marking exists to prevent. Built with
+/// `--cfg pythrust_tsan` (CI's race job), each is reported to it as the
+/// plain write it stands for; otherwise this is nothing.
+mod tsan {
+    use std::sync::atomic::AtomicUsize;
+
+    #[cfg(pythrust_tsan)]
+    unsafe extern "C" {
+        /// ThreadSanitizer's hook for an uninstrumented 8-byte write.
+        fn __tsan_write8(addr: *mut std::ffi::c_void);
+    }
+
+    /// Reports a plain write of `word` to ThreadSanitizer.
+    #[cfg(pythrust_tsan)]
+    pub(super) fn plain_write(word: &AtomicUsize) {
+        // SAFETY: the hook only records the access; `word` is live.
+        unsafe { __tsan_write8(word.as_ptr().cast()) }
+    }
+
+    #[cfg(not(pythrust_tsan))]
+    pub(super) fn plain_write(_word: &AtomicUsize) {}
 }
 
 /// A borrow cell with `RefCell`'s API, safe to share once marked.
@@ -345,6 +373,36 @@ impl<T> Drop for RefMut<'_, T> {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// What marking costs one thread, per operation: a count's `inc` and
+    /// `dec`, and a read borrow taken and dropped, unmarked against
+    /// marked, uncontended. Reported in the M6c step 4b PR; run with
+    /// `cargo test --release -p pythrust-rt -- --ignored --nocapture
+    /// atomics_cost`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn atomics_cost() {
+        const N: u32 = 50_000_000;
+        let ns = |f: &dyn Fn()| {
+            let start = std::time::Instant::now();
+            (0..N).for_each(|_| f());
+            start.elapsed().as_nanos() as f64 / f64::from(N)
+        };
+        for marked in [false, true] {
+            let count = Count::new();
+            let slot = Slot::new(0u64);
+            if marked {
+                count.mark();
+                slot.mark();
+            }
+            let counted = ns(&|| {
+                std::hint::black_box(&count).inc();
+                std::hint::black_box(&count).dec();
+            });
+            let borrowed = ns(&|| drop(std::hint::black_box(&slot).borrow()));
+            println!("marked {marked}: inc+dec {counted:.2} ns, borrow {borrowed:.2} ns");
+        }
+    }
 
     /// A slot the test marked before sharing it, as the ABI contract
     /// requires of every caller.
