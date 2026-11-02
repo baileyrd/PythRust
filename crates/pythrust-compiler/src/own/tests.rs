@@ -1572,7 +1572,7 @@ fn rule_4_follows_lists_module_values_and_exceptions_hold() {
         (
             "hold(xs)",
             "f = ex.submit(poke, 1)\n        xs.append(2)",
-            "`held` is read by a task until the `with` block ends",
+            "`xs`, which a parameter, module value or exception may share, is read by a task",
         ),
         (
             "hold(xs)",

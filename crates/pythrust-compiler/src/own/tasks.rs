@@ -466,9 +466,10 @@ impl<'a> Cx<'a> {
     }
 
     /// What a diagnostic on the submitter's `inst` calls `shared`: for
-    /// [`PARAMS`], a variable `inst` uses that may hold it.
+    /// [`PARAMS`] or a module value, a variable `inst` uses that
+    /// [`PARAMS`] holds, if any.
     fn inst_name(&self, inst: &Inst, shared: &Shared) -> String {
-        if !matches!(shared, Shared::List(PARAMS)) {
+        if matches!(shared, Shared::List(o) if *o != PARAMS) {
             return self.name(shared);
         }
         let named = inst_operands(inst).into_iter().find_map(|op| {
