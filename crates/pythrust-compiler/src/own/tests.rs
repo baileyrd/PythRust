@@ -1602,13 +1602,31 @@ def show(n: int) -> str:\n    return str(saved)\n\
 def run() -> None:\n    \
 with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(show, 0)\n        xs.append(2)\n\
 run()\n";
-    for src in [param, module] {
+    // In a container, or a default.
+    let held = "import concurrent.futures\nxs = [1]\nsaved = [ValueError(xs)]\n\
+def show(n: int) -> str:\n    return str(saved)\n\
+def run() -> None:\n    \
+with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(show, 0)\n        xs.append(2)\n\
+run()\n";
+    let default = "import concurrent.futures\nxs = [1]\n\
+def show(n: int, e=ValueError(xs)) -> str:\n    return str(e)\n\
+def run() -> None:\n    \
+with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(show, 0)\n        xs.append(2)\n\
+run()\n";
+    for src in [param, module, held, default] {
         let (msg, _) = mode_err(src);
         assert!(
             msg.contains("by a task until the `with` block ends"),
             "{msg}\n{src}"
         );
     }
+    // A scalar exception shares nothing.
+    let scalar = "import concurrent.futures\n\
+def show(e):\n    return str(e)\n\
+def run(xs: list[int]) -> None:\n    e = ValueError(1)\n    \
+with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(show, e)\n        ys = [1]\n        ys.append(2)\n\
+run([1])\n";
+    assert_eq!(checked(scalar), Ok(()), "{scalar}");
     // A list no module value or exception holds stays apart.
     let apart = rule4(&format!(
         "hold(ys)\n    {WITH}f = ex.submit(poke, 1)\n        xs.append(2)"
@@ -1726,6 +1744,29 @@ with concurrent.futures.ThreadPoolExecutor() as ex:\n        print(ex.submit(siz
     assert!(mode_err(global)
         .0
         .contains("`size` reads `fh`, which holds one"));
+    // A file inside an exception, given to `submit` or `map`.
+    let show = "def show(e):\n    return str(e)\n";
+    for start in ["ex.submit(show, e).result()", "list(ex.map(show, [e]))"] {
+        let src = format!(
+            "import concurrent.futures\n{show}def main() -> None:\n    f = open(\"p\", \"rb\")\n    \
+             e = ValueError(f)\n    \
+             with concurrent.futures.ThreadPoolExecutor() as ex:\n        print({start})\n    f.close()\nmain()\n"
+        );
+        let (msg, _) = mode_err(&src);
+        assert!(msg.contains("a file cannot reach a task"), "{msg}\n{src}");
+    }
+    // An exception of a module value holding a file.
+    let global = "import concurrent.futures\nfh = open(\"p\", \"rb\")\nsaved = [ValueError(fh)]\n\
+         def look(n: int) -> int:\n    return len(str(saved)) + n\ndef main() -> None:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        print(ex.submit(look, 1).result())\nmain()\n";
+    assert!(mode_err(global).0.contains("which holds one"), "{global}");
+    // With no exception holding a file, one may reach a task.
+    let scalar = format!(
+        "import concurrent.futures\n{show}def main() -> None:\n    f = open(\"p\", \"rb\")\n    \
+         e = ValueError(1)\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        print(ex.submit(show, e).result())\n    f.close()\nmain()\n"
+    );
+    assert_eq!(checked(&scalar), Ok(()), "{scalar}");
 }
 
 #[test]

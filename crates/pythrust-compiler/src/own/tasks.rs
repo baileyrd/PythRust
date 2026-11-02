@@ -69,6 +69,8 @@ struct World {
     files: Vec<BTreeSet<GlobalId>>,
     /// Whether it may change or keep a list the module's values hold.
     changes: Vec<bool>,
+    /// Whether the program makes an exception that holds a file.
+    exc_files: bool,
 }
 
 impl World {
@@ -78,6 +80,7 @@ impl World {
             lists: vec![BTreeSet::new(); n],
             files: vec![BTreeSet::new(); n],
             changes: vec![false; n],
+            exc_files: exc_files(program),
         };
         let mut callees = vec![BTreeSet::new(); n];
         let mut nested = false;
@@ -115,12 +118,18 @@ impl World {
             if module_value(program, ty) {
                 self.lists[i].insert(*g);
             }
-            if holds(program, ty, Ty::File) {
+            if self.holds_file(program, ty) {
                 self.files[i].insert(*g);
             }
         }
         self.changes[i] |=
             matches!(inst, Inst::SetGlobal { .. }) || changes(flow, inst).contains(&Obj::World);
+    }
+
+    /// Whether a value of `ty` may hold a file: it does, or it holds an
+    /// exception and some exception holds one.
+    fn holds_file(&self, program: &Program, ty: Ty) -> bool {
+        holds(program, ty, Ty::File) || (self.exc_files && holds(program, ty, Ty::Exc))
     }
 
     /// Adds each function's callees' reach to its own, to a fixpoint.
@@ -326,7 +335,7 @@ impl<'a> Cx<'a> {
                 .map_or("?", String::as_str)
         };
         for (k, p) in callee.params.iter().enumerate() {
-            if holds(self.program, callee.locals[p.0], Ty::File) {
+            if self.world.holds_file(self.program, callee.locals[p.0]) {
                 let msg = format!(
                     "a file cannot reach a task: parameter `{}` of `{name}` holds one",
                     param(k)
@@ -547,6 +556,23 @@ fn party(
         changes_world,
         span,
     }
+}
+
+/// Whether any exception the program makes holds a file.
+fn exc_files(program: &Program) -> bool {
+    let insts = program.funcs.iter().flat_map(|f| {
+        f.blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .map(move |inst| (f, inst))
+    });
+    insts.into_iter().any(|(f, inst)| match inst {
+        Inst::Assign {
+            value: Rvalue::NewExc(_, Some(Operand::Local(l))),
+            ..
+        } => holds(program, f.locals[l.0], Ty::File),
+        _ => false,
+    })
 }
 
 /// Whether a global of `ty` may hold a list: one does, or an exception.
