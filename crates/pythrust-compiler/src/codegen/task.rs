@@ -161,6 +161,13 @@ impl FnGen<'_, '_, '_> {
         Ok(self.unslot(v, self.func.locals[dest.0]))
     }
 
+    /// The next of `map`'s results ([`Rvalue::NextResult`]).
+    pub(super) fn next_result(&mut self, rs: Operand, dest: LocalId) -> Result<Value> {
+        let rs = self.operand(rs);
+        let v = self.call_rt_value(Rt::ResultsNext, &[rs])?;
+        Ok(self.unslot(v, self.func.locals[dest.0]))
+    }
+
     /// `op` as a slot a task takes: marked, with a reference of its own.
     fn cross(&mut self, op: Operand) -> Result<Value> {
         let ty = self.func.ty(op);

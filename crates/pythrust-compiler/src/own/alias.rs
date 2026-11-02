@@ -952,7 +952,7 @@ pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
         Inst::SetItem {
             list, index, value, ..
         } => vec![*list, *index, *value],
-        Inst::Raise { exc, .. } | Inst::Sort(exc) => vec![*exc],
+        Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => vec![*exc],
         Inst::Retain(_) | Inst::Release(_) | Inst::Forget(_) | Inst::DropGlobal(_) => Vec::new(),
     }
 }
@@ -991,7 +991,7 @@ fn rvalue_operands(rv: &Rvalue) -> Vec<Operand> {
         Rvalue::Submit { exec, args, .. } => {
             std::iter::once(*exec).chain(args.iter().copied()).collect()
         }
-        Rvalue::TaskResult(a) => vec![*a],
+        Rvalue::TaskResult(a) | Rvalue::NextResult(a) => vec![*a],
         Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
         Rvalue::StrLit(_)
         | Rvalue::Global(_)

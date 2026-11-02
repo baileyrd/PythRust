@@ -963,11 +963,44 @@ a = ex.submit(sq, 3)\n        rs = ex.map(sq, xs)\n        \
 return a.result() + len(list(rs))\n\
 print(run([1, 2]))\n";
 
+/// `map` in `build`: a `Submit` per element appended to its results,
+/// which are reversed once made and then taken by `NextResult`, here by
+/// `list`; nothing calls `sq` on this thread.
 #[test]
-fn build_refuses_map_for_now() {
-    let (d, text) = rejected(TASKS);
-    assert!(d.message.contains("`map` of tasks (M6c step 4b-2)"), "{d}");
-    assert!(text.starts_with("ex.map("), "{text}");
+fn build_maps_tasks_onto_results_taken_in_turn() {
+    let p = lowered(TASKS);
+    let sq = p.funcs.iter().position(|f| f.name == "sq").unwrap();
+    let run = p.funcs.iter().find(|f| f.name == "run").unwrap();
+    let insts = || run.blocks.iter().flat_map(|b| &b.insts);
+    let results: Vec<LocalId> = insts()
+        .filter_map(|i| match i {
+            Inst::Assign {
+                dest,
+                value: Rvalue::NewSeq(items),
+                ..
+            } if run.locals[dest.0] == Ty::Results && items.is_empty() => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    let [rs] = results[..] else {
+        panic!("`map` makes one results value, got {results:?}");
+    };
+    let submits = insts().filter(
+        |i| matches!(i, Inst::Assign { value: Rvalue::Submit { func, .. }, .. } if func.0 == sq),
+    );
+    assert_eq!(submits.count(), 2, "one `submit` and one in `map`'s loop");
+    let rs_op = Operand::Local(rs);
+    let appended = insts().any(|i| matches!(i, Inst::Append { list, .. } if *list == rs_op));
+    let reversed = insts().any(|i| matches!(i, Inst::Reverse(l) if *l == rs_op));
+    // `rs` names the value `map` made.
+    let taken = insts().any(|i| {
+        matches!(i, Inst::Assign { value: Rvalue::NextResult(Operand::Local(l)), .. }
+            if run.locals[l.0] == Ty::Results)
+    });
+    assert!(appended && reversed && taken);
+    let called =
+        insts().any(|i| matches!(i, Inst::Assign { value: Rvalue::Call(id, _), .. } if id.0 == sq));
+    assert!(!called);
 }
 
 /// Submits `sq` in a loop it may leave by `break`, `return` or a raise.

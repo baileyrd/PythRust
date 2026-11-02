@@ -101,6 +101,13 @@ pub enum Ty {
     /// the function that submitted the task and its local lists. Only
     /// `build` makes one; analysis lowers a future as its result.
     Future,
+    /// `map`'s results (M6c): the futures of its tasks, a list held only
+    /// by the function that called `map`, made in order and then
+    /// reversed ([`Inst::Reverse`]), so each [`Rvalue::NextResult`] takes
+    /// the next from its end. [`Rvalue::Len`] is how many are left; the
+    /// value itself is always true. Only `build` makes one; analysis
+    /// lowers `map`'s results as a list of the results.
+    Results,
 }
 
 impl Ty {
@@ -121,6 +128,7 @@ impl Ty {
                 | Ty::File
                 | Ty::Exec
                 | Ty::Future
+                | Ty::Results
         )
     }
 }
@@ -268,6 +276,9 @@ pub enum Inst {
     },
     /// Sorts a list in place by `<`, stably.
     Sort(Operand),
+    /// Reverses a list, here only `map`'s results ([`Ty::Results`]), in
+    /// place.
+    Reverse(Operand),
     /// `raise exc`: makes the `Exc` pending, with its own reference, as
     /// raised at `span`. Nothing may be pending.
     Raise { exc: Operand, span: Span },
@@ -392,6 +403,10 @@ pub enum Rvalue {
     /// value of the destination's type, or raises again what escaped it
     /// (pending, giving null or 0).
     TaskResult(Operand),
+    /// One step over `map`'s results, which hold at least one future:
+    /// takes the next, waits for its task and gives its result, as
+    /// [`Rvalue::TaskResult`]; when it raises, the rest are dropped.
+    NextResult(Operand),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

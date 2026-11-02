@@ -218,6 +218,11 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::Bytes | Ty::File => 'y',
         Ty::Future => 'u',
         Ty::Exec => return Err(backend("an executor in a value".to_string())),
+        // A list of futures ([`Ty::Results`]).
+        Ty::Results => {
+            out.push_str("lu");
+            return Ok(());
+        }
         Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id) => {
             let compound = types
                 .get(id.0)

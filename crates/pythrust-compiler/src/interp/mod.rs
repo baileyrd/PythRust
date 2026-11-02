@@ -627,8 +627,11 @@ impl<'m> Interp<'m, '_> {
         for (op, right) in rest {
             let r = self.eval(right)?;
             let span = l_span.merge(right.span);
-            let holds = match &r {
-                Value::Results(results) => self.results_contain(results, &l, *op, span)?,
+            // Only membership takes results; `None is rs` is identity.
+            let holds = match (&r, op) {
+                (Value::Results(results), CmpOp::In | CmpOp::NotIn) => {
+                    self.results_contain(results, &l, *op, span)?
+                }
                 _ => value::compare(*op, &l, &r, span)?,
             };
             if !holds {

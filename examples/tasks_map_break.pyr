@@ -1,10 +1,12 @@
 # deviation: `run` runs every task `map` started even when a `for` over its results is left early, and leaving the `with` waits for them; CPython cancels the tasks that have not started.
 # expect-exit: 1
-# Leaving the loop early. `run` has run every task by then, so the last
-# one's overflow (a fault, which checked integers make fatal) stops the
-# program before anything prints. CPython cancels that task, or runs it
-# without overflowing and drops its result, and prints both lines. The
-# fixture shows this deviation through another one, checked overflow.
+# native-unjoined: the last task's overflow ends the program while workers still run
+# Leaving the loop early. Every task still runs before the `with` is
+# left, so the last one's overflow (a fault, which checked integers make
+# fatal) stops the program before anything prints, whenever that task
+# runs. CPython cancels it, or runs it without overflowing and drops its
+# result, and prints `after 0`. The fixture shows this deviation through
+# another one, checked overflow.
 import concurrent.futures
 
 
@@ -16,10 +18,11 @@ def step(i: int) -> int:
 
 def main() -> None:
     with concurrent.futures.ThreadPoolExecutor() as ex:
+        first = -1
         for r in ex.map(step, range(100000)):
-            print("first", r)
+            first = r
             break
-    print("after")
+    print("after", first)
 
 
 main()

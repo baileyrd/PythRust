@@ -872,6 +872,29 @@ pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq) {
     *items = merge_sort(desc, taken);
 }
 
+/// Reverses list `s` in place: `map`'s results, made in order and taken
+/// from the end ([`crate::task::pt_results_next`]).
+///
+/// # Safety
+///
+/// `s` is a live list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_reverse(s: *const PtSeq) {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    s.items.borrow_mut().reverse();
+}
+
+/// Removes and gives `s`'s last slot, with the reference it held.
+pub(crate) fn pop(s: &PtSeq) -> Option<u64> {
+    s.items.borrow_mut().pop()
+}
+
+/// Removes every slot of `s`, giving them with their references.
+pub(crate) fn take_all(s: &PtSeq) -> Vec<u64> {
+    std::mem::take(&mut *s.items.borrow_mut())
+}
+
 fn merge_sort(desc: &[u8], mut items: Vec<u64>) -> Vec<u64> {
     if items.len() < 2 {
         return items;

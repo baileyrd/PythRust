@@ -523,6 +523,7 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::Executor => Ty::None,
         Type::Future(_) if seqs.futures => Ty::Future,
         Type::Future(t) => settle(t, subst, bound, seqs),
+        Type::Results(_) if seqs.futures => Ty::Results,
         Type::Results(t) => {
             let elem = settle(t, subst, bound, seqs);
             seqs.list(elem)
@@ -566,6 +567,7 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         // analysis future, its result, binds it.
         (Type::Future(_), Ty::Future) => true,
         (Type::Future(t), _) => bind(t, ty, seqs, subst),
+        (Type::Results(_), Ty::Results) => true,
         (Type::Results(t), Ty::List(_)) => seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst)),
         (Type::Set(t), Ty::Set(_)) | (Type::View(_, t), Ty::View(_)) => {
             seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst))
@@ -1001,10 +1003,11 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         // Tasks ([`FnBuilder::task_call`]): the executor's variable holds
         // nothing (its `with` statement owns it), a future is a handle in
         // `build` and its task's result for analysis, and `map`'s results
-        // are a list of them.
+        // are a list of futures in `build` and of results for analysis.
         Type::Executor => Ok(Ty::None),
         Type::Future(_) if seqs.futures => Ok(Ty::Future),
         Type::Future(t) => concrete(t, subst, seqs, span),
+        Type::Results(_) if seqs.futures => Ok(Ty::Results),
         Type::Results(t) => {
             let elem = concrete(t, subst, seqs, span)?;
             Ok(seqs.list(elem))

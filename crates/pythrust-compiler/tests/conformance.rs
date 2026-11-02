@@ -25,6 +25,9 @@
 //!   alone: the golden holds CPython's (and `run`'s) output, and
 //!   `<name>.native.out` the native program's, which is required to
 //!   differ from it, so a stale native deviation fails.
+//! - `# native-unjoined: why` a fault in a task ends the native program
+//!   without joining the executor's workers, so ThreadSanitizer runs it
+//!   with `report_thread_leaks=0`; it needs a nonzero `expect-exit`.
 //! - `# expect-error: text` the program must fail `check` (lex, parse,
 //!   infer) with a diagnostic containing `text`; it implies exit 1. Every
 //!   other program must pass `check`. `corpus_checks` asserts both.
@@ -41,6 +44,7 @@
 //! - `PYTHRUST_TSAN=1` native programs link a ThreadSanitizer-instrumented
 //!   runtime (`PYTHRUST_RT`, through `ci/tsan-cc`); a race report exits
 //!   66 and so fails the golden. Instrumented binaries skip the size gate.
+//!   A program marked `native-unjoined` runs with `report_thread_leaks=0`.
 //!   CI's race job sets it on x86-64 Linux.
 //! - `PYTHRUST_TSAN_RUNS=n` with `PYTHRUST_TSAN=1`, runs each task program
 //!   `n` more times pinned to one CPU and `n` unpinned: a race shows only
@@ -74,6 +78,8 @@ struct Expect {
     check_error: Option<String>,
     /// Why native code alone deviates, if it does.
     native_deviation: Option<String>,
+    /// Why the native program ends without joining its workers, if so.
+    unjoined: Option<String>,
 }
 
 /// One corpus program and its golden stdout.
@@ -95,6 +101,7 @@ const EXIT: &str = "# expect-exit:";
 const DEVIATION: &str = "# deviation:";
 const NATIVE_DEVIATION: &str = "# native-deviation:";
 const ERROR: &str = "# expect-error:";
+const UNJOINED: &str = "# native-unjoined:";
 
 /// Reads directives from the leading `#` comment block of `src`.
 fn parse_expect(src: &str) -> Res<Expect> {
@@ -102,6 +109,7 @@ fn parse_expect(src: &str) -> Res<Expect> {
     let mut deviation: Option<String> = None;
     let mut check_error: Option<String> = None;
     let mut native_deviation: Option<String> = None;
+    let mut unjoined: Option<String> = None;
     for line in src.lines().take_while(|l| l.starts_with('#')) {
         if let Some(v) = line.strip_prefix(EXIT) {
             let n = v
@@ -116,17 +124,23 @@ fn parse_expect(src: &str) -> Res<Expect> {
         } else if let Some(v) = line.strip_prefix(NATIVE_DEVIATION) {
             let why = text(v, NATIVE_DEVIATION)?;
             set_once(&mut native_deviation, why, NATIVE_DEVIATION)?;
+        } else if let Some(v) = line.strip_prefix(UNJOINED) {
+            set_once(&mut unjoined, text(v, UNJOINED)?, UNJOINED)?;
         }
     }
     let status = status.unwrap_or(0);
     if check_error.is_some() && status != 1 {
         return Err(format!("{ERROR} needs {EXIT} 1"));
     }
+    if unjoined.is_some() && status == 0 {
+        return Err(format!("{UNJOINED} needs a nonzero {EXIT}"));
+    }
     Ok(Expect {
         status,
         deviation,
         check_error,
         native_deviation,
+        unjoined,
     })
 }
 
@@ -498,6 +512,9 @@ const NATIVE: &[&str] = &[
     "tasks_generic_discarded",
     "tasks_globals",
     "tasks_leave_block",
+    "tasks_map",
+    "tasks_map_break",
+    "tasks_map_taken",
     "tasks_long_line",
     "tasks_partial_line",
     "tasks_result_marked",
@@ -529,12 +546,7 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a generic function storing a bool key into an int-keyed table: `run` cannot \
          always tell the table is int-keyed, so `build` refuses rather than differ",
     ),
-    ("tasks_map", TASKS_GAP),
-    ("tasks_map_break", TASKS_GAP),
 ];
-
-/// Why `build` refuses `map`: native `map` is M6c step 4b-2.
-const TASKS_GAP: &str = "`map`: native `map` follows native `submit` (M6c step 4b-2)";
 
 const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";
 
@@ -984,8 +996,8 @@ fn loosen_strips_raises_clauses() {
 
 /// A native program that failed must print exactly what `pythrust run`
 /// prints for the same file: the error, its location and its carets. Only
-/// called once the program is known to terminate.
-fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
+/// called once the program is known to terminate; `cmd` runs `exe`.
+fn stderr_mismatch(exe: &Path, mut cmd: Command) -> Res<Option<String>> {
     let stderr = |cmd: &mut Command| -> Res<String> {
         let out = cmd
             .output()
@@ -993,7 +1005,7 @@ fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
         Ok(String::from_utf8_lossy(&out.stderr).into_owned())
     };
     let source = exe.with_extension("pyr");
-    let native = stderr(&mut Command::new(exe))?;
+    let native = stderr(&mut cmd)?;
     let interp = stderr(Command::new(pythrust_bin()?).arg("run").arg(&source))?;
     Ok((native != interp).then(|| {
         format!(
@@ -1033,8 +1045,8 @@ fn uses_tasks(case: &Case) -> Res<bool> {
 fn tsan_repeats(case: &Case, exe: &Path) -> Res<Vec<String>> {
     let mut failures = Vec::new();
     for k in 0..tsan_runs()? {
-        let pinned = run(Command::new("taskset").args(["-c", "0"]).arg(exe), TIMEOUT)?;
-        let free = run(&mut Command::new(exe), TIMEOUT)?;
+        let pinned = run(&mut native(case, exe, true), TIMEOUT)?;
+        let free = run(&mut native(case, exe, false), TIMEOUT)?;
         for (how, got) in [("pinned", pinned), ("unpinned", free)] {
             if let Some(m) = mismatch(case, &got) {
                 failures.push(format!("{how} run {}: {m}", k + 2));
@@ -1042,6 +1054,28 @@ fn tsan_repeats(case: &Case, exe: &Path) -> Res<Vec<String>> {
         }
     }
     Ok(failures)
+}
+
+/// A command running `case`'s native program `exe`, `pinned` to one
+/// CPU or not. A fault in a task exits without joining the executor's
+/// workers, as it exits without releasing, so under ThreadSanitizer a
+/// case marked `native-unjoined` does not report them as leaked
+/// threads; every other case must have joined them, even one an
+/// uncaught exception ends, since leaving the `with` joins them.
+fn native(case: &Case, exe: &Path, pinned: bool) -> Command {
+    let mut cmd = match pinned {
+        true => {
+            let mut c = Command::new("taskset");
+            c.args(["-c", "0"]).arg(exe);
+            c
+        }
+        false => Command::new(exe),
+    };
+    if tsan_requested() && case.expect.unjoined.is_some() {
+        let options = std::env::var("TSAN_OPTIONS").unwrap_or_default();
+        cmd.env("TSAN_OPTIONS", format!("{options} report_thread_leaks=0"));
+    }
+    cmd
 }
 
 fn memcheck_requested() -> bool {
@@ -1097,11 +1131,20 @@ fn memcheck_failure(case: &Case, got: Res<Run>, report: &str) -> Option<String> 
 /// and debug-info stripping it is over 5 MB; this bound catches that.
 const MAX_NATIVE_BYTES: u64 = 1 << 20;
 
-/// Fails a native binary larger than [`MAX_NATIVE_BYTES`].
-fn oversized(exe: &Path) -> Res<Option<String>> {
+/// The bound for a program using tasks, which links the runtime's
+/// threads: `tasks_map` and `tasks_map_taken` are 1.05 to 1.12 MB on
+/// AArch64 and macOS (Nano, 2026-11-02). It still catches 5 MB.
+const MAX_TASKS_NATIVE_BYTES: u64 = 2 << 20;
+
+/// Fails a native binary larger than its bound: [`MAX_TASKS_NATIVE_BYTES`]
+/// when the program uses tasks, else [`MAX_NATIVE_BYTES`].
+fn oversized(exe: &Path, tasks: bool) -> Res<Option<String>> {
+    let max = match tasks {
+        true => MAX_TASKS_NATIVE_BYTES,
+        false => MAX_NATIVE_BYTES,
+    };
     let size = fs::metadata(exe).map_err(|e| e.to_string())?.len();
-    Ok((size > MAX_NATIVE_BYTES)
-        .then(|| format!("{}: {size} bytes exceeds {MAX_NATIVE_BYTES}", exe.display())))
+    Ok((size > max).then(|| format!("{}: {size} bytes exceeds {max}", exe.display())))
 }
 
 /// `pythrust build` links in a private directory beside the executable
@@ -1175,7 +1218,7 @@ fn corpus_matches_native() -> Res<()> {
             ));
         }
         if !tsan_requested() {
-            failures.extend(oversized(&exe)?);
+            failures.extend(oversized(&exe, uses_tasks(&case)?)?);
         }
         let case = match native_golden(case)? {
             Ok(c) => c,
@@ -1184,7 +1227,7 @@ fn corpus_matches_native() -> Res<()> {
                 continue;
             }
         };
-        let got = run(&mut Command::new(&exe), TIMEOUT)?;
+        let got = run(&mut native(&case, &exe, false), TIMEOUT)?;
         if tsan_requested() && uses_tasks(&case)? {
             failures.extend(tsan_repeats(&case, &exe)?);
         }
@@ -1192,7 +1235,7 @@ fn corpus_matches_native() -> Res<()> {
         let errored = failed.is_none() && got.status != 0;
         failures.extend(failed);
         if errored {
-            failures.extend(stderr_mismatch(&exe)?);
+            failures.extend(stderr_mismatch(&exe, native(&case, &exe, false))?);
         }
         if memchecked {
             failures.extend(memcheck(&case, &exe)?);
@@ -1646,7 +1689,7 @@ fn native_matches_run_at_the_repr_limit() -> Res<()> {
             if got != want {
                 failures.push(format!("{src}\n  run {want:?}\n  native {got:?}"));
             }
-            failures.extend(stderr_mismatch(&exe)?);
+            failures.extend(stderr_mismatch(&exe, Command::new(&exe))?);
             let raises = u == 3;
             if (got.status == 0) != (fits && !raises) {
                 failures.push(format!("{src}\n  exit {} at depth {n}", got.status));
@@ -1874,6 +1917,7 @@ fn expect_defaults() {
         deviation: None,
         check_error: None,
         native_deviation: None,
+        unjoined: None,
     };
     assert_eq!(parse_expect("print(1)\n"), Ok(want()));
     assert_eq!(parse_expect(""), Ok(want()));
@@ -1881,12 +1925,13 @@ fn expect_defaults() {
 
 #[test]
 fn expect_reads_directives() {
-    let src = "# a plain comment\n# expect-exit: 1\n# deviation: checked overflow\n# expect-error: overflow\n# native-deviation: lines\nx = 1\n";
+    let src = "# a plain comment\n# expect-exit: 1\n# deviation: checked overflow\n# expect-error: overflow\n# native-deviation: lines\n# native-unjoined: a fault\nx = 1\n";
     let want = Expect {
         status: 1,
         deviation: Some("checked overflow".to_string()),
         check_error: Some("overflow".to_string()),
         native_deviation: Some("lines".to_string()),
+        unjoined: Some("a fault".to_string()),
     };
     assert_eq!(parse_expect(src), Ok(want));
 }
@@ -1903,6 +1948,7 @@ fn expect_rejects_bad_directives() {
     assert!(parse_expect("# expect-exit: 1\n# expect-exit: 2\n").is_err());
     assert!(parse_expect("# deviation:\n").is_err());
     assert!(parse_expect("# native-deviation:\n").is_err());
+    assert!(parse_expect("# native-unjoined: a fault\n").is_err());
     assert!(parse_expect("# deviation: a\n# deviation: b\n").is_err());
     assert!(parse_expect("# expect-error:\n# expect-exit: 1\n").is_err());
     assert!(parse_expect("# expect-error: x\n").is_err());
@@ -1919,6 +1965,7 @@ fn mismatch_reports_status_and_stdout() {
             deviation: None,
             check_error: None,
             native_deviation: None,
+            unjoined: None,
         },
     };
     let ok = Run {
@@ -1948,6 +1995,7 @@ fn memcheck_fails_closed() {
             deviation: None,
             check_error: None,
             native_deviation: None,
+            unjoined: None,
         },
     };
     let ran = |stdout: &str, status: i32| -> Res<Run> {

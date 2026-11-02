@@ -390,6 +390,7 @@ fn source(program: &Program, ty: Ty) -> Type {
         // Only `build` makes these, and the analyses never see its IR.
         Ty::Exec => Type::Executor,
         Ty::Future => Type::Future(Box::new(Type::None)),
+        Ty::Results => Type::Results(Box::new(Type::None)),
         Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_) => {
             compound_source(program, ty)
         }
