@@ -945,7 +945,7 @@ fn term_operands(term: &Term) -> Vec<Operand> {
 /// The operands `inst` reads, not counting reference counting.
 pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
     match inst {
-        Inst::Assign { value, .. } => rvalue_operands(value),
+        Inst::Assign { value, .. } => value.operands(),
         Inst::Print { args, sep, end } => args.iter().chain(sep).chain(end).copied().collect(),
         Inst::Append { list, value, .. } => vec![*list, *value],
         Inst::SetGlobal { value, .. } => vec![*value],
@@ -954,50 +954,6 @@ pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
         } => vec![*list, *index, *value],
         Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => vec![*exc],
         Inst::Retain(_) | Inst::Release(_) | Inst::Forget(_) | Inst::DropGlobal(_) => Vec::new(),
-    }
-}
-
-fn rvalue_operands(rv: &Rvalue) -> Vec<Operand> {
-    match rv {
-        Rvalue::Use(a)
-        | Rvalue::Neg(a)
-        | Rvalue::Len(a)
-        | Rvalue::ToStr(a)
-        | Rvalue::CopyList(a)
-        | Rvalue::View(a)
-        | Rvalue::Field(a, _)
-        | Rvalue::Wrap(a)
-        | Rvalue::Unwrap(a)
-        | Rvalue::IsNone(a)
-        | Rvalue::ToFloat(a)
-        | Rvalue::BoolToInt(a)
-        | Rvalue::FloatToInt(a)
-        | Rvalue::ParseFloat(a)
-        | Rvalue::ParseInt(a) => vec![*a],
-        Rvalue::Int(_, a, b)
-        | Rvalue::Index(a, b)
-        | Rvalue::Entry(a, b, _)
-        | Rvalue::Cmp(_, a, b)
-        | Rvalue::AddOverflows(a, b)
-        | Rvalue::Concat(a, b)
-        | Rvalue::Repeat(a, b)
-        | Rvalue::Float(_, a, b)
-        | Rvalue::IntPow(a, b)
-        | Rvalue::Contains { hay: a, needle: b } => vec![*a, *b],
-        Rvalue::Call(_, args)
-        | Rvalue::NewSeq(args)
-        | Rvalue::Std(_, args)
-        | Rvalue::Rust(_, args) => args.clone(),
-        Rvalue::Submit { exec, args, .. } => {
-            std::iter::once(*exec).chain(args.iter().copied()).collect()
-        }
-        Rvalue::TaskResult(a) | Rvalue::NextResult(a) | Rvalue::Hold(a) => vec![*a],
-        Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
-        Rvalue::StrLit(_)
-        | Rvalue::Global(_)
-        | Rvalue::Raised
-        | Rvalue::PendingIs(_)
-        | Rvalue::Catch => Vec::new(),
     }
 }
 

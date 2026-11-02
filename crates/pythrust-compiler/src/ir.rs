@@ -535,3 +535,69 @@ impl Program {
         }
     }
 }
+
+impl Rvalue {
+    /// The operands an rvalue reads.
+    pub fn operands(&self) -> Vec<Operand> {
+        match self {
+            Rvalue::Use(a)
+            | Rvalue::Neg(a)
+            | Rvalue::Len(a)
+            | Rvalue::ToStr(a)
+            | Rvalue::CopyList(a)
+            | Rvalue::View(a)
+            | Rvalue::Field(a, _)
+            | Rvalue::Wrap(a)
+            | Rvalue::Unwrap(a)
+            | Rvalue::IsNone(a)
+            | Rvalue::ToFloat(a)
+            | Rvalue::BoolToInt(a)
+            | Rvalue::FloatToInt(a)
+            | Rvalue::ParseFloat(a)
+            | Rvalue::ParseInt(a) => vec![*a],
+            Rvalue::Int(_, a, b)
+            | Rvalue::Cmp(_, a, b)
+            | Rvalue::AddOverflows(a, b)
+            | Rvalue::Concat(a, b)
+            | Rvalue::Repeat(a, b)
+            | Rvalue::Index(a, b)
+            | Rvalue::Entry(a, b, _)
+            | Rvalue::Float(_, a, b)
+            | Rvalue::IntPow(a, b) => vec![*a, *b],
+            Rvalue::Contains { hay, needle } => vec![*hay, *needle],
+            Rvalue::Call(_, args)
+            | Rvalue::NewSeq(args)
+            | Rvalue::Std(_, args)
+            | Rvalue::Rust(_, args) => args.clone(),
+            Rvalue::Submit { exec, args, .. } => {
+                std::iter::once(*exec).chain(args.iter().copied()).collect()
+            }
+            Rvalue::TaskResult(a) | Rvalue::NextResult(a) | Rvalue::Hold(a) => vec![*a],
+            Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
+            Rvalue::StrLit(_)
+            | Rvalue::Global(_)
+            | Rvalue::Raised
+            | Rvalue::PendingIs(_)
+            | Rvalue::Catch => Vec::new(),
+        }
+    }
+}
+
+impl Inst {
+    /// Whether this instruction names local `l` anywhere.
+    pub fn mentions(&self, l: LocalId) -> bool {
+        let local = |op: &Operand| *op == Operand::Local(l);
+        match self {
+            Inst::Assign { dest, value, .. } => *dest == l || value.operands().iter().any(local),
+            Inst::Print { args, sep, end } => args.iter().chain(sep).chain(end).any(local),
+            Inst::Retain(x) | Inst::Release(x) | Inst::Forget(x) => *x == l,
+            Inst::Append { list, value, .. } => local(list) || local(value),
+            Inst::SetGlobal { value, .. } => local(value),
+            Inst::DropGlobal(_) => false,
+            Inst::SetItem {
+                list, index, value, ..
+            } => [list, index, value].into_iter().any(local),
+            Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => local(exc),
+        }
+    }
+}
