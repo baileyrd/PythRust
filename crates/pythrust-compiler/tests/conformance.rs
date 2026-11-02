@@ -541,7 +541,17 @@ const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not sup
 /// Builds the runtime library `pythrust build` links against, with the
 /// profile and target of the `pythrust` under test so it lands beside it.
 /// `cargo test` builds the compiler but not this static library.
+///
+/// Once per test process: tests run in parallel, and a second build
+/// could replace the library while another test links against it. macOS
+/// CI once failed a link with the library missing (run 41471525150);
+/// one build per process leaves nothing to race.
 fn build_runtime() -> Res<()> {
+    static BUILT: std::sync::OnceLock<Res<()>> = std::sync::OnceLock::new();
+    BUILT.get_or_init(build_runtime_now).clone()
+}
+
+fn build_runtime_now() -> Res<()> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let args = runtime_build_args(&pythrust_bin()?, &|dir| dir.join("CACHEDIR.TAG").is_file())?;
     let status = Command::new(cargo)
