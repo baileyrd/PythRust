@@ -1674,10 +1674,11 @@ fn fclone_lite_matches_cpython() -> Res<()> {
     let exe = native_case(&dir, "fclone", &read(&app)?)?;
     let want = fclone_cpython(&app, &root)?;
     assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
+    assert!(!want.stdout.contains("locked"), "{}", want.stdout);
     let mut interp = Command::new(pythrust_bin()?);
-    interp.arg("run").arg(&app).arg(&root);
-    assert_eq!(run(&mut interp, TIMEOUT)?, want);
-    assert_eq!(run(Command::new(&exe).arg(&root), TIMEOUT)?, want);
+    interp.arg("run").arg(&app);
+    assert_eq!(fclone_run(&mut interp, &root)?, want);
+    assert_eq!(fclone_run(&mut Command::new(&exe), &root)?, want);
     cleanup(&dir)?;
     Ok(())
 }
@@ -1695,10 +1696,10 @@ fn fclone_tasks_matches_fclone_lite() -> Res<()> {
     let app = fclone_app("fclone_tasks.py");
     assert_eq!(fclone_cpython(&app, &root)?, want);
     let mut interp = Command::new(pythrust_bin()?);
-    interp.arg("run").arg(&app).arg(&root);
-    assert_eq!(run(&mut interp, TIMEOUT)?, want);
+    interp.arg("run").arg(&app);
+    assert_eq!(fclone_run(&mut interp, &root)?, want);
     let exe = native_case(&dir, "fclone_tasks", &read(&app)?)?;
-    assert_eq!(run(Command::new(&exe).arg(&root), TIMEOUT)?, want);
+    assert_eq!(fclone_run(&mut Command::new(&exe), &root)?, want);
     cleanup(&dir)?;
     Ok(())
 }
@@ -1712,10 +1713,13 @@ fn fclone_app(name: &str) -> PathBuf {
 }
 
 /// A tree under `dir` with two duplicate groups of one size, a pair of
-/// empty files, a file of a size of its own and a symbolic link, which
-/// fclone-lite skips.
+/// empty files, a file of a size of its own, a symbolic link, and two
+/// unreadable (mode 000) files of one size; fclone-lite skips the link
+/// and the unreadable files.
 #[cfg(unix)]
 fn fclone_tree(dir: &Path) -> Res<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
     let root = dir.join("tree");
     fs::create_dir_all(root.join("a").join("b")).map_err(|e| e.to_string())?;
     let files = [
@@ -1724,14 +1728,21 @@ fn fclone_tree(dir: &Path) -> Res<PathBuf> {
         ("a/b/three", "yy"),
         ("four", "yy"),
         ("five", "zz"),
-        ("a/six", "zy"),
+        ("a/six", "zz"),
+        ("seven", "zyx"),
         ("empty", ""),
         ("a/b/empty", ""),
+        ("locked", "123"),
+        ("a/locked", "456"),
     ];
     for (name, text) in files {
         write(&root.join(name), text)?;
     }
     std::os::unix::fs::symlink(root.join("one"), root.join("link")).map_err(|e| e.to_string())?;
+    for name in ["locked", "a/locked"] {
+        let none = fs::Permissions::from_mode(0o000);
+        fs::set_permissions(root.join(name), none).map_err(|e| e.to_string())?;
+    }
     Ok(root)
 }
 
@@ -1739,10 +1750,21 @@ fn fclone_tree(dir: &Path) -> Res<PathBuf> {
 #[cfg(unix)]
 fn fclone_cpython(app: &Path, root: &Path) -> Res<Run> {
     let mut cpython = Command::new(python());
-    cpython.args(["-I", "-X", "utf8"]).arg(app).arg(root);
-    let got = run(&mut cpython, TIMEOUT)?;
+    cpython.args(["-I", "-X", "utf8"]).arg(app);
+    let got = fclone_run(&mut cpython, root)?;
     assert_eq!(got.status, 0, "{}", got.stdout);
     Ok(got)
+}
+
+/// Runs `cmd` over `root`; as `nobody` when this user (root) can read
+/// the tree's mode-000 files, so they stay unreadable to the program.
+#[cfg(unix)]
+fn fclone_run(cmd: &mut Command, root: &Path) -> Res<Run> {
+    use std::os::unix::process::CommandExt;
+    if fs::read(root.join("locked")).is_ok() {
+        cmd.uid(65534).gid(65534);
+    }
+    run(cmd.arg(root), TIMEOUT)
 }
 
 /// A built program sees its own arguments in `sys.argv`, as `run` sees

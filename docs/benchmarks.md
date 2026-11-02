@@ -92,7 +92,7 @@ The one-task row is now within the noise of the direct call, which gained too: i
 
 ## fclone-lite on tasks (M6c driver)
 
-`apps/fclone-lite/fclone_tasks.py` is fclone-lite with every candidate (a file sharing its size with another) hashed through one executor's `map`; the serial `fclone_lite.py` hashes them one by one. Both are valid Python, and they print the same groups (test `fclone_tasks_matches_fclone_lite`, and identical output on all three trees here, with rusty_fclone finding the same group counts). Same 4-core VM, warm cache, release `pythrust` (2026-11-02), one warm-up then 5 runs, median seconds. Trees shaped like M6b's (`roadmap.md`, M6b driver), regenerated: 900 MB of 30 files of 30 MB with 10 duplicate pairs; 105 MB of 4,400 files of 5 sizes, 400 duplicates; 153 MB of 4,400 files over 479 sizes, 400 duplicates. Core counts by `taskset`.
+`apps/fclone-lite/fclone_tasks.py` is fclone-lite with every candidate (a file sharing its size with another) hashed through one executor's `map`; the serial `fclone_lite.py` hashes them one by one. Both are valid Python, and they print the same groups (test `fclone_tasks_matches_fclone_lite`, and identical output on all three trees here, with rusty_fclone finding the same group counts). Same 4-core VM, warm cache, release `pythrust` (2026-11-02), one warm-up then 5 runs, median seconds. Trees shaped like those of M6b's parallel-hashing rows (`roadmap.md`, M6b follow-up), regenerated, sizes approximate: 900 MB of 30 files of 30 MB with 10 duplicate pairs; 105 MB of 4,400 files of 5 sizes, 400 duplicates; 153 MB of 4,400 files over 479 sizes, 400 duplicates. Core counts by `taskset`.
 
 | Program | 900 MB, 30 files | 105 MB, 5 sizes | 153 MB, 479 sizes |
 |---|---:|---:|---:|
@@ -104,7 +104,7 @@ The one-task row is now within the noise of the direct call, which gained too: i
 | CPython `fclone_tasks.py` | 0.991 (0.896 to 1.384) | 1.368 (1.271 to 1.601) | 1.555 (1.504 to 1.677) |
 | rusty_fclone | 0.081 (0.063 to 0.089) | 0.223 (0.189 to 0.242) | 0.261 (0.231 to 0.331) |
 
-On four cores the task build runs 2.7x, 3.1x and 3.6x faster than the serial native build; on one core it costs 4%, 3% and 3% more. It still trails CPython's own threads on the large-file tree, where both are hash-bound and CPython hashes with OpenSSL ([M6a](roadmap.md#phase-5-m6-plan): 1.2x to 1.5x our SHA-256 on this CPU) on threads that release the GIL; on the small-file trees CPython's threads are slower than its serial run. rusty_fclone is not like-for-like (partial hashing, xxh3), as in M6b. These are the author's timings on one VM.
+On four cores the task build runs 2.7x, 3.1x and 3.6x faster than the serial native build; on one core its medians are 4%, 3% and 3% higher, within run-to-run spread. It still trails CPython's own threads on the large-file tree, where both are hash-bound; CPython's lead there comes in part from hashing with OpenSSL ([M6a](roadmap.md#phase-5-m6-plan): 1.2x to 1.5x our SHA-256 on this CPU), on threads that release the GIL; on the small-file trees CPython's threads are slower than its serial run. rusty_fclone is not like-for-like (partial hashing, xxh3), as in M6b. These are the author's timings on one VM.
 
 ## CPU-bound tasks (M6c step 4c)
 
