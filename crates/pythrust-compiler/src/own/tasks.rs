@@ -18,8 +18,8 @@
 //! touching it reads the globals the function loads, changing it
 //! changes the module's values, and an exception reaches all of them.
 //! A caller may pass one list as two arguments, or a module list, so
-//! the parameters' lists are one list, and the module's (pending
-//! Nano's pick).
+//! every list a parameter, a module value or an exception may be or
+//! hold is one list, and the module's (pending Nano's pick).
 //!
 //! No file reaches a task: not in its arguments' types, nor in a module
 //! variable or default it reads. `map` runs no function that changes or
@@ -44,9 +44,9 @@ pub(super) fn check(program: &Program, summaries: &[Summary]) -> Result<()> {
             continue;
         }
         let flow = body::settle(program, func, summaries);
-        let mut held = canon(flow.reachable(&Objs::from([Obj::World])));
-        held.remove(&Obj::World);
-        held.insert(PARAMS);
+        let roots = (0..func.params.len()).map(Obj::Param).chain([Obj::World]);
+        let mut shared = flow.reachable(&roots.collect());
+        shared.remove(&Obj::World);
         let cx = Cx {
             program,
             summaries,
@@ -54,7 +54,7 @@ pub(super) fn check(program: &Program, summaries: &[Summary]) -> Result<()> {
             func,
             index: i,
             flow: &flow,
-            held,
+            shared,
         };
         func.regions.iter().try_for_each(|r| cx.region(r))?;
     }
@@ -221,8 +221,9 @@ struct Cx<'a> {
     func: &'a Func,
     index: usize,
     flow: &'a Flow<'a>,
-    /// The function's lists a module value or an exception may hold.
-    held: Objs,
+    /// The lists a parameter, a module value or an exception may be or
+    /// hold: one list, [`PARAMS`], to rule 4.
+    shared: Objs,
 }
 
 /// A task's call: where it is, and what it calls with what.
@@ -353,10 +354,11 @@ impl<'a> Cx<'a> {
     /// The party a task is.
     fn task(&self, c: &Call) -> Party {
         let touched = self.reach(c.args);
-        let changed = canon(
-            self.flow
-                .passed(c.args, &self.summaries[c.callee].params, Mode::Mut),
-        );
+        let changed = self.canon(self.flow.passed(
+            c.args,
+            &self.summaries[c.callee].params,
+            Mode::Mut,
+        ));
         let mut reads = self.world.lists[c.callee].clone();
         if touched.contains(&Obj::World) {
             reads.extend(self.world.lists[self.index].iter().copied());
@@ -381,7 +383,7 @@ impl<'a> Cx<'a> {
                     let Some((shared, mine)) = self.inst(inst, span).conflict(t) else {
                         continue;
                     };
-                    let x = self.name(&shared);
+                    let x = self.inst_name(inst, &shared);
                     let how = if mine { "read" } else { "changed" };
                     let msg = format!("{x} is {how} by a task until the `with` block ends");
                     return Err(error(span, msg));
@@ -403,7 +405,7 @@ impl<'a> Cx<'a> {
     /// The party one of the submitter's instructions is.
     fn inst(&self, inst: &Inst, span: Span) -> Party {
         let touched = self.reach(&inst_operands(inst));
-        let changed = canon(changes(self.flow, inst));
+        let changed = self.canon(changes(self.flow, inst));
         let mut reads = BTreeSet::new();
         let mut changes_world = self.changes_world(&changed);
         match inst {
@@ -435,8 +437,8 @@ impl<'a> Cx<'a> {
         if ops.iter().any(|a| self.holds_exc(*a)) {
             objs.insert(Obj::World);
         }
-        let mut touched = canon(self.flow.reachable(&objs));
-        if touched.iter().any(|o| self.held.contains(o)) {
+        let mut touched = self.canon(self.flow.reachable(&objs));
+        if touched.contains(&PARAMS) {
             touched.insert(Obj::World);
         }
         touched
@@ -444,7 +446,16 @@ impl<'a> Cx<'a> {
 
     /// Whether changing `changed` changes the module's values.
     fn changes_world(&self, changed: &Objs) -> bool {
-        changed.contains(&Obj::World) || changed.iter().any(|o| self.held.contains(o))
+        changed.contains(&Obj::World) || changed.contains(&PARAMS)
+    }
+
+    /// `objs`, each list [`Cx::shared`] holds as [`PARAMS`].
+    fn canon(&self, objs: Objs) -> Objs {
+        let one = |o: Obj| match self.shared.contains(&o) || matches!(o, Obj::Param(_)) {
+            true => PARAMS,
+            false => o,
+        };
+        objs.into_iter().map(one).collect()
     }
 
     fn holds_exc(&self, op: Operand) -> bool {
@@ -452,6 +463,22 @@ impl<'a> Cx<'a> {
             return false;
         };
         holds(self.program, self.func.locals[l.0], Ty::Exc)
+    }
+
+    /// What a diagnostic on the submitter's `inst` calls `shared`: for
+    /// [`PARAMS`], a variable `inst` uses that may hold it.
+    fn inst_name(&self, inst: &Inst, shared: &Shared) -> String {
+        if !matches!(shared, Shared::List(PARAMS)) {
+            return self.name(shared);
+        }
+        let named = inst_operands(inst).into_iter().find_map(|op| {
+            let Operand::Local(l) = op else { return None };
+            let n = self.func.names.get(&l)?;
+            let held = self.canon(self.flow.reachable(&self.flow.points_to(op)));
+            held.contains(&PARAMS)
+                .then(|| format!("`{n}`, which {SHARED} may share,"))
+        });
+        named.unwrap_or_else(|| self.name(shared))
     }
 
     /// What a diagnostic calls `shared`.
@@ -467,12 +494,12 @@ impl<'a> Cx<'a> {
         name.map_or_else(|| "a parameter's default".to_string(), |n| format!("`{n}`"))
     }
 
-    /// "a parameter", or a source variable that may be `o`, else one
+    /// A list [`SHARED`] may hold, or a source variable that may be `o`, else one
     /// that may hold it.
     fn list_name(&self, o: Obj) -> String {
         let func = self.func;
         if o == PARAMS {
-            return "a parameter".to_string();
+            return format!("a list {SHARED} may hold");
         }
         let is = |l: LocalId| self.flow.points_to(Operand::Local(l)).contains(&o);
         if let Some((_, n)) = func.names.iter().find(|(l, _)| is(**l)) {
@@ -487,14 +514,13 @@ impl<'a> Cx<'a> {
     }
 }
 
-/// The one list every parameter's list is, to rule 4.
+/// The one list every list a parameter, a module value or an exception
+/// may be or hold is, to rule 4: a caller may pass one list as two
+/// arguments, or a module list.
 const PARAMS: Obj = Obj::Param(0);
 
-/// `objs`, each parameter's list as [`PARAMS`].
-fn canon(objs: Objs) -> Objs {
-    let param = |o: Obj| matches!(o, Obj::Param(_)).then_some(PARAMS).unwrap_or(o);
-    objs.into_iter().map(param).collect()
-}
+/// Who may hold [`PARAMS`], for diagnostics.
+const SHARED: &str = "a parameter, module value or exception";
 
 /// A party, the module's values left to `reads` and `changes_world`.
 fn party(

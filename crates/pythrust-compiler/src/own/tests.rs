@@ -1582,7 +1582,7 @@ fn rule_4_follows_lists_module_values_and_exceptions_hold() {
         (
             "e = ValueError(xs)",
             "f = ex.submit(show, e)\n        xs.append(2)",
-            "`xs` is read by a task until the `with` block ends",
+            "`xs`, which a parameter, module value or exception may share, is read by a task",
         ),
     ];
     for (before, body, want) in cases {
@@ -1607,7 +1607,7 @@ fn rule_4_counts_parameters_as_one_list_with_module_values() {
         (
             "xs: list[int], ys: list[int]",
             "f = ex.submit(add, xs, 1)\n        print(len(ys))",
-            "a parameter is changed by a task until the `with` block ends",
+            "`ys`, which a parameter, module value or exception may share, is changed by a task until",
         ),
         (
             "xs: list[int], ys: list[int]",
@@ -1617,13 +1617,45 @@ fn rule_4_counts_parameters_as_one_list_with_module_values() {
         (
             "xs: list[int], ys: list[int]",
             "print(list(ex.map(size, [xs])))\n        ys.append(9)",
-            "a parameter is read by a task until the `with` block ends",
+            "`ys`, which a parameter, module value or exception may share, is read by a task until",
         ),
     ];
     for (params, body, want) in cases {
         let src = run(params, body);
         let (msg, _) = mode_err(&src);
         assert!(msg.contains(want), "{msg}\n{src}");
+    }
+    // A list of the function's own stored into a parameter's list.
+    let into = |params: &str, body: &str, call: &str| {
+        format!(
+            "{PARTIES}def run({params}) -> None:\n    a = [1]\n    xs.append(a)\n    \
+             {WITH}{body}\n{call}\n"
+        )
+    };
+    let rows = "xs: list[list[int]], ys: list[list[int]]";
+    let stored = [
+        into(
+            rows,
+            "f = ex.submit(total, ys)\n        a.append(2)",
+            "l = [[0]]\nrun(l, l)",
+        ),
+        into(
+            rows,
+            "f = ex.submit(add, a, 1)\n        print(len(ys[1]))",
+            "l = [[0]]\nrun(l, l)",
+        ),
+        into(
+            "xs: list[list[int]]",
+            "f = ex.submit(poke, 1)\n        a.append(2)",
+            "run(held)",
+        ),
+    ];
+    for src in stored {
+        let (msg, _) = mode_err(&src);
+        assert!(
+            msg.contains("by a task until the `with` block ends"),
+            "{msg}\n{src}"
+        );
     }
     // Reading parameters, or changing a local list, stays accepted.
     let reads = run(
