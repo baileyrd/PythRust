@@ -1526,7 +1526,11 @@ def copy(xs: list[int]) -> list[int]:\n    return list(xs)\n\
 def note(n: int) -> None:\n    log.append(n)\n\
 def peek(n: int) -> int:\n    return len(other) + n\n\
 def keep(n: int, acc: list[int] = []) -> int:\n    acc.append(n)\n    return len(acc)\n\
-def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return len(xs)\n";
+def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return len(xs)\n\
+held: list[list[int]] = []\n\
+def hold(xs: list[int]) -> None:\n    held.append(xs)\n\
+def poke(n: int) -> None:\n    held[0].append(n)\n\
+def show(e):\n    return str(e)\n";
 
 /// `main`'s body, `with` and all, after [`PARTIES`].
 fn rule4(body: &str) -> String {
@@ -1541,7 +1545,8 @@ fn rule_4_refuses_what_parties_share() {
         ("a = ex.submit(add, xs, 1)\n        b = ex.submit(add, xs, 2)", "two tasks of this block share `xs`, and one changes it"),
         ("f = ex.submit(size, xs)\n        xs.append(2)", "`xs` is read by a task until the `with` block ends"),
         ("f = ex.submit(add, xs, 1)\n        print(len(xs))", "`xs` is changed by a task until the `with` block ends"),
-        ("f = ex.submit(total, rows)\n        r = rows[0]\n        r.append(2)", "is read by a task until the `with` block ends"),
+        ("f = ex.submit(total, rows)\n        rows[0].append(2)", "a list in `rows` is read by a task until the `with` block ends"),
+        ("f = ex.submit(total, rows)\n        r = rows[0]\n        r.append(2)", "`r` is read by a task until the `with` block ends"),
         ("zs = ex.submit(same, xs).result()\n        zs.append(2)", "is read by a task until the `with` block ends"),
         ("a = ex.submit(keep, 1)\n        b = ex.submit(keep, 2)", "two tasks of this block share a parameter's default, and one changes it"),
         ("a = ex.submit(note, 1)\n        b = ex.submit(note, 2)", "two tasks of this block share `log`, and one changes it"),
@@ -1559,6 +1564,37 @@ fn rule_4_refuses_what_parties_share() {
         let (msg, _) = mode_err(&src);
         assert!(msg.contains(want), "{msg}\n{src}");
     }
+}
+
+#[test]
+fn rule_4_follows_lists_module_values_and_exceptions_hold() {
+    let cases = [
+        (
+            "hold(xs)",
+            "f = ex.submit(poke, 1)\n        xs.append(2)",
+            "`held` is read by a task until the `with` block ends",
+        ),
+        (
+            "hold(xs)",
+            "a = ex.submit(poke, 1)\n        b = ex.submit(size, xs)",
+            "two tasks of this block share `held`, and one changes it",
+        ),
+        (
+            "e = ValueError(xs)",
+            "f = ex.submit(show, e)\n        xs.append(2)",
+            "`xs` is read by a task until the `with` block ends",
+        ),
+    ];
+    for (before, body, want) in cases {
+        let src = rule4(&format!("{before}\n    {WITH}{body}"));
+        let (msg, _) = mode_err(&src);
+        assert!(msg.contains(want), "{msg}\n{src}");
+    }
+    // A list no module value or exception holds stays apart.
+    let apart = rule4(&format!(
+        "hold(ys)\n    {WITH}f = ex.submit(poke, 1)\n        xs.append(2)"
+    ));
+    assert_eq!(checked(&apart), Ok(()), "{apart}");
 }
 
 #[test]

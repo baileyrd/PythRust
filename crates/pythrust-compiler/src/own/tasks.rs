@@ -13,7 +13,10 @@
 //! and its callees load, and a conflict needs one that both read, while
 //! one may change the module's values. Should a module value hold
 //! another, or two variables name one list, every list global counts
-//! as read by any party that reads one.
+//! as read by any party that reads one. A list of the function's own
+//! that a module value or an exception may hold is the module's too:
+//! touching it reads the globals the function loads, changing it
+//! changes the module's values, and an exception reaches all of them.
 //!
 //! No file reaches a task: not in its arguments' types, nor in a module
 //! variable or default it reads. `map` runs no function that changes or
@@ -38,6 +41,8 @@ pub(super) fn check(program: &Program, summaries: &[Summary]) -> Result<()> {
             continue;
         }
         let flow = body::settle(program, func, summaries);
+        let mut held = flow.reachable(&Objs::from([Obj::World]));
+        held.remove(&Obj::World);
         let cx = Cx {
             program,
             summaries,
@@ -45,6 +50,7 @@ pub(super) fn check(program: &Program, summaries: &[Summary]) -> Result<()> {
             func,
             index: i,
             flow: &flow,
+            held,
         };
         func.regions.iter().try_for_each(|r| cx.region(r))?;
     }
@@ -103,7 +109,7 @@ impl World {
             if holds_list(program, ty) {
                 self.lists[i].insert(*g);
             }
-            if holds_file(program, ty) {
+            if holds(program, ty, Ty::File) {
                 self.files[i].insert(*g);
             }
         }
@@ -211,6 +217,8 @@ struct Cx<'a> {
     func: &'a Func,
     index: usize,
     flow: &'a Flow<'a>,
+    /// The function's lists a module value or an exception may hold.
+    held: Objs,
 }
 
 /// A task's call: where it is, and what it calls with what.
@@ -311,7 +319,7 @@ impl<'a> Cx<'a> {
                 .map_or("?", String::as_str)
         };
         for (k, p) in callee.params.iter().enumerate() {
-            if holds_file(self.program, callee.locals[p.0]) {
+            if holds(self.program, callee.locals[p.0], Ty::File) {
                 let msg = format!(
                     "a file cannot reach a task: parameter `{}` of `{name}` holds one",
                     param(k)
@@ -340,12 +348,7 @@ impl<'a> Cx<'a> {
 
     /// The party a task is.
     fn task(&self, c: &Call) -> Party {
-        let args: Objs = c
-            .args
-            .iter()
-            .flat_map(|a| self.flow.points_to(*a))
-            .collect();
-        let touched = self.flow.reachable(&args);
+        let touched = self.reach(c.args);
         let changed = self
             .flow
             .passed(c.args, &self.summaries[c.callee].params, Mode::Mut);
@@ -353,7 +356,7 @@ impl<'a> Cx<'a> {
         if touched.contains(&Obj::World) {
             reads.extend(self.world.lists[self.index].iter().copied());
         }
-        let changes_world = self.world.changes[c.callee] || changed.contains(&Obj::World);
+        let changes_world = self.world.changes[c.callee] || self.changes_world(&changed);
         party(touched, changed, reads, changes_world, c.span)
     }
 
@@ -394,14 +397,10 @@ impl<'a> Cx<'a> {
 
     /// The party one of the submitter's instructions is.
     fn inst(&self, inst: &Inst, span: Span) -> Party {
-        let ops: Objs = inst_operands(inst)
-            .into_iter()
-            .flat_map(|a| self.flow.points_to(a))
-            .collect();
-        let touched = self.flow.reachable(&ops);
+        let touched = self.reach(&inst_operands(inst));
         let changed = changes(self.flow, inst);
         let mut reads = BTreeSet::new();
-        let mut changes_world = changed.contains(&Obj::World);
+        let mut changes_world = self.changes_world(&changed);
         match inst {
             Inst::Assign {
                 value: Rvalue::Global(g),
@@ -424,6 +423,32 @@ impl<'a> Cx<'a> {
         party(touched, changed, reads, changes_world, span)
     }
 
+    /// The lists `ops` reach, the module's values among them should
+    /// one be held by a module value or an exception.
+    fn reach(&self, ops: &[Operand]) -> Objs {
+        let mut objs: Objs = ops.iter().flat_map(|a| self.flow.points_to(*a)).collect();
+        if ops.iter().any(|a| self.holds_exc(*a)) {
+            objs.insert(Obj::World);
+        }
+        let mut touched = self.flow.reachable(&objs);
+        if touched.iter().any(|o| self.held.contains(o)) {
+            touched.insert(Obj::World);
+        }
+        touched
+    }
+
+    /// Whether changing `changed` changes the module's values.
+    fn changes_world(&self, changed: &Objs) -> bool {
+        changed.contains(&Obj::World) || changed.iter().any(|o| self.held.contains(o))
+    }
+
+    fn holds_exc(&self, op: Operand) -> bool {
+        let Operand::Local(l) = op else {
+            return false;
+        };
+        holds(self.program, self.func.locals[l.0], Ty::Exc)
+    }
+
     /// What a diagnostic calls `shared`.
     fn name(&self, shared: &Shared) -> String {
         match shared {
@@ -437,7 +462,8 @@ impl<'a> Cx<'a> {
         name.map_or_else(|| "a parameter's default".to_string(), |n| format!("`{n}`"))
     }
 
-    /// A source variable that may be `o`, preferring a parameter.
+    /// A source variable that may be `o`, preferring a parameter, else
+    /// one that may hold it.
     fn list_name(&self, o: Obj) -> String {
         let func = self.func;
         if let Obj::Param(i) = o {
@@ -445,11 +471,16 @@ impl<'a> Cx<'a> {
                 return format!("`{n}`");
             }
         }
-        let named = func
-            .names
-            .iter()
-            .find(|(l, _)| self.flow.points_to(Operand::Local(**l)).contains(&o));
-        named.map_or_else(|| "a list".to_string(), |(_, n)| format!("`{n}`"))
+        let is = |l: LocalId| self.flow.points_to(Operand::Local(l)).contains(&o);
+        if let Some((_, n)) = func.names.iter().find(|(l, _)| is(**l)) {
+            return format!("`{n}`");
+        }
+        let holds = |l: LocalId| {
+            let objs = self.flow.points_to(Operand::Local(l));
+            self.flow.reachable(&objs).contains(&o)
+        };
+        let holder = func.names.iter().find(|(l, _)| holds(**l));
+        holder.map_or_else(|| "a list".to_string(), |(_, n)| format!("a list in `{n}`"))
     }
 }
 
@@ -472,17 +503,17 @@ fn party(
     }
 }
 
-/// Whether a value of `ty` is or holds a file.
-fn holds_file(program: &Program, ty: Ty) -> bool {
-    if ty == Ty::File {
+/// Whether a value of `ty` is or holds a `want` (a file, an exception).
+fn holds(program: &Program, ty: Ty, want: Ty) -> bool {
+    if ty == want {
         return true;
     }
     match program.compound(ty) {
         Some(Compound::List(t) | Compound::Set(t) | Compound::Opt(t) | Compound::View(_, t)) => {
-            holds_file(program, *t)
+            holds(program, *t, want)
         }
-        Some(Compound::Dict(k, v)) => holds_file(program, *k) || holds_file(program, *v),
-        Some(Compound::Tuple(fields)) => fields.iter().any(|f| holds_file(program, *f)),
+        Some(Compound::Dict(k, v)) => holds(program, *k, want) || holds(program, *v, want),
+        Some(Compound::Tuple(fields)) => fields.iter().any(|f| holds(program, *f, want)),
         None => false,
     }
 }
