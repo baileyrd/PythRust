@@ -107,8 +107,9 @@ jobs:
       - run: cargo +nightly build --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir "$RUNNER_TEMP/calibrate"
         env:
           RUSTFLAGS: "-Zsanitizer=thread --cfg pythrust_tsan --cfg pythrust_calibrate"
-      # Fails unless exactly the gate ran and passed: a renamed or skipped
-      # gate must not pass as zero tests.
+      # Fails unless exactly the gate ran and passed: a renamed gate must
+      # not pass as zero tests, and PYTHRUST_CALIBRATE_REQUIRED makes a
+      # missing runtime fail it rather than skip it.
       - shell: bash
         run: |
           cargo test --locked --test conformance -- --exact the_race_detector_reports_injected_races 2>&1 | tee "$RUNNER_TEMP/gate.log"
@@ -116,6 +117,7 @@ jobs:
         env:
           RUSTFLAGS: ""
           PYTHRUST_CALIBRATE_RT: ${{ runner.temp }}/calibrate/x86_64-unknown-linux-gnu/debug/libpythrust_rt.a
+          PYTHRUST_CALIBRATE_REQUIRED: "1"
 
   rust-version:
     # The oldest toolchain a program calling Rust bindings builds with:

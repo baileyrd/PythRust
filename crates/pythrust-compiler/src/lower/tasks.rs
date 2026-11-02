@@ -68,10 +68,16 @@ impl<'a> FnBuilder<'_, 'a> {
         let ExprKind::Name(name) = &ex.kind else {
             return Err(internal(ex.span, "an executor that is not a name"));
         };
-        let found = self.execs.iter().rev().find(|(n, _)| n == name);
-        found
-            .map(|(_, l)| Operand::Local(*l))
+        self.exec_local(name)
             .ok_or_else(|| internal(ex.span, "an executor outside its `with` block"))
+    }
+
+    /// In `build`, the executor a `with` block in scope binds to `name`:
+    /// its temporary, read in place of the binding, which holds `None`,
+    /// so `if ex:` sees an executor, which is true.
+    pub(super) fn exec_local(&self, name: &str) -> Option<Operand> {
+        let found = self.execs.iter().rev().find(|(n, _)| n == name);
+        found.map(|(_, l)| Operand::Local(*l))
     }
 
     /// `ex.submit(f, *args)`, `ex.map(f, xs)` or `fut.result()`; `None`

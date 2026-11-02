@@ -3,7 +3,8 @@
 Usage: python3 ci/check_jobs.py [CI_YML [GUARD_YML]]
 
 A workflow GitHub cannot parse runs no jobs, and no jobs is not green
-(Nano, 2026-11-02, after #88's CI never ran). This runs from its own
+(Nano, 2026-11-02): #88's first four heads, 3b620f4 to 65320b1, ran no
+CI jobs because ci.yml did not parse; 204e17b fixed it. This runs from its own
 workflow, so it still reports when ci.yml is broken. Needs PyYAML.
 """
 

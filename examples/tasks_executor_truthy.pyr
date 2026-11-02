@@ -1,0 +1,16 @@
+# An executor is true, as in CPython: `build` reads the executor itself
+# for its `with` binding's name, not the binding, which holds None.
+import concurrent.futures
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        if ex:
+            print(1)
+        else:
+            print(0)
+        if not ex:
+            print(2)
+
+
+main()

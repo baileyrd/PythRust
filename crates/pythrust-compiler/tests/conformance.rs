@@ -48,6 +48,9 @@
 //! - `PYTHRUST_CALIBRATE_RT` a ThreadSanitizer runtime built with
 //!   `--cfg pythrust_calibrate`; `the_race_detector_reports_injected_races`
 //!   then checks the detector reports each injected race.
+//! - `PYTHRUST_CALIBRATE_REQUIRED=1` makes a missing
+//!   `PYTHRUST_CALIBRATE_RT` fail that test instead of skipping it, so
+//!   CI's gate cannot pass without calibrating.
 
 use std::fs;
 use std::io::Read;
@@ -490,6 +493,7 @@ const NATIVE: &[&str] = &[
     "strings",
     "sys_argv",
     "tasks_arguments",
+    "tasks_executor_truthy",
     "tasks_generic",
     "tasks_generic_discarded",
     "tasks_globals",
@@ -1675,7 +1679,8 @@ const TSAN_EXIT: i32 = 66;
 /// (and `ci/tsan-cc` as `cc`); without it there is nothing to check.
 #[test]
 fn the_race_detector_reports_injected_races() -> Res<()> {
-    let Some(rt) = std::env::var_os("PYTHRUST_CALIBRATE_RT") else {
+    let required = std::env::var_os("PYTHRUST_CALIBRATE_REQUIRED").is_some_and(|v| v == "1");
+    let Some(rt) = calibration_runtime(std::env::var_os("PYTHRUST_CALIBRATE_RT"), required)? else {
         eprintln!("skipped: PYTHRUST_CALIBRATE_RT is not set");
         return Ok(());
     };
@@ -1706,6 +1711,30 @@ fn the_race_detector_reports_injected_races() -> Res<()> {
     cleanup(&dir)?;
     report(failures);
     Ok(())
+}
+
+/// The calibrating runtime to check against: `rt`, or `None` to skip,
+/// which is an error when calibration is `required` (CI's gate).
+fn calibration_runtime(
+    rt: Option<std::ffi::OsString>,
+    required: bool,
+) -> Res<Option<std::ffi::OsString>> {
+    match (rt, required) {
+        (Some(rt), _) if !rt.is_empty() => Ok(Some(rt)),
+        (_, true) => Err("PYTHRUST_CALIBRATE_REQUIRED=1 needs PYTHRUST_CALIBRATE_RT".to_string()),
+        (_, false) => Ok(None),
+    }
+}
+
+#[test]
+fn a_required_calibration_without_its_runtime_fails() {
+    assert!(calibration_runtime(None, true).is_err());
+    assert!(calibration_runtime(Some("".into()), true).is_err());
+    assert_eq!(calibration_runtime(None, false), Ok(None));
+    assert_eq!(
+        calibration_runtime(Some("rt.a".into()), true),
+        Ok(Some("rt.a".into()))
+    );
 }
 
 /// Builds a copy of `source` in `dir` against the runtime library `rt`.

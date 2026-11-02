@@ -17,7 +17,10 @@ impl<'a> FnBuilder<'_, 'a> {
             ExprKind::Int(n) => Ok(Operand::Int(*n)),
             ExprKind::Bool(b) => Ok(Operand::Bool(*b)),
             ExprKind::None => Ok(Operand::None),
-            ExprKind::Name(name) => self.read(name, e.span),
+            ExprKind::Name(name) => match self.exec_local(name) {
+                Some(exec) => Ok(exec),
+                None => self.read(name, e.span),
+            },
             ExprKind::Unary { op, operand } => self.unary(*op, operand, e.span),
             ExprKind::Binary { op, left, right } => self.binary(*op, left, right, e.span),
             ExprKind::Logical { op, left, right } => self.logical(*op, left, right, e.span),
