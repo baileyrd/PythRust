@@ -143,6 +143,14 @@ impl PtFut {
     }
 }
 
+impl Drop for PtFut {
+    /// Every outcome was released by the last handle or the worker.
+    fn drop(&mut self) {
+        let done = self.done.get_mut().unwrap_or_else(PoisonError::into_inner);
+        debug_assert!(done.outcome.is_none(), "a task's outcome outlived its future");
+    }
+}
+
 /// A task waiting for a worker.
 struct Job {
     thunk: Thunk,
