@@ -31,7 +31,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 
 use crate::exc::{self, PtCtx};
-use crate::seq;
+use crate::seq::{self, PtSeq};
 
 /// A task's compiled entry: called on a worker with the worker's
 /// context and the arguments its submitter packed, it returns the
@@ -375,6 +375,49 @@ pub unsafe extern "C" fn pt_result(fut: *const PtFut) -> u64 {
     })
 }
 
+/// One step over `map`'s results (M6c step 4b-2), a list of futures
+/// (`lu`) in reverse order ([`seq::pt_list_reverse`]): takes the next
+/// future, waits for its task and gives its result with a new
+/// reference. When the task raised, raises it again, gives 0, and drops
+/// every future not yet taken, as CPython's `map` ends at an exception.
+/// An empty list gives 0 and raises nothing; generated code checks the
+/// length first.
+///
+/// # Safety
+///
+/// `s` is a live list of futures, and this is the thread that submitted
+/// their tasks (as for [`pt_result`]).
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_results_next(s: *const PtSeq) -> u64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq::seq(s as u64) };
+    let Some(fut) = seq::pop(s) else {
+        return 0;
+    };
+    // SAFETY: the list held this handle, which is now ours.
+    let f = unsafe { &*(fut as *const PtFut) };
+    let got = f.wait(|outcome| match outcome {
+        Outcome::Value(v) => {
+            seq::inc(f.desc, *v);
+            Some(*v)
+        }
+        Outcome::Raised(r) => {
+            r.raise_again();
+            None
+        }
+    });
+    let rest = match got {
+        Some(_) => Vec::new(),
+        None => seq::take_all(s),
+    };
+    for h in rest.into_iter().chain([fut]) {
+        // SAFETY: each a handle the list held, now ours, not used again.
+        unsafe { pt_fut_dec(h as *const PtFut) };
+    }
+    got.unwrap_or(0)
+}
+
 /// Adds a handle to a future.
 ///
 /// # Safety
@@ -435,7 +478,6 @@ pub unsafe extern "C" fn pt_exec_end(exec: *mut PtExec) {
 #[allow(unsafe_code)] // The tests drive the C ABI as generated code does.
 mod tests {
     use super::*;
-    use crate::seq::PtSeq;
     use crate::str::{self as pstr, PtStr};
     use std::sync::atomic::AtomicU64;
 
@@ -642,6 +684,39 @@ mod tests {
         let got = unsafe { seq::pt_seq_get(futs, 0, &mut status) } as *const PtFut;
         assert_eq!((status, result(got)), (0, 5));
         drop_fut(got);
+        // SAFETY: the test's reference to the list, the last.
+        unsafe { seq::pt_seq_dec(futs) };
+        end(exec);
+    }
+
+    /// `map`'s results: a reversed list of futures, each taken once, in
+    /// order; an exception drops the futures not yet taken, and an
+    /// empty list gives 0. Under Miri a leak or a double free fails it.
+    #[test]
+    fn results_are_taken_once_and_end_at_an_exception() {
+        const FUTS: &[u8] = b"lu";
+        let exec = pt_exec_new();
+        let futs = seq::new_seq(FUTS, Vec::new());
+        let tasks: [(Thunk, &[u64]); 4] =
+            [(add, &[1, 2]), (add, &[3, 4]), (fails, &[]), (add, &[5, 6])];
+        for (thunk, args) in tasks {
+            let fut = submit(exec, thunk, args, INT);
+            // SAFETY: a live list of futures, and the test's live handle.
+            unsafe { seq::pt_seq_push(futs, fut as u64) };
+            drop_fut(fut);
+        }
+        // SAFETY: the test's live list, on the submitting thread.
+        let next = || unsafe { pt_results_next(futs) };
+        // SAFETY: as above.
+        unsafe { seq::pt_list_reverse(futs) };
+        assert_eq!((next(), next()), (3, 7));
+        assert_eq!(next(), 0);
+        // SAFETY: `pt_catch` gave this thread the reference.
+        unsafe { seq::pt_seq_dec(caught()) };
+        // SAFETY: as above.
+        assert_eq!(unsafe { seq::pt_seq_len(futs) }, 0);
+        assert_eq!(next(), 0);
+        assert!(exc::take_raised().is_none());
         // SAFETY: the test's reference to the list, the last.
         unsafe { seq::pt_seq_dec(futs) };
         end(exec);

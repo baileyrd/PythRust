@@ -159,10 +159,12 @@ enum Rt {
     TaskResult,
     FutInc,
     FutDec,
+    ResultsNext,
+    ListReverse,
 }
 
 impl Rt {
-    const ALL: [Rt; 83] = [
+    const ALL: [Rt; 85] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -246,6 +248,8 @@ impl Rt {
         Rt::TaskResult,
         Rt::FutInc,
         Rt::FutDec,
+        Rt::ResultsNext,
+        Rt::ListReverse,
     ];
 
     fn symbol(self) -> &'static str {
@@ -333,6 +337,8 @@ impl Rt {
             Rt::TaskResult => "pt_result",
             Rt::FutInc => "pt_fut_inc",
             Rt::FutDec => "pt_fut_dec",
+            Rt::ResultsNext => "pt_results_next",
+            Rt::ListReverse => "pt_list_reverse",
         }
     }
 
@@ -403,9 +409,9 @@ impl Rt {
             Rt::Open | Rt::FileRead => (vec![ptr; 5], Some(ptr)),
             Rt::Mark => (vec![ptr, ptr, I64], None),
             Rt::ExecNew => (vec![], Some(ptr)),
-            Rt::ExecEnd | Rt::FutInc | Rt::FutDec => (vec![ptr], None),
+            Rt::ExecEnd | Rt::FutInc | Rt::FutDec | Rt::ListReverse => (vec![ptr], None),
             Rt::Submit => (vec![ptr; 6], Some(ptr)),
-            Rt::TaskResult => (vec![ptr], Some(I64)),
+            Rt::TaskResult | Rt::ResultsNext => (vec![ptr], Some(I64)),
         }
     }
 }
@@ -528,7 +534,8 @@ impl<'r> Codegen<'r> {
             | Ty::Bytes
             | Ty::File
             | Ty::Exec
-            | Ty::Future => self.ptr,
+            | Ty::Future
+            | Ty::Results => self.ptr,
         }
     }
 
@@ -745,6 +752,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let s = self.operand(*list);
                 self.call_rt(Rt::ListSort, &[s]);
             }
+            Inst::Reverse(list) => {
+                let s = self.operand(*list);
+                self.call_rt(Rt::ListReverse, &[s]);
+            }
             Inst::SetItem {
                 list,
                 index,
@@ -833,7 +844,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::Set(_)
             | Ty::View(_) => Rt::WriteSeq,
             Ty::Bytes | Ty::File => Rt::WriteObj,
-            Ty::Exec | Ty::Future => return Err(backend("printing a task's handle".to_string())),
+            Ty::Exec | Ty::Future | Ty::Results => {
+                return Err(backend("printing a task's handle".to_string()))
+            }
         };
         self.call_rt(rt, &[v]);
         Ok(())
@@ -955,7 +968,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Index(s, i) if is_seq(self.func.ty(*s)) => self.item(*s, *i, dest, span),
             Rvalue::Index(s, i) if self.func.ty(*s) == Ty::Range => self.range_item(*s, *i, span),
             Rvalue::Index(s, i) => self.str_item(*s, *i, span),
-            Rvalue::Len(s) if is_seq(self.func.ty(*s)) || is_table(self.func.ty(*s)) => {
+            Rvalue::Len(s)
+                if is_seq(self.func.ty(*s))
+                    || is_table(self.func.ty(*s))
+                    || self.func.ty(*s) == Ty::Results =>
+            {
                 self.rt_on(Rt::SeqLen, &[*s])
             }
             Rvalue::Entry(t, i, part) => self.entry(*t, *i, *part, dest),
@@ -1022,6 +1039,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
             Rvalue::Submit { exec, func, args } => self.submit(*exec, *func, args),
             Rvalue::TaskResult(fut) => self.task_result(*fut, dest),
+            Rvalue::NextResult(rs) => self.next_result(*rs, dest),
         }
     }
 
@@ -1043,7 +1061,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::View(_) => Rt::StrFromSeq,
             Ty::Bytes | Ty::File => Rt::ObjStr,
             Ty::Exc => Rt::ExcStr,
-            Ty::Exec | Ty::Future => return Err(backend("`str` of a task's handle".to_string())),
+            Ty::Exec | Ty::Future | Ty::Results => {
+                return Err(backend("`str` of a task's handle".to_string()))
+            }
             Ty::Str => {
                 self.call_rt(Rt::StrInc, &[v]);
                 return Ok(v);

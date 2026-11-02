@@ -221,7 +221,13 @@ impl<'a> FnBuilder<'_, 'a> {
             if let ast::CmpOp::In | ast::CmpOp::NotIn = op {
                 self.reads_results(right)?;
             }
-            let c = self.cmp(*op, l, r, span)?;
+            let c = match self.ty(r) {
+                Ty::Results => {
+                    let found = self.results_contain(l, r, right.span, span)?;
+                    self.negate_if(*op, found, span)
+                }
+                _ => self.cmp(*op, l, r, span)?,
+            };
             self.assign(dest, Rvalue::Use(c), span);
             if i + 1 == rest.len() {
                 break;
@@ -336,7 +342,7 @@ impl<'a> FnBuilder<'_, 'a> {
     }
 
     /// `found` for `in`, its negation for `not in`.
-    fn negate_if(&mut self, op: ast::CmpOp, found: Operand, span: Span) -> Operand {
+    pub(super) fn negate_if(&mut self, op: ast::CmpOp, found: Operand, span: Span) -> Operand {
         if op == ast::CmpOp::In {
             return found;
         }
@@ -388,7 +394,7 @@ impl<'a> FnBuilder<'_, 'a> {
     }
 
     /// `l == r`, either side optional or not.
-    fn equal(&mut self, l: Operand, r: Operand, span: Span) -> Result<Operand> {
+    pub(super) fn equal(&mut self, l: Operand, r: Operand, span: Span) -> Result<Operand> {
         if matches!(self.ty(l), Ty::Opt(_)) || matches!(self.ty(r), Ty::Opt(_)) {
             return self.opt_eq(CmpOp::Eq, l, r, span);
         }
@@ -482,7 +488,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
-            Ty::Exc | Ty::File | Ty::Exec | Ty::Future => Operand::Bool(true),
+            Ty::Exc | Ty::File | Ty::Exec | Ty::Future | Ty::Results => Operand::Bool(true),
             Ty::Bytes
             | Ty::Str
             | Ty::List(_)
@@ -538,12 +544,33 @@ impl<'a> FnBuilder<'_, 'a> {
         let Some(def) = def else {
             if matches!(name.as_str(), "list" | "sorted" | "set") {
                 args.iter().try_for_each(|a| self.reads_results(&a.value))?;
+                return self.results_builtin(name, args, ops, span);
             }
             return self.builtin(name, args, ops, span);
         };
         let slots = bind_params(def, args, ops)?;
         let node = self.node_type(span)?;
         self.call_def(def, slots, node, span)
+    }
+
+    /// `list`, `sorted` or `set`: in `build`, `map`'s results are taken
+    /// into a new list first, which is `list`'s result itself.
+    fn results_builtin(
+        &mut self,
+        name: &str,
+        args: &[Arg],
+        mut ops: Vec<Operand>,
+        span: Span,
+    ) -> Result<Operand> {
+        let Some(k) = ops.iter().position(|op| self.ty(*op) == Ty::Results) else {
+            return self.builtin(name, args, ops, span);
+        };
+        let at = args.get(k).map_or(span, |a| a.value.span);
+        ops[k] = self.drain_results(ops[k], at)?;
+        if name == "list" {
+            return Ok(ops[k]);
+        }
+        self.builtin(name, args, ops, span)
     }
 
     /// A call of `def` with `slots`, its arguments in parameter order
@@ -919,6 +946,8 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::File => "_io.BufferedReader",
         Ty::Exec => "ThreadPoolExecutor",
         Ty::Future => "Future",
+        // CPython's `Executor.map` gives a generator.
+        Ty::Results => "generator",
         // Exceptions print by kind, which only the run time knows.
         Ty::Exc => "exception",
     }

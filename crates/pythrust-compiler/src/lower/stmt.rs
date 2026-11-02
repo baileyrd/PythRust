@@ -22,10 +22,12 @@ pub(super) enum Looped<'s> {
         takes: Option<Span>,
     },
     /// `ex.map(f, xs)` (M6c): runs the task `f` on the item and appends
-    /// its result to `out` ([`FnBuilder::map_item`]).
+    /// its result to `out` ([`FnBuilder::map_item`]), or in `build`
+    /// submits it to `exec` and appends its future.
     Map {
         f: &'s str,
         out: LocalId,
+        exec: Option<Operand>,
         span: Span,
     },
 }
@@ -333,7 +335,9 @@ impl FnBuilder<'_, '_> {
         body: &Block,
         orelse: &Block,
     ) -> Result<()> {
-        let takes = matches!(self.node_type(iter.span)?, Type::Results(_)).then_some(iter.span);
+        // In `build` each step takes its result itself ([`FnBuilder::for_results`]).
+        let results = matches!(self.node_type(iter.span)?, Type::Results(_));
+        let takes = (results && !self.native_tasks()).then_some(iter.span);
         let looped = Looped::For {
             target,
             body,
@@ -362,7 +366,34 @@ impl FnBuilder<'_, '_> {
             return self.for_table(&looped, d, part, iter.span);
         }
         let s = self.expr(iter)?;
+        if self.ty(s) == Ty::Results {
+            let item = self.result_ty(iter.span)?;
+            return self.for_results(&looped, s, item, iter.span);
+        }
         self.for_value(&looped, s, iter.span)
+    }
+
+    /// `for x in rs` over `map`'s results in `build`: takes the next
+    /// while any are left, so a loop left early leaves the rest, and one
+    /// that raised has ended them. The loop holds its own reference.
+    fn for_results(&mut self, l: &Looped, s: Operand, item: Ty, span: Span) -> Result<()> {
+        let s = self.own(s, span);
+        let (head, enter, latch) = (self.new_block(), self.new_block(), self.new_block());
+        let (other, end) = (self.new_block(), self.new_block());
+        self.terminate(Term::Goto(head));
+        self.switch_to(head);
+        let n = self.temp(Ty::Int, Rvalue::Len(s), span);
+        let going = self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Gt, n, Operand::Int(0)), span);
+        self.terminate(Term::Branch {
+            cond: going,
+            then: enter,
+            orelse: other,
+        });
+        self.switch_to(enter);
+        self.iteration(l, |b| b.next_result(s, item, span), latch, end)?;
+        self.switch_to(latch);
+        self.terminate(Term::Goto(head));
+        self.finish_loop(l, other, end)
     }
 
     /// A loop over the value `s`, already evaluated.
@@ -482,10 +513,13 @@ impl FnBuilder<'_, '_> {
                 self.bind_iteration(target, next)?;
                 self.loop_body(body, latch, end)
             }
-            Looped::Map { f, out, span } => {
+            Looped::Map { f, out, exec, span } => {
                 self.pooled_stmt(|b| {
                     let x = next(b)?;
-                    b.map_item(f, *out, x, *span)
+                    match exec {
+                        Some(exec) => b.native_map_item(f, *out, *exec, x, *span),
+                        None => b.map_item(f, *out, x, *span),
+                    }
                 })?;
                 self.terminate(Term::Goto(latch));
                 Ok(())

@@ -11,17 +11,16 @@
 //! the `with` statement owns an [`Ty::Exec`] temporary, released (which
 //! waits for every task) however the block is left; `submit` gives a
 //! [`Ty::Future`] ([`Rvalue::Submit`]) and `result()` waits for it
-//! ([`Rvalue::TaskResult`]). `map` is not native yet (M6c step 4b-2).
+//! ([`Rvalue::TaskResult`]). `map` submits a task per element and
+//! gives [`Ty::Results`], its futures, which each step over the results
+//! takes in order ([`Rvalue::NextResult`]).
 
 use crate::ast::{Arg, Block, Expr, ExprKind, FuncDef, Ident};
 use crate::diag::Result;
 use crate::infer::{scope, Type};
-use crate::ir::{BlockId, Inst, LocalId, Operand, Rvalue, Task, Term, Ty};
+use crate::ir::{BlockId, CmpOp, Inst, LocalId, Operand, Rvalue, Task, Term, Ty};
 use crate::span::Span;
 use crate::stdlib::StdFn;
-
-/// Why `build` refuses `ex.map(...)` for now.
-const MAP_GAP: &str = "`map` of tasks (M6c step 4b-2)";
 
 use super::expr::bind_params;
 use super::stmt::Looped;
@@ -32,7 +31,7 @@ impl<'a> FnBuilder<'_, 'a> {
     /// nothing, and for analysis making the executor does nothing.
     pub(super) fn with_stmt(&mut self, binding: &Ident, body: &Block, span: Span) -> Result<()> {
         self.write(&binding.name, Operand::None, binding.span)?;
-        if self.cx.reach == Reach::Called {
+        if self.native_tasks() {
             return self.native_with(binding, body, span);
         }
         // The region is the blocks the body makes, from a fresh one; the
@@ -47,6 +46,12 @@ impl<'a> FnBuilder<'_, 'a> {
         self.terminate(Term::Goto(after));
         self.switch_to(after);
         Ok(())
+    }
+
+    /// Whether tasks run on workers, as `build` runs them, rather than
+    /// where they are submitted, as analysis lowers them.
+    pub(super) fn native_tasks(&self) -> bool {
+        self.cx.reach == Reach::Called
     }
 
     /// [`FnBuilder::with_stmt`] for `build`: the executor is a temporary
@@ -89,10 +94,10 @@ impl<'a> FnBuilder<'_, 'a> {
         args: &[Arg],
         span: Span,
     ) -> Result<Option<Operand>> {
-        let native = self.cx.reach == Reach::Called;
+        let native = self.native_tasks();
         match (self.node_type(value.span)?, attr) {
             (Type::Executor, "submit") if native => self.native_submit(value, args, span).map(Some),
-            (Type::Executor, "map") if native => Err(unsupported(span, MAP_GAP)),
+            (Type::Executor, "map") if native => self.native_map(value, args, span).map(Some),
             (Type::Future(_), "result") if native => {
                 let fut = self.expr(value)?;
                 let ty = self.ty_at(span)?;
@@ -126,6 +131,31 @@ impl<'a> FnBuilder<'_, 'a> {
         let (args, func, _) = self.call_operands(def, slots, node, span)?;
         let submit = Rvalue::Submit { exec, func, args };
         Ok(self.temp(Ty::Future, submit, span))
+    }
+
+    /// `ex.map(f, xs)` in `build`: submits a task per element of `xs`,
+    /// read once, giving their futures, reversed so the first is taken
+    /// first from the end.
+    fn native_map(&mut self, ex: &Expr, args: &[Arg], span: Span) -> Result<Operand> {
+        let [_, xs] = args else {
+            return Err(internal(span, "`map` without a function and an iterable"));
+        };
+        let def = self.task_def(args, span)?;
+        let exec = self.exec_named(ex)?;
+        let s = self.expr(&xs.value)?;
+        let out = self.temp(Ty::Results, Rvalue::NewSeq(Vec::new()), span);
+        let Operand::Local(out_local) = out else {
+            return Err(internal(span, "`map`'s results without a local"));
+        };
+        let looped = Looped::Map {
+            f: &def.name.name,
+            out: out_local,
+            exec: Some(exec),
+            span,
+        };
+        self.for_value(&looped, s, xs.value.span)?;
+        self.emit(Inst::Reverse(out));
+        Ok(out)
     }
 
     /// `ex.submit(f, *args)`: `f(*args)`, its result the future.
@@ -162,6 +192,7 @@ impl<'a> FnBuilder<'_, 'a> {
         let looped = Looped::Map {
             f: &def.name.name,
             out,
+            exec: None,
             span,
         };
         self.for_value(&looped, s, xs.value.span)?;
@@ -179,11 +210,16 @@ impl<'a> FnBuilder<'_, 'a> {
     /// decided (`ex.map(f, ())` of a generic `f`) holds nothing, so its
     /// open parts take any slot type, as for `not []`.
     fn results_ty(&mut self, span: Span) -> Result<Ty> {
+        let elem = self.result_ty(span)?;
+        Ok(self.cx.seqs.list(elem))
+    }
+
+    /// The type of each of `map`'s results at `span`.
+    pub(super) fn result_ty(&mut self, span: Span) -> Result<Ty> {
         let Type::Results(t) = self.node_type(span)? else {
             return Err(internal(span, "`map` gives no results"));
         };
-        let elem = super::settle(t, &self.subst, &self.dead, &mut self.cx.seqs);
-        Ok(self.cx.seqs.list(elem))
+        Ok(super::settle(t, &self.subst, &self.dead, &mut self.cx.seqs))
     }
 
     /// One item `x` of `map`: `f(x)`, appended to `out`.
@@ -198,6 +234,32 @@ impl<'a> FnBuilder<'_, 'a> {
         };
         let (value, _) = self.emit_call(def, slots, node, span)?;
         self.task(value, true, span)?;
+        let list = Operand::Local(out);
+        self.emit(Inst::Append { list, value, span });
+        Ok(())
+    }
+
+    /// One item `x` of `map` in `build`: submits `f(x)` to `exec` and
+    /// appends its future to `out`.
+    pub(super) fn native_map_item(
+        &mut self,
+        f: &str,
+        out: LocalId,
+        exec: Operand,
+        x: Operand,
+        span: Span,
+    ) -> Result<()> {
+        let def = self.def_named(f, span)?;
+        let mut slots = vec![None; def.params.len()];
+        if let Some(first) = slots.first_mut() {
+            *first = Some(x);
+        }
+        let Type::Results(node) = self.node_type(span)? else {
+            return Err(internal(span, "`map` gives no results"));
+        };
+        let (args, func, _) = self.call_operands(def, slots, node, span)?;
+        let submit = Rvalue::Submit { exec, func, args };
+        let value = self.temp(Ty::Future, submit, span);
         let list = Operand::Local(out);
         self.emit(Inst::Append { list, value, span });
         Ok(())
@@ -249,11 +311,98 @@ impl<'a> FnBuilder<'_, 'a> {
         self.check_raised(span)
     }
 
-    /// [`FnBuilder::took_result`] where `e` is `map`'s results.
+    /// [`FnBuilder::took_result`] where `e` is `map`'s results, for
+    /// analysis; in `build` each step that takes one checks it.
     pub(super) fn reads_results(&mut self, e: &Expr) -> Result<()> {
+        if self.native_tasks() {
+            return Ok(());
+        }
         match self.node_type(e.span)? {
             Type::Results(_) => self.took_result(e.span),
             _ => Ok(()),
         }
+    }
+
+    /// `list(rs)` in `build`: a new list of `map`'s results left in `rs`,
+    /// taking each; the argument at `span`.
+    pub(super) fn drain_results(&mut self, rs: Operand, span: Span) -> Result<Operand> {
+        let item = self.result_ty(span)?;
+        let ty = self.cx.seqs.list(item);
+        let out = self.temp(ty, Rvalue::NewSeq(Vec::new()), span);
+        self.take_each(rs, item, span, |b, value| {
+            b.emit(Inst::Append {
+                list: out,
+                value,
+                span,
+            });
+            Ok(None)
+        })?;
+        Ok(out)
+    }
+
+    /// `needle in rs` in `build`: takes `map`'s results until one equals
+    /// `needle`, as `in` on CPython's iterator does; `rs` at `at`.
+    pub(super) fn results_contain(
+        &mut self,
+        needle: Operand,
+        rs: Operand,
+        at: Span,
+        span: Span,
+    ) -> Result<Operand> {
+        let item = self.result_ty(at)?;
+        let found = self.new_local(Ty::Bool);
+        self.assign(found, Rvalue::Use(Operand::Bool(false)), span);
+        self.take_each(rs, item, span, |b, x| {
+            let eq = b.equal(needle, x, span)?;
+            b.assign(found, Rvalue::Use(eq), span);
+            Ok(Some(Operand::Local(found)))
+        })?;
+        Ok(Operand::Local(found))
+    }
+
+    /// A loop taking each of `map`'s results left in `rs`, of type
+    /// `item`, and running `step` on it as one statement; a condition
+    /// `step` gives ends the loop when true.
+    fn take_each(
+        &mut self,
+        rs: Operand,
+        item: Ty,
+        span: Span,
+        step: impl FnOnce(&mut Self, Operand) -> Result<Option<Operand>>,
+    ) -> Result<()> {
+        let (head, body, end) = (self.new_block(), self.new_block(), self.new_block());
+        self.terminate(Term::Goto(head));
+        self.switch_to(head);
+        let n = self.temp(Ty::Int, Rvalue::Len(rs), span);
+        let going = self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Gt, n, Operand::Int(0)), span);
+        self.terminate(Term::Branch {
+            cond: going,
+            then: body,
+            orelse: end,
+        });
+        self.switch_to(body);
+        let stop = self.pooled_stmt(|b| {
+            let x = b.next_result(rs, item, span)?;
+            step(b, x)
+        })?;
+        let term = match stop {
+            Some(cond) => Term::Branch {
+                cond,
+                then: end,
+                orelse: head,
+            },
+            None => Term::Goto(head),
+        };
+        self.terminate(term);
+        self.switch_to(end);
+        Ok(())
+    }
+
+    /// The next of `map`'s results left in `rs`, of type `item`, which
+    /// raises what its task raised.
+    pub(super) fn next_result(&mut self, rs: Operand, item: Ty, span: Span) -> Result<Operand> {
+        let x = self.temp(item, Rvalue::NextResult(rs), span);
+        self.took_result(span)?;
+        Ok(x)
     }
 }

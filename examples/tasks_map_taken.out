@@ -1,0 +1,15 @@
+False [1, 4] False
+empty results are true
+True []
+first 25
+[1, 4, 16]
+True [1, 4]
+caught three
+never taken
+['a', 'aa']
+['b', 'bb']
+[0, 10, 20]
+[40, 50]
+['x', 'xx', '!']
+['y', 'yy', '!']
+done []

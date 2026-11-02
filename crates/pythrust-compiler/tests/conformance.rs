@@ -41,7 +41,9 @@
 //! - `PYTHRUST_TSAN=1` native programs link a ThreadSanitizer-instrumented
 //!   runtime (`PYTHRUST_RT`, through `ci/tsan-cc`); a race report exits
 //!   66 and so fails the golden. Instrumented binaries skip the size gate.
-//!   CI's race job sets it on x86-64 Linux.
+//!   A program expected to fail runs with `report_thread_leaks=0`: a
+//!   runtime error exits without joining the workers. CI's race job sets
+//!   it on x86-64 Linux.
 //! - `PYTHRUST_TSAN_RUNS=n` with `PYTHRUST_TSAN=1`, runs each task program
 //!   `n` more times pinned to one CPU and `n` unpinned: a race shows only
 //!   on some schedules.
@@ -498,6 +500,9 @@ const NATIVE: &[&str] = &[
     "tasks_generic_discarded",
     "tasks_globals",
     "tasks_leave_block",
+    "tasks_map",
+    "tasks_map_break",
+    "tasks_map_taken",
     "tasks_long_line",
     "tasks_partial_line",
     "tasks_result_marked",
@@ -529,12 +534,7 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a generic function storing a bool key into an int-keyed table: `run` cannot \
          always tell the table is int-keyed, so `build` refuses rather than differ",
     ),
-    ("tasks_map", TASKS_GAP),
-    ("tasks_map_break", TASKS_GAP),
 ];
-
-/// Why `build` refuses `map`: native `map` is M6c step 4b-2.
-const TASKS_GAP: &str = "`map`: native `map` follows native `submit` (M6c step 4b-2)";
 
 const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";
 
@@ -984,8 +984,8 @@ fn loosen_strips_raises_clauses() {
 
 /// A native program that failed must print exactly what `pythrust run`
 /// prints for the same file: the error, its location and its carets. Only
-/// called once the program is known to terminate.
-fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
+/// called once the program is known to terminate; `cmd` runs `exe`.
+fn stderr_mismatch(exe: &Path, mut cmd: Command) -> Res<Option<String>> {
     let stderr = |cmd: &mut Command| -> Res<String> {
         let out = cmd
             .output()
@@ -993,7 +993,7 @@ fn stderr_mismatch(exe: &Path) -> Res<Option<String>> {
         Ok(String::from_utf8_lossy(&out.stderr).into_owned())
     };
     let source = exe.with_extension("pyr");
-    let native = stderr(&mut Command::new(exe))?;
+    let native = stderr(&mut cmd)?;
     let interp = stderr(Command::new(pythrust_bin()?).arg("run").arg(&source))?;
     Ok((native != interp).then(|| {
         format!(
@@ -1033,8 +1033,8 @@ fn uses_tasks(case: &Case) -> Res<bool> {
 fn tsan_repeats(case: &Case, exe: &Path) -> Res<Vec<String>> {
     let mut failures = Vec::new();
     for k in 0..tsan_runs()? {
-        let pinned = run(Command::new("taskset").args(["-c", "0"]).arg(exe), TIMEOUT)?;
-        let free = run(&mut Command::new(exe), TIMEOUT)?;
+        let pinned = run(&mut native(case, exe, true), TIMEOUT)?;
+        let free = run(&mut native(case, exe, false), TIMEOUT)?;
         for (how, got) in [("pinned", pinned), ("unpinned", free)] {
             if let Some(m) = mismatch(case, &got) {
                 failures.push(format!("{how} run {}: {m}", k + 2));
@@ -1042,6 +1042,27 @@ fn tsan_repeats(case: &Case, exe: &Path) -> Res<Vec<String>> {
         }
     }
     Ok(failures)
+}
+
+/// A command running `case`'s native program `exe`, `pinned` to one
+/// CPU or not. A runtime error exits without joining the executor's
+/// workers, as it exits without releasing, so under ThreadSanitizer a
+/// case expected to fail does not report them as leaked threads; one
+/// that exits cleanly still must have joined them.
+fn native(case: &Case, exe: &Path, pinned: bool) -> Command {
+    let mut cmd = match pinned {
+        true => {
+            let mut c = Command::new("taskset");
+            c.args(["-c", "0"]).arg(exe);
+            c
+        }
+        false => Command::new(exe),
+    };
+    if tsan_requested() && case.expect.status != 0 {
+        let options = std::env::var("TSAN_OPTIONS").unwrap_or_default();
+        cmd.env("TSAN_OPTIONS", format!("{options} report_thread_leaks=0"));
+    }
+    cmd
 }
 
 fn memcheck_requested() -> bool {
@@ -1184,7 +1205,7 @@ fn corpus_matches_native() -> Res<()> {
                 continue;
             }
         };
-        let got = run(&mut Command::new(&exe), TIMEOUT)?;
+        let got = run(&mut native(&case, &exe, false), TIMEOUT)?;
         if tsan_requested() && uses_tasks(&case)? {
             failures.extend(tsan_repeats(&case, &exe)?);
         }
@@ -1192,7 +1213,7 @@ fn corpus_matches_native() -> Res<()> {
         let errored = failed.is_none() && got.status != 0;
         failures.extend(failed);
         if errored {
-            failures.extend(stderr_mismatch(&exe)?);
+            failures.extend(stderr_mismatch(&exe, native(&case, &exe, false))?);
         }
         if memchecked {
             failures.extend(memcheck(&case, &exe)?);
@@ -1646,7 +1667,7 @@ fn native_matches_run_at_the_repr_limit() -> Res<()> {
             if got != want {
                 failures.push(format!("{src}\n  run {want:?}\n  native {got:?}"));
             }
-            failures.extend(stderr_mismatch(&exe)?);
+            failures.extend(stderr_mismatch(&exe, Command::new(&exe))?);
             let raises = u == 3;
             if (got.status == 0) != (fits && !raises) {
                 failures.push(format!("{src}\n  exit {} at depth {n}", got.status));

@@ -115,6 +115,7 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
         | Inst::Sort(_)
+        | Inst::Reverse(_)
         | Inst::Raise { .. } => false,
     }
 }
@@ -135,6 +136,7 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::Rust(..)
         | Rvalue::Submit { .. }
         | Rvalue::TaskResult(_)
+        | Rvalue::NextResult(_)
         | Rvalue::Concat(..)
         | Rvalue::Repeat(..)
         | Rvalue::Index(..)
@@ -480,6 +482,7 @@ fn ends(inst: &Inst, l: LocalId) -> bool {
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
         | Inst::Sort(_)
+        | Inst::Reverse(_)
         | Inst::Raise { .. } => false,
     }
 }
@@ -519,7 +522,7 @@ fn mentions(inst: &Inst, l: LocalId) -> bool {
         Inst::SetItem {
             list, index, value, ..
         } => [list, index, value].into_iter().any(local),
-        Inst::Raise { exc, .. } | Inst::Sort(exc) => local(exc),
+        Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => local(exc),
     }
 }
 
@@ -558,7 +561,7 @@ fn operands(value: &Rvalue) -> Vec<Operand> {
         Rvalue::Submit { exec, args, .. } => {
             std::iter::once(*exec).chain(args.iter().copied()).collect()
         }
-        Rvalue::TaskResult(a) => vec![*a],
+        Rvalue::TaskResult(a) | Rvalue::NextResult(a) => vec![*a],
         Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
         Rvalue::StrLit(_)
         | Rvalue::Global(_)
