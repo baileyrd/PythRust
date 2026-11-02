@@ -1127,9 +1127,11 @@ fn memcheck_failure(case: &Case, got: Res<Run>, report: &str) -> Option<String> 
     ))
 }
 
-/// A corpus program links to about 0.5 MB. Without dead-code removal
-/// and debug-info stripping it is over 5 MB; this bound catches that.
-const MAX_NATIVE_BYTES: u64 = 1 << 20;
+/// A corpus program links to about 0.5 MB, and one using tasks, which
+/// links the runtime's threads, to about 1 MB (`tasks_map_taken` is 1.04
+/// MB on x86-64 and 1.12 MB on AArch64). Without dead-code removal and
+/// debug-info stripping one is over 5 MB; this bound catches that.
+const MAX_NATIVE_BYTES: u64 = 2 << 20;
 
 /// Fails a native binary larger than [`MAX_NATIVE_BYTES`].
 fn oversized(exe: &Path) -> Res<Option<String>> {
