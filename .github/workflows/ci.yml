@@ -61,7 +61,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install nightly --profile minimal --component miri && cargo +nightly miri setup
-      - run: cargo +nightly miri test --locked -p pythrust-rt -- sync:: task::
+      # Quoted: `sync:: task::` would otherwise read as a YAML mapping.
+      - run: "cargo +nightly miri test --locked -p pythrust-rt -- sync:: task::"
         env:
           MIRIFLAGS: "-Zmiri-permissive-provenance -Zmiri-many-seeds=0..8"
 
