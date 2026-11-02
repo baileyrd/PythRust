@@ -75,7 +75,20 @@ A `for` loop whose body cannot change its list holds one read borrow of it for t
 | `shared_4` | 0.444 (0.345 to 0.494) | 1.880 (1.499 to 2.393) | 2.773 (2.254 to 3.134) | 0.157 (0.138 to 0.201) | 0.123 (0.114 to 0.158) | 0.098 (0.080 to 0.104) |
 | `shared_baseline` | 0.123 (0.114 to 0.149) | 0.133 (0.120 to 0.163) | 0.125 (0.099 to 0.135) | 0.110 (0.100 to 0.122) | 0.112 (0.110 to 0.142) | 0.120 (0.108 to 0.141) |
 
-Before, tasks on one list on more than one core were 4x to 6x slower than on one core: every read changed the list's one borrow word, so its cache line moved between the cores on every read. After, a loop changes that word twice. One task still takes about 1.6x as long as the direct call: each string's count `inc`/`dec` stays atomic (option B, next).
+Before, tasks on one list on more than one core were 4x to 6x slower than on one core: every read changed the list's one borrow word, so its cache line moved between the cores on every read. After, a loop changes that word twice. One task still takes about 1.6x as long as the direct call: each string's count `inc`/`dec` stays atomic (option B, below).
+
+### Reading elements without a count (atomics cost B)
+
+A held loop whose variable only reads each element while the hold lasts reads it without a count of its own ([native.md](native.md#strings-lists-and-tuples)): no `inc`/`dec` per element, marked or not. A and B built and run in the same session, same method as above, median seconds:
+
+| Benchmark | A, 1 core | A, 2 cores | A, 4 cores | B, 1 core | B, 2 cores | B, 4 cores |
+|---|---:|---:|---:|---:|---:|---:|
+| `shared` (1 task) | 0.179 (0.146 to 0.189) | 0.176 (0.150 to 0.190) | 0.179 (0.144 to 0.208) | 0.091 (0.062 to 0.109) | 0.076 (0.067 to 0.097) | 0.103 (0.092 to 0.116) |
+| `shared_2` | 0.165 (0.138 to 0.181) | 0.117 (0.114 to 0.130) | 0.116 (0.098 to 0.136) | 0.084 (0.078 to 0.098) | 0.076 (0.059 to 0.087) | 0.062 (0.059 to 0.073) |
+| `shared_4` | 0.181 (0.177 to 0.185) | 0.115 (0.099 to 0.124) | 0.085 (0.073 to 0.090) | 0.079 (0.071 to 0.091) | 0.060 (0.048 to 0.068) | 0.058 (0.053 to 0.063) |
+| `shared_baseline` | 0.116 (0.109 to 0.128) | 0.115 (0.093 to 0.145) | 0.112 (0.094 to 0.130) | 0.080 (0.074 to 0.090) | 0.091 (0.084 to 0.102) | 0.085 (0.082 to 0.115) |
+
+The one-task row is now within the noise of the direct call, which gained too: its counts were plain, but still two runtime calls per element. Each program also builds its list of 200,000 strings, which no row here changes.
 
 ## CPU-bound tasks (M6c step 4c)
 
