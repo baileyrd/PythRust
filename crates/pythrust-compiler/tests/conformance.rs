@@ -1669,6 +1669,53 @@ fn files_match_cpython() -> Res<()> {
 fn fclone_lite_matches_cpython() -> Res<()> {
     build_runtime()?;
     let dir = scratch("fclone")?;
+    let root = fclone_tree(&dir)?;
+    let app = fclone_app("fclone_lite.py");
+    let exe = native_case(&dir, "fclone", &read(&app)?)?;
+    let want = fclone_cpython(&app, &root)?;
+    assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
+    let mut interp = Command::new(pythrust_bin()?);
+    interp.arg("run").arg(&app).arg(&root);
+    assert_eq!(run(&mut interp, TIMEOUT)?, want);
+    assert_eq!(run(Command::new(&exe).arg(&root), TIMEOUT)?, want);
+    cleanup(&dir)?;
+    Ok(())
+}
+
+/// The M6c driver: fclone-lite hashing every candidate through one
+/// executor's `map` prints what the serial fclone-lite prints, under
+/// CPython, `run` and natively.
+#[cfg(unix)]
+#[test]
+fn fclone_tasks_matches_fclone_lite() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("fclone-tasks")?;
+    let root = fclone_tree(&dir)?;
+    let want = fclone_cpython(&fclone_app("fclone_lite.py"), &root)?;
+    let app = fclone_app("fclone_tasks.py");
+    assert_eq!(fclone_cpython(&app, &root)?, want);
+    let mut interp = Command::new(pythrust_bin()?);
+    interp.arg("run").arg(&app).arg(&root);
+    assert_eq!(run(&mut interp, TIMEOUT)?, want);
+    let exe = native_case(&dir, "fclone_tasks", &read(&app)?)?;
+    assert_eq!(run(Command::new(&exe).arg(&root), TIMEOUT)?, want);
+    cleanup(&dir)?;
+    Ok(())
+}
+
+/// `apps/fclone-lite/<name>`.
+#[cfg(unix)]
+fn fclone_app(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/fclone-lite")
+        .join(name)
+}
+
+/// A tree under `dir` with two duplicate groups of one size, a pair of
+/// empty files, a file of a size of its own and a symbolic link, which
+/// fclone-lite skips.
+#[cfg(unix)]
+fn fclone_tree(dir: &Path) -> Res<PathBuf> {
     let root = dir.join("tree");
     fs::create_dir_all(root.join("a").join("b")).map_err(|e| e.to_string())?;
     let files = [
@@ -1685,19 +1732,17 @@ fn fclone_lite_matches_cpython() -> Res<()> {
         write(&root.join(name), text)?;
     }
     std::os::unix::fs::symlink(root.join("one"), root.join("link")).map_err(|e| e.to_string())?;
-    let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/fclone-lite/fclone_lite.py");
-    let exe = native_case(&dir, "fclone", &read(&app)?)?;
+    Ok(root)
+}
+
+/// CPython's run of `app` over `root`, which must succeed.
+#[cfg(unix)]
+fn fclone_cpython(app: &Path, root: &Path) -> Res<Run> {
     let mut cpython = Command::new(python());
-    cpython.args(["-I", "-X", "utf8"]).arg(&app).arg(&root);
-    let want = run(&mut cpython, TIMEOUT)?;
-    assert_eq!(want.status, 0, "{}", want.stdout);
-    assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
-    let mut interp = Command::new(pythrust_bin()?);
-    interp.arg("run").arg(&app).arg(&root);
-    assert_eq!(run(&mut interp, TIMEOUT)?, want);
-    assert_eq!(run(Command::new(&exe).arg(&root), TIMEOUT)?, want);
-    cleanup(&dir)?;
-    Ok(())
+    cpython.args(["-I", "-X", "utf8"]).arg(app).arg(root);
+    let got = run(&mut cpython, TIMEOUT)?;
+    assert_eq!(got.status, 0, "{}", got.stdout);
+    Ok(got)
 }
 
 /// A built program sees its own arguments in `sys.argv`, as `run` sees
