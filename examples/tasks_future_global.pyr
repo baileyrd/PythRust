@@ -1,0 +1,18 @@
+# deviation: executors, futures and `map`'s results stay in the function that made them (M6c, Nano 2026-11-01); CPython lets a module list hold futures.
+# expect-exit: 1
+# expect-error: global `pending` cannot hold one
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        pending.append(ex.submit(square, 3))
+    print(pending[0].result())
+
+
+pending = []
+main()

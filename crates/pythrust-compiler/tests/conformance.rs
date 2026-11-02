@@ -491,7 +491,13 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a generic function storing a bool key into an int-keyed table: `run` cannot \
          always tell the table is int-keyed, so `build` refuses rather than differ",
     ),
+    ("tasks_map", TASKS_GAP),
+    ("tasks_map_break", TASKS_GAP),
+    ("tasks_submit", TASKS_GAP),
 ];
+
+/// Why `build` refuses tasks: native tasks are M6c's next step.
+const TASKS_GAP: &str = "tasks: native tasks are M6c's step after the front end";
 
 const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";
 

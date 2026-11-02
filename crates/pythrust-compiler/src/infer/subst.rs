@@ -45,6 +45,8 @@ impl Subst {
             Type::Set(elem) => Type::Set(Box::new(self.zonk(&elem))),
             Type::View(view, item) => Type::View(view, Box::new(self.zonk(&item))),
             Type::Optional(inner) => Type::Optional(Box::new(self.zonk(&inner))),
+            Type::Future(r) => Type::Future(Box::new(self.zonk(&r))),
+            Type::Results(r) => Type::Results(Box::new(self.zonk(&r))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.zonk(t)).collect()),
             other => other,
         }
@@ -61,7 +63,9 @@ impl Subst {
             (Type::Var(v), other) | (other, Type::Var(v)) => self.bind(*v, other),
             (Type::List(x), Type::List(y))
             | (Type::Set(x), Type::Set(y))
-            | (Type::Optional(x), Type::Optional(y)) => self.unify(x, y),
+            | (Type::Optional(x), Type::Optional(y))
+            | (Type::Future(x), Type::Future(y))
+            | (Type::Results(x), Type::Results(y)) => self.unify(x, y),
             (Type::View(v, x), Type::View(w, y)) if v == w => self.unify(x, y),
             (Type::Dict(k1, v1), Type::Dict(k2, v2)) => {
                 self.unify(k1, k2)?;
@@ -111,9 +115,12 @@ impl Subst {
             Type::Var(v) => {
                 out.insert(v);
             }
-            Type::List(elem) | Type::Set(elem) | Type::Optional(elem) | Type::View(_, elem) => {
-                self.free_vars(&elem, out)
-            }
+            Type::List(elem)
+            | Type::Set(elem)
+            | Type::Optional(elem)
+            | Type::View(_, elem)
+            | Type::Future(elem)
+            | Type::Results(elem) => self.free_vars(&elem, out),
             Type::Dict(k, v) => {
                 self.free_vars(&k, out);
                 self.free_vars(&v, out);
@@ -135,6 +142,8 @@ impl Subst {
             Type::Set(elem) => Type::Set(Box::new(self.rename(&elem, map))),
             Type::View(view, item) => Type::View(view, Box::new(self.rename(&item, map))),
             Type::Optional(inner) => Type::Optional(Box::new(self.rename(&inner, map))),
+            Type::Future(r) => Type::Future(Box::new(self.rename(&r, map))),
+            Type::Results(r) => Type::Results(Box::new(self.rename(&r, map))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.rename(t, map)).collect()),
             other => other,
         }

@@ -334,7 +334,13 @@ impl Checker {
     }
 
     /// Python binding: positional arguments first, then keywords by name.
-    fn bind_args(&mut self, name: &str, sig: &FuncType, args: &[Arg], span: Span) -> Result<()> {
+    pub(super) fn bind_args(
+        &mut self,
+        name: &str,
+        sig: &FuncType,
+        args: &[Arg],
+        span: Span,
+    ) -> Result<()> {
         let given = args.iter().filter(|a| a.name.is_none()).count();
         let mut bound = vec![false; sig.params.len()];
         let mut next = Some(0);
@@ -377,12 +383,14 @@ impl Checker {
         let (min, max) = match name {
             "append" | "add" => (1, 1),
             "get" => (1, 2),
-            "keys" | "values" | "items" | "read" | "close" => (0, 0),
+            "keys" | "values" | "items" | "read" | "close" | "result" => (0, 0),
+            "submit" | "map" => return self.task(value, attr, args),
             _ => {
                 let msg = format!(
                     "unknown method `.{name}`; the methods are `list.append`, `set.add`, \
-                     `dict.get`, `.keys`, `.values` and `.items`, and a file's `.read` \
-                     and `.close`"
+                     `dict.get`, `.keys`, `.values` and `.items`, a file's `.read` \
+                     and `.close`, an executor's `.submit` and `.map`, and a future's \
+                     `.result`"
                 );
                 return Err(error(attr.span, msg));
             }
@@ -401,6 +409,7 @@ impl Checker {
                     Type::None
                 })
             }
+            "result" => self.result(value.span, &receiver),
             _ => self.view(name, value.span, &receiver),
         }
     }

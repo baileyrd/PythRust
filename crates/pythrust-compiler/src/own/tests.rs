@@ -1,4 +1,4 @@
-use super::{analyze, check, modes, Analysis, Mode, Param, Precision, Strs};
+use super::{analyze, check, modes, warnings, Analysis, Mode, Param, Precision, Strs};
 use crate::ast::{Mode as Temper, ParamMode, StmtKind};
 use crate::diag::DiagKind;
 use crate::{infer, lexer, parser};
@@ -1372,4 +1372,205 @@ fn a_tempered_file_parameter_read_without_mut_is_an_error() {
         Ok(()),
         "loose `r` infers its mode"
     );
+}
+
+/// A program whose functions use tasks (M6c), which lowering cannot
+/// express yet: one called, one no code calls.
+const TASKS: &str = "import concurrent.futures\n\
+def sq(x: int) -> int:\n    return x * x\n\
+def called(n: int) -> int:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+return ex.submit(sq, n).result()\n\
+def unused(n: int) -> None:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        pass\n\
+print(called(2))\n";
+
+#[test]
+fn tasks_leave_the_other_functions_checked() {
+    let grow =
+        format!("{TASKS}temper def grow(xs: list[int]) -> None:\n    xs.append(1)\ngrow([0])\n");
+    assert_eq!(
+        mode_err(&grow).0,
+        "tempered `grow` changes `xs` in place; write `mut xs`"
+    );
+    let alias =
+        format!("{TASKS}temper def same(xs: list[int]) -> list[int]:\n    return xs\nsame([1])\n");
+    assert!(
+        mode_err(&alias).0.contains("returns its parameter `xs`"),
+        "{alias}"
+    );
+    let shared = format!(
+        "{TASKS}temper def two(mut a: list[int], b: list[int]) -> None:\n    a.append(len(b))\n\
+         def go() -> None:\n    xs = [1]\n    two(xs, xs)\ngo()\n"
+    );
+    assert!(mode_err(&shared).0.contains("list(...)"), "{shared}");
+    let both = format!(
+        "{TASKS}temper def f(mut a: list[int]) -> int:\n    b = a\n    b.append(1)\n    return len(a)\nprint(f([1]))\n"
+    );
+    assert!(
+        mode_err(&both).0.contains("copy instead of sharing it"),
+        "{both}"
+    );
+    let a = analyzed(TASKS);
+    assert_eq!(a.precision, Precision::Precise);
+    assert!(a.opaque.contains("called") && a.opaque.contains("unused"));
+    assert!(!a.opaque.contains("sq"));
+}
+
+#[test]
+fn a_function_that_reaches_a_task_body_is_not_diagnosed() {
+    // `keep` passes `xs` to `run`, whose body nothing summarizes yet: its
+    // written `mut` may be too weak, but nothing can tell.
+    let src = "import concurrent.futures\n\
+def sq(x: int) -> int:\n    return x * x\n\
+def run(xs: list[int]) -> None:\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+print(ex.submit(sq, len(xs)).result())\n\
+def keep(mut xs: list[int]) -> None:\n    run(xs)\nkeep([1])\n";
+    assert_eq!(checked(src), Ok(()));
+    let a = analyzed(src);
+    assert!(a.opaque.contains("keep"), "{:?}", a.opaque);
+}
+
+#[test]
+fn a_generic_task_function_with_an_open_result_is_an_error() {
+    // `run`'s result type comes only from its body, which ownership
+    // checks cannot see until tasks lower (step 3b): a named error, not a
+    // silent fallback (Nano, 2026-11-02).
+    let used = "import concurrent.futures\n\
+def dbl(n):\n    return n * n\n\
+def run(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+return ex.submit(dbl, x).result()\n\
+def outer(y):\n    return run(y) + 1\n\
+temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
+print(outer(2))\ngrow([0])\n";
+    let discarded = "import concurrent.futures\n\
+def task(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        pass\n    return x * x\n\
+def wrap(x):\n    task(x)\n    return x\n\
+temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
+wrap(2)\ngrow([1])\n";
+    for (src, name) in [(used, "run"), (discarded, "task")] {
+        let (msg, at) = mode_err(src);
+        assert_eq!(at, name, "{msg}");
+        assert!(
+            msg.contains(&format!("annotate `{name}`'s parameters and result")),
+            "{msg}"
+        );
+    }
+    // The fix it names: annotated, it lowers, and `grow` is checked.
+    let annotated = used.replace("def run(x):", "def run(x: int) -> int:");
+    assert!(mode_err(&annotated).0.contains("write `mut xs`"));
+    let annotated = discarded.replace("def task(x):", "def task(x: int) -> int:");
+    assert!(mode_err(&annotated).0.contains("write `mut xs`"));
+}
+
+#[test]
+fn a_task_program_never_falls_back_silently() {
+    // Another gap, met first, would otherwise hide what the program's
+    // tasks need: a task program that does not lower is a named error.
+    let src = "import concurrent.futures\nx = print(7)\ndef print(n):\n    return 1\n\
+def task(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        pass\n    return x * x\n\
+def wrap(x):\n    task(x)\n    return x\n\
+temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
+wrap(2)\ngrow([1])\n";
+    let (msg, _) = mode_err(src);
+    assert!(
+        msg.contains("uses tasks, so its ownership checks cannot be skipped"),
+        "{msg}"
+    );
+    assert!(msg.contains("does not support"), "{msg}");
+    // Without tasks, the same gap stays the conservative fallback.
+    let plain = "x = print(7)\ndef print(n):\n    return 1\n";
+    assert_eq!(checked(plain), Ok(()));
+}
+
+#[test]
+fn a_tempered_function_whose_checks_are_skipped_is_warned() {
+    // No program reaches this yet (tempered code uses no executor and
+    // calls only tempered code), so the skipped set is given by hand.
+    let src = "temper def f(xs: list[int]) -> int:\n    return len(xs)\n\
+               def g(xs: list[int]) -> int:\n    return len(xs)\nprint(f([1]), g([2]))\n";
+    let module = match lexer::lex(src).and_then(|t| parser::parse(&t)) {
+        Ok(m) => m,
+        Err(d) => panic!("parse failed: {d}"),
+    };
+    let mut a = analyzed(src);
+    assert_eq!(warnings(&module, &a), Vec::new());
+    a.opaque.extend(["f".to_string(), "g".to_string()]);
+    let got: Vec<String> = warnings(&module, &a)
+        .into_iter()
+        .map(|w| w.message)
+        .collect();
+    assert_eq!(
+        got,
+        ["ownership checks skipped for `f`: it may reach tasks (pending 3b)"]
+    );
+}
+
+/// One program per entry of grammar.md's known-unchecked list (M6c,
+/// Nano 2026-11-02), each passing every check until rule 4 refuses it.
+const UNCHECKED: [(&str, &str); 5] = [
+    (
+        "tasks-share-a-list",
+        "def add(xs: list[int], n: int) -> None:\n    xs.append(n)\n\
+         def main() -> None:\n    xs: list[int] = []\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         a = ex.submit(add, xs, 1)\n        b = ex.submit(add, xs, 2)\n        \
+         a.result()\n        b.result()\n    print(xs)\n",
+    ),
+    (
+        "tasks-alias-or-file",
+        "def same(xs: list[int]) -> list[int]:\n    return xs\n\
+         def main() -> None:\n    xs = [1]\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         ys = ex.submit(same, xs).result()\n        ys.append(2)\n    print(xs)\n",
+    ),
+    (
+        "tasks-alias-or-file",
+        "def size(f) -> int:\n    return len(f.read())\n\
+         def main() -> None:\n    f = open(\"p\", \"rb\")\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         print(ex.submit(size, f).result())\n",
+    ),
+    (
+        "tasks-map-changes",
+        "def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return len(xs)\n\
+         def main() -> None:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         print(list(ex.map(grow, [[1], [2]])))\n",
+    ),
+    (
+        "tasks-module-list",
+        "log: list[int] = []\n\
+         def note(n: int) -> None:\n    log.append(n)\n\
+         def main() -> None:\n    \
+         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+         a = ex.submit(note, 1)\n        b = ex.submit(note, 2)\n        \
+         a.result()\n        b.result()\n",
+    ),
+];
+
+#[test]
+fn known_unchecked_task_gaps_stay_listed() {
+    let grammar = include_str!("../../../../docs/grammar.md");
+    let listed: Vec<&str> = grammar
+        .split("`unchecked:")
+        .skip(1)
+        .filter_map(|rest| rest.split('`').next())
+        .collect();
+    for (id, body) in UNCHECKED {
+        assert!(
+            listed.contains(&id),
+            "`unchecked:{id}` left grammar.md: drop its program"
+        );
+        let src = format!("import concurrent.futures\n{body}main()\n");
+        assert_eq!(
+            checked(&src),
+            Ok(()),
+            "`unchecked:{id}` is checked now: remove it from grammar.md's known-unchecked list\n{src}"
+        );
+    }
+    for id in &listed {
+        assert!(
+            UNCHECKED.iter().any(|(u, _)| u == id),
+            "grammar.md lists `unchecked:{id}` with no program here"
+        );
+    }
 }

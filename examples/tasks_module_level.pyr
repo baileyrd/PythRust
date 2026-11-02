@@ -1,0 +1,12 @@
+# deviation: an executor at module level is not supported (M6c, Nano 2026-11-01); CPython runs it. Move the `with` into a function.
+# expect-exit: 1
+# expect-error: an executor at module level is not supported
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+with concurrent.futures.ThreadPoolExecutor() as ex:
+    print(ex.submit(square, 3).result())

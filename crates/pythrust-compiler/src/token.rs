@@ -48,10 +48,12 @@ pub enum TokenKind {
     Try,
     Except,
     Raise,
-    /// `as`, only in `except Name as e`.
+    /// `as`, only in `except Name as e` and `with value as name`.
     As,
     /// `import`, only at module top level (M6a).
     Import,
+    /// `with`, only around an executor (M6c).
+    With,
 
     // Arithmetic operators.
     Plus,

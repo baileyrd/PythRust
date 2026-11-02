@@ -23,6 +23,9 @@ impl<'m> Interp<'m, '_> {
     /// Calls `f`; inference checked the arguments' count and types.
     pub(super) fn std(&mut self, f: StdFn, args: &Args<'m>) -> Exec<'m, Value<'m>> {
         let span = args.span;
+        if f == StdFn::Executor {
+            return Ok(Value::Executor);
+        }
         if let (StdFn::Sha256, [Value::Bytes(data)]) = (f, args.positional.as_slice()) {
             return Ok(Value::str(&sha256::hex(&sha256::digest(data))));
         }

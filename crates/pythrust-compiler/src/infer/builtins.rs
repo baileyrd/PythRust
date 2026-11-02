@@ -81,6 +81,7 @@ impl Checker {
             StdFn::Join => (1, usize::MAX, Type::Str),
             StdFn::Isdir | StdFn::Isfile | StdFn::Islink => (1, 1, Type::Bool),
             StdFn::Getsize => (1, 1, Type::Int),
+            StdFn::Executor => (0, 0, Type::Executor),
             StdFn::Open => return self.open(args, span),
             StdFn::Sha256 => return self.sha256(args, span),
             StdFn::Read | StdFn::Close => {

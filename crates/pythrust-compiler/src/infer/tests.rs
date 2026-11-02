@@ -854,7 +854,7 @@ fn builtin_misuse_is_an_error() {
         ),
         (
             b.call("list", vec![b.s("ab")]),
-            "`list` copies a list, dict, set or dict view, not str",
+            "`list` copies a list, dict, set, dict view or `map`'s results, not str",
         ),
         (
             b.call("list", vec![]),
@@ -2117,7 +2117,7 @@ fn dict_and_set_misuse_is_an_error() {
         ),
         (
             "print(list(\"ab\"))\n",
-            "`list` copies a list, dict, set or dict view, not str",
+            "`list` copies a list, dict, set, dict view or `map`'s results, not str",
         ),
         (
             "print(sorted([{1}]))\n",
@@ -2354,6 +2354,26 @@ fn calls_check_against_the_stub() {
         "`fastfs.add` is missing argument `b`"
     );
     assert!(err("import fastfs\nx: str = fastfs.add(1, 2)\n").contains("expected str, found int"));
+}
+
+#[test]
+fn a_binding_function_is_not_a_task_yet() {
+    // Nano, 2026-11-02: not until an app needs it.
+    let src = "import fastfs\nimport concurrent.futures\ndef main() -> None:\n    \
+               with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
+               print(ex.submit(fastfs.add, 1, 2).result())\n        \
+               print(list(ex.map(fastfs.file_xxh3, [\"p\"])))\nmain()\n";
+    let got = with_fastfs(src).err().unwrap_or_default();
+    assert!(
+        got.contains("cannot run the Rust binding function `fastfs.add`"),
+        "{got}"
+    );
+    let mapped = src.replace("print(ex.submit(fastfs.add, 1, 2).result())\n        ", "");
+    let got = with_fastfs(&mapped).err().unwrap_or_default();
+    assert!(
+        got.contains("`map` cannot run the Rust binding function `fastfs.file_xxh3`"),
+        "{got}"
+    );
 }
 
 #[test]

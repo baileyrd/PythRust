@@ -415,8 +415,9 @@ fn equal(s: &mut Subst, c: &Constraint, l: &Type, r: &Type) -> Result<Step> {
     Ok(Step::Done(vec![Need::Comparable(l)]))
 }
 
-/// A view or a file compares by identity in CPython, so a type holding
-/// one, at any depth, is not comparable; the parts are checked as they become
+/// A view, a file, an executor, a future or `map`'s results compares by
+/// identity in CPython, so a type holding one, at any depth, is not
+/// comparable; the parts are checked as they become
 /// known.
 fn comparable(s: &Subst, c: &Constraint, t: &Type) -> Result<Step> {
     let Some(t) = known(s, t) else {
@@ -432,6 +433,13 @@ fn comparable(s: &Subst, c: &Constraint, t: &Type) -> Result<Step> {
         }
         Type::File => {
             let msg = "files compare by identity, which is not supported".to_string();
+            return Err(error(c, msg));
+        }
+        Type::Executor | Type::Future(_) | Type::Results(_) => {
+            let msg = format!(
+                "{} compares by identity, which is not supported",
+                s.zonk(&t)
+            );
             return Err(error(c, msg));
         }
         Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => vec![*inner],
@@ -496,9 +504,11 @@ fn iter(s: &mut Subst, c: &Constraint, iterable: &Type, elem: &Type) -> Result<S
         return Ok(Step::Waiting);
     };
     match &t {
-        Type::List(item) | Type::Set(item) | Type::Dict(item, _) | Type::View(_, item) => {
-            expect(s, c, elem, item)?
-        }
+        Type::List(item)
+        | Type::Set(item)
+        | Type::Dict(item, _)
+        | Type::View(_, item)
+        | Type::Results(item) => expect(s, c, elem, item)?,
         Type::Str => expect(s, c, elem, &Type::Str)?,
         Type::Range => expect(s, c, elem, &Type::Int)?,
         Type::Tuple(items) => items.iter().try_for_each(|item| expect(s, c, elem, item))?,
@@ -701,13 +711,17 @@ fn to_list(s: &mut Subst, c: &Constraint, arg: &Type, elem: &Type) -> Result<Ste
         return Ok(Step::Waiting);
     };
     match &t {
-        Type::List(item) | Type::Set(item) | Type::Dict(item, _) | Type::View(_, item) => {
+        Type::List(item)
+        | Type::Set(item)
+        | Type::Dict(item, _)
+        | Type::View(_, item)
+        | Type::Results(item) => {
             expect(s, c, elem, item)?;
             Ok(Step::Done(vec![]))
         }
         other => {
             let msg = format!(
-                "`list` copies a list, dict, set or dict view, not {}",
+                "`list` copies a list, dict, set, dict view or `map`'s results, not {}",
                 s.zonk(other)
             );
             Err(error(c, msg))

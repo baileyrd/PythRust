@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 
 use super::builtins::Builtin;
@@ -47,7 +47,19 @@ pub(super) enum Value<'m> {
     Bytes(Rc<[u8]>),
     /// A file `open(p, "rb")` returned.
     File(Rc<File>),
+    /// `concurrent.futures.ThreadPoolExecutor()` (M6c). Its tasks run at
+    /// `submit`, so it holds nothing.
+    Executor,
+    /// What `submit` returned: how its task ended.
+    Future(Rc<Outcome<'m>>),
+    /// What `map` returned: how each task ended, in order, taken by
+    /// iterating once, as Python's generator is.
+    Results(Rc<RefCell<VecDeque<Outcome<'m>>>>),
 }
+
+/// How a task ended: its result, or the exception that escaped it and
+/// where it was raised.
+pub(super) type Outcome<'m> = std::result::Result<Value<'m>, (Rc<Exc<'m>>, Span)>;
 
 /// An exception value: its kind and the argument it was built with.
 #[derive(Debug)]
@@ -201,7 +213,10 @@ impl<'m> Value<'m> {
             | Value::Builtin(_)
             | Value::Method(_)
             | Value::Exc(_)
-            | Value::File(_) => true,
+            | Value::File(_)
+            | Value::Executor
+            | Value::Future(_)
+            | Value::Results(_) => true,
         }
     }
 
@@ -225,6 +240,9 @@ impl<'m> Value<'m> {
             Value::Exc(e) => e.kind.name(),
             Value::Bytes(_) => "bytes",
             Value::File(_) => "_io.BufferedReader",
+            Value::Executor => "ThreadPoolExecutor",
+            Value::Future(_) => "Future",
+            Value::Results(_) => "generator",
         }
     }
 
@@ -443,6 +461,8 @@ fn eq_at<'m>(a: &Value<'m>, b: &Value<'m>, depth: usize, span: Span) -> Result<b
         (Value::Exc(x), Value::Exc(y)) => Rc::ptr_eq(x, y),
         (Value::Bytes(x), Value::Bytes(y)) => x == y,
         (Value::File(x), Value::File(y)) => Rc::ptr_eq(x, y),
+        (Value::Future(x), Value::Future(y)) => Rc::ptr_eq(x, y),
+        (Value::Results(x), Value::Results(y)) => Rc::ptr_eq(x, y),
         _ => false,
     })
 }
@@ -694,6 +714,10 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
         Value::Str(s) => str_repr(s),
         Value::Bytes(b) => bytes_repr(b),
         Value::File(f) => format!("<_io.BufferedReader name={}>", str_repr(&f.name)),
+        // Never shown: inference refuses passing one to `print` or `str`.
+        Value::Executor | Value::Future(_) | Value::Results(_) => {
+            format!("<{}>", v.type_name())
+        }
         Value::Range(r) if r.step == 1 => format!("range({}, {})", r.start, r.stop),
         Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
         Value::Func(f) => format!("<function {}>", f.def.name.name),

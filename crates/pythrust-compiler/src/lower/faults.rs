@@ -107,6 +107,10 @@ impl<'a> Sites<'a> {
                 self.block(body);
                 handlers.iter().for_each(|h| self.block(&h.body));
             }
+            StmtKind::With { value, body, .. } => {
+                self.expr(value);
+                self.block(body);
+            }
             StmtKind::FuncDef(_) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
         }
     }

@@ -13,6 +13,7 @@ mod methods;
 mod ops;
 mod stdlib;
 mod table;
+mod tasks;
 mod value;
 
 #[cfg(test)]
@@ -94,6 +95,7 @@ fn run_here<'m>(
     let mut interp = Interp {
         globals: HashMap::new(),
         frames: Vec::new(),
+        task_frames: 0,
         types,
         argv,
         out,
@@ -153,6 +155,9 @@ struct Interp<'m, 'o> {
     types: &'m Types,
     /// One per active call; empty at module level.
     frames: Vec<Frame<'m>>,
+    /// Calls active in the tasks that started the running one, whose
+    /// frames are set aside while it runs.
+    task_frames: usize,
     /// `sys.argv`'s value.
     argv: &'o [String],
     out: &'o mut dyn Write,
@@ -258,6 +263,11 @@ impl<'m> Interp<'m, '_> {
                 return Err(Unwind::Raise(exc, stmt.span));
             }
             StmtKind::Try { body, handlers } => return self.exec_try(body, handlers),
+            StmtKind::With {
+                value,
+                binding,
+                body,
+            } => return self.exec_with(value, binding, body),
         }
         Ok(Flow::Next)
     }
@@ -350,7 +360,10 @@ impl<'m> Interp<'m, '_> {
     ) -> Exec<'m, Flow<'m>> {
         let mut items = match self.dict_view(iter)? {
             Some(items) => items,
-            None => self.eval(iter)?.iter(iter.span)?,
+            None => match self.eval(iter)? {
+                Value::Results(r) => return self.for_results(&r, target, body, orelse),
+                v => v.iter(iter.span)?,
+            },
         };
         for v in items.by_ref() {
             self.assign(target, v)?;
@@ -613,7 +626,12 @@ impl<'m> Interp<'m, '_> {
         let mut l_span = left.span;
         for (op, right) in rest {
             let r = self.eval(right)?;
-            if !value::compare(*op, &l, &r, l_span.merge(right.span))? {
+            let span = l_span.merge(right.span);
+            let holds = match &r {
+                Value::Results(results) => self.results_contain(results, &l, *op, span)?,
+                _ => value::compare(*op, &l, &r, span)?,
+            };
+            if !holds {
                 return Ok(Value::Bool(false));
             }
             (l, l_span) = (r, right.span);
@@ -622,6 +640,9 @@ impl<'m> Interp<'m, '_> {
     }
 
     fn eval_call(&mut self, func: &'m Expr, args: &'m [Arg], span: Span) -> Exec<'m, Value<'m>> {
+        if let Some(out) = self.task_call(func, args, span) {
+            return out;
+        }
         let callee = self.eval(func)?;
         let mut evaluated = Args {
             positional: Vec::new(),
@@ -629,7 +650,11 @@ impl<'m> Interp<'m, '_> {
             span,
         };
         for arg in args {
-            let v = self.eval(&arg.value)?;
+            let v = match self.eval(&arg.value)? {
+                // `list`, `sorted` or `set` of `map`'s results.
+                Value::Results(r) => tasks::drain(&r)?,
+                v => v,
+            };
             self.tag(&v, arg.value.span);
             match &arg.name {
                 Some(name) => evaluated.keywords.push((name, v)),
@@ -793,6 +818,10 @@ fn collect_block<'m>(block: &'m [Stmt], names: &mut HashSet<&'m str>) {
                     names.extend(h.binding.as_ref().map(|b| b.name.as_str()));
                     collect_block(&h.body, names);
                 }
+            }
+            StmtKind::With { binding, body, .. } => {
+                names.insert(&binding.name);
+                collect_block(body, names);
             }
             _ => {}
         }

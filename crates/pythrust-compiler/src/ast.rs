@@ -114,6 +114,13 @@ pub enum StmtKind {
         body: Block,
         handlers: Vec<Handler>,
     },
+    /// `'with' expr 'as' NAME ':' block` (M6c): `value` is an executor,
+    /// whose tasks all end before the block is left.
+    With {
+        value: Expr,
+        binding: Ident,
+        body: Block,
+    },
 }
 
 /// `'except' classes ['as' NAME] ':' block`, where `classes` is a name

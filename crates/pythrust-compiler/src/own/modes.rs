@@ -39,6 +39,9 @@ pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
         return Ok(());
     }
     for def in defs(module) {
+        if analysis.opaque.contains(&def.name.name) {
+            continue;
+        }
         if let Some(d) = analysis.aliasing.get(&def.name.name) {
             return Err(d.clone());
         }

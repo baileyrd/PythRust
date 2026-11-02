@@ -25,6 +25,7 @@ impl Parser<'_> {
                 continue;
             }
             let module = self.import(&name)?;
+            self.dotted_import(module, &name)?;
             stmts.extend(
                 module
                     .vars
@@ -52,6 +53,24 @@ impl Parser<'_> {
         self.expect(&TokenKind::Newline)?;
         let span = self.span_from(start);
         Ok(stmts.into_iter().map(|s| Stmt { span, ..s }).collect())
+    }
+
+    /// After `import concurrent`, the `.futures` it needs: the one
+    /// dotted import, as CPython loads `futures` only when named.
+    fn dotted_import(&mut self, module: &ModuleDef, name: &Ident) -> Result<()> {
+        let (top, sub) = stdlib::DOTTED_IMPORT;
+        if module.name != top {
+            return Ok(());
+        }
+        let follows =
+            self.at(&TokenKind::Dot) && matches!(&self.tok(1).kind, TokenKind::Name(n) if n == sub);
+        if !follows {
+            let msg = format!("write `import {top}.{sub}`: `{top}` alone has no names");
+            return Err(error(name.span, msg));
+        }
+        self.bump();
+        self.bump();
+        Ok(())
     }
 
     /// Records the import of the module `name`.
