@@ -1,0 +1,89 @@
+# Loops that change their list through another name (an optional, a
+# tuple, a dict, a nested list, a module list, an indexed target) are not
+# held and see each append; a module loop may rebind the list it walks.
+LOG: list[int] = [1, 2, 3]
+
+
+def opt_alias(xs: list[int]) -> int:
+    ys: list[int] | None = None
+    ys = xs
+    n = 0
+    for x in xs:
+        n += 1
+        if n < 3 and ys is not None:
+            ys.append(x)
+    return n
+
+
+def tuple_alias(xs: list[int]) -> int:
+    t = (xs, 1)
+    n = 0
+    for x in xs:
+        n += 1
+        if n < 3:
+            t[0].append(x)
+    return n
+
+
+def dict_alias(xs: list[int]) -> int:
+    d = {"a": xs}
+    n = 0
+    for x in xs:
+        n += 1
+        if n < 3:
+            d["a"].append(x)
+    return n
+
+
+def nested_alias(g: list[list[int]]) -> int:
+    n = 0
+    for x in g[0]:
+        n += 1
+        if n < 3:
+            g[0].append(x)
+    for row in g:
+        row.append(0)
+    return n
+
+
+def global_append() -> int:
+    n = 0
+    for x in LOG:
+        n += 1
+        if n < 3:
+            LOG.append(x)
+    return n
+
+
+def opt_param(xs: list[int] | None) -> int:
+    n = 0
+    if xs is not None:
+        for x in xs:
+            n += 1
+            if n < 3:
+                xs.append(x)
+    return n
+
+
+print(opt_alias([1, 2, 3]), tuple_alias([1, 2, 3]), dict_alias([1, 2, 3]))
+g = [[1, 2], [3]]
+print(nested_alias(g), g)
+m = 0
+for x in LOG:
+    m += x
+    LOG = [9, 8]
+LOG.append(m)
+print(m, LOG)
+print(global_append(), LOG)
+print(opt_param([5, 6]))
+
+
+def f(xs: list[int], ys: list[int]) -> int:
+    for xs[0] in ys:
+        pass
+    for ys[0] in ys:
+        pass
+    return xs[0] + ys[0]
+
+
+print(f([0], [1, 2, 3]))

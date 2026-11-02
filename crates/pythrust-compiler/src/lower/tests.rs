@@ -1183,3 +1183,64 @@ fn the_hold_fixtures_hold_where_they_say() {
         assert_eq!(holds(&p, name), (0, 0), "{name}");
     }
 }
+/// Pins which loops of the held-loop exit, alias and raise fixtures
+/// hold.
+#[test]
+fn the_held_loop_edge_fixtures_hold_where_they_say() {
+    let fixtures = [
+        (
+            include_str!("../../../../examples/for_hold_exits.pyr"),
+            &[
+                ("in_if", 1),
+                ("in_while", 1),
+                ("nested_return", 2),
+                // The `else` appends: its blocks count as the loop's.
+                ("else_clause", 0),
+                ("else_plain", 1),
+                ("outer_continue", 2),
+                ("f", 2),
+                ("g", 1),
+                ("h", 1),
+            ][..],
+        ),
+        (
+            include_str!("../../../../examples/for_hold_aliases.pyr"),
+            &[
+                ("opt_alias", 0),
+                ("tuple_alias", 0),
+                ("dict_alias", 0),
+                // `for row in g` holds; `for x in g[0]` does not.
+                ("nested_alias", 1),
+                ("global_append", 0),
+                ("opt_param", 0),
+                ("f", 0),
+                // The module's loop rebinds `LOG`, changing no list.
+                ("<module>", 1),
+            ][..],
+        ),
+        (
+            include_str!("../../../../examples/for_hold_raise.pyr"),
+            &[("main", 2)][..],
+        ),
+    ];
+    for (src, want) in fixtures {
+        let p = lowered(src);
+        for (name, loops) in want {
+            assert_eq!(holds(&p, name).0, *loops, "{name}");
+        }
+    }
+}
+
+#[test]
+fn a_loop_that_submits_or_takes_a_result_borrows_per_read() {
+    let src = concat!(
+        "import concurrent.futures\n",
+        "def one(n: int) -> int:\n    return n\n",
+        "def main(rows: list[int]) -> int:\n    n = 0\n",
+        "    with concurrent.futures.ThreadPoolExecutor() as ex:\n",
+        "        for r in rows:\n            n += ex.submit(one, r).result()\n",
+        "    return n\n",
+        "print(main([1, 2]))\n",
+    );
+    assert_eq!(holds(&lowered(src), "main"), (0, 0));
+}

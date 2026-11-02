@@ -1,0 +1,29 @@
+# A `for` over a list a `map` fills: a task raises while the list is
+# filled, before the loop starts, and the handler catches it. The list is
+# released as a plain list there, never as a loop's hold.
+import concurrent.futures
+
+
+def boom(n: int) -> int:
+    if n == 2:
+        raise ValueError("two")
+    return n
+
+
+def main() -> None:
+    n = 0
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        try:
+            for x in sorted(ex.map(boom, [1, 2, 3])):
+                n += x
+        except ValueError:
+            n += 100
+        try:
+            for x in list(ex.map(boom, [3, 1, 2])):
+                n += x
+        except ValueError:
+            n += 1000
+    print(n)
+
+
+main()

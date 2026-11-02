@@ -1,0 +1,20 @@
+# expect-exit: 1
+# As for_hold_raise, uncaught: the list is released on the way out.
+import concurrent.futures
+
+
+def boom(n: int) -> int:
+    if n == 2:
+        raise ValueError("two")
+    return n
+
+
+def main() -> None:
+    n = 0
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for x in list(ex.map(boom, [1, 2, 3])):
+            n += x
+    print(n)
+
+
+main()
