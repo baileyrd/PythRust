@@ -402,7 +402,7 @@ impl<'a> Flow<'a> {
 
     /// Every list reachable from an argument whose mode is at least
     /// `min`.
-    fn passed(&self, args: &[Operand], params: &[Param], min: Mode) -> Objs {
+    pub(super) fn passed(&self, args: &[Operand], params: &[Param], min: Mode) -> Objs {
         let ops: Vec<Operand> = args
             .iter()
             .zip(params)
@@ -498,7 +498,7 @@ impl<'a> Flow<'a> {
             .any(|s| meets(s, region))
     }
 
-    fn effects(&self, inst: &Inst, mutated: &mut Objs, kept: &mut Objs) {
+    pub(super) fn effects(&self, inst: &Inst, mutated: &mut Objs, kept: &mut Objs) {
         match inst {
             Inst::Assign {
                 value: Rvalue::Call(f, args),

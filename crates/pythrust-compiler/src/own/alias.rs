@@ -943,7 +943,7 @@ fn term_operands(term: &Term) -> Vec<Operand> {
 }
 
 /// The operands `inst` reads, not counting reference counting.
-fn inst_operands(inst: &Inst) -> Vec<Operand> {
+pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
     match inst {
         Inst::Assign { value, .. } => rvalue_operands(value),
         Inst::Print { args, sep, end } => args.iter().chain(sep).chain(end).copied().collect(),
@@ -1006,7 +1006,7 @@ fn error(span: Span, message: String) -> Diagnostic {
 }
 
 /// Where a change `inst` makes is reported.
-fn inst_span(inst: &Inst) -> Option<Span> {
+pub(super) fn inst_span(inst: &Inst) -> Option<Span> {
     match inst {
         Inst::Append { span, .. } | Inst::SetItem { span, .. } | Inst::Assign { span, .. } => {
             Some(*span)

@@ -1515,75 +1515,89 @@ wrap(2)\ngrow([1])\n";
     assert_eq!(checked(plain), Ok(()));
 }
 
-/// One program per entry of grammar.md's known-unchecked list (M6c,
-/// Nano 2026-11-02), each passing every check until rule 4 refuses it.
-const UNCHECKED: [(&str, &str); 5] = [
-    (
-        "tasks-share-a-list",
-        "def add(xs: list[int], n: int) -> None:\n    xs.append(n)\n\
-         def main() -> None:\n    xs: list[int] = []\n    \
-         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
-         a = ex.submit(add, xs, 1)\n        b = ex.submit(add, xs, 2)\n        \
-         a.result()\n        b.result()\n    print(xs)\n",
-    ),
-    (
-        "tasks-alias-or-file",
-        "def same(xs: list[int]) -> list[int]:\n    return xs\n\
-         def main() -> None:\n    xs = [1]\n    \
-         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
-         ys = ex.submit(same, xs).result()\n        ys.append(2)\n    print(xs)\n",
-    ),
-    (
-        "tasks-alias-or-file",
-        "def size(f) -> int:\n    return len(f.read())\n\
-         def main() -> None:\n    f = open(\"p\", \"rb\")\n    \
-         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
-         print(ex.submit(size, f).result())\n",
-    ),
-    (
-        "tasks-map-changes",
-        "def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return len(xs)\n\
-         def main() -> None:\n    \
-         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
-         print(list(ex.map(grow, [[1], [2]])))\n",
-    ),
-    (
-        "tasks-module-list",
-        "log: list[int] = []\n\
-         def note(n: int) -> None:\n    log.append(n)\n\
-         def main() -> None:\n    \
-         with concurrent.futures.ThreadPoolExecutor() as ex:\n        \
-         a = ex.submit(note, 1)\n        b = ex.submit(note, 2)\n        \
-         a.result()\n        b.result()\n",
-    ),
-];
+/// Task functions for rule 4's programs.
+const PARTIES: &str = "import concurrent.futures\n\
+log: list[int] = []\nother: list[int] = []\n\
+def add(xs: list[int], n: int) -> None:\n    xs.append(n)\n\
+def size(xs: list[int]) -> int:\n    return len(xs)\n\
+def total(rows: list[list[int]]) -> int:\n    return len(rows)\n\
+def same(xs: list[int]) -> list[int]:\n    return xs\n\
+def copy(xs: list[int]) -> list[int]:\n    return list(xs)\n\
+def note(n: int) -> None:\n    log.append(n)\n\
+def peek(n: int) -> int:\n    return len(other) + n\n\
+def keep(n: int, acc: list[int] = []) -> int:\n    acc.append(n)\n    return len(acc)\n\
+def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return len(xs)\n";
+
+/// `main`'s body, `with` and all, after [`PARTIES`].
+fn rule4(body: &str) -> String {
+    format!("{PARTIES}def main() -> None:\n    xs = [1]\n    ys = [2]\n    rows = [[1]]\n    {body}\nmain()\n")
+}
+
+const WITH: &str = "with concurrent.futures.ThreadPoolExecutor() as ex:\n        ";
 
 #[test]
-fn known_unchecked_task_gaps_stay_listed() {
-    let grammar = include_str!("../../../../docs/grammar.md");
-    let listed: Vec<&str> = grammar
-        .split("`unchecked:")
-        .skip(1)
-        .filter_map(|rest| rest.split('`').next())
-        .collect();
-    for (id, body) in UNCHECKED {
-        assert!(
-            listed.contains(&id),
-            "`unchecked:{id}` left grammar.md: drop its program"
-        );
-        let src = format!("import concurrent.futures\n{body}main()\n");
-        assert_eq!(
-            checked(&src),
-            Ok(()),
-            "`unchecked:{id}` is checked now: remove it from grammar.md's known-unchecked list\n{src}"
-        );
+fn rule_4_refuses_what_parties_share() {
+    let cases = [
+        ("a = ex.submit(add, xs, 1)\n        b = ex.submit(add, xs, 2)", "two tasks of this block share `xs`, and one changes it"),
+        ("f = ex.submit(size, xs)\n        xs.append(2)", "`xs` is read by a task until the `with` block ends"),
+        ("f = ex.submit(add, xs, 1)\n        print(len(xs))", "`xs` is changed by a task until the `with` block ends"),
+        ("f = ex.submit(total, rows)\n        r = rows[0]\n        r.append(2)", "is read by a task until the `with` block ends"),
+        ("zs = ex.submit(same, xs).result()\n        zs.append(2)", "is read by a task until the `with` block ends"),
+        ("a = ex.submit(keep, 1)\n        b = ex.submit(keep, 2)", "two tasks of this block share a parameter's default, and one changes it"),
+        ("a = ex.submit(note, 1)\n        b = ex.submit(note, 2)", "two tasks of this block share `log`, and one changes it"),
+        ("a = ex.submit(note, 1)\n        print(len(log))", "`log` is changed by a task until the `with` block ends"),
+        ("for i in range(2):\n            ex.submit(add, xs, i)", "the tasks this call starts share `xs`, and they change it"),
+        ("print(list(ex.map(note, [1, 2])))", "the tasks this call starts share `log`, and they change it"),
+        ("print(list(ex.map(grow, rows)))", "`map` cannot run `grow`, which changes or keeps its parameter `xs`"),
+        (
+            "a = ex.submit(add, xs, 1)\n        with concurrent.futures.ThreadPoolExecutor() as ex2:\n            b = ex2.submit(size, xs)",
+            "two tasks of this block share `xs`, and one changes it",
+        ),
+    ];
+    for (body, want) in cases {
+        let src = rule4(&format!("{WITH}{body}"));
+        let (msg, _) = mode_err(&src);
+        assert!(msg.contains(want), "{msg}\n{src}");
     }
-    for id in &listed {
-        assert!(
-            UNCHECKED.iter().any(|(u, _)| u == id),
-            "grammar.md lists `unchecked:{id}` with no program here"
-        );
+}
+
+#[test]
+fn rule_4_accepts_parties_that_share_nothing_changed() {
+    let cases = [
+        "a = ex.submit(size, xs)\n        b = ex.submit(size, xs)\n        print(len(xs), a.result())",
+        "a = ex.submit(add, xs, 1)\n        b = ex.submit(add, ys, 2)",
+        "xs.append(3)\n        a = ex.submit(add, xs, 1)",
+        "zs = ex.submit(copy, xs).result()\n        zs.append(2)\n        b = ex.submit(size, xs)",
+        "a = ex.submit(note, 1)\n        b = ex.submit(peek, 2)",
+        "print(list(ex.map(size, rows)))",
+        "for r in rows:\n            ex.submit(size, r)",
+        "for i in range(2):\n            ex.submit(size, xs)",
+    ];
+    for body in cases {
+        let src = rule4(&format!("{WITH}{body}"));
+        assert_eq!(checked(&src), Ok(()), "{src}");
     }
+    // A task changes `xs`; the submitter uses it once the block ends.
+    let after = rule4(&format!("{WITH}a = ex.submit(add, xs, 1)\n    print(xs)"));
+    assert_eq!(checked(&after), Ok(()), "{after}");
+}
+
+#[test]
+fn rule_4_keeps_files_from_tasks() {
+    let src = "import concurrent.futures\n\
+def size(f) -> int:\n    return len(f.read())\n\
+def main() -> None:\n    f = open(\"p\", \"rb\")\n    \
+with concurrent.futures.ThreadPoolExecutor() as ex:\n        print(ex.submit(size, f).result())\nmain()\n";
+    assert!(mode_err(src)
+        .0
+        .contains("a file cannot reach a task: parameter `f` of `size` holds one"));
+    let global = "import concurrent.futures\nfh = open(\"p\", \"rb\")\n\
+def size(n: int) -> int:\n    return len(fh.read()) + n\n\
+def main() -> None:\n    \
+with concurrent.futures.ThreadPoolExecutor() as ex:\n        print(ex.submit(size, 1).result())\nmain()\n";
+    assert!(mode_err(global)
+        .0
+        .contains("`size` reads `fh`, which holds one"));
 }
 
 #[test]
@@ -1668,7 +1682,8 @@ fn a_task_default_and_a_nested_task_are_followed() {
          return ex.submit(add, 1).result() + len(list(ex.map(add, [2, 3])))\nprint(run())\n"
     );
     assert_eq!(analyzed(&src).precision, Precision::Precise);
-    assert_eq!(checked(&src), Ok(()));
+    // Rule 4: the tasks share `acc`'s default, which each changes.
+    assert!(mode_err(&src).0.contains("share a parameter's default"));
     // `outer` runs `grow` as a task of its own; `run` runs `outer`.
     let grow = "def grow(xs: list[int]) -> int:\n    xs.append(1)\n    return 0\n";
     let outer = "def outer(xs: list[int]) -> int:\n    \

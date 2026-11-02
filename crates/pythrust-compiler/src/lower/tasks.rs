@@ -11,7 +11,7 @@
 use crate::ast::{Arg, Block, Expr, ExprKind, FuncDef, Ident};
 use crate::diag::Result;
 use crate::infer::{scope, Type};
-use crate::ir::{Inst, LocalId, Operand, Rvalue, Ty};
+use crate::ir::{BlockId, Inst, LocalId, Operand, Rvalue, Task, Term, Ty};
 use crate::span::Span;
 
 use super::expr::bind_params;
@@ -26,7 +26,18 @@ impl<'a> FnBuilder<'_, 'a> {
             return Err(unsupported(span, "tasks (`concurrent.futures`)"));
         }
         self.write(&binding.name, Operand::None, binding.span)?;
-        self.block(body)
+        // The region is the blocks the body makes, from a fresh one; the
+        // code after it goes on in another.
+        let start = self.new_block();
+        self.terminate(Term::Goto(start));
+        self.switch_to(start);
+        self.block(body)?;
+        let region = (start.0..self.blocks.len()).map(BlockId).collect();
+        self.regions.push(region);
+        let after = self.new_block();
+        self.terminate(Term::Goto(after));
+        self.switch_to(after);
+        Ok(())
     }
 
     /// `ex.submit(f, *args)`, `ex.map(f, xs)` or `fut.result()`; `None`
@@ -61,7 +72,9 @@ impl<'a> FnBuilder<'_, 'a> {
         let Type::Future(node) = self.node_type(span)? else {
             return Err(internal(span, "`submit` is not a future"));
         };
-        Ok(self.emit_call(def, slots, node, span)?.0)
+        let (value, _) = self.emit_call(def, slots, node, span)?;
+        self.task(value, false, span)?;
+        Ok(value)
     }
 
     /// `ex.map(f, xs)`: a new list of `f(x)` for each `x` of `xs`, read
@@ -117,8 +130,18 @@ impl<'a> FnBuilder<'_, 'a> {
             return Err(internal(span, "`map` gives no results"));
         };
         let (value, _) = self.emit_call(def, slots, node, span)?;
+        self.task(value, true, span)?;
         let list = Operand::Local(out);
         self.emit(Inst::Append { list, value, span });
+        Ok(())
+    }
+
+    /// Records the call whose result is `value` as a task.
+    fn task(&mut self, value: Operand, map: bool, span: Span) -> Result<()> {
+        let Operand::Local(dest) = value else {
+            return Err(internal(span, "a task's call has no local"));
+        };
+        self.tasks.push(Task { dest, map });
         Ok(())
     }
 
