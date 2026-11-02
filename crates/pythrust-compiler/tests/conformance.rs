@@ -1127,17 +1127,24 @@ fn memcheck_failure(case: &Case, got: Res<Run>, report: &str) -> Option<String> 
     ))
 }
 
-/// A corpus program links to about 0.5 MB, and one using tasks, which
-/// links the runtime's threads, to about 1 MB (`tasks_map_taken` is 1.04
-/// MB on x86-64 and 1.12 MB on AArch64). Without dead-code removal and
-/// debug-info stripping one is over 5 MB; this bound catches that.
-const MAX_NATIVE_BYTES: u64 = 2 << 20;
+/// A corpus program links to about 0.5 MB. Without dead-code removal
+/// and debug-info stripping it is over 5 MB; this bound catches that.
+const MAX_NATIVE_BYTES: u64 = 1 << 20;
 
-/// Fails a native binary larger than [`MAX_NATIVE_BYTES`].
-fn oversized(exe: &Path) -> Res<Option<String>> {
+/// The bound for a program using tasks, which links the runtime's
+/// threads: `tasks_map` and `tasks_map_taken` are 1.05 to 1.12 MB on
+/// AArch64 and macOS (Nano, 2026-11-02). It still catches 5 MB.
+const MAX_TASKS_NATIVE_BYTES: u64 = 2 << 20;
+
+/// Fails a native binary larger than its bound: [`MAX_TASKS_NATIVE_BYTES`]
+/// when the program uses tasks, else [`MAX_NATIVE_BYTES`].
+fn oversized(exe: &Path, tasks: bool) -> Res<Option<String>> {
+    let max = match tasks {
+        true => MAX_TASKS_NATIVE_BYTES,
+        false => MAX_NATIVE_BYTES,
+    };
     let size = fs::metadata(exe).map_err(|e| e.to_string())?.len();
-    Ok((size > MAX_NATIVE_BYTES)
-        .then(|| format!("{}: {size} bytes exceeds {MAX_NATIVE_BYTES}", exe.display())))
+    Ok((size > max).then(|| format!("{}: {size} bytes exceeds {max}", exe.display())))
 }
 
 /// `pythrust build` links in a private directory beside the executable
@@ -1211,7 +1218,7 @@ fn corpus_matches_native() -> Res<()> {
             ));
         }
         if !tsan_requested() {
-            failures.extend(oversized(&exe)?);
+            failures.extend(oversized(&exe, uses_tasks(&case)?)?);
         }
         let case = match native_golden(case)? {
             Ok(c) => c,
