@@ -871,6 +871,26 @@ pub unsafe extern "C" fn pt_seq_get_held(s: *const PtSeq, i: i64, status: *mut u
     v
 }
 
+/// `s[i]` under a hold, borrowed (atomics cost B): as
+/// [`pt_seq_get_held`] without a reference of its own, so the element
+/// is valid only while the hold lasts.
+///
+/// # Safety
+///
+/// `s` is a hold from [`pt_seq_hold`] that has not ended, and `status`
+/// points to a writable byte.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_seq_item_held(s: *const PtSeq, i: i64, status: *mut u8) -> u64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    // SAFETY: the caller's hold is a read borrow of `s.items`.
+    let items = unsafe { s.items.held() };
+    let found = position(i, items.len()).map(|k| items[k]);
+    // SAFETY: guaranteed by the caller.
+    unsafe { report(status, u8::from(found.is_none())) };
+    found.unwrap_or(0)
+}
+
 /// `s[i] = v` on a list: adds a reference to `v`'s target and drops the
 /// old slot's. Gives 1, changing nothing, when `i` is out of range, else
 /// 0.
@@ -1239,6 +1259,30 @@ mod tests {
             pt_seq_release_held(std::ptr::null_mut());
             assert!(seq(list as u64).items.is_free());
             assert_eq!(seq(list as u64).rc.get(), 1);
+            pt_seq_dec(list);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn a_held_item_is_borrowed_and_counts_nothing() {
+        let inner = make(b"li", &[1]);
+        let list = make(b"lli", &[inner as u64, inner as u64]);
+        let mut status = 9;
+        // SAFETY: both live until their last dec; the hold ends before.
+        unsafe {
+            seq(list as u64).rc.inc();
+            let h = pt_seq_hold(list) as *mut PtSeq;
+            let before = seq(inner as u64).rc.get();
+            assert_eq!(pt_seq_item_held(h, 1, &mut status), inner as u64);
+            assert_eq!(status, 0);
+            assert_eq!(pt_seq_item_held(h, -2, &mut status), inner as u64);
+            assert_eq!(seq(inner as u64).rc.get(), before);
+            assert_eq!(pt_seq_item_held(h, 2, &mut status), 0);
+            assert_eq!(status, 1);
+            assert_eq!(pt_seq_item_held(h, -3, &mut status), 0);
+            assert_eq!(status, 1);
+            pt_seq_release_held(h);
             pt_seq_dec(list);
             pt_seq_dec(inner);
         }
