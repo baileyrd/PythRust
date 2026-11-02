@@ -42,7 +42,7 @@ def digests(paths: list[str]) -> list[str]:
 - A future's type is `Future[T]` where `T` is the function's result; `result()` returns `T` and re-raises what escaped the task, so the task's `raises` set joins the caller's at `result()`. A catchable fault in a task also re-raises there, as in CPython. A fatal fault (overflow, recursion depth, out of memory) in a task stops the program with `run`'s diagnostic, as D7 makes it fatal anywhere.
 - `ex.submit(f, *args)` and `ex.map(f, xs)` take a function name, checked like a call of `f` with those arguments; `own`'s summaries also count them as calls of `f`, so a task that itself submits work, and a nested executor, are covered. `map` reads `xs` once, when called, and submits every task then, as CPython does. Keyword arguments, `max_workers` and `shutdown` wait for a program that needs them.
 - **Scope (decided, Nano 2026-11-01):** an executor, its futures and `map`'s result stay local to the function that made them: they cannot be returned, passed to a call, stored in a global or held by an exception; only a local list may hold futures, and that list cannot be passed either; `map`'s result is used only inside the block. An executor at module level is refused. Since Pythrust has no `global` statement and `def` is top-level only, only module-level code rebinds a module variable, so this also means no module variable is rebound while a task runs. Rule 4's handling of module variables depends on this; the alternative (module-level executors) needs a rule against rebinding a module variable any task reads before the block ends.
-- **Tempered code (decided, Nano 2026-11-01):** tempered functions may not use executors until the `pause` check lands (step 6), so step 6 cannot break a tempered program step 3 accepted. The alternative is to land the `pause` check with step 3.
+- **Tempered code (decided, Nano 2026-11-01):** tempered functions may not use executors until the `pause` check lands (step 6), so step 6 cannot break a tempered program step 3 accepted. The alternative is to land the `pause` check with step 3. The check landed (Nano, 2026-11-02), and tempered code may now use executors.
 
 ## Rule 4 in full
 
@@ -93,9 +93,33 @@ fclone-lite hashes each size group's candidates through an executor. Its groups 
 
 M:N parking, `async`/`await`, process pools, `threading` and its locks, cancellation and timeouts, `Future.done()`/`add_done_callback`/`as_completed`, and handing Pythrust values to Rust threads ([rust-interop.md](rust-interop.md#threads) keeps that closed). A task may call an M6b binding; the binding's "calling thread" is then the worker.
 
+## The rest of M6c (decided, Nano 2026-11-02)
+
+The fclone-lite driver and `pause` are built now. `shared[T]` and channels are parked until a program needs them; the rules below are decided and wait for that program.
+
+**`pause`** ([concurrency-syntax.md](concurrency-syntax.md#pause-marker)):
+
+- Leaving an executor's `with` block needs no marker: the block's end is visible.
+- `for r in pause ex.map(f, xs):` marks every step of the loop; `pause list(ex.map(f, xs))` marks a call that consumes the results. `ex.map(...)` and `ex.submit(...)` themselves do not pause.
+- `fut.result()` is a pause point, so tempered code writes `pause fut.result()`.
+- Once the check lands, tempered code may use executors.
+
+**`shared[T]`** (parked):
+
+- `shared(v)` moves `v`: `v` is a fresh value, or a local not used afterwards and not aliased.
+- A list, dict or set read out of a shared value cannot outlive its `with` block; ints, floats, bools, strings and copies may.
+- Two shared locks held at once in loose code draw a warning with no way to silence it; tempered code rejects it, since acquiring a lock is a pause point.
+- A shared value lives in locals and task arguments only. Widen this when a program needs it.
+
+**Channels** (parked):
+
+- `run` refuses by name at a `get` that would wait forever, because the producer has not been submitted yet. This is a listed deviation.
+- `shutdown()` and `queue.ShutDown` are included. `ShutDown` extends the exception hierarchy, so it is proposed as a subclass of `Exception`, as in CPython 3.13, and Nano confirms before it is added.
+- No queue at module level in this cut.
+
 ## Risks
 
-- **Channels under rule 5.** A task waiting on a queue that a later task feeds would hang under run-at-submit. When channels land, `run` either refuses that shape by name or gains a small cooperative scheduler; the choice goes to Nano with that step.
+- **Channels under rule 5.** A task waiting on a queue that a later task feeds would hang under run-at-submit. `run` refuses that shape by name at the `get` (decided, Nano 2026-11-02; [above](#the-rest-of-m6c-decided-nano-2026-11-02)).
 - **The gate is below wall-time noise.** benchmarks.md's shared-container timings vary by more than 3%, so the gate is measured in instruction counts (`valgrind --tool=cachegrind`, `Ir`), with wall time reported beside it. If marking misses the gate, the fallback is atomic counts only in programs that import `concurrent.futures`, chosen per build.
 - **Memcheck does not see races.** The threaded corpus also runs under a race detector (ThreadSanitizer, or Helgrind/DRD where TSan is unavailable), and the runtime's stress tests run under Miri where they can.
 - **Rule reach.** Rule 4 may reject more CPython programs than expected; the front-end step's corpus measures this before native work starts.

@@ -1,10 +1,10 @@
-# deviation: tempered code cannot use an executor until the `pause` check lands (M6c, Nano 2026-11-01); CPython runs it loosened.
+# deviation: tempered code marks each wait on a task with `pause` (M6c, Nano 2026-11-02); CPython runs it with the markers removed, and this one has none.
 # expect-exit: 1
-# expect-error: tempered `squares` cannot use an executor
+# expect-error: each step of this loop waits on a task; tempered `squares` marks it: write `pause` before it
 import concurrent.futures
 
 
-def square(x: int) -> int:
+temper def square(x: int) -> int:
     return x * x
 
 

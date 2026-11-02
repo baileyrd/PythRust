@@ -1613,3 +1613,37 @@ fn a_binding_name_is_not_a_value() {
                a Rust binding needs `--rust fastfs=path`";
     assert_eq!(src_err("import fastfs\n"), msg);
 }
+
+/// `pause` covers the whole expression to its right, conditional
+/// included, and leaves the tree as it is without it (M6c).
+#[test]
+fn pause_covers_the_expression_to_its_right() {
+    let src = "x = pause f(pause g()) if c else d\n";
+    let m = parse(&lex(src).unwrap()).unwrap();
+    let plain = parse(&lex("x = f(g()) if c else d\n").unwrap()).unwrap();
+    assert_eq!(sx_module(&m), sx_module(&plain));
+    let covered: Vec<&str> = m
+        .pauses
+        .iter()
+        .map(|p| &src[p.covers.start..p.covers.end])
+        .collect();
+    assert_eq!(covered, ["g()", "f(pause g()) if c else d"]);
+    let keyword = m
+        .pauses
+        .iter()
+        .map(|p| &src[p.keyword.start..p.keyword.end]);
+    assert!(keyword.into_iter().all(|k| k == "pause"));
+    let bare = parse(&lex("x = pause\n").unwrap()).unwrap_err();
+    assert_eq!(bare.kind, DiagKind::Parse);
+    let ret = parse(&lex("def h():\n    return pause f(), 1\n").unwrap()).unwrap();
+    assert_eq!(ret.pauses.len(), 1);
+    for src in ["x = 1 + pause f()\n", "x = not pause f()\n"] {
+        let after = parse(&lex(src).unwrap()).unwrap_err();
+        assert_eq!(after.kind, DiagKind::Parse);
+        assert!(after.message.contains("put it first, or wrap"), "{after}");
+    }
+    let wrapped = "x = not (pause f())\n";
+    let m = parse(&lex(wrapped).unwrap()).unwrap();
+    let covered = &wrapped[m.pauses[0].covers.start..m.pauses[0].covers.end];
+    assert_eq!(covered, "(pause f())");
+}

@@ -12,7 +12,8 @@
 
 use crate::ast::{
     Arg, BinOp, Binding, Block, Branch, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp,
-    Mode, Module, Param, ParamMode, Stmt, StmtKind, StubDef, Target, TargetKind, TypeExpr, UnaryOp,
+    Mode, Module, Param, ParamMode, Pause, Stmt, StmtKind, StubDef, Target, TargetKind, TypeExpr,
+    UnaryOp,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
@@ -58,6 +59,8 @@ struct Parser<'a> {
     imported_bindings: Vec<&'a Binding>,
     /// The functions of the imported bindings.
     stubs: Vec<StubDef>,
+    /// The `pause` markers so far (M6c).
+    pauses: Vec<Pause>,
 }
 
 impl<'a> Parser<'a> {
@@ -82,6 +85,7 @@ impl<'a> Parser<'a> {
             bindings,
             imported_bindings: Vec::new(),
             stubs: Vec::new(),
+            pauses: Vec::new(),
         })
     }
 
@@ -217,6 +221,7 @@ impl<'a> Parser<'a> {
         Ok(Module {
             body,
             stubs: std::mem::take(&mut self.stubs),
+            pauses: std::mem::take(&mut self.pauses),
             span: start.merge(self.eof.span),
         })
     }
@@ -720,7 +725,22 @@ impl<'a> Parser<'a> {
     }
 
     fn expr(&mut self) -> Result<Expr> {
-        self.nested(Self::conditional)
+        self.nested(Self::paused)
+    }
+
+    /// `'pause' expr | conditional` (M6c): the marker covers the whole
+    /// expression to its right and is recorded beside the tree.
+    fn paused(&mut self) -> Result<Expr> {
+        if !self.at(&TokenKind::Pause) {
+            return self.conditional();
+        }
+        let keyword = self.bump().span;
+        let covered = self.expr()?;
+        self.pauses.push(Pause {
+            keyword,
+            covers: covered.span,
+        });
+        Ok(covered)
     }
 
     /// `or_expr ['if' or_expr 'else' expr]`
@@ -962,6 +982,11 @@ impl<'a> Parser<'a> {
             TokenKind::LParen => return self.paren(),
             TokenKind::LBracket => return self.list(),
             TokenKind::LBrace => return self.braces(),
+            TokenKind::Pause => {
+                let msg = "`pause` covers a whole expression: put it first, or wrap \
+                           what it covers in parentheses: `(pause ...)`";
+                return Err(error(tok.span, msg));
+            }
             _ => return Err(self.unexpected("an expression")),
         };
         self.bump();
@@ -983,10 +1008,19 @@ impl<'a> Parser<'a> {
         }
         let inner = self.expr_list()?;
         self.expect(&TokenKind::RParen)?;
+        let span = self.span_from(start);
+        self.widen_pauses(inner.span, span);
         Ok(Expr {
             kind: inner.kind,
-            span: self.span_from(start),
+            span,
         })
+    }
+
+    /// A parenthesized expression takes the parentheses' span, so a
+    /// marker that covered it covers them too (M6c).
+    fn widen_pauses(&mut self, inner: Span, outer: Span) {
+        let covering = self.pauses.iter_mut().filter(|p| p.covers == inner);
+        covering.for_each(|p| p.covers = outer);
     }
 
     fn list(&mut self) -> Result<Expr> {
@@ -1235,6 +1269,7 @@ fn starts_expr(kind: &TokenKind) -> bool {
             | TokenKind::Minus
             | TokenKind::Plus
             | TokenKind::Not
+            | TokenKind::Pause
     )
 }
 
@@ -1311,6 +1346,7 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Import => "import",
         TokenKind::As => "as",
         TokenKind::With => "with",
+        TokenKind::Pause => "pause",
         TokenKind::Pipe => "|",
         TokenKind::Plus => "+",
         TokenKind::Minus => "-",
