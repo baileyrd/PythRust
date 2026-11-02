@@ -1306,8 +1306,6 @@ fn is_table(ty: Ty) -> bool {
     matches!(ty, Ty::Dict(_) | Ty::Set(_))
 }
 
-/// The runtime functions adding and dropping a reference to a `ty`. An
-/// optional's are its present type's, or a sequence's for a boxed one.
 /// The runtime call taking a new reference to a `ty` value. An executor
 /// has one owner and is never copied.
 fn rc_inc(types: &[Compound], ty: Ty) -> Result<Rt> {
@@ -1332,7 +1330,8 @@ fn rc_dec(types: &[Compound], ty: Ty) -> Rt {
     }
 }
 
-/// The type whose count a `ty` value carries: an optional's present type.
+/// The type whose count a `ty` value carries: an optional's present type,
+/// or the optional itself (a sequence's count) for a boxed one.
 fn counted(types: &[Compound], ty: Ty) -> Ty {
     match ty {
         Ty::Opt(id) => match types.get(id.0) {
