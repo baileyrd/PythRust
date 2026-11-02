@@ -215,15 +215,42 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
 /// Holds `module` to `analysis`: written modes (D2), then calls to
 /// tempered functions (A5). Only precise analyses are checked.
 pub fn check(module: &Module, analysis: &Analysis) -> Result<()> {
-    // A lowering gap is never an error, but for a shape of task code the
-    // language refuses rather than leave the program unchecked.
     if let Precision::Conservative(gap) = &analysis.precision {
-        if gap.kind != DiagKind::Backend {
-            return Err(gap.clone());
-        }
+        unchecked(module, gap)?;
     }
     modes::check(module, analysis)?;
     calls::check(module, analysis)
+}
+
+/// A lowering gap is never an error, except in a program that uses
+/// tasks (M6c): there a skipped ownership check would hide what the
+/// tasks need, so the gap is a named error (Nano, 2026-11-02): a task
+/// shape the language refuses ([`DiagKind::Type`]) as it is, any other
+/// gap naming why the program's checks cannot run.
+fn unchecked(module: &Module, gap: &Diagnostic) -> Result<()> {
+    if gap.kind != DiagKind::Backend {
+        return Err(gap.clone());
+    }
+    if !uses_tasks(module) {
+        return Ok(());
+    }
+    Err(Diagnostic {
+        span: gap.span,
+        message: format!(
+            "this program uses tasks, so its ownership checks cannot be skipped, \
+             but they cannot run: {}",
+            gap.message
+        ),
+        kind: DiagKind::Type,
+    })
+}
+
+/// Whether a function of `module` opens an executor.
+fn uses_tasks(module: &Module) -> bool {
+    module.body.iter().any(|s| match &s.kind {
+        StmtKind::FuncDef(f) => !crate::infer::scope::withs(&f.body).is_empty(),
+        _ => false,
+    })
 }
 
 /// One summary per function of `program`, indexed by `FuncId`: the

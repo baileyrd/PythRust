@@ -1460,3 +1460,23 @@ wrap(2)\ngrow([1])\n";
     let annotated = discarded.replace("def task(x):", "def task(x: int) -> int:");
     assert!(mode_err(&annotated).0.contains("write `mut xs`"));
 }
+
+#[test]
+fn a_task_program_never_falls_back_silently() {
+    // Another gap, met first, would otherwise hide what the program's
+    // tasks need: a task program that does not lower is a named error.
+    let src = "import concurrent.futures\nx = print(7)\ndef print(n):\n    return 1\n\
+def task(x):\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        pass\n    return x * x\n\
+def wrap(x):\n    task(x)\n    return x\n\
+temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
+wrap(2)\ngrow([1])\n";
+    let (msg, _) = mode_err(src);
+    assert!(
+        msg.contains("uses tasks, so its ownership checks cannot be skipped"),
+        "{msg}"
+    );
+    assert!(msg.contains("does not support"), "{msg}");
+    // Without tasks, the same gap stays the conservative fallback.
+    let plain = "x = print(7)\ndef print(n):\n    return 1\n";
+    assert_eq!(checked(plain), Ok(()));
+}
