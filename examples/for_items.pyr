@@ -74,4 +74,4 @@ words = ["ab", "c", "AB", "abab", "c"]
 print(total(words), longest_sorted(words), pairs(words))
 print(tagged(words))
 print(first_of(words), checked(words), checked(["a", ""]))
-print(reused("x" * 3, words))
+print(reused("x" * 3, words), reused("y" * 2, []))
