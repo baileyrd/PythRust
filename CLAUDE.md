@@ -39,6 +39,13 @@ Tools load on demand. If remind_me_* tools are not visible, run a tool search fo
 Threads and the orchestrator: before asking the user any design, scope or
 behaviour question, consult the `project-expert` subagent. Never ask the
 user first.
+- Cloud project threads start in the parent of the checkouts, not the repo
+  root, so `project-expert` is usually not an agent type there. Then spawn a
+  general-purpose Agent whose prompt is the full body of
+  `.claude/agents/project-expert.md`, read fresh from the repo at call time,
+  plus the question and context. That counts as the expert. Improvising an
+  answer without it is forbidden. The agent file is the only copy of the
+  expert's instructions; do not paste them anywhere else.
 - ANSWER: act on it; the source is cited.
 - ESCALATE: ask the user exactly that block: question, options,
   recommendation. Nothing more. Do not act on the recommendation; leave

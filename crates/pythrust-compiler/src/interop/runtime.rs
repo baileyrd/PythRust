@@ -94,7 +94,7 @@ pub fn embedded() -> Result<Vec<File>, String> {
         .collect()
 }
 
-/// `manifest` as a crate outside its workspace reads it (D38): each
+/// `manifest` as a crate outside its workspace reads it (D39): each
 /// `key.workspace = true` line in `[package]` becomes that key's value
 /// in `workspace`'s `[workspace.package]`, and an empty `[workspace]`
 /// ends it unless it has one. That is the only inheritance the repo's

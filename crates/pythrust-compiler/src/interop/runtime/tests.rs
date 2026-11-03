@@ -43,7 +43,7 @@ fn standalone_reads_comments_and_strings() {
 }
 
 /// Only `key.workspace = true` in `[package]`, from a workspace above,
-/// is rewritten (D38); any other inheritance is a named error asking for
+/// is rewritten (D39); any other inheritance is a named error asking for
 /// a standalone manifest, not a guess.
 #[test]
 fn standalone_refuses_other_inheritance_forms() {
