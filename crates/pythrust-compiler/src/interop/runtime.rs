@@ -97,10 +97,23 @@ pub fn embedded() -> Result<Vec<File>, String> {
 /// `manifest` as a crate outside its workspace reads it: each
 /// `key.workspace = true` line becomes that key's line in `workspace`'s
 /// `[workspace.package]`, and an empty `[workspace]` ends it unless it
-/// already has one.
+/// already has one. A dependency with a `path` is refused, since it
+/// would resolve from wherever the manifest is copied.
 pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
     let mut out = String::new();
+    let mut in_dependencies = false;
     for line in manifest.lines() {
+        if let Some(header) = line.trim().strip_prefix('[') {
+            in_dependencies = header
+                .split('.')
+                .any(|p| p.trim_end_matches(']').ends_with("dependencies"));
+        }
+        if in_dependencies && sets_path(line) {
+            return Err(format!(
+                "`{}` is a path dependency, which would resolve from the extracted copy; a runtime override cannot have one",
+                line.trim()
+            ));
+        }
         let inherited = line
             .split_once('=')
             .filter(|(_, v)| v.trim() == "true")
@@ -115,6 +128,20 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
         out.push_str("\n[workspace]\n");
     }
     Ok(out)
+}
+
+/// Whether `line`, in a dependency table, sets a `path`: as its key, or
+/// as a key of its inline table.
+fn sets_path(line: &str) -> bool {
+    let Some((key, value)) = line.split_once('=') else {
+        return false;
+    };
+    let is_path = |k: &str| k.trim() == "path";
+    is_path(key)
+        || value.contains('{')
+            && value
+                .split(['{', ','])
+                .any(|part| part.split_once('=').is_some_and(|(k, _)| is_path(k)))
 }
 
 /// The line of `[workspace.package]` in `workspace` that sets `key`.

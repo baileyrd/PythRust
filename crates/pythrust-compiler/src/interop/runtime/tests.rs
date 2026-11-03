@@ -30,6 +30,26 @@ fn standalone_names_a_field_the_workspace_does_not_set() {
     );
 }
 
+/// A path dependency would resolve from the extracted copy, not from
+/// the override, so it is a named error; `[lib] path` is the crate's own.
+#[test]
+fn standalone_refuses_a_path_dependency() {
+    let refused = [
+        "[dependencies]\nhelper = { path = \"../helper\" }\n",
+        "[dev-dependencies.helper]\npath = \"../helper\"\n",
+        "[target.'cfg(unix)'.build-dependencies]\nh = { version = \"1\", path = \"h\" }\n",
+    ];
+    for manifest in refused {
+        let got = standalone(manifest, "");
+        assert!(
+            got.as_ref().is_err_and(|e| e.contains("path dependency")),
+            "{manifest}: {got:?}"
+        );
+    }
+    let lib = "[lib]\npath = \"src/lib.rs\"\n[dependencies]\nxpath = \"1\"\n";
+    assert!(standalone(lib, "").is_ok());
+}
+
 #[test]
 fn the_hash_covers_every_path_and_byte() {
     let file = |path: &str, text: &str| File {

@@ -41,7 +41,7 @@ pub(crate) fn selected() -> Result<Vec<Source>, String> {
 /// `Cargo.toml` made standalone.
 fn snapshot(dir: &Path) -> Result<Vec<Source>, String> {
     let read_failed = |e: String| format!("pythrust: {RT_SRC_ENV}: {e}\n");
-    let mut files = files_in(dir).map_err(read_failed)?;
+    let mut files = files_in(dir, Links::Read).map_err(read_failed)?;
     let workspace = workspace_manifest(dir)?;
     let manifest = files
         .iter_mut()
@@ -79,29 +79,40 @@ fn workspace_manifest(dir: &Path) -> Result<String, String> {
     Ok(String::new())
 }
 
-/// Every file under `root` but a top-level `target`, sorted by path.
-/// A symbolic link is read as the file it names, never followed into a
-/// directory.
-fn files_in(root: &Path) -> Result<Vec<Source>, String> {
+/// How a walk treats a symbolic link.
+#[derive(Clone, Copy)]
+enum Links {
+    /// An override's: read as the file it names, never followed into a
+    /// directory.
+    Read,
+    /// The extracted copy's: refused, so the copy holds only its own files.
+    Refuse,
+}
+
+/// Every file under `root` but a top-level `target`, sorted by path. Any
+/// entry that is not a directory or a regular file (a FIFO, a socket, a
+/// device) is refused before it is read, and so is a link, as `links` says.
+fn files_in(root: &Path, links: Links) -> Result<Vec<Source>, String> {
     let mut out = Vec::new();
-    walk(root, root, &mut out)?;
+    walk(root, root, links, &mut out)?;
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<Source>) -> Result<(), String> {
+fn walk(root: &Path, dir: &Path, links: Links, out: &mut Vec<Source>) -> Result<(), String> {
     let failed = |p: &Path, e: std::io::Error| format!("cannot read {}: {e}", p.display());
     for entry in std::fs::read_dir(dir).map_err(|e| failed(dir, e))? {
         let entry = entry.map_err(|e| failed(dir, e))?;
         let path = entry.path();
-        let is_dir = entry.file_type().map_err(|e| failed(&path, e))?.is_dir();
-        if is_dir && dir == root && entry.file_name() == "target" {
+        let kind = entry.file_type().map_err(|e| failed(&path, e))?;
+        if kind.is_dir() && dir == root && entry.file_name() == "target" {
             continue;
         }
-        if is_dir {
-            walk(root, &path, out)?;
+        if kind.is_dir() {
+            walk(root, &path, links, out)?;
             continue;
         }
+        regular(&path, kind, links)?;
         let text = std::fs::read(&path).map_err(|e| failed(&path, e))?;
         out.push(Source {
             path: relative(root, &path)?,
@@ -109,6 +120,20 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Source>) -> Result<(), String> {
         });
     }
     Ok(())
+}
+
+/// Whether the non-directory entry at `path`, of type `kind`, may be
+/// read: a regular file, or a link to one where `links` reads links.
+fn regular(path: &Path, kind: std::fs::FileType, links: Links) -> Result<(), String> {
+    let target = match (kind.is_symlink(), links) {
+        (false, _) => kind.is_file(),
+        (true, Links::Refuse) => false,
+        (true, Links::Read) => std::fs::metadata(path).is_ok_and(|m| m.is_file()),
+    };
+    match target {
+        true => Ok(()),
+        false => Err(format!("{} is not a regular file", path.display())),
+    }
 }
 
 /// `path` under `root`, `/`-separated.
@@ -173,12 +198,14 @@ fn rt_dir(project: &Path, files: &[Source]) -> PathBuf {
     project.join(".pythrust").join("rt").join(name)
 }
 
-/// Whether `dir` holds exactly `files`, byte for byte: no file missing,
-/// changed or added (a stray `build.rs` would run). A copy that cannot
-/// be read does not match, so it is rewritten, and a write that fails
-/// then is the error.
+/// Whether `dir` is a directory of its own, not a link, holding exactly
+/// `files` as regular files, byte for byte: no file missing, changed or
+/// added (a stray `build.rs` would run). A copy that cannot be read does
+/// not match, so it is rewritten, and a write that fails then is the
+/// error.
 fn matches(dir: &Path, files: &[Source]) -> bool {
-    files_in(dir).is_ok_and(|found| found == files)
+    let own = std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir());
+    own && files_in(dir, Links::Refuse).is_ok_and(|found| found == files)
 }
 
 /// Removes whatever is at `path`, if anything: a directory with all it
@@ -196,4 +223,82 @@ fn remove(path: &Path) -> Result<(), String> {
         std::fs::remove_file(path)
     };
     removed.map_err(failed)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn files() -> Vec<Source> {
+        let file = |path: &str, text: &str| Source {
+            path: path.to_string(),
+            text: text.as_bytes().to_vec(),
+        };
+        vec![
+            file("Cargo.toml", "[package]\n"),
+            file("src/lib.rs", "//! rt\n"),
+        ]
+    }
+
+    /// A fresh directory for `name`, removed again by the test on pass.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pythrust-rt-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn mkfifo(path: &Path) {
+        let made = std::process::Command::new("mkfifo").arg(path).status();
+        assert!(made.unwrap().success());
+    }
+
+    /// The copy is the project's own: a link in it, a special file or a
+    /// linked root does not match and is replaced, never read through.
+    #[test]
+    fn a_copy_holding_links_or_special_files_is_rewritten() {
+        let tmp = scratch("links");
+        let (project, outside) = (tmp.join("p"), tmp.join("outside"));
+        std::fs::create_dir_all(&outside).unwrap();
+        let files = files();
+        let dir = ensure(&project, &files).unwrap();
+        let lib = dir.join("src/lib.rs");
+
+        std::fs::write(outside.join("lib.rs"), "//! rt\n").unwrap();
+        std::fs::remove_file(&lib).unwrap();
+        symlink(outside.join("lib.rs"), &lib).unwrap();
+        assert!(!matches(&dir, &files));
+        ensure(&project, &files).unwrap();
+        assert!(!lib.symlink_metadata().unwrap().is_symlink());
+
+        mkfifo(&dir.join("stray"));
+        assert!(!matches(&dir, &files));
+        ensure(&project, &files).unwrap();
+        assert!(!dir.join("stray").exists());
+
+        std::fs::rename(&dir, outside.join("rt")).unwrap();
+        symlink(outside.join("rt"), &dir).unwrap();
+        assert!(!matches(&dir, &files));
+        let (got, _shared) = extract(&project, &files).unwrap();
+        assert!(got.symlink_metadata().unwrap().is_dir());
+        assert!(outside.join("rt/src/lib.rs").is_file());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// An override is read through its links, but a special file in it
+    /// is a named error, not a read that waits forever.
+    #[test]
+    fn an_override_holding_a_special_file_is_a_named_error() {
+        let tmp = scratch("override");
+        std::fs::write(tmp.join("Cargo.toml"), "[package]\n").unwrap();
+        mkfifo(&tmp.join("pipe"));
+        let got = snapshot(&tmp).map(|_| ());
+        assert!(
+            got.as_ref()
+                .is_err_and(|e| e.contains("not a regular file")),
+            "{got:?}"
+        );
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 }
