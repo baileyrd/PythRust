@@ -54,7 +54,13 @@ fastfs = { path = "fastfs" }
 - **Concurrency.** Two file locks (std's `File::lock`, no new dependency) keep the shared paths consistent:
   - *The project lock*, `.pythrust/project.lock`. A build holds it shared for its whole run, so nothing it reads (the runtime directory, `pythrust.lock`) changes under it. `pythrust lock`, and a build that must extract or repair the runtime, hold it exclusively.
   - *The build lock*, in each program's build directory, held exclusively for the whole build (generated files, cargo and the link), so two builds of the same program run one after the other.
-- **Extraction.** A runtime directory is used only when every file matches the embedded source byte for byte, which also catches a half-written or edited copy. Otherwise the build drops its shared project lock, takes it exclusively, checks again (another build may have extracted it meanwhile), writes the files to a temporary directory, removes any mismatched copy and renames the new one into place, then goes back to a shared lock and checks once more. No build is running while it does this, since builds hold the lock shared.
+- **Extraction.** The *selected source* is the embedded runtime, or, under `PYTHRUST_RT_SRC`, a snapshot of that directory read once at the start of the build (its files and its standalone `Cargo.toml`). Its hash names the directory. A runtime directory is used only when every file matches the selected source byte for byte, which also catches a half-written or edited copy. Otherwise the build repairs it under the exclusive project lock: it checks again (another build may have extracted it meanwhile), writes the files to a temporary directory, removes any mismatched copy and renames the new one into place. No build is running while it does this, since builds hold the lock shared.
+- **Lock order.** A build takes the project lock before its build lock, and never waits for the project lock while holding a build lock, so no two builds wait on each other:
+  1. Take the project lock shared and check the runtime directory.
+  2. On a mismatch, release it, take it exclusively, repair, release it, and go back to step 1.
+  3. Take the build lock, and build. Both locks are held to the end.
+
+  The stale-lock check after a failed `--locked` build resolves an isolated copy in the program's build directory, under the locks the build already holds. It never runs `pythrust lock` itself, which would need the project lock exclusively.
 
 ## Why plain `--locked` now works
 
@@ -105,7 +111,7 @@ What carries over from M6b's lock tests:
 
    Until PR 3, `build` keeps M6b's lock mechanism, reading each binding's `Cargo.lock`.
 3. **Lockfile:** `pythrust lock`, plain `--locked`, and the missing and stale errors. M6b's seed and verify are removed, and the bindings' `Cargo.lock` files stay in place, ignored ([choice 2](#follow-on-choices)). `apps/fclone-lite/pythrust.lock` is committed. Its tests include: a lock, then the lock deleted and made again, which must not reuse the old pins; two `pythrust lock` runs at once; and `pythrust lock` beside a running build.
-4. **Shipped runtime:** the embedded source, its file-list test, keyed extraction, and a test that builds a binding with `PYTHRUST_RT_SRC` unset, from outside the checkout. Its tests include a corrupted runtime directory, repaired, and two builds extracting at once, one of them while another program builds. The PR reports first-build time.
+4. **Shipped runtime:** the embedded source, its file-list test, keyed extraction, and a test that builds a binding with `PYTHRUST_RT_SRC` unset, from outside the checkout. Its tests include a corrupted runtime directory, repaired; two builds extracting at once, one of them while another program builds; two builds of the same program while the runtime needs repair; and a `PYTHRUST_RT_SRC` override that changes between builds. The PR reports first-build time.
 5. **Driver.** CI copies `apps/fclone-lite` outside the repository and builds `fclone_fast.pyr` from its manifest and lock, with no flags or environment variables, on Linux, macOS and Windows. Its groups must match `fclone_lite.py`'s, as the existing interop test checks.
 
 Exit:
