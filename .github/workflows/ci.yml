@@ -143,13 +143,27 @@ jobs:
           RUSTUP_TOOLCHAIN=1.88.0 ./target/debug/pythrust build "$RUNNER_TEMP/main.pyr"
           test "$("$RUNNER_TEMP/main")" = "42 2.5"
           cmp "$RUNNER_TEMP/pythrust.lock" "$RUNNER_TEMP/locked"
+      - name: Every app's lock matches its bindings
+        run: |
+          for m in apps/*/pythrust.toml; do
+            (cd "$(dirname "$m")" && "$GITHUB_WORKSPACE/target/debug/pythrust" lock --check)
+          done
+
+  compiler-rust-version:
+    # The compiler's own `rust-version`, the oldest toolchain that builds
+    # pythrust, checked on exactly that toolchain.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.97.0 --profile minimal
+      - run: cargo +1.97.0 check --locked -p pythrust-compiler --all-targets
 
   all:
     # One check standing for every job above: it fails unless each
     # succeeded, every `check` platform included. A job that was skipped
     # or cancelled is not a pass. `ci/check_jobs.py` (the "CI jobs"
     # workflow) checks that this list names every job.
-    needs: [check, memcheck, miri, race, rust-version]
+    needs: [check, memcheck, miri, race, rust-version, compiler-rust-version]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -159,4 +173,4 @@ jobs:
         run: |
           echo "results: $RESULTS"
           for r in $RESULTS; do test "$r" = success; done
-          test "$(echo $RESULTS | wc -w)" -eq 5
+          test "$(echo $RESULTS | wc -w)" -eq 6

@@ -15,6 +15,9 @@ use crate::project::Found;
 /// The lock's file name, beside `pythrust.toml`.
 const FILE: &str = "pythrust.lock";
 
+/// The generated crate's own entry, which no lock check counts.
+const ROOT: (&str, &str) = (CRATE, CRATE_VERSION);
+
 /// The project's directory for generated files.
 const DOT: &str = ".pythrust";
 
@@ -100,7 +103,7 @@ pub(crate) struct Locked {
 /// cover, if any.
 pub(crate) fn check_covered(locked: &Locked, text: &str, path: &Path) -> Result<(), String> {
     let built = lock::parse(text).map_err(|e| format!("pythrust: {}: {e}\n", path.display()))?;
-    let changes = lock::uncovered(&built, &locked.lock, (CRATE, CRATE_VERSION));
+    let changes = lock::uncovered(&built, &locked.lock, ROOT);
     if changes.is_empty() {
         return Ok(());
     }
@@ -146,10 +149,7 @@ pub(crate) fn lock(project: &Found) -> Result<PathBuf, String> {
     let _held = hold(project.dir(), Hold::Exclusive)?;
     let path = project.dir().join(FILE);
     let old = seed(&path)?;
-    let runtime = cargo::runtime_src()?;
-    let bindings = all_bindings(project)?;
-    let dir = project.dir().join(DOT).join("lock");
-    let text = resolve(&dir, &runtime, &bindings, old.as_deref())?;
+    let text = fresh(project, old.as_deref())?;
     parsed(&path, &text)?;
     let tmp = project.dir().join(format!(".{FILE}.tmp"));
     let written = std::fs::write(&tmp, lock::with_header(&text))
@@ -160,6 +160,35 @@ pub(crate) fn lock(project: &Found) -> Result<PathBuf, String> {
         let _ = std::fs::remove_file(&tmp);
     }
     written.map(|()| path)
+}
+
+/// `pythrust lock --check`: whether `pythrust lock` would leave the lock
+/// of `project` as it is. Otherwise the error names each entry that
+/// differs. Writes nothing; gives the lock's path.
+pub(crate) fn check(project: &Found) -> Result<PathBuf, String> {
+    let _held = hold(project.dir(), Hold::Exclusive)?;
+    let locked = read(project)?;
+    let path = project.dir().join(FILE);
+    let text = fresh(project, Some(&locked.text))?;
+    if text == locked.text {
+        return Ok(path);
+    }
+    let new = parsed(&path, &text)?;
+    let mut changes = lock::uncovered(&new, &locked.lock, ROOT);
+    changes.extend(lock::removed(&locked.lock, &new, ROOT));
+    let listed: String = changes.iter().map(|c| format!("  {c}\n")).collect();
+    Err(format!(
+        "pythrust: pythrust.lock does not match the bindings; run `pythrust lock`\n{listed}"
+    ))
+}
+
+/// The lock cargo resolves for every binding of `project`, starting from
+/// `seed` (none: from nothing).
+fn fresh(project: &Found, seed: Option<&str>) -> Result<String, String> {
+    let runtime = cargo::runtime_src()?;
+    let bindings = all_bindings(project)?;
+    let dir = project.dir().join(DOT).join("lock");
+    resolve(&dir, &runtime, &bindings, seed)
 }
 
 /// The current lock's text without its header, to resolve from; `None`

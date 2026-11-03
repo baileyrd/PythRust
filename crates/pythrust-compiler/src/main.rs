@@ -31,7 +31,7 @@ use pythrust_compiler::{
 };
 
 const USAGE: &str =
-    "usage: pythrust <check|build> <file> | pythrust run <file> [arg ...] | pythrust lock";
+    "usage: pythrust <check|build> <file> | pythrust run <file> [arg ...] | pythrust lock [--check]";
 
 /// The runtime library every native program links against. Found next
 /// to this executable, where `cargo build` puts it, unless overridden.
@@ -107,8 +107,8 @@ enum Command {
 #[derive(Debug, PartialEq, Eq)]
 enum Request<'a> {
     /// `pythrust lock`: resolve the project's Rust dependencies into
-    /// `pythrust.lock`.
-    Lock,
+    /// `pythrust.lock`; with `--check`, only say whether it matches.
+    Lock { check: bool },
     /// A command over one program.
     Program(Invocation<'a>),
 }
@@ -137,7 +137,7 @@ fn main() -> ExitCode {
         .collect();
     let inv = match parse_args(&args) {
         Ok(Request::Program(inv)) => inv,
-        Ok(Request::Lock) => return lock(),
+        Ok(Request::Lock { check }) => return lock(check),
         Err(message) => {
             eprintln!("{message}\n{USAGE}");
             return ExitCode::from(2);
@@ -197,13 +197,20 @@ fn main() -> ExitCode {
 }
 
 /// `pythrust lock`: writes the lock of the project above the current
-/// directory.
-fn lock() -> ExitCode {
+/// directory, or with `check` says whether it matches.
+fn lock(check: bool) -> ExitCode {
     let locked = project::here().and_then(|found| {
         eprintln!("pythrust: using {}", found.path.display());
-        lockfile::lock(&found)
+        match check {
+            true => lockfile::check(&found),
+            false => lockfile::lock(&found),
+        }
     });
     match locked {
+        Ok(path) if check => {
+            eprintln!("pythrust: {} is up to date", path.display());
+            ExitCode::SUCCESS
+        }
         Ok(path) => {
             eprintln!("pythrust: wrote {}", path.display());
             ExitCode::SUCCESS
@@ -234,7 +241,16 @@ fn run(sources: &Sources, module: &Module, types: &Types, argv: &[String]) -> Ex
     }
 }
 
-/// Parses `lock`, `<check|build> <file>` or `run <file> [arg ...]`: the
+/// The arguments after `lock`: none, or `--check`.
+fn lock_args(more: &[String]) -> Result<Request<'_>, String> {
+    match more {
+        [] => Ok(Request::Lock { check: false }),
+        [flag] if flag == "--check" => Ok(Request::Lock { check: true }),
+        _ => Err("`lock` takes only `--check`".to_string()),
+    }
+}
+
+/// Parses `lock [--check]`, `<check|build> <file>` or `run <file> [arg ...]`: the
 /// command, the file, and the program's arguments after it, as `python`
 /// takes them.
 fn parse_args(args: &[String]) -> Result<Request<'_>, String> {
@@ -242,8 +258,7 @@ fn parse_args(args: &[String]) -> Result<Request<'_>, String> {
         return Err("expected a command".to_string());
     };
     let command = match command.as_str() {
-        "lock" if more.is_empty() => return Ok(Request::Lock),
-        "lock" => return Err("`lock` takes no arguments".to_string()),
+        "lock" => return lock_args(more),
         "run" => Command::Run,
         "check" => Command::Check,
         "build" => Command::Build,
@@ -664,13 +679,36 @@ mod tests {
         })
     }
 
+    /// CI checks the compiler on exactly its declared `rust-version`.
+    #[test]
+    fn ci_checks_the_compilers_rust_version() {
+        let ci = include_str!("../../../.github/workflows/ci.yml");
+        let v = env!("CARGO_PKG_RUST_VERSION");
+        assert!(!v.is_empty());
+        let check = format!("cargo +{v}.0 check --locked -p pythrust-compiler --all-targets");
+        assert!(
+            ci.contains(&format!("rustup toolchain install {v}.0 ")),
+            "{v}"
+        );
+        assert!(ci.contains(&check), "{v}");
+    }
+
     #[test]
     fn parse_args_takes_lock_alone() {
-        assert_eq!(parse_args(&args(&["lock"])), Ok(Request::Lock));
         assert_eq!(
-            parse_args(&args(&["lock", "a.pyr"])),
-            Err("`lock` takes no arguments".to_string())
+            parse_args(&args(&["lock"])),
+            Ok(Request::Lock { check: false })
         );
+        assert_eq!(
+            parse_args(&args(&["lock", "--check"])),
+            Ok(Request::Lock { check: true })
+        );
+        for bad in [&["lock", "a.pyr"][..], &["lock", "--check", "--check"]] {
+            assert_eq!(
+                parse_args(&args(bad)),
+                Err("`lock` takes only `--check`".to_string())
+            );
+        }
     }
 
     #[test]

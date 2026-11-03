@@ -5,6 +5,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+# The oldest toolchain that builds pythrust: cranelift needs 1.97. Binding
+# crates resolve against an older target, `interop::gen::MIN_RUST`.
+rust-version = "1.97"
 
 [dependencies]
 cranelift-codegen = "0.137"

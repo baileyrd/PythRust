@@ -226,3 +226,18 @@ fn a_path_package_named_like_the_root_is_checked() {
         [Change::Added("root 2.0.0".into())]
     );
 }
+
+#[test]
+fn removed_names_what_a_new_lock_dropped() {
+    let old = lock(
+        "root",
+        &["a"],
+        &[("a", "0.1.0", &[]), ("itoa", "1.0.1", &[])],
+    );
+    let new = lock("root", &[], &[("itoa", "1.0.1", &[])]);
+    assert_eq!(
+        removed(&old, &new, ROOT),
+        [Change::Removed("a 0.1.0".into())]
+    );
+    assert_eq!(removed(&old, &old, ROOT), []);
+}

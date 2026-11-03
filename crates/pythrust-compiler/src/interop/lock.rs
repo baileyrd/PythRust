@@ -207,6 +207,8 @@ pub enum Change {
     /// Same name, version and source; another checksum, or a dependency
     /// the locked entry does not have.
     Changed(String),
+    /// Locked, but no longer resolved.
+    Removed(String),
 }
 
 impl std::fmt::Display for Change {
@@ -214,6 +216,7 @@ impl std::fmt::Display for Change {
         match self {
             Change::Added(p) => write!(f, "added `{p}`"),
             Change::Changed(p) => write!(f, "changed `{p}`"),
+            Change::Removed(p) => write!(f, "removed `{p}`"),
         }
     }
 }
@@ -240,6 +243,16 @@ pub fn uncovered(built: &Lock, locked: &Lock, root: (&str, &str)) -> Vec<Change>
         }
     }
     out
+}
+
+/// Each entry of `locked` but `root`'s that `new` no longer holds.
+pub fn removed(locked: &Lock, new: &Lock, root: (&str, &str)) -> Vec<Change> {
+    locked
+        .packages
+        .iter()
+        .filter(|p| p.id() != (root.0, root.1, None) && new.find(p).is_none())
+        .map(|p| Change::Removed(p.label()))
+        .collect()
 }
 
 #[cfg(test)]

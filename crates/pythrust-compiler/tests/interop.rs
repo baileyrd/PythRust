@@ -524,6 +524,97 @@ fn staleness_is_checked_for_what_a_program_imports() {
     );
 }
 
+/// A build compiles only the bindings its program imports: one added to
+/// `[rust]` after the lock, and broken, does not stop it.
+#[test]
+fn a_broken_unlocked_binding_left_unimported_does_not_stop_a_build() {
+    let dir = scratch("unimported");
+    let a = binding(&dir, "a", "", false);
+    assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "5\n");
+    let b = binding(&dir, "b", "", false);
+    fs::write(b.join("Cargo.toml"), "[package\n").unwrap();
+    fs::write(
+        dir.join("pythrust.toml"),
+        manifest(&dir, &[("a", &a), ("b", &b)]),
+    )
+    .unwrap();
+    let built = build_only(&dir, "main.pyr");
+    assert!(built.status.success(), "{}", text(&built.stderr));
+}
+
+/// A program importing a binding the lock does not hold gets the
+/// stale-lock error naming it.
+#[test]
+fn an_imported_binding_missing_from_the_lock_is_stale() {
+    let dir = scratch("unlocked");
+    let a = binding(&dir, "a", "", false);
+    assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "5\n");
+    let b = binding(&dir, "b", "", false);
+    fs::write(
+        dir.join("pythrust.toml"),
+        manifest(&dir, &[("a", &a), ("b", &b)]),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("both.pyr"),
+        "import a\nimport b\nprint(a.digits(1), b.digits(22))\n",
+    )
+    .unwrap();
+    let err = failed(&build_only(&dir, "both.pyr"));
+    assert_eq!(
+        err,
+        "pythrust: pythrust.lock is out of date; run `pythrust lock`\n  added `b 0.1.0`\n"
+    );
+}
+
+/// `pythrust lock --check` in `dir`.
+fn lock_check(dir: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .args(["lock", "--check"])
+        .current_dir(dir)
+        .output()
+        .unwrap()
+}
+
+/// `pythrust lock --check` passes on a current lock and names each entry
+/// that differs from a fresh lock of every binding otherwise, writing
+/// nothing.
+#[test]
+fn lock_check_compares_the_lock_with_every_binding() {
+    let dir = scratch("check");
+    let a = binding(&dir, "a", "", false);
+    fs::write(dir.join("pythrust.toml"), manifest(&dir, &[("a", &a)])).unwrap();
+    let err = failed(&lock_check(&dir));
+    assert_eq!(err, "pythrust: no pythrust.lock; run `pythrust lock`\n");
+    assert!(lock(&dir).status.success());
+    let locked = read(dir.join("pythrust.lock"));
+    let ok = lock_check(&dir);
+    assert!(ok.status.success(), "{}", text(&ok.stderr));
+    assert!(
+        text(&ok.stderr).ends_with("pythrust.lock is up to date\n"),
+        "{}",
+        text(&ok.stderr)
+    );
+
+    let b = binding(&dir, "b", "[dependencies]\nitoa = \"1.0\"\n", true);
+    fs::write(
+        dir.join("pythrust.toml"),
+        manifest(&dir, &[("a", &a), ("b", &b)]),
+    )
+    .unwrap();
+    let err = failed(&lock_check(&dir));
+    assert!(
+        err.starts_with("pythrust: pythrust.lock does not match the bindings; run `pythrust lock`\n  added `b 0.1.0`\n  added `itoa 1.0."),
+        "{err}"
+    );
+    assert_eq!(read(dir.join("pythrust.lock")), locked);
+
+    assert!(lock(&dir).status.success());
+    fs::write(dir.join("pythrust.toml"), manifest(&dir, &[("a", &a)])).unwrap();
+    let err = failed(&lock_check(&dir));
+    assert!(err.contains("\n  removed `b 0.1.0`\n"), "{err}");
+}
+
 /// A lock that cannot be resolved leaves the previous one as it was.
 #[test]
 fn a_failed_lock_keeps_the_old_one() {
