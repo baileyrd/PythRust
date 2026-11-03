@@ -9,42 +9,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// Set to keep every test's scratch directory, as a failing test's is.
-const KEEP: &str = "PYTHRUST_KEEP_SCRATCH";
+mod common;
+use common::{Scratch, KEEP};
 
-/// A test's scratch directory, removed when the test ends: each holds a
-/// cargo build of about 1 GB. A failing test's, or every one under
-/// [`KEEP`], stays, and its path is printed.
-struct Scratch(PathBuf);
-
-impl std::ops::Deref for Scratch {
-    type Target = Path;
-
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        if std::thread::panicking() || std::env::var_os(KEEP).is_some() {
-            eprintln!("kept scratch directory {}", self.0.display());
-            return;
-        }
-        if let Err(e) = fs::remove_dir_all(&self.0) {
-            eprintln!("cannot remove {}: {e}", self.0.display());
-        }
-    }
-}
-
-/// A fresh directory for `test`, flat in the temp dir: no parent shared
-/// with other tests, so none is created or removed under a test running
-/// beside it.
+/// A scratch directory for `test`; each holds a cargo build of about
+/// 1 GB, so a passing test's goes.
 fn scratch(test: &str) -> Scratch {
-    let dir = std::env::temp_dir().join(format!("pythrust-interop-{}-{test}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    Scratch(dir)
+    common::scratch("interop", test)
 }
 
 #[test]
