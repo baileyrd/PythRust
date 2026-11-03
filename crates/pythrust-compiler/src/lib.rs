@@ -6,6 +6,7 @@
 //! [`infer`], [`interp`]; and for native code [`lower`], [`rc`] (refcount
 //! elision), [`codegen`].
 //! [`interop`] holds the pure parts of Rust binding builds (M6b).
+//! [`manifest`] reads a project's `pythrust.toml` (M6d).
 //! [`own`] summarizes how functions use their parameters, on the IR.
 //! See `docs/grammar.md` for the language these types describe.
 
@@ -25,6 +26,7 @@ pub mod interop;
 pub mod interp;
 pub mod lexer;
 pub mod lower;
+pub mod manifest;
 pub mod own;
 pub mod parser;
 pub mod rc;
