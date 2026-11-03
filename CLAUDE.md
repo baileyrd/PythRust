@@ -45,8 +45,11 @@ user first.
 - When the user answers, pass the answer to `project-expert` to record.
   Don't write DECISIONS.md or remind-me yourself; one writer keeps each
   answer recorded exactly once.
-- Non-blocking? Take the expert's recommendation, keep going, and add the
-  question to `docs/handoff/OPEN_QUESTIONS.md`.
+- Non-blocking? Add the question to `docs/handoff/OPEN_QUESTIONS.md` and
+  keep going. Take the expert's recommendation only for a reversible
+  `[default]` within approved scope. An ESCALATE keeps existing behaviour
+  until the user answers (never reverse a `[stated]` row, change public API,
+  or bump dependencies on a recommendation); continue with unrelated work.
 
 ## Read first, in order
 

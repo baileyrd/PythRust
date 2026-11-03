@@ -23,8 +23,8 @@ source -> lex -> parse -> infer -> (interp | lower -> ir -> own/rc -> codegen ->
 ```
 Modular monolith: `crates/pythrust-compiler` (one module per stage; stages meet only at `span diag token ast exc ir`), `crates/pythrust-rt` (runtime native programs link). Detail: `docs/design.md`, `docs/native.md`, `docs/research/`.
 
-## State (2026-11-03, main 27147ee)
-M0–M5 done; M6a, M6b done; M6c done except parked `shared[T]`/channels; M6d: design (#96) and manifest (#97) merged, lockfile (#99) in review, shipped runtime and driver pending; M6e waits. Driver app: fclone-lite (`apps/fclone-lite/`).
+## State (2026-11-03, main 79a1a6e)
+M0–M5 done; M6a, M6b done; M6c done except parked `shared[T]`/channels; M6d: design (#96), manifest (#97) and lockfile (#99) merged; shipped runtime and driver pending; M6e waits. Driver app: fclone-lite (`apps/fclone-lite/`).
 
 ## Acceptance — first slice (for a new thread)
 - [ ] `docs/roadmap.md` item for the thread is checked only with a test that holds it.

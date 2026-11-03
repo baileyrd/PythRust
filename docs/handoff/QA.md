@@ -32,5 +32,5 @@ Answered from repo docs and remind-me; each answer cites its source. Backfilled 
 - **Q:** Who answers design questions? **A:** `project-expert` subagent first; Nano only for intent, scope, taste, or reversing a [stated] row. [stated] — D36
 
 ## Environment
-- **Q:** Rust version? **A:** 1.97 floor (D34). Docs elsewhere may still say 1.88/1.89; see OPEN_QUESTIONS Q2. [stated]
+- **Q:** Rust version? **A:** 1.97 floor (D34, landed in #99). [stated]
 - **Q:** Repo name? **A:** `baileyrd/PythRust` (language is "Pythrust"). [stated]
