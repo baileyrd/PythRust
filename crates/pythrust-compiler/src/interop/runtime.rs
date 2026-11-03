@@ -94,22 +94,18 @@ pub fn embedded() -> Result<Vec<File>, String> {
         .collect()
 }
 
-/// `manifest` as a crate outside its workspace reads it: each
-/// `[package]` field inherited with `key.workspace = true` (or
-/// `key = { workspace = true }`) becomes that key's value in the
-/// `[workspace.package]` of its own `[workspace]`, or else of
-/// `workspace`, and an empty `[workspace]` ends it unless it has one. A
-/// dependency with a `path` is refused, since it would resolve from
-/// wherever the manifest is copied.
+/// `manifest` as a crate outside its workspace reads it (D38): each
+/// `key.workspace = true` line in `[package]` becomes that key's value
+/// in `workspace`'s `[workspace.package]`, and an empty `[workspace]`
+/// ends it unless it has one. That is the only inheritance the repo's
+/// own runtime uses; any other form, or inheritance in a manifest that
+/// is its own workspace, is a named error asking for a standalone
+/// manifest. A dependency with a `path` is refused, since it would
+/// resolve from wherever the manifest is copied.
 pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
     let stmts = statements(manifest);
     let own = is_root(&stmts);
-    let theirs = if own {
-        None
-    } else {
-        Some(statements(workspace))
-    };
-    let ws = theirs.as_deref().unwrap_or(&stmts);
+    let ws = statements(workspace);
     let mut out = String::new();
     let mut table = String::new();
     for stmt in &stmts {
@@ -122,9 +118,11 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
                 stmt.code.trim()
             ));
         }
-        match inherited(&stmt.code).filter(|_| table == "package") {
-            Some(key) => out.push_str(&inherited_value(key, ws)?),
-            None => out.push_str(&stmt.lines.join("\n")),
+        let inherits = table == "package" && inherited(&stmt.code).is_some();
+        match (inherits, supported(&stmt.code).filter(|_| !own)) {
+            (false, _) => out.push_str(&stmt.lines.join("\n")),
+            (true, Some(key)) => out.push_str(&inherited_value(key, &ws)?),
+            (true, None) => return Err(unsupported(&stmt.code)),
         }
         out.push('\n');
     }
@@ -274,6 +272,23 @@ fn inherited(code: &str) -> Option<&str> {
     }
     (value == "true").then_some(())?;
     key.trim().strip_suffix(".workspace").map(str::trim_end)
+}
+
+/// The key of a `key.workspace = true` line with a bare key, the one
+/// inheritance form `standalone` rewrites.
+fn supported(code: &str) -> Option<&str> {
+    let (key, value) = code.split_once('=')?;
+    (value.trim() == "true").then_some(())?;
+    let key = key.trim().strip_suffix(".workspace")?.trim_end();
+    let bare = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    (!key.is_empty() && key.chars().all(bare)).then_some(key)
+}
+
+fn unsupported(code: &str) -> String {
+    format!(
+        "`{}` inherits from a workspace in a form pythrust does not rewrite: only `key.workspace = true` in [package], from a workspace above; make the override's Cargo.toml standalone",
+        code.trim()
+    )
 }
 
 /// Whether the dotted key or table name `name` has a part naming a

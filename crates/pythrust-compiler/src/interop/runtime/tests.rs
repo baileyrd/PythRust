@@ -30,16 +30,36 @@ fn standalone_names_a_field_the_workspace_does_not_set() {
     );
 }
 
-/// Inheritance is read in every TOML spelling: a trailing comment, a
-/// `#` inside a string, and the inline-table form.
+/// The supported inheritance line keeps working through a trailing
+/// comment, and a `#` inside a string is not a comment.
 #[test]
-fn standalone_reads_inheritance_in_every_spelling() {
-    let manifest = "[package]\nversion.workspace = true # shared\nedition = { workspace = true }\nname = \"a#b\" # c\ndescription = \"q\\\"#\" # d\nreadme = 'a#b' # e\n";
+fn standalone_reads_comments_and_strings() {
+    let manifest = "[package]\nversion.workspace = true # shared\nname = \"a#b\" # c\ndescription = \"q\\\"#\" # d\nreadme = 'a#b' # e\n";
     let got = standalone(manifest, WORKSPACE_TOML);
     assert_eq!(
         got,
-        Ok("[package]\nversion = \"0.3.0\"\nedition = \"2021\"\nname = \"a#b\" # c\ndescription = \"q\\\"#\" # d\nreadme = 'a#b' # e\n\n[workspace]\n".to_string())
+        Ok("[package]\nversion = \"0.3.0\"\nname = \"a#b\" # c\ndescription = \"q\\\"#\" # d\nreadme = 'a#b' # e\n\n[workspace]\n".to_string())
     );
+}
+
+/// Only `key.workspace = true` in `[package]`, from a workspace above,
+/// is rewritten (D38); any other inheritance is a named error asking for
+/// a standalone manifest, not a guess.
+#[test]
+fn standalone_refuses_other_inheritance_forms() {
+    let refused = [
+        "[package]\nedition = { workspace = true }\n",
+        "[package]\n\"version\".workspace = true\n",
+        "[package]\nversion.workspace = true\n[workspace]\n[workspace.package]\nversion = \"1.0.0\"\n",
+    ];
+    for manifest in refused {
+        let got = standalone(manifest, WORKSPACE_TOML);
+        assert!(
+            got.as_ref()
+                .is_err_and(|e| e.contains("make the override's Cargo.toml standalone")),
+            "{manifest}: {got:?}"
+        );
+    }
 }
 
 /// The manifest is read as statements, not lines: string and array
@@ -69,14 +89,15 @@ fn standalone_reads_quote_runs_and_quoted_headers() {
     assert!(got.contains("\nversion = \"0.3.0\"\n"), "{got}");
 }
 
-/// A manifest that is its own workspace root inherits from itself, and
-/// a header's trailing comment does not hide it.
+/// A manifest that is its own workspace root is kept as it is, and a
+/// header's trailing comment does not hide its `[workspace]`.
 #[test]
-fn standalone_reads_its_own_commented_workspace() {
-    let manifest = "[package]\nversion.workspace = true\n[workspace] # standalone\n[workspace.package] # shared\nversion = \"1.0.0\"\n";
-    let got = standalone(manifest, WORKSPACE_TOML).unwrap();
-    assert!(got.starts_with("[package]\nversion = \"1.0.0\"\n"), "{got}");
-    assert_eq!(got.matches("[workspace]").count(), 1, "{got}");
+fn standalone_keeps_its_own_commented_workspace() {
+    let manifest = "[package]\nversion = \"1.0.0\"\n[workspace] # standalone\n";
+    assert_eq!(
+        standalone(manifest, WORKSPACE_TOML),
+        Ok(manifest.to_string())
+    );
 }
 
 /// A path dependency would resolve from the extracted copy, not from
