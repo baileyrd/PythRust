@@ -104,11 +104,10 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
     let mut in_dependencies = false;
     for line in manifest.lines() {
         if let Some(header) = line.trim().strip_prefix('[') {
-            in_dependencies = header
-                .split('.')
-                .any(|p| p.trim_end_matches(']').ends_with("dependencies"));
+            let header = header.split('#').next().unwrap_or_default();
+            in_dependencies = names_dependencies(header.trim_end().trim_end_matches(']'));
         }
-        if in_dependencies && sets_path(line) {
+        if sets_path(line, in_dependencies) {
             return Err(format!(
                 "`{}` is a path dependency, which would resolve from the extracted copy; a runtime override cannot have one",
                 line.trim()
@@ -130,18 +129,40 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// Whether `line`, in a dependency table, sets a `path`: as its key, or
-/// as a key of its inline table.
-fn sets_path(line: &str) -> bool {
+/// Whether `line` sets a dependency's `path`: a key whose last dotted
+/// part is `path`, bare or quoted, on the line or in its inline tables,
+/// where the table (`in_dependencies`) or the line's own dotted key names
+/// a dependency table. A line heuristic, not a TOML parser: it errs
+/// towards refusing, and a refusal costs only a named error.
+fn sets_path(line: &str, in_dependencies: bool) -> bool {
     let Some((key, value)) = line.split_once('=') else {
         return false;
     };
-    let is_path = |k: &str| k.trim() == "path";
-    is_path(key)
-        || value.contains('{')
-            && value
-                .split(['{', ','])
-                .any(|part| part.split_once('=').is_some_and(|(k, _)| is_path(k)))
+    if !in_dependencies && !names_dependencies(key) {
+        return false;
+    }
+    let keys = value
+        .split(['{', ','])
+        .filter_map(|part| part.split_once('=').map(|(k, _)| k));
+    std::iter::once(key)
+        .chain(keys)
+        .any(|k| last_part(k) == "path")
+}
+
+/// Whether the dotted key or table name `name` has a part naming a
+/// dependency table (`dependencies`, `dev-dependencies`, ...).
+fn names_dependencies(name: &str) -> bool {
+    name.split('.')
+        .any(|p| unquoted(p).ends_with("dependencies"))
+}
+
+/// The last part of the dotted key `key`, unquoted.
+fn last_part(key: &str) -> &str {
+    unquoted(key.rsplit('.').next().unwrap_or_default())
+}
+
+fn unquoted(part: &str) -> &str {
+    part.trim().trim_matches(['"', '\''])
 }
 
 /// The line of `[workspace.package]` in `workspace` that sets `key`.

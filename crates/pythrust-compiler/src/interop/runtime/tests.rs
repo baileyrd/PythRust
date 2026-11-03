@@ -38,6 +38,13 @@ fn standalone_refuses_a_path_dependency() {
         "[dependencies]\nhelper = { path = \"../helper\" }\n",
         "[dev-dependencies.helper]\npath = \"../helper\"\n",
         "[target.'cfg(unix)'.build-dependencies]\nh = { version = \"1\", path = \"h\" }\n",
+        "[dependencies] # local helpers\nhelper = { path = \"../helper\" }\n",
+        "[dependencies]\nhelper = { \"path\" = \"../helper\" }\n",
+        "[dependencies]\nhelper = {'path'=\"../helper\"}\n",
+        "[dependencies]\nhelper.path = \"../helper\"\n",
+        "[dependencies.helper]\n\"path\" = \"../helper\"\n",
+        "dependencies.helper.path = \"../helper\"\n[package]\n",
+        "dependencies = { helper = { path = \"../helper\" } }\n",
     ];
     for manifest in refused {
         let got = standalone(manifest, "");
@@ -46,7 +53,8 @@ fn standalone_refuses_a_path_dependency() {
             "{manifest}: {got:?}"
         );
     }
-    let lib = "[lib]\npath = \"src/lib.rs\"\n[dependencies]\nxpath = \"1\"\n";
+    let lib =
+        "[lib]\npath = \"src/lib.rs\"\n[package]\nname = \"path\"\n[dependencies]\nxpath = \"1\"\n";
     assert!(standalone(lib, "").is_ok());
 }
 
