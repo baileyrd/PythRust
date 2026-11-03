@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use pythrust_compiler::interop::gen::CRATE;
+use pythrust_compiler::interop::gen::{CRATE, CRATE_VERSION};
 use pythrust_compiler::interop::lock::{self, Lock};
 
 use crate::cargo::{self, Binding};
@@ -100,7 +100,7 @@ pub(crate) struct Locked {
 /// cover, if any.
 pub(crate) fn check_covered(locked: &Locked, text: &str, path: &Path) -> Result<(), String> {
     let built = lock::parse(text).map_err(|e| format!("pythrust: {}: {e}\n", path.display()))?;
-    let changes = lock::uncovered(&built, &locked.lock, CRATE);
+    let changes = lock::uncovered(&built, &locked.lock, (CRATE, CRATE_VERSION));
     if changes.is_empty() {
         return Ok(());
     }

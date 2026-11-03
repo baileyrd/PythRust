@@ -2,6 +2,9 @@ use super::*;
 
 const REG: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
+/// The generated crate `lock_text` writes first.
+const ROOT: (&str, &str) = ("root", "0.1.0");
+
 /// A lock with the path package `root` depending on `deps`, then each
 /// registry package of `pkgs`: `(name, version, deps)`.
 fn lock_text(root: &str, deps: &[&str], pkgs: &[(&str, &str, &[&str])]) -> String {
@@ -87,7 +90,7 @@ fn a_git_package_is_found() {
 #[test]
 fn the_same_resolution_is_covered() {
     let a = lock("a", &["itoa"], &[("itoa", "1.0.1", &[])]);
-    assert_eq!(uncovered(&a, &a.clone(), "root"), []);
+    assert_eq!(uncovered(&a, &a.clone(), ROOT), []);
 }
 
 /// A program importing one of two bindings resolves a subset: dropped
@@ -110,7 +113,7 @@ fn a_subset_is_covered() {
         &["a"],
         &[("a", "0.1.0", &["itoa"]), ("itoa", "1.0.1", &[])],
     );
-    assert_eq!(uncovered(&subset, &full, "root"), []);
+    assert_eq!(uncovered(&subset, &full, ROOT), []);
 }
 
 #[test]
@@ -134,7 +137,7 @@ fn new_pins_and_edges_are_not_covered() {
             ("ryu", "1.0.0", &[]),
         ],
     );
-    let got: Vec<String> = uncovered(&built, &locked, "root")
+    let got: Vec<String> = uncovered(&built, &locked, ROOT)
         .iter()
         .map(Change::to_string)
         .collect();
@@ -147,13 +150,13 @@ fn another_checksum_or_source_is_not_covered() {
     let text = lock_text("root", &["itoa"], &[("itoa", "1.0.1", &[])]);
     let sum = parse(&text.replace("sum-itoa", "other")).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
-        uncovered(&sum, &old, "root"),
+        uncovered(&sum, &old, ROOT),
         [Change::Changed("itoa 1.0.1".into())]
     );
     let mirror = parse(&text.replace(REG, "sparse+https://mirror.example/"))
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
-        uncovered(&mirror, &old, "root"),
+        uncovered(&mirror, &old, ROOT),
         [Change::Added("itoa 1.0.1".into())]
     );
 }
@@ -175,7 +178,7 @@ fn only_the_path_root_is_left_out() {
     let locked = lock("root", &[], &[]);
     let built = lock("root", &["root"], &[("root", "1.0.0", &[])]);
     assert_eq!(
-        uncovered(&built, &locked, "root"),
+        uncovered(&built, &locked, ROOT),
         [Change::Added("root 1.0.0".into())]
     );
 }
@@ -193,9 +196,9 @@ fn an_edge_that_switches_source_is_not_covered() {
     };
     let parsed = |source: &str| parse(&text(source)).unwrap_or_else(|e| panic!("{e}"));
     let locked = parsed(REG);
-    assert_eq!(uncovered(&parsed(REG), &locked, "root"), []);
+    assert_eq!(uncovered(&parsed(REG), &locked, ROOT), []);
     assert_eq!(
-        uncovered(&parsed(MIRROR), &locked, "root"),
+        uncovered(&parsed(MIRROR), &locked, ROOT),
         [Change::Changed("a 0.1.0".into())]
     );
 }
@@ -205,7 +208,21 @@ fn an_edge_that_switches_source_is_not_covered() {
 fn an_unresolved_edge_is_not_covered() {
     let locked = lock("root", &["a"], &[("a", "0.1.0", &["gone"])]);
     assert_eq!(
-        uncovered(&locked.clone(), &locked, "root"),
+        uncovered(&locked.clone(), &locked, ROOT),
         [Change::Changed("a 0.1.0".into())]
+    );
+}
+
+/// A binding whose package shares the generated crate's name, at
+/// another version, is checked like any other path package.
+#[test]
+fn a_path_package_named_like_the_root_is_checked() {
+    let locked = lock("root", &[], &[]);
+    let text = lock_text("root", &["root 2.0.0"], &[])
+        + "\n[[package]]\nname = \"root\"\nversion = \"2.0.0\"\n";
+    let built = parse(&text).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        uncovered(&built, &locked, ROOT),
+        [Change::Added("root 2.0.0".into())]
     );
 }

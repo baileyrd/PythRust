@@ -219,14 +219,15 @@ impl std::fmt::Display for Change {
 }
 
 /// Each entry of `built`, cargo's resolution for one program, that
-/// `locked` does not cover, leaving out the generated crate `root`
-/// itself. A program may import only some bindings, so `built` may drop
-/// entries, and an entry may lose dependencies a dropped binding's
-/// features added; anything else is new. So a binding that starts
-/// depending on a crate already in the lock shows as changed.
-pub fn uncovered(built: &Lock, locked: &Lock, root: &str) -> Vec<Change> {
+/// `locked` does not cover, leaving out the generated crate itself, the
+/// path package of `root`'s name and version. A program may import only
+/// some bindings, so `built` may drop entries, and an entry may lose
+/// dependencies a dropped binding's features added; anything else is
+/// new. So a binding that starts depending on a crate already in the
+/// lock shows as changed.
+pub fn uncovered(built: &Lock, locked: &Lock, root: (&str, &str)) -> Vec<Change> {
     let mut out = Vec::new();
-    let is_root = |p: &&Package| p.name == root && p.source.is_none();
+    let is_root = |p: &&Package| p.id() == (root.0, root.1, None);
     for p in built.packages.iter().filter(|p| !is_root(p)) {
         let Some(q) = locked.find(p) else {
             out.push(Change::Added(p.label()));
