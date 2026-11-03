@@ -1,4 +1,4 @@
-//! A probe binding for `pythrust build --rust probe=...`.
+//! A probe binding, named `probe = { path = "..." }` in a test's `pythrust.toml`.
 
 /// `x` doubled.
 pub fn double(x: i64) -> i64 {

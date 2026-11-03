@@ -223,6 +223,16 @@ pub fn module_names() -> String {
     names.join(", ")
 }
 
+/// The error for `import name` of a module that is neither standard
+/// nor a binding the project's `pythrust.toml` names (M6d); `why` says
+/// what was found instead, as "no pythrust.toml names it".
+pub fn not_standard(name: &str, why: &str) -> String {
+    format!(
+        "`{name}` is not a standard module, and {why}; the standard modules are: {}",
+        module_names()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

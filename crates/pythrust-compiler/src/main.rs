@@ -12,6 +12,7 @@
 
 mod bindings;
 mod cargo;
+mod project;
 
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -26,8 +27,7 @@ use pythrust_compiler::{
     Warning,
 };
 
-const USAGE: &str = "usage: pythrust <check|build> [--rust name=path ...] <file> \
-                     | pythrust run [--rust name=path ...] <file> [arg ...]";
+const USAGE: &str = "usage: pythrust <check|build> <file> | pythrust run <file> [arg ...]";
 
 /// The runtime library every native program links against. Found next
 /// to this executable, where `cargo build` puts it, unless overridden.
@@ -103,8 +103,6 @@ enum Command {
 #[derive(Debug, PartialEq, Eq)]
 struct Invocation<'a> {
     command: Command,
-    /// Each `--rust name=path` (M6b, interim until M6d), in order.
-    rust: Vec<(&'a str, &'a str)>,
     path: &'a str,
     /// The program's arguments, after the file: `run` only.
     rest: &'a [String],
@@ -138,8 +136,19 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let project = match project::bindings(path, &src) {
+        Ok(project) => project,
+        Err(message) => {
+            eprint!("{message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let (Some(manifest), Command::Check | Command::Build) = (&project.manifest, inv.command) {
+        eprintln!("pythrust: using {}", manifest.display());
+    }
+    let crates = project.crates;
     let mut sources = Sources::new(path, &src);
-    let rust = match bindings::load(&inv.rust, &mut sources) {
+    let rust = match bindings::load(&crates, &mut sources) {
         Ok(rust) => rust,
         Err(message) => {
             eprint!("{message}");
@@ -158,7 +167,7 @@ fn main() -> ExitCode {
     }
     match inv.command {
         Command::Check => ExitCode::SUCCESS,
-        Command::Build => build(&sources, &module, &types, &inv.rust),
+        Command::Build => build(&sources, &module, &types, &crates),
         Command::Run if !module.stubs.is_empty() => {
             eprintln!("pythrust: {}", stdlib::RUST_RUN_GAP);
             ExitCode::FAILURE
@@ -191,10 +200,9 @@ fn run(sources: &Sources, module: &Module, types: &Types, argv: &[String]) -> Ex
     }
 }
 
-/// Parses `<check|build> [--rust name=path ...] <file>` or
-/// `run [--rust name=path ...] <file> [arg ...]`: the command, the
-/// bindings, the file, and the program's arguments after it, as
-/// `python` takes them.
+/// Parses `<check|build> <file>` or `run <file> [arg ...]`: the
+/// command, the file, and the program's arguments after it, as `python`
+/// takes them.
 fn parse_args(args: &[String]) -> Result<Invocation<'_>, String> {
     let [command, more @ ..] = args else {
         return Err("expected a command".to_string());
@@ -205,27 +213,20 @@ fn parse_args(args: &[String]) -> Result<Invocation<'_>, String> {
         "build" => Command::Build,
         other => return Err(format!("unknown command `{other}`")),
     };
-    let mut rust = Vec::new();
-    let mut more = more;
-    while let [flag, value, after @ ..] = more {
-        if flag != "--rust" {
-            break;
-        }
-        rust.push(bindings::split(value)?);
-        more = after;
-    }
     let [path, rest @ ..] = more else {
         return Err("expected a file".to_string());
     };
-    if path == "--rust" {
-        return Err("`--rust` takes `name=path`".to_string());
+    if path.starts_with("--rust") {
+        return Err(
+            "`--rust` is gone: name Rust bindings in the `[rust]` table of pythrust.toml"
+                .to_string(),
+        );
     }
     if command != Command::Run && !rest.is_empty() {
         return Err(format!("expected one file, got {}", rest.len() + 1));
     }
     Ok(Invocation {
         command,
-        rust,
         path: path.as_str(),
         rest,
     })
@@ -253,7 +254,7 @@ fn flush(out: &mut impl Write) -> pythrust_compiler::Result<()> {
 
 /// `pythrust build`: compiles the checked `module` and links it,
 /// reporting any failure.
-fn build(sources: &Sources, module: &Module, types: &Types, rust: &[(&str, &str)]) -> ExitCode {
+fn build(sources: &Sources, module: &Module, types: &Types, rust: &[cargo::Crate]) -> ExitCode {
     match native(sources, module, types, rust) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -277,7 +278,7 @@ fn native(
     sources: &Sources,
     module: &Module,
     types: &Types,
-    rust: &[(&str, &str)],
+    rust: &[cargo::Crate],
 ) -> Result<(), String> {
     let out = absolute(&output_path(sources.path())?)?;
     let render = |diag: &Diagnostic| sources.render(diag);
@@ -296,7 +297,7 @@ fn native(
 }
 
 /// The bindings `module` calls, with absolute directories.
-fn called(module: &Module, rust: &[(&str, &str)]) -> Result<Vec<cargo::Crate>, String> {
+fn called(module: &Module, rust: &[cargo::Crate]) -> Result<Vec<cargo::Crate>, String> {
     let calls = |name: &str| {
         let prefix = format!("{name}.");
         module
@@ -305,11 +306,11 @@ fn called(module: &Module, rust: &[(&str, &str)]) -> Result<Vec<cargo::Crate>, S
             .any(|s| s.name.name.starts_with(&prefix))
     };
     rust.iter()
-        .filter(|(name, _)| calls(name))
-        .map(|(name, dir)| {
+        .filter(|c| calls(&c.name))
+        .map(|c| {
             Ok(cargo::Crate {
-                name: name.to_string(),
-                dir: absolute(Path::new(dir))?,
+                name: c.name.clone(),
+                dir: absolute(&c.dir)?,
             })
         })
         .collect()
@@ -608,7 +609,6 @@ mod tests {
     fn invocation<'a>(command: Command, path: &'a str, rest: &'a [String]) -> Invocation<'a> {
         Invocation {
             command,
-            rust: Vec::new(),
             path,
             rest,
         }
@@ -645,22 +645,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_takes_rust_bindings_before_the_file() {
-        let given = args(&["check", "--rust", "a=x", "--rust", "b=../y z", "f.pyr"]);
-        let none: &[String] = &[];
-        let want = Invocation {
-            rust: vec![("a", "x"), ("b", "../y z")],
-            ..invocation(Command::Check, "f.pyr", none)
+    fn parse_args_names_the_manifest_for_the_removed_rust_flag() {
+        let given = args(&["check", "--rust", "a=x", "f.pyr"]);
+        let err = parse_args(&given);
+        let Err(message) = err else {
+            panic!("{err:?}");
         };
-        assert_eq!(parse_args(&given), Ok(want));
-        let run = args(&["run", "--rust", "a=x", "f.pyr", "--rust", "b=y"]);
-        let rest = args(&["--rust", "b=y"]);
-        let got = parse_args(&run).map(|i| (i.rust, i.rest.to_vec()));
-        assert_eq!(got, Ok((vec![("a", "x")], rest)));
-        assert!(parse_args(&args(&["check", "--rust", "f.pyr"])).is_err());
-        assert!(parse_args(&args(&["check", "--rust"])).is_err());
-        assert!(parse_args(&args(&["check", "--rust", "=x", "f.pyr"])).is_err());
-        assert!(parse_args(&args(&["check", "f.pyr", "--rust", "a=x"])).is_err());
+        assert!(
+            message.contains("`[rust]` table of pythrust.toml"),
+            "{message}"
+        );
     }
 
     #[test]

@@ -184,7 +184,7 @@ fn runtime_src() -> Result<PathBuf, String> {
 }
 
 /// A binding's lock and its Cargo package's name, which may differ from
-/// the binding's (`--rust fastfs=...` over package `fastfs-binding`).
+/// the binding's (`fastfs = { path = ... }` over package `fastfs-binding`).
 struct Checked {
     lock: Lock,
     package: String,

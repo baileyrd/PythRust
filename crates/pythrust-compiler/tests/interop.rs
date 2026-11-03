@@ -1,5 +1,6 @@
-//! `pythrust build --rust` end to end (M6b native plumbing,
-//! `docs/research/rust-interop.md#build`): cargo builds the generated
+//! `pythrust build` of programs importing Rust bindings end to end (M6b
+//! native plumbing, `docs/research/rust-interop.md#build`), each named in
+//! a `pythrust.toml` beside the program (M6d): cargo builds the generated
 //! crate over real bindings, and the bindings' `Cargo.lock` files decide
 //! every crates.io version. Tests with registry dependencies fetch
 //! `itoa` from crates.io, as a user's first build would.
@@ -187,14 +188,51 @@ fn build_as(
 fn compile(dir: &Path, file: &str, src: &str, bindings: &[(&str, &Path)]) -> Output {
     let path = dir.join(file);
     fs::write(&path, src).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_pythrust"));
-    command.arg("build");
+    fs::write(dir.join("pythrust.toml"), manifest(dir, bindings)).unwrap();
+    Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .arg("build")
+        .arg(&path)
+        .output()
+        .unwrap()
+}
+
+/// A `pythrust.toml` in `dir` naming each `(name, dir)` binding by its
+/// path from `dir`. A binding outside `dir` is copied in as `dir/name`
+/// first: a manifest's paths are relative, and on Windows the checkout
+/// and the temp dir may be on different drives.
+fn manifest(dir: &Path, bindings: &[(&str, &Path)]) -> String {
+    let mut out = String::from("[package]\nname = \"t\"\nversion = \"0.1.0\"\n\n[rust]\n");
     for (name, binding) in bindings {
-        let mut flag = std::ffi::OsString::from(format!("{name}="));
-        flag.push(binding);
-        command.arg("--rust").arg(flag);
+        let inside = match binding.strip_prefix(dir) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => {
+                copy_tree(binding, &dir.join(name));
+                PathBuf::from(name)
+            }
+        };
+        let parts: Vec<String> = inside
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        out.push_str(&format!("{name} = {{ path = \"{}\" }}\n", parts.join("/")));
     }
-    command.arg(&path).output().unwrap()
+    out
+}
+
+/// Copies the binding `from` to `to`, leaving out any `target` dir.
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            if entry.file_name() != "target" {
+                copy_tree(&path, &to.join(entry.file_name()));
+            }
+        } else {
+            fs::copy(&path, to.join(entry.file_name())).unwrap();
+        }
+    }
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -211,12 +249,18 @@ fn stdout(result: (Output, Option<Output>)) -> String {
     text(&ran.stdout)
 }
 
-/// The build's stderr, which must have failed.
+/// The build's stderr, which must have failed, after the line naming
+/// the manifest it used.
 fn failure(result: (Output, Option<Output>)) -> String {
     let (built, ran) = result;
     assert!(ran.is_none(), "built: {}", text(&built.stderr));
     assert_eq!(built.status.code(), Some(1));
-    text(&built.stderr)
+    let err = text(&built.stderr);
+    let Some((first, rest)) = err.split_once('\n') else {
+        panic!("no manifest line: {err}");
+    };
+    assert!(first.starts_with("pythrust: using "), "{err}");
+    rest.to_string()
 }
 
 const DIGITS: &str = "import a\nprint(a.digits(12345))\n";

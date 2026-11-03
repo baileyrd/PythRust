@@ -1,5 +1,5 @@
 //! fastfs: file hashing for `fclone_fast.pyr`, called through Pythrust's
-//! Rust interop (`pythrust build --rust fastfs=...`).
+//! Rust interop, named in `apps/fclone-lite/pythrust.toml`.
 
 use std::fs::File;
 use std::io::{self, Read};
