@@ -160,7 +160,7 @@ A warning (a lint) is a note on a valid program. `run`, `check` and `build` prin
 
 ## Manifest (`pythrust.toml`)
 
-Decided for M6d (Nano, 2026-11-03; [research/package-tool.md](research/package-tool.md)); implemented in M6d's manifest PR. A project's manifest is a strict subset of TOML 1.0. Every form the subset accepts parses to the same values under CPython 3.13's `tomllib`, which an oracle test checks. Any other form, valid TOML or not, is a named error at its line and column.
+Decided for M6d (Nano, 2026-11-03; [research/package-tool.md](research/package-tool.md)); scheduled for M6d's manifest PR. A project's manifest is a strict subset of TOML 1.0. Every form the subset accepts parses to the same values under CPython 3.13's `tomllib`, which an oracle test checks. Any other form, valid TOML or not, is a named error at its line and column.
 
 ```ebnf
 manifest = { line } ;
