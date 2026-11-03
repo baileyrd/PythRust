@@ -249,12 +249,18 @@ fn stdout(result: (Output, Option<Output>)) -> String {
     text(&ran.stdout)
 }
 
-/// The build's stderr, which must have failed.
+/// The build's stderr, which must have failed, after the line naming
+/// the manifest it used.
 fn failure(result: (Output, Option<Output>)) -> String {
     let (built, ran) = result;
     assert!(ran.is_none(), "built: {}", text(&built.stderr));
     assert_eq!(built.status.code(), Some(1));
-    text(&built.stderr)
+    let err = text(&built.stderr);
+    let Some((first, rest)) = err.split_once('\n') else {
+        panic!("no manifest line: {err}");
+    };
+    assert!(first.starts_with("pythrust: using "), "{err}");
+    rest.to_string()
 }
 
 const DIGITS: &str = "import a\nprint(a.digits(12345))\n";
