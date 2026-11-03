@@ -6,7 +6,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use pythrust_compiler::ast::Ident;
-use pythrust_compiler::manifest::{self, toml, Manifest};
+use pythrust_compiler::manifest::{self, toml, Manifest, RustDep};
 use pythrust_compiler::{lexer, stdlib, DiagKind, Diagnostic, Token, TokenKind};
 
 use crate::bindings;
@@ -17,7 +17,23 @@ pub(crate) struct Project {
     /// With absolute directories, in import order.
     pub(crate) crates: Vec<Crate>,
     /// `None` when every import is standard: then none is looked for.
-    pub(crate) manifest: Option<PathBuf>,
+    pub(crate) manifest: Option<Found>,
+}
+
+/// A manifest read from disk.
+pub(crate) struct Found {
+    /// The `pythrust.toml` itself, as the walk found it.
+    pub(crate) path: PathBuf,
+    /// Every binding of `[rust]`, with absolute directories, in order:
+    /// `pythrust lock` resolves them all.
+    pub(crate) all: Vec<Crate>,
+}
+
+impl Found {
+    /// The directory the manifest is in: the project's.
+    pub(crate) fn dir(&self) -> &Path {
+        self.path.parent().unwrap_or(Path::new("."))
+    }
 }
 
 /// The project of the program at `path`, whose text is `src`. An error
@@ -39,18 +55,35 @@ pub(crate) fn bindings(path: &str, src: &str) -> Result<Project, String> {
         let message = stdlib::not_standard(&first.name, &why);
         return Err(render_import(path, src, first, message));
     };
-    let manifest = read(&file)?;
-    let dir = file.parent().unwrap_or(Path::new("."));
+    let found = load(file)?;
     let crates = imports
         .iter()
-        .map(|import| {
-            named(&manifest, dir, import).map_err(|m| render_import(path, src, import, m))
-        })
+        .map(|import| named(&found, import).map_err(|m| render_import(path, src, import, m)))
         .collect::<Result<_, _>>()?;
     Ok(Project {
         crates,
-        manifest: Some(file),
+        manifest: Some(found),
     })
+}
+
+/// The manifest above the current directory, for `pythrust lock`.
+pub(crate) fn here() -> Result<Found, String> {
+    let start = normalize(&absolute(Path::new("."))?);
+    let Some(file) = find(&start)? else {
+        return Err(format!(
+            "pythrust: no pythrust.toml in {} or any directory above it\n",
+            start.display()
+        ));
+    };
+    load(file)
+}
+
+/// Reads the manifest `file` and places each of its bindings.
+fn load(file: PathBuf) -> Result<Found, String> {
+    let manifest = read(&file)?;
+    let dir = file.parent().unwrap_or(Path::new("."));
+    let all = manifest.rust.iter().map(|dep| place(dir, dep)).collect();
+    Ok(Found { path: file, all })
 }
 
 /// The program's imports that are not standard modules, each once, in
@@ -154,22 +187,27 @@ fn read(file: &Path) -> Result<Manifest, String> {
     Ok(manifest)
 }
 
-/// The binding `import` names in `manifest`, whose directory is `dir`.
-fn named(manifest: &Manifest, dir: &Path, import: &Ident) -> Result<Crate, String> {
-    let Some(dep) = manifest.rust.iter().find(|d| d.name.name == import.name) else {
+/// The binding `import` names in `found`.
+fn named(found: &Found, import: &Ident) -> Result<Crate, String> {
+    let Some(c) = found.all.iter().find(|c| c.name == import.name) else {
         let why = format!(
             "{} has no `{}` in `[rust]`",
-            dir.join(manifest::FILE).display(),
+            found.path.display(),
             import.name
         );
         return Err(stdlib::not_standard(&import.name, &why));
     };
+    Ok(c.clone())
+}
+
+/// The binding `dep` of the manifest in `dir`.
+fn place(dir: &Path, dep: &RustDep) -> Crate {
     // `/`-separated in the manifest; split so each OS joins its own way.
     let rel: PathBuf = dep.path.text.split('/').collect();
-    Ok(Crate {
-        name: import.name.clone(),
+    Crate {
+        name: dep.name.name.clone(),
         dir: dir.join(rel),
-    })
+    }
 }
 
 /// `message` as a parse error at `import` in the program.
