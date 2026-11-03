@@ -25,12 +25,17 @@ Where the repo and a memory disagree, the repo wins; note the drift.
    Pick the reversible option and record it tagged `[default]` with a
    one-line why.
 3. **Escalate** only for intent, scope or taste, or for anything that would
-   reverse a `[stated]` or `[agreed]` row. Don't record anything; return the
-   escalation block below and let the caller ask the user.
+   reverse a `[stated]` or `[agreed]` row. Never log a `[default]` for it.
+   Add it to OPEN_QUESTIONS.md as `[open]` (blocking? y/n, interim = keep
+   current behaviour) so it survives the session, then return the escalation
+   block below. The recommendation is advice, not a decision: no one acts on
+   it until the user answers.
 When unsure between 2 and 3: if the user could tell the result apart without
 reading the code, escalate.
 
 ## Record, once per settled answer
+Record a `[stated]` row only from the user's own words, passed on verbatim
+by the caller; never from a caller's paraphrase or your own recommendation.
 Skip this when the answer is already a DECISIONS.md row. Otherwise:
 - DECISIONS.md: append a row with the next D#, its why, and its tag
   (`[default]`, or `[stated]` when recording the user's answer).
@@ -50,3 +55,4 @@ Escalation, kept short:
     OPTIONS: a) … b) … (at most c)
     RECOMMEND: <letter> — <one-line why>
     REVERSES: <D# if it would reverse a [stated] row, else none>
+    HOLD: <what must not change until the user answers>

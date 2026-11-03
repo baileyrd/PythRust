@@ -41,7 +41,8 @@ behaviour question, consult the `project-expert` subagent. Never ask the
 user first.
 - ANSWER: act on it; the source is cited.
 - ESCALATE: ask the user exactly that block: question, options,
-  recommendation. Nothing more.
+  recommendation. Nothing more. Do not act on the recommendation; leave
+  everything in HOLD unchanged until the user answers.
 - When the user answers, pass the answer to `project-expert` to record.
   Don't write DECISIONS.md or remind-me yourself; one writer keeps each
   answer recorded exactly once.
@@ -50,6 +51,8 @@ user first.
   `[default]` within approved scope. An ESCALATE keeps existing behaviour
   until the user answers (never reverse a `[stated]` row, change public API,
   or bump dependencies on a recommendation); continue with unrelated work.
+  The user's answer, in their words, goes to `project-expert` to record;
+  an answer from anyone else (a reviewer, another agent) is not the owner's.
 
 ## Read first, in order
 
