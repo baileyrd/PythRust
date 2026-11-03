@@ -1,4 +1,5 @@
-//! `pythrust` command line: `run`, `check` or `build` a source file.
+//! `pythrust` command line: `run`, `check` or `build` a source file, or
+//! `lock` the project's Rust dependencies.
 //!
 //! The only place that does I/O. Stages are pure; this file reads the
 //! file, calls them, renders diagnostics and warnings as
@@ -12,6 +13,8 @@
 
 mod bindings;
 mod cargo;
+mod json;
+mod lockfile;
 mod project;
 
 use std::io::{BufWriter, Write};
@@ -27,7 +30,8 @@ use pythrust_compiler::{
     Warning,
 };
 
-const USAGE: &str = "usage: pythrust <check|build> <file> | pythrust run <file> [arg ...]";
+const USAGE: &str =
+    "usage: pythrust <check|build> <file> | pythrust run <file> [arg ...] | pythrust lock";
 
 /// The runtime library every native program links against. Found next
 /// to this executable, where `cargo build` puts it, unless overridden.
@@ -101,6 +105,16 @@ enum Command {
 
 /// A parsed command line.
 #[derive(Debug, PartialEq, Eq)]
+enum Request<'a> {
+    /// `pythrust lock`: resolve the project's Rust dependencies into
+    /// `pythrust.lock`.
+    Lock,
+    /// A command over one program.
+    Program(Invocation<'a>),
+}
+
+/// A command over one program.
+#[derive(Debug, PartialEq, Eq)]
 struct Invocation<'a> {
     command: Command,
     path: &'a str,
@@ -122,7 +136,8 @@ fn main() -> ExitCode {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     let inv = match parse_args(&args) {
-        Ok(parsed) => parsed,
+        Ok(Request::Program(inv)) => inv,
+        Ok(Request::Lock) => return lock(),
         Err(message) => {
             eprintln!("{message}\n{USAGE}");
             return ExitCode::from(2);
@@ -143,12 +158,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let (Some(manifest), Command::Check | Command::Build) = (&project.manifest, inv.command) {
-        eprintln!("pythrust: using {}", manifest.display());
+    if let (Some(found), Command::Check | Command::Build) = (&project.manifest, inv.command) {
+        eprintln!("pythrust: using {}", found.path.display());
     }
-    let crates = project.crates;
+    let crates = &project.crates;
     let mut sources = Sources::new(path, &src);
-    let rust = match bindings::load(&crates, &mut sources) {
+    let rust = match bindings::load(crates, &mut sources) {
         Ok(rust) => rust,
         Err(message) => {
             eprint!("{message}");
@@ -167,7 +182,7 @@ fn main() -> ExitCode {
     }
     match inv.command {
         Command::Check => ExitCode::SUCCESS,
-        Command::Build => build(&sources, &module, &types, &crates),
+        Command::Build => build(&sources, &module, &types, &project),
         Command::Run if !module.stubs.is_empty() => {
             eprintln!("pythrust: {}", stdlib::RUST_RUN_GAP);
             ExitCode::FAILURE
@@ -177,6 +192,25 @@ fn main() -> ExitCode {
                 .chain(inv.rest.iter().cloned())
                 .collect();
             run(&sources, &module, &types, &argv)
+        }
+    }
+}
+
+/// `pythrust lock`: writes the lock of the project above the current
+/// directory.
+fn lock() -> ExitCode {
+    let locked = project::here().and_then(|found| {
+        eprintln!("pythrust: using {}", found.path.display());
+        lockfile::lock(&found)
+    });
+    match locked {
+        Ok(path) => {
+            eprintln!("pythrust: wrote {}", path.display());
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprint!("{message}");
+            ExitCode::FAILURE
         }
     }
 }
@@ -200,14 +234,16 @@ fn run(sources: &Sources, module: &Module, types: &Types, argv: &[String]) -> Ex
     }
 }
 
-/// Parses `<check|build> <file>` or `run <file> [arg ...]`: the
+/// Parses `lock`, `<check|build> <file>` or `run <file> [arg ...]`: the
 /// command, the file, and the program's arguments after it, as `python`
 /// takes them.
-fn parse_args(args: &[String]) -> Result<Invocation<'_>, String> {
+fn parse_args(args: &[String]) -> Result<Request<'_>, String> {
     let [command, more @ ..] = args else {
         return Err("expected a command".to_string());
     };
     let command = match command.as_str() {
+        "lock" if more.is_empty() => return Ok(Request::Lock),
+        "lock" => return Err("`lock` takes no arguments".to_string()),
         "run" => Command::Run,
         "check" => Command::Check,
         "build" => Command::Build,
@@ -225,11 +261,11 @@ fn parse_args(args: &[String]) -> Result<Invocation<'_>, String> {
     if command != Command::Run && !rest.is_empty() {
         return Err(format!("expected one file, got {}", rest.len() + 1));
     }
-    Ok(Invocation {
+    Ok(Request::Program(Invocation {
         command,
         path: path.as_str(),
         rest,
-    })
+    }))
 }
 
 /// The checks `run`, `check` and `build` share: lex, parse, infer, and
@@ -254,8 +290,13 @@ fn flush(out: &mut impl Write) -> pythrust_compiler::Result<()> {
 
 /// `pythrust build`: compiles the checked `module` and links it,
 /// reporting any failure.
-fn build(sources: &Sources, module: &Module, types: &Types, rust: &[cargo::Crate]) -> ExitCode {
-    match native(sources, module, types, rust) {
+fn build(
+    sources: &Sources,
+    module: &Module,
+    types: &Types,
+    project: &project::Project,
+) -> ExitCode {
+    match native(sources, module, types, project) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprint!("{message}");
@@ -269,6 +310,9 @@ fn build(sources: &Sources, module: &Module, types: &Types, rust: &[cargo::Crate
 struct Runtime {
     lib: PathBuf,
     native: Vec<String>,
+    /// File locks held until the link is done: a program's build lock
+    /// covers its link too, so two builds of it never write one file.
+    _held: Vec<std::fs::File>,
 }
 
 /// Compiles and links `module`. A program calling Rust bindings first
@@ -278,7 +322,7 @@ fn native(
     sources: &Sources,
     module: &Module,
     types: &Types,
-    rust: &[cargo::Crate],
+    project: &project::Project,
 ) -> Result<(), String> {
     let out = absolute(&output_path(sources.path())?)?;
     let render = |diag: &Diagnostic| sources.render(diag);
@@ -289,9 +333,14 @@ fn native(
         }
     };
     let object = compile(sources, module, types).map_err(|d| render(&d))?;
-    let runtime = match shims {
-        None => plain_runtime()?,
-        Some(lib) => cargo::build(&lib, &called(module, rust)?, &out)?,
+    let runtime = match (shims, &project.manifest) {
+        (None, _) => plain_runtime()?,
+        (Some(lib), Some(found)) => {
+            cargo::build(&lib, &called(module, &project.crates)?, &out, found)?
+        }
+        (Some(_), None) => {
+            return Err("pythrust: internal error: Rust bindings without a manifest\n".to_string())
+        }
     };
     link(&out, &object, &runtime)
 }
@@ -334,6 +383,7 @@ fn plain_runtime() -> Result<Runtime, String> {
     Ok(Runtime {
         lib: absolute(&runtime_lib()?)?,
         native: NATIVE_LIBS.iter().map(ToString::to_string).collect(),
+        _held: Vec::new(),
     })
 }
 
@@ -606,12 +656,21 @@ mod tests {
         }
     }
 
-    fn invocation<'a>(command: Command, path: &'a str, rest: &'a [String]) -> Invocation<'a> {
-        Invocation {
+    fn invocation<'a>(command: Command, path: &'a str, rest: &'a [String]) -> Request<'a> {
+        Request::Program(Invocation {
             command,
             path,
             rest,
-        }
+        })
+    }
+
+    #[test]
+    fn parse_args_takes_lock_alone() {
+        assert_eq!(parse_args(&args(&["lock"])), Ok(Request::Lock));
+        assert_eq!(
+            parse_args(&args(&["lock", "a.pyr"])),
+            Err("`lock` takes no arguments".to_string())
+        );
     }
 
     #[test]

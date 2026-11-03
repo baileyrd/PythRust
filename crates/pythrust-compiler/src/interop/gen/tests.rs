@@ -161,6 +161,7 @@ fn manifest_quotes_and_escapes_paths() {
     for part in [
         "name = \"pythrust_bindings\"",
         "crate-type = [\"staticlib\"]",
+        "rust-version = \"1.88\"",
         "panic = \"unwind\"",
         "\n[workspace]\n",
     ] {
@@ -177,4 +178,26 @@ fn a_file_name_cannot_break_out_of_the_comment() {
         "{lib}"
     );
     assert_eq!(lib.matches("#[unsafe(no_mangle)]\n").count(), 1, "{lib}");
+}
+
+#[test]
+fn the_named_minimum_is_the_runtimes_rust_version() {
+    let manifest = include_str!("../../../../pythrust-rt/Cargo.toml");
+    assert!(manifest.contains(&format!("\nrust-version = \"{MIN_RUST}\"\n")));
+}
+
+/// CI's oldest-toolchain job builds with [`MIN_RUST`]; if the two ever
+/// differ, Nano decides which moves (`docs/research/package-tool.md`,
+/// choice 8).
+#[test]
+fn the_named_minimum_is_cis_oldest_toolchain() {
+    let ci = include_str!("../../../../../.github/workflows/ci.yml");
+    assert!(
+        ci.contains(&format!("rustup toolchain install {MIN_RUST}.0 ")),
+        "{ci}"
+    );
+    assert!(
+        ci.contains(&format!("RUSTUP_TOOLCHAIN={MIN_RUST}.0 ")),
+        "{ci}"
+    );
 }
