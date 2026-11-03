@@ -1,6 +1,6 @@
 # M6d: the package tool, first cut
 
-**Status: decided 2026-11-03.** Nano accepted the scope's six recommendations, with conditions: [scope](https://claude.ai/artifact/T8zQ1ew154ifDNbmmT7NSD). Code follows in the PR order below.
+**Status: decided 2026-11-03.** Nano accepted the scope's six recommendations, with conditions: [scope](https://claude.ai/artifact/T8zQ1ew154ifDNbmmT7NSD). Nano accepted the nine [follow-on choices](#follow-on-choices) the same day. Code follows in the PR order below.
 
 ## Objective
 
@@ -15,7 +15,7 @@
 3. **One `pythrust.lock`** holds the full resolved set of the generated crate: `pythrust-rt`, the bindings, and every crate they pull in.
    - `build` copies it in as the generated crate's `Cargo.lock` and runs cargo with `--locked`. M6b's seed-and-verify goes ([below](#why-plain---locked-now-works)).
    - `pythrust lock` writes it. A missing lock is the named error "no pythrust.lock; run `pythrust lock`". A stale one gets "pythrust.lock is out of date; run `pythrust lock`", followed by the packages that differ ([below](#why-plain---locked-now-works)).
-   - A binding no longer needs its own committed `Cargo.lock` (proposed, [question 2](#proposed-awaiting-nano)).
+   - A binding no longer needs its own committed `Cargo.lock` ([choice 2](#follow-on-choices)): `build` ignores it, and nothing deletes it.
 4. **`--rust` is removed** in the same PR as the manifest, and the interop tests and fclone-lite move to manifests. The public CLI change is approved (Nano, 2026-11-03).
 5. **Discovery.** From the source file's directory, walk up to the first `pythrust.toml` or the filesystem root.
    - The manifest is read only when the program imports a binding, so every other program builds exactly as today, with or without a manifest above it.
@@ -25,7 +25,7 @@
    - A test compares the embedded file list with the runtime directory, so a new runtime file cannot be left out.
    - On first use, the files are written to `.pythrust/rt/<version>-<hash>/`, where the hash covers the embedded sources. A build whose directory is missing or does not match writes it afresh. No cache is shared between projects in this cut.
    - The embedded set carries a standalone `Cargo.toml` for the runtime, with the workspace's inherited `version`, `edition`, `license` and `repository` written out and an empty `[workspace]`, since a copy outside the repository has no workspace to inherit from. The file-list test treats that `Cargo.toml` as the embedded counterpart of the repository's, and a test builds the extracted copy.
-   - `PYTHRUST_RT_SRC` stays as a development override (proposed, question 5).
+   - `PYTHRUST_RT_SRC` stays as a development override ([choice 5](#follow-on-choices)). When it is set, `build` prints one stderr line naming the path, and the extracted copy is keyed by that source's hash as for the embedded one.
    - The PR reports first-build time.
 
 ## The manifest
@@ -39,15 +39,15 @@ version = "0.1.0"
 fastfs = { path = "fastfs" }
 ```
 
-- **`[package]`** is required (proposed, question 3). `name` is a string of ASCII letters, digits, `-` and `_`, starting with a letter. `version` is a string. Neither is used yet beyond being required, which keeps `publish` open.
+- **`[package]`** is required ([choice 3](#follow-on-choices)). `name` is a string of ASCII letters, digits, `-` and `_`, starting with a letter. `version` is a string. Neither is used yet beyond being required, which keeps `publish` open.
 - **`[rust]`** maps a binding's name to an inline table `{ path = "..." }`.
   - The path is relative to the manifest's directory.
   - The name and the stub follow M6b's rules ([rust-interop.md](rust-interop.md#resolution)): the stub is `path/name.pyr`, and a reserved name or a missing directory or stub is an error.
-  - The path is non-empty and relative; `..` is allowed, an absolute path is an error (proposed, question 9).
+  - The path is non-empty and relative; `..` is allowed, an absolute path is an error ([choice 9](#follow-on-choices)).
   - Diagnostics point into `pythrust.toml` with line and column.
-- **The generated crate depends only on the bindings a program imports** (proposed, question 1). `pythrust lock` resolves a crate that names every binding in `[rust]`, and a build that names a subset still passes `--locked` with that lock, unchanged (checked on cargo 1.94.1 and 1.99.1). So one lock fits every program, and a program never compiles or links a binding it does not import. Cargo does not document that it accepts unused lock entries, so PR 3 tests it on every CI OS.
-- **Each binding stays its own workspace root**, as in M6b (proposed, question 7).
-- **Build directories** move to `.pythrust/` in the manifest's directory (proposed, question 4). Today they sit next to the output file; [rust-interop.md](rust-interop.md) says next to the `.pyr` file, and the code wins.
+- **The generated crate depends only on the bindings a program imports** ([choice 1](#follow-on-choices)). `pythrust lock` resolves a crate that names every binding in `[rust]`, and a build that names a subset still passes `--locked` with that lock, unchanged (checked on cargo 1.94.1 and 1.99.1). So one lock fits every program, and a program never compiles or links a binding it does not import. Cargo does not document that it accepts unused lock entries, so PR 3 tests it on every CI OS.
+- **Each binding stays its own workspace root**, as in M6b ([choice 7](#follow-on-choices)).
+- **Build directories** move to `.pythrust/` in the manifest's directory ([choice 4](#follow-on-choices)). Today they sit next to the output file; [rust-interop.md](rust-interop.md) says next to the `.pyr` file, and the code wins.
   - `.pythrust/build/<stem>-<hash>/` per program, where the hash covers the program's path relative to the manifest, so `a/main.pyr` and `b/main.pyr` never share a directory, and no program name can collide with the runtime's.
   - `.pythrust/rt/<version>-<hash>/` for the runtime. Extraction writes to a temporary directory beside it and renames it into place; a build that loses the race uses the winner's copy, which is identical.
   - `.pythrust/lock/` for `pythrust lock`'s generated crate.
@@ -71,9 +71,9 @@ Checked on 2026-11-03 (cargo 1.99.1), with fclone-lite's generated crate:
 3. It runs `cargo metadata` without `--locked`. Cargo keeps every pin that still fits and resolves only what is new, as `cargo build` does.
 4. It copies the result back.
 
-`cargo update` is not wrapped in this cut (proposed, question 6); deleting `pythrust.lock` and running `pythrust lock` re-resolves everything.
+`cargo update` is not wrapped in this cut ([choice 6](#follow-on-choices)). **To update dependencies**, delete `pythrust.lock` and run `pythrust lock`, which re-resolves everything; the user docs say so. A targeted update flag waits for a real need.
 
-`pythrust lock` sets `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback` and the generated crate declares the runtime's `rust-version` (1.88), so a fresh resolution prefers crates that build on the minimum Rust (proposed, question 8).
+`pythrust lock` sets `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback` and the generated crate declares the runtime's `rust-version`, so a fresh resolution prefers crates that build on the minimum Rust ([choice 8](#follow-on-choices)). The version is one named constant in the compiler, and a test checks it equals `pythrust-rt`'s `rust-version` and CI's oldest-toolchain job (1.88 today).
 
 `pythrust lock` strips its header line before copying the lock in and writes it once on the way out, since cargo adds its own header and rewrites line endings.
 
@@ -99,7 +99,7 @@ What carries over from M6b's lock tests:
    - `apps/fclone-lite/pythrust.toml`, and the interop tests migrated.
 
    Until PR 3, `build` keeps M6b's lock mechanism, reading each binding's `Cargo.lock`.
-3. **Lockfile:** `pythrust lock`, plain `--locked`, and the missing and stale errors. M6b's seed and verify are removed, and so are the bindings' `Cargo.lock` files (question 2). `apps/fclone-lite/pythrust.lock` is committed.
+3. **Lockfile:** `pythrust lock`, plain `--locked`, and the missing and stale errors. M6b's seed and verify are removed, and the bindings' `Cargo.lock` files stay in place, ignored ([choice 2](#follow-on-choices)). `apps/fclone-lite/pythrust.lock` is committed.
 4. **Shipped runtime:** the embedded source, its file-list test, keyed extraction, and a test that builds a binding with `PYTHRUST_RT_SRC` unset, from outside the checkout. The PR reports first-build time.
 5. **Driver.** CI copies `apps/fclone-lite` outside the repository and builds `fclone_fast.pyr` from its manifest and lock, with no flags or environment variables, on Linux, macOS and Windows. Its groups must match `fclone_lite.py`'s, as the existing interop test checks.
 
@@ -108,18 +108,18 @@ Exit:
 - PR 5's build passes.
 - A missing lock, a stale lock and a `[python]` table each fail with their named error.
 
-## Proposed, awaiting Nano
+## Follow-on choices
 
-The review of this note found choices the six decisions do not settle. Each is written above as recommended, and stays open until Nano answers.
+The review of this note found choices the six decisions did not settle. Nano accepted all nine on 2026-11-03, four of them with conditions, which are written into the sections above.
 
-1. **Build only the imported bindings**, with one lock resolved over all of `[rust]`. The alternative, every binding in every program, makes each program compile and link every binding, and one binding failing on one OS breaks every program there. A third way, each binding an optional dependency enabled by `--features`, keeps the lock byte-identical even under an unlocked cargo run, at the cost of a features table in the generated crate.
-2. **Drop the bindings' own `Cargo.lock`s**, with no seeding of the first `pythrust.lock` from them. The project's lock is the one pin; a binding author's tested versions are not carried over. Seeding would keep them, at the cost of keeping M6b's seed code.
-3. **Require `[package]` with `name` and `version`**, `name` being ASCII letters, digits, `-` and `_`, starting with a letter.
-4. **Build directories under `.pythrust/` in the manifest's directory**, laid out as above.
-5. **Keep `PYTHRUST_RT_SRC`** as a development override.
-6. **The lock is the verbatim `Cargo.lock` under one header line**, and `cargo update` is not wrapped.
-7. **Each binding stays its own workspace**, as in M6b.
-8. **Resolution prefers crates that build on Rust 1.88**, the runtime's minimum. Declaring `rust-version` also makes an older cargo fail early with its own message.
+1. **Build only the imported bindings**, with one lock resolved over all of `[rust]`.
+2. **Pythrust ignores the bindings' own `Cargo.lock`s**, with no seeding from them. They are not deleted from any repository.
+3. **`[package]` is required**, with `name` and `version`.
+4. **Build directories sit under `.pythrust/`** in the manifest's directory.
+5. **`PYTHRUST_RT_SRC` stays**, announced by one stderr line naming the path, and its extraction is keyed by the source hash.
+6. **The lock is the verbatim `Cargo.lock` under one header line.** `cargo update` is not wrapped. To update dependencies, delete `pythrust.lock` and run `pythrust lock`; a targeted update flag waits for a real need.
+7. **Each binding stays its own workspace root.**
+8. **Resolution prefers crates that build on the minimum Rust**, one named constant equal to the toolchain the project already uses (1.88: `pythrust-rt`'s `rust-version` and CI's oldest-toolchain job). If the two ever differ, ask Nano first.
 9. **A `[rust]` path is non-empty and relative**; `..` is allowed and an absolute path is an error.
 
 ## Not in this cut

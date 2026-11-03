@@ -191,7 +191,7 @@ newline  = '\n' | '\r\n' ;                                (* the last line may o
   - A table or key defined twice is an error.
   - A key outside the schema is an error, and so is a key before the first table.
 - **Schema:**
-  - `[package]` is required, with `name` and `version`, both strings. `name` is ASCII letters, digits, `-` and `_`, starting with a letter. (Proposed, awaiting Nano: [question 3](research/package-tool.md#proposed-awaiting-nano).)
+  - `[package]` is required, with `name` and `version`, both strings. `name` is ASCII letters, digits, `-` and `_`, starting with a letter.
   - `[rust]` maps a binding name to `{ path = "..." }`.
   - `[python]` and `[pythrust]` are reserved: present at all, each is an error.
 
