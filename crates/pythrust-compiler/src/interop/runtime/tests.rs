@@ -50,6 +50,9 @@ fn standalone_refuses_other_inheritance_forms() {
     let refused = [
         "[package]\nedition = { workspace = true }\n",
         "[package]\n\"version\".workspace = true\n",
+        "[package]\nversion.\"workspace\" = true\n",
+        "[package]\nversion = { \"workspace\" = true }\n",
+        "[package.version]\nworkspace = true\n",
         "[package]\nversion.workspace = true\n[workspace]\n[workspace.package]\nversion = \"1.0.0\"\n",
     ];
     for manifest in refused {

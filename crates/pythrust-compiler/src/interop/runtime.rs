@@ -118,8 +118,9 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
                 stmt.code.trim()
             ));
         }
-        let inherits = table == "package" && inherited(&stmt.code).is_some();
-        match (inherits, supported(&stmt.code).filter(|_| !own)) {
+        let inherits = package_table(&table) && inherited(&stmt.code);
+        let rewritable = !own && table == "package";
+        match (inherits, supported(&stmt.code).filter(|_| rewritable)) {
             (false, _) => out.push_str(&stmt.lines.join("\n")),
             (true, Some(key)) => out.push_str(&inherited_value(key, &ws)?),
             (true, None) => return Err(unsupported(&stmt.code)),
@@ -262,16 +263,29 @@ fn sets_path(line: &str, in_dependencies: bool) -> bool {
         .any(|k| last_part(k) == "path")
 }
 
-/// The key a comment-free line inherits from the workspace, written as
-/// `key.workspace = true` or `key = { workspace = true }`.
-fn inherited(code: &str) -> Option<&str> {
-    let (key, value) = code.split_once('=')?;
-    let value: String = value.chars().filter(|c| !c.is_whitespace()).collect();
-    if value == "{workspace=true}" {
-        return Some(key.trim());
-    }
-    (value == "true").then_some(())?;
-    key.trim().strip_suffix(".workspace").map(str::trim_end)
+/// Whether the statement `code` inherits from a workspace in any
+/// spelling: a key part named `workspace`, bare or quoted, in its key or,
+/// when its value is an inline table, in that table's keys. Recognized only to refuse what `supported` does
+/// not rewrite.
+fn inherited(code: &str) -> bool {
+    let Some((key, value)) = code.split_once('=') else {
+        return false;
+    };
+    let table = value.trim_start().starts_with('{').then_some(value);
+    let keys = table
+        .into_iter()
+        .flat_map(|v| v.split(['{', ',']))
+        .filter_map(|part| part.split_once('=').map(|(k, _)| k));
+    std::iter::once(key)
+        .chain(keys)
+        .any(|k| k.split('.').any(|p| unquoted(p) == "workspace"))
+}
+
+/// Whether the table `name` holds package fields: `[package]` or a
+/// subtable of one field, such as `[package.version]`, but not
+/// `[package.metadata.*]`, which cargo leaves to tools.
+fn package_table(name: &str) -> bool {
+    name == "package" || name.starts_with("package.") && !name.starts_with("package.metadata")
 }
 
 /// The key of a `key.workspace = true` line with a bare key, the one
