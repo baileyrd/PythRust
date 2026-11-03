@@ -1675,10 +1675,9 @@ fn fclone_lite_matches_cpython() -> Res<()> {
     let want = fclone_cpython(&app, &root)?;
     assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
     assert!(!want.stdout.contains("locked"), "{}", want.stdout);
-    let mut interp = Command::new(pythrust_bin()?);
-    interp.arg("run").arg(&app);
-    assert_eq!(fclone_run(&mut interp, &root)?, want);
-    assert_eq!(fclone_run(&mut Command::new(&exe), &root)?, want);
+    let run_app = ["run".as_ref(), app.as_os_str()];
+    assert_eq!(fclone_run(pythrust_bin()?, &run_app, &root)?, want);
+    assert_eq!(fclone_run(&exe, &[], &root)?, want);
     cleanup(&dir)?;
     Ok(())
 }
@@ -1695,13 +1694,33 @@ fn fclone_tasks_matches_fclone_lite() -> Res<()> {
     let want = fclone_cpython(&fclone_app("fclone_lite.py"), &root)?;
     let app = fclone_app("fclone_tasks.py");
     assert_eq!(fclone_cpython(&app, &root)?, want);
-    let mut interp = Command::new(pythrust_bin()?);
-    interp.arg("run").arg(&app);
-    assert_eq!(fclone_run(&mut interp, &root)?, want);
+    let run_app = ["run".as_ref(), app.as_os_str()];
+    assert_eq!(fclone_run(pythrust_bin()?, &run_app, &root)?, want);
     let exe = native_case(&dir, "fclone_tasks", &read(&app)?)?;
-    assert_eq!(fclone_run(&mut Command::new(&exe), &root)?, want);
+    assert_eq!(fclone_run(&exe, &[], &root)?, want);
     cleanup(&dir)?;
     Ok(())
+}
+
+/// The fclone tests' unreadable files stay unreadable to the programs
+/// even for root, while a private (mode 0700) parent of the app and the
+/// tree, like a checkout under `/root` or a private temp dir, stays
+/// reachable.
+#[cfg(unix)]
+#[test]
+fn fclone_runs_under_a_private_parent() -> Res<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("fclone-private")?;
+    let private = dir.join("private");
+    fs::create_dir(&private).map_err(|e| e.to_string())?;
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    let root = fclone_tree(&private)?;
+    let app = private.join("fclone_lite.py");
+    fs::copy(fclone_app("fclone_lite.py"), &app).map_err(|e| e.to_string())?;
+    let got = fclone_cpython(&app, &root)?;
+    assert!(got.stdout.contains("2 bytes:"), "{}", got.stdout);
+    assert!(!got.stdout.contains("locked"), "{}", got.stdout);
+    cleanup(&dir)
 }
 
 /// `apps/fclone-lite/<name>`.
@@ -1749,23 +1768,50 @@ fn fclone_tree(dir: &Path) -> Res<PathBuf> {
 /// CPython's run of `app` over `root`, which must succeed.
 #[cfg(unix)]
 fn fclone_cpython(app: &Path, root: &Path) -> Res<Run> {
-    let mut cpython = Command::new(python());
-    cpython.args(["-I", "-X", "utf8"]).arg(app);
-    let got = fclone_run(&mut cpython, root)?;
+    let args = [
+        "-I".as_ref(),
+        "-X".as_ref(),
+        "utf8".as_ref(),
+        app.as_os_str(),
+    ];
+    let got = fclone_run(python(), &args, root)?;
     assert_eq!(got.status, 0, "{}", got.stdout);
     Ok(got)
 }
 
-/// Runs `cmd` over `root`; as `nobody` when this user (root) can read
-/// the tree's mode-000 files, so they stay unreadable to the program.
+/// Runs `program` with `args` over `root`. When this user (root) can
+/// read the tree's mode-000 files, the program runs under `setpriv`
+/// without the two capabilities that bypass file modes, still as this
+/// user: the mode-000 files refuse it, while a private checkout, home or
+/// temp dir it owns stays reachable. Running as `nobody` instead would
+/// lose those. Needs util-linux's `setpriv` only when run as root.
 #[cfg(unix)]
-fn fclone_run(cmd: &mut Command, root: &Path) -> Res<Run> {
-    use std::os::unix::process::CommandExt;
-    if fs::read(root.join("locked")).is_ok() {
-        cmd.uid(65534).gid(65534);
-    }
-    run(cmd.arg(root), TIMEOUT)
+fn fclone_run(
+    program: impl AsRef<std::ffi::OsStr>,
+    args: &[&std::ffi::OsStr],
+    root: &Path,
+) -> Res<Run> {
+    let mut cmd = match fs::read(root.join("locked")) {
+        Err(_) => Command::new(program),
+        Ok(_) => {
+            let mut setpriv = Command::new("setpriv");
+            setpriv.args(UNPRIVILEGED).arg(program);
+            setpriv
+        }
+    };
+    run(cmd.args(args).arg(root), TIMEOUT)
 }
+
+/// `setpriv` options that drop `CAP_DAC_OVERRIDE` and
+/// `CAP_DAC_READ_SEARCH` for good, ending with the `--` before the program.
+#[cfg(unix)]
+const UNPRIVILEGED: [&str; 5] = [
+    "--bounding-set",
+    "-dac_override,-dac_read_search",
+    "--inh-caps",
+    "-all",
+    "--",
+];
 
 /// A built program sees its own arguments in `sys.argv`, as `run` sees
 /// those after the file. Not a corpus program: the harness passes none.
