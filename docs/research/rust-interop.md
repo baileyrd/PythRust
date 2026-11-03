@@ -157,7 +157,7 @@ Each waits for an app that needs it: named-builtin raises (`abi::Raise`); lists 
 
 | Risk | Mitigation |
 | --- | --- |
-| `build` runs the binding's build scripts and fetches its crates | The same trust as `cargo build`; `--rust` names each binding explicitly, and the lockfile check pins versions |
+| `build` runs the binding's build scripts and fetches its crates | The same trust as `cargo build`; `[rust]` in the first `pythrust.toml` above the program names each binding explicitly, read only when the program imports one, and the lockfile check pins versions |
 | First build time (runtime plus binding with cargo, probably tens of seconds) | Incremental after that; measured in the plumbing PR, which fails if a first CI build exceeds 120 s |
 | Runtime source missing for an installed `pythrust` | `PYTHRUST_RT_SRC` names it; shipping it is M6d's |
 | A binding's dependencies need system libraries | Taken from cargo's `native-static-libs` |

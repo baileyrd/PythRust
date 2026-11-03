@@ -212,7 +212,7 @@ fn parse_args(args: &[String]) -> Result<Invocation<'_>, String> {
     let [path, rest @ ..] = more else {
         return Err("expected a file".to_string());
     };
-    if path == "--rust" {
+    if path.starts_with("--rust") {
         return Err(
             "`--rust` is gone: name Rust bindings in the `[rust]` table of pythrust.toml"
                 .to_string(),

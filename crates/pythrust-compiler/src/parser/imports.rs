@@ -76,7 +76,10 @@ impl Parser<'_> {
     /// Records the import of the module `name`.
     fn import(&mut self, name: &Ident) -> Result<&'static ModuleDef> {
         let Some(module) = stdlib::module(&name.name) else {
-            return Err(error(name.span, stdlib::not_standard(&name.name)));
+            return Err(error(
+                name.span,
+                stdlib::not_standard(&name.name, "no pythrust.toml names it"),
+            ));
         };
         if !self.modules.iter().any(|m| m.name == module.name) {
             self.modules.push(module);

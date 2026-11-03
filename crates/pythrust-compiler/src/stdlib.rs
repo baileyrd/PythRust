@@ -224,11 +224,11 @@ pub fn module_names() -> String {
 }
 
 /// The error for `import name` of a module that is neither standard
-/// nor a binding the project's `pythrust.toml` names (M6d).
-pub fn not_standard(name: &str) -> String {
+/// nor a binding the project's `pythrust.toml` names (M6d); `why` says
+/// what was found instead, as "no pythrust.toml names it".
+pub fn not_standard(name: &str, why: &str) -> String {
     format!(
-        "`{name}` is not a standard module, and no pythrust.toml names it; \
-         the standard modules are: {}",
+        "`{name}` is not a standard module, and {why}; the standard modules are: {}",
         module_names()
     )
 }

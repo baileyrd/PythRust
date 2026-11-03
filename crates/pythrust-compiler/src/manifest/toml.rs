@@ -71,8 +71,10 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Table>> {
     let mut tables: Vec<Table> = Vec::new();
     let mut start = 0;
     for raw in text.split_inclusive('\n') {
-        let line = raw.strip_suffix('\n').unwrap_or(raw);
-        let line = line.strip_suffix('\r').unwrap_or(line);
+        let line = match raw.strip_suffix('\n') {
+            Some(line) => line.strip_suffix('\r').unwrap_or(line),
+            None => raw,
+        };
         if let Some(cr) = line.find('\r') {
             return error(
                 start + cr,
@@ -265,12 +267,19 @@ impl Line<'_> {
             Some('"') => self.basic(),
             Some('\'') => self.fail("literal strings ('...') are not supported; write \"...\""),
             Some('[') => self.fail("arrays are not supported"),
-            Some('t' | 'f') => self.fail("booleans are not supported; write a string"),
+            Some('t' | 'f') if self.boolean() => {
+                self.fail("booleans are not supported; write a string")
+            }
             Some(c) if c.is_ascii_digit() || matches!(c, '+' | '-') || self.special_float() => {
                 self.fail("numbers and dates are not supported; write a string")
             }
             _ => self.fail("expected a string \"...\""),
         }
+    }
+
+    /// Whether the value is `true` or `false`.
+    fn boolean(&self) -> bool {
+        self.rest().starts_with("true") || self.rest().starts_with("false")
     }
 
     /// Whether the value is `inf` or `nan`, TOML's special floats.
@@ -308,6 +317,7 @@ impl Line<'_> {
 
     /// One escape, after its `\`.
     fn escape(&mut self) -> Result<char> {
+        let at = self.at();
         self.bump();
         let c = self.peek();
         self.bump();
@@ -319,16 +329,17 @@ impl Line<'_> {
             Some('n') => Ok('\n'),
             Some('f') => Ok('\u{c}'),
             Some('r') => Ok('\r'),
-            Some('u') => self.unicode(4),
-            Some('U') => self.unicode(8),
-            _ => self.fail(
+            Some('u') => self.unicode(4, at),
+            Some('U') => self.unicode(8, at),
+            _ => error(
+                at,
                 "unknown escape; the escapes are \\\" \\\\ \\b \\t \\n \\f \\r \\uXXXX \\UXXXXXXXX",
             ),
         }
     }
 
-    /// The `digits` hex digits of a `\u` or `\U` escape.
-    fn unicode(&mut self, digits: usize) -> Result<char> {
+    /// The `digits` hex digits of a `\u` or `\U` escape starting at `at`.
+    fn unicode(&mut self, digits: usize, at: usize) -> Result<char> {
         let hex: String = self.rest().chars().take(digits).collect();
         let valid = hex.len() == digits && hex.chars().all(|c| c.is_ascii_hexdigit());
         let scalar = valid
@@ -336,10 +347,13 @@ impl Line<'_> {
             .flatten()
             .and_then(char::from_u32);
         let Some(c) = scalar else {
-            return self.fail(format!(
-                "`\\{}` needs {digits} hex digits naming a Unicode scalar value",
-                if digits == 4 { 'u' } else { 'U' }
-            ));
+            return error(
+                at,
+                format!(
+                    "`\\{}` needs {digits} hex digits naming a Unicode scalar value",
+                    if digits == 4 { 'u' } else { 'U' }
+                ),
+            );
         };
         self.pos += digits;
         Ok(c)
@@ -503,6 +517,10 @@ mod tests {
             ("[a]\n[a]\n", "table `[a]` is defined twice"),
             ("k = \"x\"\n", "after a table header"),
             ("[a]\nk = \"x\"\r\r\n", "carriage return"),
+            ("[a]\nk = \"x\"\r", "carriage return"),
+            ("[a]\r", "carriage return"),
+            ("[a]\n# c\r", "carriage return"),
+            ("[a]\nk = fastfs\n", "expected a string"),
             ("[a]\nk\n", "`=` after the key"),
             ("[a\n", "`]` after the table name"),
             ("[a]\n= \"x\"\n", "expected a key"),
@@ -527,6 +545,17 @@ mod tests {
     fn errors_point_at_their_place() {
         let src = "[a]\nk = 'x'\n";
         assert_eq!(err(src.as_bytes()).span.start, src.find('\'').unwrap_or(0));
+        for esc in [
+            "[a]\nk = \"ab\\e\"\n",
+            "[a]\nk = \"ab\\u12\"\n",
+            "[a]\nk = \"ab\\UD800\"\n",
+        ] {
+            assert_eq!(
+                err(esc.as_bytes()).span.start,
+                esc.find('\\').unwrap_or(0),
+                "{esc:?}"
+            );
+        }
         let dup = "[a]\nk = \"x\"\nk = \"y\"\n";
         assert_eq!(err(dup.as_bytes()).span.start, dup.rfind('k').unwrap_or(0));
     }

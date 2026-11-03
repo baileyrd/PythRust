@@ -272,7 +272,7 @@ fn rust_binding_names_are_resolved() {
     let named = "rust_not_given.pyr:1:8: parse error: `fastfs` is not a standard module, \
                  and no pythrust.toml names it";
     assert!(err.contains(named), "{err}");
-    assert!(err.contains("and every directory above it"), "{err}");
+    assert!(err.contains("or any directory above it)"), "{err}");
 
     let dir = project("unnamed", FASTFS);
     let out = pythrust_in("check", &dir, "main", "import sys, other\n");
@@ -332,6 +332,68 @@ fn the_manifest_is_found_above_and_read_only_when_needed() {
     assert!(err.contains(reserved), "{err}");
 }
 
+/// A program reached through `..` looks above its own directory, not
+/// above the current one; a binding path may leave the project with
+/// `..`; and a `[rust]` key that is not a plain name is refused at its
+/// line. These tests assume no `pythrust.toml` above the temp dir.
+#[test]
+fn discovery_follows_the_programs_path_and_paths_may_climb() {
+    let root = project("climb", FASTFS);
+    let real = root.join("real");
+    fs::create_dir_all(&real).unwrap();
+    fs::write(real.join("main.pyr"), "import fastfs\nfastfs.add(1, 2)\n").unwrap();
+    // `root/proj` holds a manifest naming nothing; `../real/main.pyr` from
+    // there must not find it.
+    let proj = root.join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    fs::write(
+        proj.join("pythrust.toml"),
+        "[package]\nname = \"q\"\nversion = \"1\"\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .args(["check", "../real/main.pyr"])
+        .current_dir(&proj)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+
+    let shared = root.join("app");
+    let manifest =
+        "[package]\nname = \"app\"\nversion = \"1\"\n[rust]\nfastfs = { path = \"../fastfs\" }\n";
+    fs::create_dir_all(&shared).unwrap();
+    fs::write(shared.join("pythrust.toml"), manifest).unwrap();
+    let out = pythrust_in(
+        "check",
+        &shared,
+        "main",
+        "import fastfs\nfastfs.add(1, 2)\n",
+    );
+    assert!(out.status.success(), "{out:?}");
+
+    let bad = "[package]\nname = \"app\"\nversion = \"1\"\n[rust]\nfast-fs = { path = \"x\" }\n";
+    fs::write(shared.join("pythrust.toml"), bad).unwrap();
+    let out = pythrust_in("check", &shared, "main", "import fastfs\n");
+    let err = text(&out.stderr);
+    assert!(
+        err.contains("pythrust.toml:5:1: manifest error: binding `fast-fs` is not a name"),
+        "{err}"
+    );
+}
+
+/// fclone-lite's committed manifest names the binding its fast driver
+/// imports.
+#[test]
+fn fclone_lites_manifest_checks_its_fast_driver() {
+    let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/fclone-lite/fclone_fast.pyr");
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .arg("check")
+        .arg(app)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+}
+
 /// `--rust` is gone; its error says where bindings are named now.
 #[test]
 fn the_rust_flag_names_the_manifest() {
@@ -344,4 +406,9 @@ fn the_rust_flag_names_the_manifest() {
         text(&out.stderr).contains("`[rust]` table of pythrust.toml"),
         "{out:?}"
     );
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .args(["check", "--rust=a=b", "main.pyr"])
+        .output()
+        .unwrap();
+    assert!(text(&out.stderr).contains("pythrust.toml"), "{out:?}");
 }

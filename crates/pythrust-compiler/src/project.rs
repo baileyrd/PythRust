@@ -3,7 +3,7 @@
 //! read only when the program imports a module that is not standard,
 //! and the Rust bindings it names for those imports.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use pythrust_compiler::ast::Ident;
 use pythrust_compiler::manifest::{self, toml, Manifest};
@@ -21,13 +21,13 @@ pub(crate) fn bindings(path: &str, src: &str) -> Result<Vec<Crate>, String> {
     let Some(first) = imports.first() else {
         return Ok(Vec::new());
     };
-    let start = absolute(&program_dir(path))?;
-    let Some(file) = find(&start) else {
-        let message = format!(
-            "{}; looked in {} and every directory above it",
-            stdlib::not_standard(&first.name),
+    let start = normalize(&absolute(&program_dir(path))?);
+    let Some(file) = find(&start)? else {
+        let why = format!(
+            "no pythrust.toml names it (none in {} or any directory above it)",
             start.display()
         );
+        let message = stdlib::not_standard(&first.name, &why);
         return Err(render_import(path, src, first, message));
     };
     let manifest = read(&file)?;
@@ -88,12 +88,37 @@ fn absolute(path: &Path) -> Result<PathBuf, String> {
         .map_err(|e| format!("pythrust: cannot resolve {}: {e}\n", path.display()))
 }
 
-/// The first `pythrust.toml` in `start` or a directory above it.
-fn find(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .map(|dir| dir.join(manifest::FILE))
-        .find(|file| file.is_file())
+/// `path` with `.` dropped and each `..` taking off the name before it,
+/// as text: the directories above a program are those of its path as
+/// written, not of the current directory. Symlinks are not resolved.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The first `pythrust.toml` in `start` or a directory above it. A
+/// manifest that cannot be checked for (say, a directory it cannot
+/// search) is an error, not a reason to look further up.
+fn find(start: &Path) -> Result<Option<PathBuf>, String> {
+    for dir in start.ancestors() {
+        let file = dir.join(manifest::FILE);
+        let exists = file
+            .try_exists()
+            .map_err(|e| format!("pythrust: cannot look for {}: {e}\n", file.display()))?;
+        if exists {
+            return Ok(Some(file));
+        }
+    }
+    Ok(None)
 }
 
 /// Reads and checks the manifest `file`, and the name of each binding
@@ -119,16 +144,18 @@ fn read(file: &Path) -> Result<Manifest, String> {
 /// The binding `import` names in `manifest`, whose directory is `dir`.
 fn named(manifest: &Manifest, dir: &Path, import: &Ident) -> Result<Crate, String> {
     let Some(dep) = manifest.rust.iter().find(|d| d.name.name == import.name) else {
-        return Err(format!(
-            "{}; {} has no `{}` in `[rust]`",
-            stdlib::not_standard(&import.name),
+        let why = format!(
+            "{} has no `{}` in `[rust]`",
             dir.join(manifest::FILE).display(),
             import.name
-        ));
+        );
+        return Err(stdlib::not_standard(&import.name, &why));
     };
+    // `/`-separated in the manifest; split so each OS joins its own way.
+    let rel: PathBuf = dep.path.text.split('/').collect();
     Ok(Crate {
         name: import.name.clone(),
-        dir: dir.join(&dep.path.text),
+        dir: dir.join(rel),
     })
 }
 
@@ -158,6 +185,19 @@ mod tests {
             ["fastfs", "b"]
         );
         assert_eq!(names("x = (\n"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn continued_and_aliased_imports_scan_their_module_names() {
+        assert_eq!(names("import sys, \\\n    fastfs\n"), ["fastfs"]);
+        assert_eq!(names("import fastfs as f\n"), ["fastfs"]);
+    }
+
+    #[test]
+    fn normalize_takes_dot_dot_off_the_name_before_it() {
+        let root = std::path::absolute("/").unwrap_or_default();
+        let path = root.join("x/proj/./../real");
+        assert_eq!(normalize(&path), root.join("x/real"));
     }
 
     #[test]
