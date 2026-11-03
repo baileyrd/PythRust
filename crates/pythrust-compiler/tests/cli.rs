@@ -364,11 +364,13 @@ fn discovery_follows_the_programs_path_and_paths_may_climb() {
         .output()
         .unwrap();
     let err = text(&out.stderr);
+    // The current directory may be reported through a symlink (macOS's
+    // `/var` is `/private/var`), so match the path's tail.
     let looked = format!(
-        "none in {} or any directory above it",
-        bare.join("real").display()
+        "climb bare{}real or any directory above it",
+        std::path::MAIN_SEPARATOR
     );
-    assert!(err.contains(&looked), "{err}");
+    assert!(err.contains("none in ") && err.contains(&looked), "{err}");
 
     let root = project("climb", FASTFS);
     let shared = root.join("app");
