@@ -35,6 +35,19 @@ Tools load on demand. If remind_me_* tools are not visible, run a tool search fo
 
 • PR and merge activity (opened, merged, blocked, why) always gets saved — other surfaces rely on it to know current state.
 
+## Design questions go to project-expert first
+Threads and the orchestrator: before asking the user any design, scope or
+behaviour question, consult the `project-expert` subagent. Never ask the
+user first.
+- ANSWER: act on it; the source is cited.
+- ESCALATE: ask the user exactly that block: question, options,
+  recommendation. Nothing more.
+- When the user answers, pass the answer to `project-expert` to record.
+  Don't write DECISIONS.md or remind-me yourself; one writer keeps each
+  answer recorded exactly once.
+- Non-blocking? Take the expert's recommendation, keep going, and add the
+  question to `docs/handoff/OPEN_QUESTIONS.md`.
+
 ## Read first, in order
 
 1. `README.md`
@@ -42,6 +55,7 @@ Tools load on demand. If remind_me_* tools are not visible, run a tool search fo
 3. `docs/grammar.md` (the spec for phase 2; if code and spec disagree, fix one and say which)
 4. `docs/roadmap.md`
 5. `docs/handoff.md` (parallel threads and milestones)
+6. `docs/handoff/` (SPEC, DECISIONS, QA, OPEN_QUESTIONS: what is already decided and why)
 
 ## Layout
 
