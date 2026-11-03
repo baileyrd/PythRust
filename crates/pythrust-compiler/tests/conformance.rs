@@ -1669,6 +1669,118 @@ fn files_match_cpython() -> Res<()> {
 fn fclone_lite_matches_cpython() -> Res<()> {
     build_runtime()?;
     let dir = scratch("fclone")?;
+    let root = fclone_tree(&dir)?;
+    let app = fclone_app("fclone_lite.py");
+    let exe = native_case(&dir, "fclone", &read(&app)?)?;
+    let want = fclone_cpython(&app, &root)?;
+    assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
+    assert!(!want.stdout.contains("locked"), "{}", want.stdout);
+    let run_app = ["run".as_ref(), app.as_os_str()];
+    assert_eq!(fclone_run(pythrust_bin()?, &run_app, &root)?, want);
+    assert_eq!(fclone_run(&exe, &[], &root)?, want);
+    cleanup(&dir)?;
+    Ok(())
+}
+
+/// The M6c driver: fclone-lite hashing every candidate through one
+/// executor's `map` prints what the serial fclone-lite prints, under
+/// CPython, `run` and natively.
+#[cfg(unix)]
+#[test]
+fn fclone_tasks_matches_fclone_lite() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("fclone-tasks")?;
+    let root = fclone_tree(&dir)?;
+    let want = fclone_cpython(&fclone_app("fclone_lite.py"), &root)?;
+    assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
+    let app = fclone_app("fclone_tasks.py");
+    assert_eq!(fclone_cpython(&app, &root)?, want);
+    let run_app = ["run".as_ref(), app.as_os_str()];
+    assert_eq!(fclone_run(pythrust_bin()?, &run_app, &root)?, want);
+    let exe = native_case(&dir, "fclone_tasks", &read(&app)?)?;
+    assert_eq!(fclone_run(&exe, &[], &root)?, want);
+    cleanup(&dir)?;
+    Ok(())
+}
+
+/// Under a low open-file limit the task driver's pool can run out of
+/// descriptors where the serial fclone-lite, one file at a time, does
+/// not; the task driver still prints what the serial one prints, under
+/// CPython and natively (`run` runs each task at `submit`, one at a time).
+#[cfg(unix)]
+#[test]
+fn fclone_tasks_matches_fclone_lite_under_a_descriptor_limit() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("fclone-fds")?;
+    let root = dir.join("tree");
+    fs::create_dir(&root).map_err(|e| e.to_string())?;
+    let first = root.join("f00");
+    fs::write(&first, vec![7u8; 1 << 20]).map_err(|e| e.to_string())?;
+    for i in 1..=40 {
+        fs::hard_link(&first, root.join(format!("f{i:02}"))).map_err(|e| e.to_string())?;
+    }
+    let lite = fclone_app("fclone_lite.py");
+    let want = fclone_limited(python(), &["-I".as_ref(), lite.as_os_str()], &root)?;
+    let paths = want.stdout.lines().filter(|l| l.starts_with("  ")).count();
+    assert_eq!((want.status, paths), (0, 41), "{}", want.stdout);
+    let app = fclone_app("fclone_tasks.py");
+    let tasks = fclone_limited(python(), &["-I".as_ref(), app.as_os_str()], &root)?;
+    assert_eq!(tasks, want);
+    let exe = native_case(&dir, "fclone_tasks", &read(&app)?)?;
+    assert_eq!(fclone_limited(&exe, &[], &root)?, want);
+    cleanup(&dir)
+}
+
+/// Runs `program` with `args` over `root` with at most 8 open files,
+/// enough for a lone read but fewer than the pool opens at once.
+#[cfg(unix)]
+fn fclone_limited(
+    program: impl AsRef<std::ffi::OsStr>,
+    args: &[&std::ffi::OsStr],
+    root: &Path,
+) -> Res<Run> {
+    let mut sh = Command::new("sh");
+    sh.args(["-c", "ulimit -n 8 && exec \"$@\"", "sh"]);
+    run(sh.arg(program).args(args).arg(root), TIMEOUT)
+}
+
+/// The fclone tests' unreadable files stay unreadable to the programs
+/// even for root, while a private (mode 0700) parent of the app and the
+/// tree, like a checkout under `/root` or a private temp dir, stays
+/// reachable.
+#[cfg(unix)]
+#[test]
+fn fclone_runs_under_a_private_parent() -> Res<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("fclone-private")?;
+    let private = dir.join("private");
+    fs::create_dir(&private).map_err(|e| e.to_string())?;
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    let root = fclone_tree(&private)?;
+    let app = private.join("fclone_lite.py");
+    fs::copy(fclone_app("fclone_lite.py"), &app).map_err(|e| e.to_string())?;
+    let got = fclone_cpython(&app, &root)?;
+    assert!(got.stdout.contains("2 bytes:"), "{}", got.stdout);
+    assert!(!got.stdout.contains("locked"), "{}", got.stdout);
+    cleanup(&dir)
+}
+
+/// `apps/fclone-lite/<name>`.
+#[cfg(unix)]
+fn fclone_app(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/fclone-lite")
+        .join(name)
+}
+
+/// A tree under `dir` with two duplicate groups of one size, a pair of
+/// empty files, a file of a size of its own, a symbolic link, and two
+/// unreadable (mode 000) files of one size; fclone-lite skips the link
+/// and the unreadable files.
+#[cfg(unix)]
+fn fclone_tree(dir: &Path) -> Res<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
     let root = dir.join("tree");
     fs::create_dir_all(root.join("a").join("b")).map_err(|e| e.to_string())?;
     let files = [
@@ -1677,28 +1789,74 @@ fn fclone_lite_matches_cpython() -> Res<()> {
         ("a/b/three", "yy"),
         ("four", "yy"),
         ("five", "zz"),
-        ("a/six", "zy"),
+        ("a/six", "zz"),
+        ("seven", "zyx"),
         ("empty", ""),
         ("a/b/empty", ""),
+        ("locked", "123"),
+        ("a/locked", "456"),
     ];
     for (name, text) in files {
         write(&root.join(name), text)?;
     }
     std::os::unix::fs::symlink(root.join("one"), root.join("link")).map_err(|e| e.to_string())?;
-    let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/fclone-lite/fclone_lite.py");
-    let exe = native_case(&dir, "fclone", &read(&app)?)?;
-    let mut cpython = Command::new(python());
-    cpython.args(["-I", "-X", "utf8"]).arg(&app).arg(&root);
-    let want = run(&mut cpython, TIMEOUT)?;
-    assert_eq!(want.status, 0, "{}", want.stdout);
-    assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
-    let mut interp = Command::new(pythrust_bin()?);
-    interp.arg("run").arg(&app).arg(&root);
-    assert_eq!(run(&mut interp, TIMEOUT)?, want);
-    assert_eq!(run(Command::new(&exe).arg(&root), TIMEOUT)?, want);
-    cleanup(&dir)?;
-    Ok(())
+    for name in ["locked", "a/locked"] {
+        let none = fs::Permissions::from_mode(0o000);
+        fs::set_permissions(root.join(name), none).map_err(|e| e.to_string())?;
+    }
+    Ok(root)
 }
+
+/// CPython's run of `app` over `root`, which must succeed.
+#[cfg(unix)]
+fn fclone_cpython(app: &Path, root: &Path) -> Res<Run> {
+    let args = [
+        "-I".as_ref(),
+        "-X".as_ref(),
+        "utf8".as_ref(),
+        app.as_os_str(),
+    ];
+    let got = fclone_run(python(), &args, root)?;
+    assert_eq!(got.status, 0, "{}", got.stdout);
+    Ok(got)
+}
+
+/// Runs `program` with `args` over `root`. When this user (root) can
+/// read the tree's mode-000 files on Linux, the program runs under
+/// util-linux's `setpriv` without the two capabilities that bypass file
+/// modes, still as this user: the mode-000 files refuse it, while a
+/// private checkout, home or temp dir it owns stays reachable (running
+/// as `nobody` would lose those). Root on another Unix has no such tool,
+/// so there the programs read the mode-000 files: they hold distinct
+/// bytes, so the outputs still match, but the unreadable-file path goes
+/// unexercised. Linux and non-root runs, CI's included, exercise it.
+#[cfg(unix)]
+fn fclone_run(
+    program: impl AsRef<std::ffi::OsStr>,
+    args: &[&std::ffi::OsStr],
+    root: &Path,
+) -> Res<Run> {
+    let readable = fs::read(root.join("locked")).is_ok();
+    let mut cmd = if readable && cfg!(target_os = "linux") {
+        let mut setpriv = Command::new("setpriv");
+        setpriv.args(UNPRIVILEGED).arg(program);
+        setpriv
+    } else {
+        Command::new(program)
+    };
+    run(cmd.args(args).arg(root), TIMEOUT)
+}
+
+/// `setpriv` options that drop `CAP_DAC_OVERRIDE` and
+/// `CAP_DAC_READ_SEARCH` for good, ending with the `--` before the program.
+#[cfg(unix)]
+const UNPRIVILEGED: [&str; 5] = [
+    "--bounding-set",
+    "-dac_override,-dac_read_search",
+    "--inh-caps",
+    "-all",
+    "--",
+];
 
 /// A built program sees its own arguments in `sys.argv`, as `run` sees
 /// those after the file. Not a corpus program: the harness passes none.
