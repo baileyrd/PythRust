@@ -118,7 +118,8 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
                 stmt.code.trim()
             ));
         }
-        let inherits = package_table(&table) && inherited(&stmt.code);
+        let metadata = table == "package" && first_key_part(&stmt.code) == "metadata";
+        let inherits = package_table(&table) && !metadata && inherited(&stmt.code);
         let rewritable = !own && table == "package";
         match (inherits, supported(&stmt.code).filter(|_| rewritable)) {
             (false, _) => out.push_str(&stmt.lines.join("\n")),
@@ -279,6 +280,12 @@ fn inherited(code: &str) -> bool {
     std::iter::once(key)
         .chain(keys)
         .any(|k| k.split('.').any(|p| unquoted(p) == "workspace"))
+}
+
+/// The first part of the key the statement `code` sets, unquoted.
+fn first_key_part(code: &str) -> &str {
+    let key = code.split_once('=').map_or("", |(k, _)| k);
+    unquoted(key.split('.').next().unwrap_or_default())
 }
 
 /// Whether the table `name` holds package fields: `[package]` or a

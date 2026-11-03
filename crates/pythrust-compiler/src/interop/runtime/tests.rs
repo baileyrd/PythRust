@@ -30,6 +30,15 @@ fn standalone_names_a_field_the_workspace_does_not_set() {
     );
 }
 
+/// Keys under `package.metadata`, in any spelling, are left to tools:
+/// a `workspace` key there is not inheritance.
+#[test]
+fn standalone_leaves_package_metadata_alone() {
+    let manifest = "[package]\nmetadata = { tool = { workspace = true } }\nmetadata.other.workspace = true\n\"metadata\".x = { workspace = true }\n";
+    let got = standalone(manifest, WORKSPACE_TOML);
+    assert_eq!(got, Ok(format!("{manifest}\n[workspace]\n")));
+}
+
 /// The supported inheritance line keeps working through a trailing
 /// comment, and a `#` inside a string is not a comment.
 #[test]
