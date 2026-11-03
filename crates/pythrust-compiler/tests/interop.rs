@@ -606,7 +606,7 @@ fn an_imported_binding_missing_from_the_lock_is_stale() {
 
 /// `pythrust lock --check` in `dir`.
 fn lock_check(dir: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pythrust"))
+    pythrust()
         .args(["lock", "--check"])
         .current_dir(dir)
         .output()
@@ -614,8 +614,8 @@ fn lock_check(dir: &Path) -> Output {
 }
 
 /// `pythrust lock --check` passes on a current lock and names each entry
-/// that differs from a fresh lock of every binding otherwise, writing
-/// nothing.
+/// that differs from a fresh lock of every binding otherwise, leaving
+/// `pythrust.lock` as it is.
 #[test]
 fn lock_check_compares_the_lock_with_every_binding() {
     let dir = scratch("check");
@@ -682,10 +682,12 @@ fn the_embedded_runtime_is_extracted_and_repaired() {
     let original = read(lib.clone());
     fs::write(&lib, "broken").unwrap();
     fs::remove_file(rt.join("src/abi.rs")).unwrap();
+    fs::write(rt.join("build.rs"), "fn main() {}\n").unwrap();
     let built = build_only(&dir, "main.pyr");
     assert!(built.status.success(), "{}", text(&built.stderr));
     assert_eq!(read(lib), original);
     assert!(rt.join("src/abi.rs").is_file());
+    assert!(!rt.join("build.rs").exists());
     assert_eq!(runtimes(&dir), [rt]);
 }
 
@@ -766,6 +768,30 @@ fn an_override_runtime_is_keyed_by_its_source() {
     assert_eq!(copies.len(), 2, "{copies:?}");
     let changed = copies.iter().find(|c| **c != embedded).unwrap();
     assert!(read(changed.join("src/lib.rs")).ends_with("// changed\n"));
+}
+
+/// A relative `PYTHRUST_RT_SRC` naming the runtime as the repository
+/// writes it, inheriting from a workspace above: made standalone, it is
+/// the embedded runtime, so it shares that copy.
+#[test]
+fn an_override_inheriting_from_its_workspace_is_made_standalone() {
+    let dir = scratch("rt-inherit");
+    let a = binding(&dir, "a", "", false);
+    assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "5\n");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let ws = dir.join("ws");
+    let rt = ws.join("crates/rt");
+    copy_tree(&repo.join("crates/pythrust-rt"), &rt);
+    fs::copy(repo.join("Cargo.toml"), ws.join("Cargo.toml")).unwrap();
+    let out = pythrust()
+        .arg("build")
+        .arg(dir.join("main.pyr"))
+        .current_dir(&rt)
+        .env("PYTHRUST_RT_SRC", "../rt")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(runtimes(&dir).len(), 1, "{:?}", runtimes(&dir));
 }
 
 /// A lock that cannot be resolved leaves the previous one as it was.
@@ -890,7 +916,7 @@ fn locks_and_builds_at_once_take_turns() {
     fs::remove_dir_all(dir.join(".pythrust")).unwrap();
 
     let spawn = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        pythrust()
             .args(args)
             .current_dir(&*dir)
             .stdout(std::process::Stdio::piped())
@@ -990,6 +1016,9 @@ fn programs_named_alike_build_apart() {
         let built = compile(&dir, &format!("{sub}/main.pyr"), src, &[("probe", &probe)]);
         assert!(built.status.success(), "{}", text(&built.stderr));
     }
+    // Another spelling of one program's path is the same build.
+    let again = build_only(&dir, "y/../x/main.pyr");
+    assert!(again.status.success(), "{}", text(&again.stderr));
     let builds = fs::read_dir(dir.join(".pythrust/build")).unwrap();
     let mains = builds
         .filter(|e| {

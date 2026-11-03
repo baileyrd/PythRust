@@ -260,11 +260,20 @@ fn crate_dir(out: &Path, project: &Found) -> Result<PathBuf, String> {
     }
     .unwrap_or_default()
     .to_string_lossy();
-    let out = crate::absolute(out)?;
-    let root = crate::absolute(project.dir())?;
+    // Canonical, so every spelling of one program's path is one build,
+    // under one build lock. The output's directory exists: the source is
+    // in it.
+    let canonical = |p: &Path| {
+        std::fs::canonicalize(p)
+            .map_err(|e| format!("pythrust: cannot resolve {}: {e}\n", p.display()))
+    };
+    let out = canonical(crate::output_dir(out))?.join(out.file_name().unwrap_or_default());
+    let root = canonical(project.dir())?;
     let from_root = out.strip_prefix(&root).unwrap_or(&out);
     let key = runtime::digest(from_root.to_string_lossy().as_bytes());
-    let dir = root
+    // The directory itself as the project names it: a canonical path is
+    // verbatim (`\\?\`) on Windows, which the toolchain need not take.
+    let dir = crate::absolute(project.dir())?
         .join(".pythrust")
         .join("build")
         .join(format!("{name}-{key}"));
