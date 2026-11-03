@@ -81,6 +81,8 @@ fn standalone_refuses_other_inheritance_forms() {
         "[dependencies]\nlibc.workspace = true\n",
         "[dependencies.libc]\nworkspace = true\n",
         "[target.'cfg(unix)'.dev-dependencies]\nlibc = { version = \"1\", workspace = true }\n",
+        "package.name = \"rt\"\npackage.version.workspace = true\npackage.edition = \"2021\"\n",
+        "package = { name = \"rt\", version = { workspace = true } }\n",
     ];
     for manifest in refused {
         let got = standalone(manifest, WORKSPACE_TOML);

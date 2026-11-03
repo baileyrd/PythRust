@@ -293,13 +293,16 @@ fn in_metadata(table: &str, code: &str) -> bool {
 }
 
 /// Whether the statement `code` in `table` is somewhere cargo reads
-/// workspace inheritance: a package field, a dependency, or `lints`.
+/// workspace inheritance: a package field, a dependency, or `lints`,
+/// judged from the statement's full key path so a root-table
+/// `package.x` or `package = { ... }` counts as a package field.
+/// `package.metadata` is excluded by the caller.
 fn inheritable(table: &str, code: &str) -> bool {
     let parts = path_parts(table, code);
     match parts.first() {
         Some(&"workspace") | None => false,
-        Some(&"lints") => true,
-        Some(_) => package_table(table) || parts.iter().any(|p| p.ends_with("dependencies")),
+        Some(&"lints") | Some(&"package") => true,
+        Some(_) => parts.iter().any(|p| p.ends_with("dependencies")),
     }
 }
 
@@ -313,13 +316,6 @@ fn path_parts<'a>(table: &'a str, code: &'a str) -> Vec<&'a str> {
         .map(unquoted)
         .filter(|part| !part.is_empty())
         .collect()
-}
-
-/// Whether the table `name` holds package fields: `[package]` or a
-/// subtable of one field, such as `[package.version]`, but not
-/// `[package.metadata.*]`, which cargo leaves to tools.
-fn package_table(name: &str) -> bool {
-    name == "package" || name.starts_with("package.") && !name.starts_with("package.metadata")
 }
 
 /// The key of a `key.workspace = true` line with a bare key, the one
