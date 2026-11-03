@@ -268,7 +268,7 @@ fn sets_path(table: &str, code: &str) -> bool {
 /// The full key path, as unquoted parts, of the statement `code` in
 /// `table` and of every key in its inline-table value.
 fn full_keys(table: &str, code: &str) -> Vec<Vec<String>> {
-    let Some((key, value)) = code.split_once('=') else {
+    let Some((key, value)) = assignment(code) else {
         return Vec::new();
     };
     let mut keys = vec![key.trim().to_string()];
@@ -291,7 +291,7 @@ fn full_keys(table: &str, code: &str) -> Vec<Vec<String>> {
 /// `package.metadata` subtree is skipped. Recognized only to refuse
 /// what `supported` does not rewrite.
 fn inherited(table: &str, code: &str) -> bool {
-    let Some((key, value)) = code.split_once('=') else {
+    let Some((key, value)) = assignment(code) else {
         return false;
     };
     let base = parts(table);
@@ -361,6 +361,27 @@ fn inline_keys(key: &str, value: &str, out: &mut Vec<String>) {
     }
 }
 
+/// The key and value of the key-value statement `code`, split at the
+/// first `=` outside a quoted key, so `'cfg(a = "b")'` stays whole.
+fn assignment(code: &str) -> Option<(&str, &str)> {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in code.char_indices() {
+        if let Some(q) = quote {
+            let closes = c == q && !escaped;
+            escaped = q == '"' && c == '\\' && !escaped;
+            quote = quote.filter(|_| !closes);
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '=' => return Some((&code[..i], &code[i + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The unquoted, non-empty parts of the dotted key or table name `name`.
 fn parts(name: &str) -> Vec<&str> {
     name.split('.')
@@ -390,7 +411,7 @@ fn inheritable(parts: &[&str]) -> bool {
 /// The unquoted parts of the full key the statement `code` sets in
 /// `table`; for a header, the table's own name.
 fn path_parts<'a>(table: &'a str, code: &'a str) -> Vec<&'a str> {
-    let key = code.split_once('=').map_or("", |(key, _)| key);
+    let key = assignment(code).map_or("", |(key, _)| key);
     let mut all = parts(table);
     all.extend(parts(key));
     all
@@ -399,7 +420,7 @@ fn path_parts<'a>(table: &'a str, code: &'a str) -> Vec<&'a str> {
 /// The key of a `key.workspace = true` line with a bare key, the one
 /// inheritance form `standalone` rewrites.
 fn supported(code: &str) -> Option<&str> {
-    let (key, value) = code.split_once('=')?;
+    let (key, value) = assignment(code)?;
     (value.trim() == "true").then_some(())?;
     let key = key.trim().strip_suffix(".workspace")?.trim_end();
     let bare = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
@@ -434,10 +455,7 @@ fn inherited_value(key: &str, workspace: &[Statement]) -> Result<String, String>
             table = name;
             continue;
         }
-        let sets = stmt
-            .code
-            .split_once('=')
-            .is_some_and(|(k, _)| unquoted(k) == unquoted(key));
+        let sets = assignment(&stmt.code).is_some_and(|(k, _)| unquoted(k) == unquoted(key));
         if table == "workspace.package" && sets {
             return Ok(stmt.lines.join("\n"));
         }
