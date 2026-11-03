@@ -100,12 +100,13 @@ pub fn embedded() -> Result<Vec<File>, String> {
 /// already has one. A dependency with a `path` is refused, since it
 /// would resolve from wherever the manifest is copied.
 pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
+    let own = manifest.lines().any(|l| is_header(l, "workspace"));
+    let workspace = if own { manifest } else { workspace };
     let mut out = String::new();
     let mut in_dependencies = false;
     for line in manifest.lines() {
-        if let Some(header) = line.trim().strip_prefix('[') {
-            let header = header.split('#').next().unwrap_or_default();
-            in_dependencies = names_dependencies(header.trim_end().trim_end_matches(']'));
+        if let Some(name) = header(line) {
+            in_dependencies = names_dependencies(name);
         }
         if sets_path(line, in_dependencies) {
             return Err(format!(
@@ -123,7 +124,7 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
         }
         out.push('\n');
     }
-    if !manifest.lines().any(|l| l.trim() == "[workspace]") {
+    if !own {
         out.push_str("\n[workspace]\n");
     }
     Ok(out)
@@ -149,6 +150,19 @@ fn sets_path(line: &str, in_dependencies: bool) -> bool {
         .any(|k| last_part(k) == "path")
 }
 
+/// The table name of the header `line`, such as `workspace` for
+/// `[workspace] # root`; `None` when `line` is not a header.
+fn header(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix('[')?;
+    let rest = rest.split('#').next().unwrap_or_default().trim_end();
+    Some(rest.trim_end_matches(']').trim_start_matches('[').trim())
+}
+
+/// Whether `line` is the header of the table `name`.
+pub fn is_header(line: &str, name: &str) -> bool {
+    header(line) == Some(name)
+}
+
 /// Whether the dotted key or table name `name` has a part naming a
 /// dependency table (`dependencies`, `dev-dependencies`, ...).
 fn names_dependencies(name: &str) -> bool {
@@ -169,7 +183,7 @@ fn unquoted(part: &str) -> &str {
 fn inherited_line(key: &str, workspace: &str) -> Result<String, String> {
     let mut lines = workspace
         .lines()
-        .skip_while(|l| l.trim() != "[workspace.package]");
+        .skip_while(|l| !is_header(l, "workspace.package"));
     lines.next();
     lines
         .take_while(|l| !l.trim_start().starts_with('['))

@@ -30,6 +30,16 @@ fn standalone_names_a_field_the_workspace_does_not_set() {
     );
 }
 
+/// A manifest that is its own workspace root inherits from itself, and
+/// a header's trailing comment does not hide it.
+#[test]
+fn standalone_reads_its_own_commented_workspace() {
+    let manifest = "[package]\nversion.workspace = true\n[workspace] # standalone\n[workspace.package] # shared\nversion = \"1.0.0\"\n";
+    let got = standalone(manifest, WORKSPACE_TOML).unwrap();
+    assert!(got.starts_with("[package]\nversion = \"1.0.0\"\n"), "{got}");
+    assert_eq!(got.matches("[workspace]").count(), 1, "{got}");
+}
+
 /// A path dependency would resolve from the extracted copy, not from
 /// the override, so it is a named error; `[lib] path` is the crate's own.
 #[test]

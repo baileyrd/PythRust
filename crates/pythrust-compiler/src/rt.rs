@@ -72,7 +72,7 @@ fn workspace_manifest(dir: &Path) -> Result<String, String> {
                 ));
             }
         };
-        if text.lines().any(|l| l.trim() == "[workspace]") {
+        if text.lines().any(|l| runtime::is_header(l, "workspace")) {
             return Ok(text);
         }
     }
@@ -283,6 +283,24 @@ mod tests {
         let (got, _shared) = extract(&project, &files).unwrap();
         assert!(got.symlink_metadata().unwrap().is_dir());
         assert!(outside.join("rt/src/lib.rs").is_file());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// The workspace above an override is found with a commented header.
+    #[test]
+    fn an_override_inherits_from_a_commented_workspace_above_it() {
+        let tmp = scratch("workspace");
+        std::fs::create_dir_all(tmp.join("rt")).unwrap();
+        let ws = "[workspace] # root\n[workspace.package]\nversion = \"2.0.0\"\n";
+        std::fs::write(tmp.join("Cargo.toml"), ws).unwrap();
+        std::fs::write(
+            tmp.join("rt/Cargo.toml"),
+            "[package]\nversion.workspace = true\n",
+        )
+        .unwrap();
+        let files = snapshot(&tmp.join("rt")).unwrap();
+        let text = String::from_utf8(files[0].text.clone()).unwrap();
+        assert!(text.contains("version = \"2.0.0\""), "{text}");
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
