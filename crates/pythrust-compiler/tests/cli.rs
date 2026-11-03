@@ -8,19 +8,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-/// A source file named for its test, so parallel tests never share one.
-fn source(name: &str, src: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("pythrust-cli-{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
+mod common;
+
+/// A scratch directory for `test`, gone when the test passes.
+fn scratch(test: &str) -> common::Scratch {
+    common::scratch("cli", test)
+}
+
+/// `src`, written as `dir/<name>.pyr`.
+fn source(dir: &Path, name: &str, src: &str) -> PathBuf {
+    fs::create_dir_all(dir).unwrap();
     let path = dir.join(format!("{name}.pyr"));
     fs::write(&path, src).unwrap();
     path
 }
 
-fn pythrust(command: &str, name: &str, src: &str) -> Output {
+/// `pythrust <command>` of `src`, written as `dir/<name>.pyr`.
+fn pythrust(command: &str, dir: &Path, name: &str, src: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pythrust"))
         .arg(command)
-        .arg(source(name, src))
+        .arg(source(dir, name, src))
         .output()
         .unwrap()
 }
@@ -34,12 +41,13 @@ fn text(bytes: &[u8]) -> String {
 /// print `0` or `0.0` depending on the data.
 #[test]
 fn int_accumulator_errors_whatever_the_loop_runs() {
+    let tmp = scratch("int_accumulator_errors_whatever_the_loop_runs");
     for (name, items) in [("loop_empty", "[]"), ("loop_nonempty", "[1, 2]")] {
         let src = format!(
             "print(\"start\")\ntotal = 0\nfor x in {items}:\n    total += 1.5\nprint(total)\n"
         );
         for command in ["check", "run"] {
-            let out = pythrust(command, name, &src);
+            let out = pythrust(command, &tmp, name, &src);
             let err = text(&out.stderr);
             assert_eq!(out.status.code(), Some(1), "{command} {name}: {err}");
             assert_eq!(text(&out.stdout), "", "{command} {name}");
@@ -51,9 +59,12 @@ fn int_accumulator_errors_whatever_the_loop_runs() {
 /// `2 ** 64` overflows `int` at runtime; output already printed stays.
 #[test]
 fn int_power_overflow_is_a_runtime_error() {
+    let tmp = scratch("int_power_overflow_is_a_runtime_error");
     let src = "print(1)\nprint(2 ** 62)\nprint(2 ** 64)\nprint(3)\n";
-    assert!(pythrust("check", "pow_overflow", src).status.success());
-    let out = pythrust("run", "pow_overflow", src);
+    assert!(pythrust("check", &tmp, "pow_overflow", src)
+        .status
+        .success());
+    let out = pythrust("run", &tmp, "pow_overflow", src);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(text(&out.stdout), "1\n4611686018427387904\n");
     assert!(text(&out.stderr).contains("OverflowError"), "{out:?}");
@@ -63,14 +74,17 @@ fn int_power_overflow_is_a_runtime_error() {
 /// the fix; a literal one is a compile error; a float base stays legal.
 #[test]
 fn negative_int_exponent_says_use_a_float_base() {
+    let tmp = scratch("negative_int_exponent_says_use_a_float_base");
     let src = "print(2.0 ** -1)\nn = -1\nprint(2 ** n)\nprint(3)\n";
-    assert!(pythrust("check", "pow_nonliteral", src).status.success());
-    let out = pythrust("run", "pow_nonliteral", src);
+    assert!(pythrust("check", &tmp, "pow_nonliteral", src)
+        .status
+        .success());
+    let out = pythrust("run", &tmp, "pow_nonliteral", src);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(text(&out.stdout), "0.5\n");
     assert!(text(&out.stderr).contains("use a float base"), "{out:?}");
 
-    let out = pythrust("run", "pow_literal", "print(1)\nprint(2 ** -1)\n");
+    let out = pythrust("run", &tmp, "pow_literal", "print(1)\nprint(2 ** -1)\n");
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(text(&out.stdout), "");
     assert!(text(&out.stderr).contains("use a float base"), "{out:?}");
@@ -80,7 +94,12 @@ fn negative_int_exponent_says_use_a_float_base() {
 /// error comes before its diagnostic, as in CPython.
 #[test]
 fn output_precedes_the_runtime_error_on_one_stream() {
-    let path = source("ordering", "print(\"before\")\nx = 0\nprint(1 // x)\n");
+    let tmp = scratch("output_precedes_the_runtime_error_on_one_stream");
+    let path = source(
+        &tmp,
+        "ordering",
+        "print(\"before\")\nx = 0\nprint(1 // x)\n",
+    );
     let log = path.with_extension("log");
     let file = fs::File::create(&log).unwrap();
     let status = Command::new(env!("CARGO_BIN_EXE_pythrust"))
@@ -104,11 +123,12 @@ fn output_precedes_the_runtime_error_on_one_stream() {
     ignore = "untested on Windows: a closed pipe fails a write differently there; the flush error path is the same code"
 )]
 fn a_failed_final_flush_is_a_runtime_error() {
+    let tmp = scratch("a_failed_final_flush_is_a_runtime_error");
     let (reader, writer) = std::io::pipe().unwrap();
     drop(reader);
     let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
         .arg("run")
-        .arg(source("flush", "print(1)\n"))
+        .arg(source(&tmp, "flush", "print(1)\n"))
         .stdout(writer)
         .stderr(Stdio::piped())
         .output()
@@ -127,7 +147,8 @@ const ARGS: &str = "import sys\nprint(len(sys.argv))\ni = 1\nwhile i < len(sys.a
 /// the file.
 #[test]
 fn run_passes_the_arguments_after_the_file_to_sys_argv() {
-    let path = source("argv_run", "import sys\nprint(sys.argv[0])\n");
+    let tmp = scratch("run_passes_the_arguments_after_the_file_to_sys_argv");
+    let path = source(&tmp, "argv_run", "import sys\nprint(sys.argv[0])\n");
     let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
         .arg("run")
         .arg(&path)
@@ -135,7 +156,7 @@ fn run_passes_the_arguments_after_the_file_to_sys_argv() {
         .unwrap();
     assert_eq!(text(&out.stdout), format!("{}\n", path.display()));
 
-    let path = source("argv_args", ARGS);
+    let path = source(&tmp, "argv_args", ARGS);
     let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
         .args([
             "run".as_ref(),
@@ -156,10 +177,8 @@ fn run_passes_the_arguments_after_the_file_to_sys_argv() {
 
 /// A project for `test` (M6d): a `pythrust.toml` naming the binding
 /// `fastfs`, whose directory holds only its stub `stub`.
-fn project(test: &str, stub: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join(format!("pythrust-cli-{}", std::process::id()))
-        .join(format!("{test} project"));
+fn project(tmp: &Path, test: &str, stub: &str) -> PathBuf {
+    let dir = tmp.join(format!("{test} project"));
     fs::create_dir_all(dir.join("fastfs")).unwrap();
     fs::write(dir.join("fastfs/fastfs.pyr"), stub).unwrap();
     let manifest =
@@ -168,26 +187,11 @@ fn project(test: &str, stub: &str) -> PathBuf {
     dir
 }
 
-/// An empty directory for `test`, with no manifest in it.
-fn scratch_dir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join(format!("pythrust-cli-{}", std::process::id()))
-        .join(test);
-    let _ = fs::remove_dir_all(&dir);
+/// An empty directory `test` in `tmp`, with no manifest in it.
+fn scratch_dir(tmp: &Path, test: &str) -> PathBuf {
+    let dir = tmp.join(test);
     fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-/// `pythrust <command>` of `src`, written as `dir/<name>.pyr`.
-fn pythrust_in(command: &str, dir: &Path, name: &str, src: &str) -> Output {
-    let path = dir.join(format!("{name}.pyr"));
-    fs::create_dir_all(dir).unwrap();
-    fs::write(&path, src).unwrap();
-    Command::new(env!("CARGO_BIN_EXE_pythrust"))
-        .arg(command)
-        .arg(path)
-        .output()
-        .unwrap()
 }
 
 const FASTFS: &str = "\
@@ -201,7 +205,8 @@ temper def add(a: int, b: int) -> int:
 /// with its named gap, and `build` needs the binding's crate.
 #[test]
 fn rust_binding_checks_and_run_and_build_name_their_gaps() {
-    let dir = project("gaps", FASTFS);
+    let tmp = scratch("rust_binding_checks_and_run_and_build_name_their_gaps");
+    let dir = project(&tmp, "gaps", FASTFS);
     let src = "\
 import fastfs
 
@@ -214,9 +219,9 @@ def main() -> None:
 print(\"start\")
 main()
 ";
-    let out = pythrust_in("check", &dir, "rust_gaps", src);
+    let out = pythrust("check", &dir, "rust_gaps", src);
     assert!(out.status.success(), "{out:?}");
-    let out = pythrust_in("run", &dir, "rust_gaps", src);
+    let out = pythrust("run", &dir, "rust_gaps", src);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(text(&out.stdout), "");
     let err = text(&out.stderr);
@@ -224,12 +229,12 @@ main()
         err,
         "pythrust: run cannot call Rust bindings yet; use build\n"
     );
-    let out = pythrust_in("build", &dir, "rust_gaps", src);
+    let out = pythrust("build", &dir, "rust_gaps", src);
     assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
     assert!(err.contains("binding `fastfs`: no Cargo.toml in"), "{err}");
     // Named but not imported, a binding changes nothing.
-    let out = pythrust_in("run", &dir, "rust_unused", "print(1)\n");
+    let out = pythrust("run", &dir, "rust_unused", "print(1)\n");
     assert_eq!(text(&out.stdout), "1\n", "{out:?}");
 }
 
@@ -237,15 +242,16 @@ main()
 /// an error in the stub renders against the stub's own file.
 #[test]
 fn rust_binding_errors_render_against_their_file() {
-    let dir = project("errors", FASTFS);
+    let tmp = scratch("rust_binding_errors_render_against_their_file");
+    let dir = project(&tmp, "errors", FASTFS);
     let src = "import fastfs\nx: int = fastfs.add(1, \"a\")\n";
-    let out = pythrust_in("check", &dir, "rust_mismatch", src);
+    let out = pythrust("check", &dir, "rust_mismatch", src);
     let err = text(&out.stderr);
     assert!(err.contains("rust_mismatch.pyr:2:24: type error"), "{err}");
     assert!(err.contains("argument `b` of `fastfs.add`"), "{err}");
 
-    let dir = project("bad stub", "temper def f(mut x: int) -> int: ...\n");
-    let out = pythrust_in("check", &dir, "rust_bad_stub", "import fastfs\n");
+    let dir = project(&tmp, "bad stub", "temper def f(mut x: int) -> int: ...\n");
+    let out = pythrust("check", &dir, "rust_bad_stub", "import fastfs\n");
     let err = text(&out.stderr);
     assert!(err.contains("fastfs.pyr:1:14: parse error"), "{err}");
     assert!(err.contains("not supported in stubs yet"), "{err}");
@@ -255,11 +261,12 @@ fn rust_binding_errors_render_against_their_file() {
 /// `build` cannot miss an import of it.
 #[test]
 fn rust_binding_without_functions_is_refused() {
+    let tmp = scratch("rust_binding_without_functions_is_refused");
     for (test, stub) in [("empty", ""), ("comments", "# nothing yet\n")] {
-        let dir = project(test, stub);
+        let dir = project(&tmp, test, stub);
         for command in ["check", "run", "build"] {
             let name = format!("rust_{test}_{command}");
-            let out = pythrust_in(command, &dir, &name, "import fastfs\nprint(1)\n");
+            let out = pythrust(command, &dir, &name, "import fastfs\nprint(1)\n");
             assert_eq!(out.status.code(), Some(1), "{command}: {out:?}");
             assert_eq!(text(&out.stdout), "", "{command}");
             let err = text(&out.stderr);
@@ -276,7 +283,8 @@ fn rust_binding_without_functions_is_refused() {
 /// module is refused at its line in the manifest.
 #[test]
 fn rust_binding_names_are_resolved() {
-    let out = pythrust("check", "rust_not_given", "import fastfs\n");
+    let tmp = scratch("rust_binding_names_are_resolved");
+    let out = pythrust("check", &tmp, "rust_not_given", "import fastfs\n");
     assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
     let named = "rust_not_given.pyr:1:8: parse error: `fastfs` is not a standard module, \
@@ -284,8 +292,8 @@ fn rust_binding_names_are_resolved() {
     assert!(err.contains(named), "{err}");
     assert!(err.contains("or any directory above it)"), "{err}");
 
-    let dir = project("unnamed", FASTFS);
-    let out = pythrust_in("check", &dir, "main", "import sys, other\n");
+    let dir = project(&tmp, "unnamed", FASTFS);
+    let out = pythrust("check", &dir, "main", "import sys, other\n");
     let err = text(&out.stderr);
     assert!(err.contains("main.pyr:1:13: parse error"), "{err}");
     assert!(
@@ -293,14 +301,14 @@ fn rust_binding_names_are_resolved() {
         "{err}"
     );
 
-    let dir = project("os", FASTFS);
+    let dir = project(&tmp, "os", FASTFS);
     let manifest = fs::read_to_string(dir.join("pythrust.toml")).unwrap();
     fs::write(
         dir.join("pythrust.toml"),
         format!("{manifest}os = {{ path = \"x\" }}\n"),
     )
     .unwrap();
-    let out = pythrust_in("check", &dir, "main", "import fastfs\n");
+    let out = pythrust("check", &dir, "main", "import fastfs\n");
     let err = text(&out.stderr);
     assert!(
         err.contains("pythrust.toml:7:1: manifest error: binding `os` is a standard module"),
@@ -312,8 +320,9 @@ fn rust_binding_names_are_resolved() {
 /// for a program importing a module that is not standard.
 #[test]
 fn the_manifest_is_found_above_and_read_only_when_needed() {
-    let dir = project("above", FASTFS);
-    let out = pythrust_in(
+    let tmp = scratch("the_manifest_is_found_above_and_read_only_when_needed");
+    let dir = project(&tmp, "above", FASTFS);
+    let out = pythrust(
         "check",
         &dir.join("src/app"),
         "main",
@@ -322,9 +331,9 @@ fn the_manifest_is_found_above_and_read_only_when_needed() {
     assert!(out.status.success(), "{out:?}");
 
     fs::write(dir.join("pythrust.toml"), "[package]\nname = 'p'\n").unwrap();
-    let out = pythrust_in("run", &dir, "plain", "import sys\nprint(1)\n");
+    let out = pythrust("run", &dir, "plain", "import sys\nprint(1)\n");
     assert_eq!(text(&out.stdout), "1\n", "{out:?}");
-    let out = pythrust_in("check", &dir, "main", "import fastfs\n");
+    let out = pythrust("check", &dir, "main", "import fastfs\n");
     let err = text(&out.stderr);
     assert!(
         err.contains("pythrust.toml:2:8: manifest error: literal strings"),
@@ -336,7 +345,7 @@ fn the_manifest_is_found_above_and_read_only_when_needed() {
         "[package]\nname = \"p\"\nversion = \"1\"\n[python]\n",
     )
     .unwrap();
-    let out = pythrust_in("check", &dir, "main", "import fastfs\n");
+    let out = pythrust("check", &dir, "main", "import fastfs\n");
     let err = text(&out.stderr);
     let reserved = "pythrust.toml:4:2: manifest error: `[python]` is reserved: Python packages arrive with M6e";
     assert!(err.contains(reserved), "{err}");
@@ -348,13 +357,14 @@ fn the_manifest_is_found_above_and_read_only_when_needed() {
 /// line. These tests assume no `pythrust.toml` above the temp dir.
 #[test]
 fn discovery_follows_the_programs_path_and_paths_may_climb() {
+    let tmp = scratch("discovery_follows_the_programs_path_and_paths_may_climb");
     // `bare/proj` holds a manifest naming `fastfs`; `../real/main.pyr`
     // from there is in `bare/real`, with no manifest above it, so the
     // walk must not reach `bare/proj` through `..`.
-    let bare = scratch_dir("climb bare");
+    let bare = scratch_dir(&tmp, "climb bare");
     fs::create_dir_all(bare.join("real")).unwrap();
     fs::write(bare.join("real/main.pyr"), "import fastfs\n").unwrap();
-    let decoy = project("climb decoy", FASTFS);
+    let decoy = project(&tmp, "climb decoy", FASTFS);
     let proj = bare.join("proj");
     fs::create_dir_all(&proj).unwrap();
     fs::copy(decoy.join("pythrust.toml"), proj.join("pythrust.toml")).unwrap();
@@ -372,13 +382,13 @@ fn discovery_follows_the_programs_path_and_paths_may_climb() {
     );
     assert!(err.contains("none in ") && err.contains(&looked), "{err}");
 
-    let root = project("climb", FASTFS);
+    let root = project(&tmp, "climb", FASTFS);
     let shared = root.join("app");
     let manifest =
         "[package]\nname = \"app\"\nversion = \"1\"\n[rust]\nfastfs = { path = \"../fastfs\" }\n";
     fs::create_dir_all(&shared).unwrap();
     fs::write(shared.join("pythrust.toml"), manifest).unwrap();
-    let out = pythrust_in(
+    let out = pythrust(
         "check",
         &shared,
         "main",
@@ -388,7 +398,7 @@ fn discovery_follows_the_programs_path_and_paths_may_climb() {
 
     let bad = "[package]\nname = \"app\"\nversion = \"1\"\n[rust]\nfast-fs = { path = \"x\" }\n";
     fs::write(shared.join("pythrust.toml"), bad).unwrap();
-    let out = pythrust_in("check", &shared, "main", "import fastfs\n");
+    let out = pythrust("check", &shared, "main", "import fastfs\n");
     let err = text(&out.stderr);
     assert!(
         err.contains("pythrust.toml:5:1: manifest error: binding `fast-fs` is not a name"),
@@ -402,9 +412,10 @@ fn discovery_follows_the_programs_path_and_paths_may_climb() {
 #[cfg(unix)]
 #[test]
 fn discovery_does_not_resolve_symlinks() {
-    let base = scratch_dir("symlinks");
+    let tmp = scratch("discovery_does_not_resolve_symlinks");
+    let base = scratch_dir(&tmp, "symlinks");
     // The program lives in `proj/src`, under a manifest naming `fastfs`.
-    let proj = project("symlinks proj", FASTFS);
+    let proj = project(&tmp, "symlinks proj", FASTFS);
     fs::create_dir_all(proj.join("src")).unwrap();
     fs::create_dir_all(proj.join("x")).unwrap();
     fs::write(proj.join("src/main.pyr"), "import fastfs\n").unwrap();
@@ -427,7 +438,7 @@ fn discovery_does_not_resolve_symlinks() {
 
     // `link/../x` is `other/x` as text, though the OS reads `proj/x`:
     // the manifest in `other` is the one used.
-    let other = project("symlinks other", FASTFS);
+    let other = project(&tmp, "symlinks other", FASTFS);
     fs::copy(
         other.join("pythrust.toml"),
         base.join("other/pythrust.toml"),
