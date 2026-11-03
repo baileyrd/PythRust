@@ -157,3 +157,25 @@ fn another_checksum_or_source_is_not_covered() {
         [Change::Added("itoa 1.0.1".into())]
     );
 }
+
+/// Cargo lists a `[patch]` it did not use under `[[patch.unused]]`,
+/// whose `version` is a package's, not the format's.
+#[test]
+fn patch_unused_is_not_read() {
+    let text = lock_text("a", &[], &[]) + "\n[[patch.unused]]\nname = \"p\"\nversion = \"0.1.0\"\n";
+    let l = parse(&text).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(l.format, 4);
+    assert_eq!(l.packages.len(), 1);
+}
+
+/// Only the generated crate itself, a path package, is left out: a
+/// registry crate of its name is checked like any other.
+#[test]
+fn only_the_path_root_is_left_out() {
+    let locked = lock("root", &[], &[]);
+    let built = lock("root", &["root"], &[("root", "1.0.0", &[])]);
+    assert_eq!(
+        uncovered(&built, &locked, "root"),
+        [Change::Added("root 1.0.0".into())]
+    );
+}

@@ -1,6 +1,6 @@
 //! `build` for a program that calls Rust bindings (M6b,
 //! `docs/research/rust-interop.md#build`): writes the generated crate
-//! into `.pythrust/<stem>/` beside the program, resolves it from the
+//! into `.pythrust/build/<stem>/` beside the program, resolves it from the
 //! project's `pythrust.lock` and refuses any entry the lock does not
 //! cover (M6d), has cargo build it with `--locked`, and gives the
 //! staticlib to link in place of the plain runtime.
@@ -265,17 +265,21 @@ fn same(a: &Path, b: &Path) -> Result<bool, String> {
     Ok(canonical(a)? == canonical(b)?)
 }
 
-/// `.pythrust/<name>/` beside the executable `out`, named by its file
-/// name without the host's executable extension, which no other
-/// program's output in that directory shares (`a.pyr` builds `a`,
-/// `a.b.pyr` builds `a.b`, or `a.exe` and `a.b.exe`), created if missing.
+/// `.pythrust/build/<name>/` beside the executable `out`, apart from the
+/// project's own files in `.pythrust/`, named by its file name without
+/// the host's executable extension, which no other program's output in
+/// that directory shares (`a.pyr` builds `a`, `a.b.pyr` builds `a.b`,
+/// or `a.exe` and `a.b.exe`), created if missing.
 fn crate_dir(out: &Path) -> Result<PathBuf, String> {
     let name = match std::env::consts::EXE_EXTENSION {
         "" => out.file_name(),
         _ => out.file_stem(),
     }
     .unwrap_or_default();
-    let dir = crate::output_dir(out).join(".pythrust").join(name);
+    let dir = crate::output_dir(out)
+        .join(".pythrust")
+        .join("build")
+        .join(name);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("pythrust: cannot create {}: {e}\n", dir.display()))?;
     Ok(dir)

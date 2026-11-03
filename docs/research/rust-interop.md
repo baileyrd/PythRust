@@ -12,7 +12,7 @@
 2. **`run` refuses for now.** The interpreter cannot call Rust: loading a library at run time needs `unsafe` in the compiler. `run` of a program that imports a binding is the named gap "run cannot call Rust bindings yet; use build". Revisit when an app needs `run` for interop programs.
 3. **Naming a binding: `--rust name=path`** on `check` and `build` (and on `run`, which then refuses). Interim: M6d's manifest replaced it ([package-tool.md](package-tool.md)); a binding is now `name = { path = "..." }` in `pythrust.toml`'s `[rust]`.
 4. **Driver:** fclone-lite hashing with xxh3 through a `fastfs` binding (below).
-5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/<stem>/` next to the output file, named by the output's file name without the executable extension, so `a.b.pyr` builds in `.pythrust/a.b/` (one directory per program, so two programs side by side never share a build), ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
+5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/build/<stem>/` next to the output file, named by the output's file name without the executable extension, so `a.b.pyr` builds in `.pythrust/build/a.b/`, apart from the project's own files in `.pythrust/` (M6d PR 3) (one directory per program, so two programs side by side never share a build), ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
 
 ## Alternatives considered
 
@@ -54,12 +54,12 @@ The driver passes the parsed stubs to the parser (`parser::parse` gains the bind
 ### Build
 
 1. `check` reads the stubs and checks calls against them. No cargo.
-2. `build` writes a generated crate into `.pythrust/`: one `extern "C"` shim per stub function, which converts the arguments, calls the binding, and converts the result. It depends on every binding and on `pythrust-rt` by path, and cargo builds it as the one staticlib the program links in place of the plain runtime.
-3. **Reproducible dependencies.** The project's `pythrust.lock` decides every crates.io version (M6d, [package-tool.md](package-tool.md#why-plain---locked-now-works)). `pythrust lock` writes it: the generated crate's `Cargo.lock` over every binding of `[rust]`, resolved from the previous lock, under one header line. A binding's own `Cargo.lock` is ignored and never deleted. `build` then:
+2. `build` writes a generated crate into `.pythrust/`: one `extern "C"` shim per stub function, which converts the arguments, calls the binding, and converts the result. It depends on every binding the program imports and on `pythrust-rt` by path, and cargo builds it as the one staticlib the program links in place of the plain runtime.
+3. **Reproducible dependencies.** The project's `pythrust.lock` decides every crates.io version (M6d, [package-tool.md](package-tool.md#how-build-uses-the-lock)). `pythrust lock` writes it: the generated crate's `Cargo.lock` over every binding of `[rust]`, resolved from the previous lock, under one header line. A binding's own `Cargo.lock` is ignored and never deleted. `build` then:
     1. refuses a missing lock ("no pythrust.lock; run `pythrust lock`") and a lock with a `git` package ("git dependencies are not supported yet; use a crates.io version");
-    2. copies the lock into `.pythrust/<stem>/Cargo.lock` and has cargo resolve the program's own crate from it, over only the bindings the program imports; cargo keeps every pin and drops the entries the program does not use;
+    2. copies the lock into `.pythrust/build/<stem>/Cargo.lock` and has cargo resolve the program's own crate from it, over only the bindings the program imports; cargo keeps every pin and drops the entries the program does not use;
     3. refuses any entry of that resolution the lock does not cover: an entry it lacks, another checksum, or a dependency the locked entry does not have, each named under "pythrust.lock is out of date; run `pythrust lock`". Dropped entries, and dependencies only an unimported binding's features added, are fine;
-    4. runs `cargo build --locked` on that resolution.
+    4. runs `cargo rustc --locked` on that resolution.
 
     Plain `--locked` over `pythrust.lock` itself does not work for a program importing only some bindings: the generated crate's own entry lists every binding, so cargo must rewrite it (cargo 1.99.1). Until M6d PR 3, the bindings' committed `Cargo.lock` files were seeded into the build and checked after it; that went with `pythrust.lock`.
 4. rustc compiles the shims against the real signatures, so a stub saying `bytes` where Rust takes `&str` fails the build. Each shim carries a comment naming its stub line, so Pythrust reports "fastfs/fastfs.pyr:1: the stub for `file_xxh3` does not match the Rust function" (the comment's text, which names the stub file as given) and then rustc's output, as Rust's output, not as a Pythrust diagnostic. An error outside the shims (in the binding, or fetching a crate) is reported as "binding `fastfs` failed to build" with cargo's output.
@@ -74,7 +74,7 @@ The driver passes the parsed stubs to the parser (`parser::parse` gains the bind
 | Generated manifest | edition 2021, an empty `[workspace]`, crate `pythrust_bindings` |
 | Profile | the profile `pythrust` itself was built with, so the debug leak check stays on in tests; `panic = "unwind"` always |
 | Target | `--target` set to the host triple `pythrust` targets, so a `windows-gnu` default cannot meet MSVC's `link.exe` |
-| Directories | `--target-dir .pythrust/<stem>/target`; generated sources written to a temporary file and renamed. The object file and final link still use the private build directory (`private_dir`) |
+| Directories | `--target-dir .pythrust/build/<stem>/target`; generated sources written to a temporary file and renamed. The object file and final link still use the private build directory (`private_dir`) |
 | Minimum toolchain | Rust 1.88, since every interop build compiles `pythrust-rt`, which uses `<[T]>::as_chunks` (1.88, in M6a's SHA-256; this note first said 1.87 for `usize::is_multiple_of`, and the plumbing PR's clippy MSRV check found the newer call); `#[unsafe(no_mangle)]` needs only 1.82. The plumbing PR records it as `pythrust-rt`'s `rust-version` and a CI job builds the probe with 1.88. This is a demonstrated lower bound, not a full MSRV audit. A missing `cargo` or an older rustc is a named error |
 
 ### The shim

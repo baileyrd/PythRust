@@ -44,11 +44,7 @@ pub(crate) fn hold(dir: &Path, how: Hold) -> Result<File, String> {
         .map_err(|e| format!("pythrust: cannot create {}: {e}\n", dot.display()))?;
     let path = dot.join(PROJECT_LOCK);
     let file = open(&path)?;
-    let held = match how {
-        Hold::Shared => file.lock_shared(),
-        Hold::Exclusive => file.lock(),
-    };
-    held.map_err(|e| format!("pythrust: cannot lock {}: {e}\n", path.display()))?;
+    take(&file, &path, how)?;
     Ok(file)
 }
 
@@ -57,9 +53,29 @@ pub(crate) fn hold(dir: &Path, how: Hold) -> Result<File, String> {
 pub(crate) fn hold_build(dir: &Path) -> Result<File, String> {
     let path = dir.join(BUILD_LOCK);
     let file = open(&path)?;
-    file.lock()
-        .map_err(|e| format!("pythrust: cannot lock {}: {e}\n", path.display()))?;
+    take(&file, &path, Hold::Exclusive)?;
     Ok(file)
+}
+
+/// Locks `file`, at `path`, as `how` says. When another run holds it,
+/// says so once before waiting, as cargo does.
+fn take(file: &File, path: &Path, how: Hold) -> Result<(), String> {
+    let tried = match how {
+        Hold::Shared => file.try_lock_shared(),
+        Hold::Exclusive => file.try_lock(),
+    };
+    let failed = |e: std::io::Error| format!("pythrust: cannot lock {}: {e}\n", path.display());
+    match tried {
+        Ok(()) => return Ok(()),
+        Err(std::fs::TryLockError::Error(e)) => return Err(failed(e)),
+        Err(std::fs::TryLockError::WouldBlock) => {}
+    }
+    eprintln!("pythrust: waiting for {}", path.display());
+    let held = match how {
+        Hold::Shared => file.lock_shared(),
+        Hold::Exclusive => file.lock(),
+    };
+    held.map_err(failed)
 }
 
 fn open(path: &Path) -> Result<File, String> {
@@ -136,10 +152,14 @@ pub(crate) fn lock(project: &Found) -> Result<PathBuf, String> {
     let text = resolve(&dir, &runtime, &bindings, old.as_deref())?;
     parsed(&path, &text)?;
     let tmp = project.dir().join(format!(".{FILE}.tmp"));
-    std::fs::write(&tmp, lock::with_header(&text))
+    let written = std::fs::write(&tmp, lock::with_header(&text))
         .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("pythrust: cannot write {}: {e}\n", path.display()))?;
-    Ok(path)
+        .map_err(|e| format!("pythrust: cannot write {}: {e}\n", path.display()));
+    if written.is_err() {
+        // The old lock stands; the half-made copy goes, best effort.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.map(|()| path)
 }
 
 /// The current lock's text without its header, to resolve from; `None`

@@ -1,4 +1,4 @@
-//! `pythrust.lock` (M6d, `docs/research/package-tool.md#why-plain---locked-now-works`):
+//! `pythrust.lock` (M6d, `docs/research/package-tool.md#how-build-uses-the-lock`):
 //! the generated crate's `Cargo.lock`, verbatim, under [`HEADER`]. This
 //! reads it, finds a git package (not supported yet), and names the
 //! entries of a build's resolution it does not cover, for the
@@ -55,6 +55,9 @@ pub fn parse(text: &str) -> Result<Lock, String> {
     };
     let mut current: Option<Package> = None;
     let mut in_deps = false;
+    // Keys of a table other than `[[package]]`, such as cargo's
+    // `[[patch.unused]]`, are not read.
+    let mut in_table = false;
     for (i, raw) in text.lines().enumerate() {
         let line = raw.trim();
         let bad = || format!("Cargo.lock line {}: cannot read `{line}`", i + 1);
@@ -67,6 +70,7 @@ pub fn parse(text: &str) -> Result<Lock, String> {
         }
         if line.starts_with('[') {
             lock.packages.extend(current.take());
+            in_table = true;
             if line == "[[package]]" {
                 current = Some(empty_package());
             }
@@ -77,7 +81,7 @@ pub fn parse(text: &str) -> Result<Lock, String> {
         };
         let (key, value) = (key.trim(), value.trim());
         match (key, current.as_mut()) {
-            ("version", None) => lock.format = value.parse().map_err(|_| bad())?,
+            ("version", None) if !in_table => lock.format = value.parse().map_err(|_| bad())?,
             ("dependencies", Some(_)) => {
                 in_deps = value != "[]";
                 if value != "[" && value != "[]" {
@@ -211,7 +215,8 @@ impl std::fmt::Display for Change {
 /// depending on a crate already in the lock shows as changed.
 pub fn uncovered(built: &Lock, locked: &Lock, root: &str) -> Vec<Change> {
     let mut out = Vec::new();
-    for p in built.packages.iter().filter(|p| p.name != root) {
+    let is_root = |p: &&Package| p.name == root && p.source.is_none();
+    for p in built.packages.iter().filter(|p| !is_root(p)) {
         let Some(q) = locked.find(p) else {
             out.push(Change::Added(p.label()));
             continue;
