@@ -168,6 +168,16 @@ fn project(test: &str, stub: &str) -> PathBuf {
     dir
 }
 
+/// An empty directory for `test`, with no manifest in it.
+fn scratch_dir(test: &str) -> PathBuf {
+    let dir = std::env::temp_dir()
+        .join(format!("pythrust-cli-{}", std::process::id()))
+        .join(test);
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 /// `pythrust <command>` of `src`, written as `dir/<name>.pyr`.
 fn pythrust_in(command: &str, dir: &Path, name: &str, src: &str) -> Output {
     let path = dir.join(format!("{name}.pyr"));
@@ -338,26 +348,29 @@ fn the_manifest_is_found_above_and_read_only_when_needed() {
 /// line. These tests assume no `pythrust.toml` above the temp dir.
 #[test]
 fn discovery_follows_the_programs_path_and_paths_may_climb() {
-    let root = project("climb", FASTFS);
-    let real = root.join("real");
-    fs::create_dir_all(&real).unwrap();
-    fs::write(real.join("main.pyr"), "import fastfs\nfastfs.add(1, 2)\n").unwrap();
-    // `root/proj` holds a manifest naming nothing; `../real/main.pyr` from
-    // there must not find it.
-    let proj = root.join("proj");
+    // `bare/proj` holds a manifest naming `fastfs`; `../real/main.pyr`
+    // from there is in `bare/real`, with no manifest above it, so the
+    // walk must not reach `bare/proj` through `..`.
+    let bare = scratch_dir("climb bare");
+    fs::create_dir_all(bare.join("real")).unwrap();
+    fs::write(bare.join("real/main.pyr"), "import fastfs\n").unwrap();
+    let decoy = project("climb decoy", FASTFS);
+    let proj = bare.join("proj");
     fs::create_dir_all(&proj).unwrap();
-    fs::write(
-        proj.join("pythrust.toml"),
-        "[package]\nname = \"q\"\nversion = \"1\"\n",
-    )
-    .unwrap();
+    fs::copy(decoy.join("pythrust.toml"), proj.join("pythrust.toml")).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
         .args(["check", "../real/main.pyr"])
         .current_dir(&proj)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{out:?}");
+    let err = text(&out.stderr);
+    let looked = format!(
+        "none in {} or any directory above it",
+        bare.join("real").display()
+    );
+    assert!(err.contains(&looked), "{err}");
 
+    let root = project("climb", FASTFS);
     let shared = root.join("app");
     let manifest =
         "[package]\nname = \"app\"\nversion = \"1\"\n[rust]\nfastfs = { path = \"../fastfs\" }\n";
@@ -381,8 +394,66 @@ fn discovery_follows_the_programs_path_and_paths_may_climb() {
     );
 }
 
+/// The walk follows the program's path as written: a symlinked directory
+/// is not resolved, and a `..` after one takes off the link's name, not
+/// its target's (`docs/grammar.md#manifest-pythrusttoml`).
+#[cfg(unix)]
+#[test]
+fn discovery_does_not_resolve_symlinks() {
+    let base = scratch_dir("symlinks");
+    // The program lives in `proj/src`, under a manifest naming `fastfs`.
+    let proj = project("symlinks proj", FASTFS);
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::create_dir_all(proj.join("x")).unwrap();
+    fs::write(proj.join("src/main.pyr"), "import fastfs\n").unwrap();
+    fs::write(proj.join("x/main.pyr"), "import fastfs\nfastfs.add(1, 2)\n").unwrap();
+    fs::create_dir_all(base.join("other")).unwrap();
+    std::os::unix::fs::symlink(proj.join("src"), base.join("other/link")).unwrap();
+
+    // Through the link, the walk sees `other/link`, `other`, ... and not `proj`.
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .arg("check")
+        .arg(base.join("other/link/main.pyr"))
+        .output()
+        .unwrap();
+    let err = text(&out.stderr);
+    let looked = format!(
+        "none in {} or any directory above it",
+        base.join("other/link").display()
+    );
+    assert!(err.contains(&looked), "{err}");
+
+    // `link/../x` is `other/x` as text, though the OS reads `proj/x`:
+    // the manifest in `other` is the one used.
+    let other = project("symlinks other", FASTFS);
+    fs::copy(
+        other.join("pythrust.toml"),
+        base.join("other/pythrust.toml"),
+    )
+    .unwrap();
+    copy_stub(&other, &base.join("other"));
+    let out = Command::new(env!("CARGO_BIN_EXE_pythrust"))
+        .arg("check")
+        .arg(base.join("other/link/../x/main.pyr"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let used = format!(
+        "pythrust: using {}",
+        base.join("other/pythrust.toml").display()
+    );
+    assert!(text(&out.stderr).contains(&used), "{out:?}");
+}
+
+/// Copies `from/fastfs` to `to/fastfs`.
+#[cfg(unix)]
+fn copy_stub(from: &Path, to: &Path) {
+    fs::create_dir_all(to.join("fastfs")).unwrap();
+    fs::copy(from.join("fastfs/fastfs.pyr"), to.join("fastfs/fastfs.pyr")).unwrap();
+}
+
 /// fclone-lite's committed manifest names the binding its fast driver
-/// imports.
+/// imports, and `check` says which manifest it used.
 #[test]
 fn fclone_lites_manifest_checks_its_fast_driver() {
     let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/fclone-lite/fclone_fast.pyr");
@@ -392,6 +463,9 @@ fn fclone_lites_manifest_checks_its_fast_driver() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
+    let used = text(&out.stderr);
+    assert!(used.starts_with("pythrust: using "), "{used}");
+    assert!(used.trim_end().ends_with("pythrust.toml"), "{used}");
 }
 
 /// `--rust` is gone; its error says where bindings are named now.

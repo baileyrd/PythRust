@@ -136,13 +136,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let crates = match project::bindings(path, &src) {
-        Ok(crates) => crates,
+    let project = match project::bindings(path, &src) {
+        Ok(project) => project,
         Err(message) => {
             eprint!("{message}");
             return ExitCode::FAILURE;
         }
     };
+    if let (Some(manifest), Command::Check | Command::Build) = (&project.manifest, inv.command) {
+        eprintln!("pythrust: using {}", manifest.display());
+    }
+    let crates = project.crates;
     let mut sources = Sources::new(path, &src);
     let rust = match bindings::load(&crates, &mut sources) {
         Ok(rust) => rust,

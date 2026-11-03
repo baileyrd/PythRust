@@ -194,6 +194,8 @@ newline  = '\n' | '\r\n' ;                                (* the last line may o
   - `[package]` is required, with `name` and `version`, both strings. `name` is ASCII letters, digits, `-` and `_`, starting with a letter.
   - `[rust]` maps a binding name to `{ path = "..." }`.
   - `[python]` and `[pythrust]` are reserved: present at all, each is an error.
+  - A `[rust]` path is relative to the manifest's directory, `/`-separated (a `\` is the error "write `/`"), and never absolute; `..` may climb out of the project.
+- **Discovery** (Nano, 2026-11-03): only a program importing a module that is not standard looks for a manifest. The search starts in the program's directory as its path is written, made absolute, with each `..` taking off the name before it as text; symlinks are not resolved, so `link/../x` is `x` beside `link`. It goes up to the filesystem root and stops at the first `pythrust.toml`. `check` and `build` print `pythrust: using <path>` to stderr when they use one, and every manifest error names it. A binding is checked (its directory and stub) only when a program imports it.
 
 ## Deviations from Python
 

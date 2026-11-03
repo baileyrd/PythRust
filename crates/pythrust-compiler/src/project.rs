@@ -12,14 +12,23 @@ use pythrust_compiler::{lexer, stdlib, DiagKind, Diagnostic, Token, TokenKind};
 use crate::bindings;
 use crate::cargo::Crate;
 
-/// The bindings the program at `path`, whose text is `src`, imports,
-/// with their absolute directories, in import order. Empty when every
-/// import is standard; then no manifest is looked for. An error comes
-/// rendered.
-pub(crate) fn bindings(path: &str, src: &str) -> Result<Vec<Crate>, String> {
+/// The bindings a program imports and the manifest that names them.
+pub(crate) struct Project {
+    /// With absolute directories, in import order.
+    pub(crate) crates: Vec<Crate>,
+    /// `None` when every import is standard: then none is looked for.
+    pub(crate) manifest: Option<PathBuf>,
+}
+
+/// The project of the program at `path`, whose text is `src`. An error
+/// comes rendered.
+pub(crate) fn bindings(path: &str, src: &str) -> Result<Project, String> {
     let imports = foreign_imports(src);
     let Some(first) = imports.first() else {
-        return Ok(Vec::new());
+        return Ok(Project {
+            crates: Vec::new(),
+            manifest: None,
+        });
     };
     let start = normalize(&absolute(&program_dir(path))?);
     let Some(file) = find(&start)? else {
@@ -32,12 +41,16 @@ pub(crate) fn bindings(path: &str, src: &str) -> Result<Vec<Crate>, String> {
     };
     let manifest = read(&file)?;
     let dir = file.parent().unwrap_or(Path::new("."));
-    imports
+    let crates = imports
         .iter()
         .map(|import| {
             named(&manifest, dir, import).map_err(|m| render_import(path, src, import, m))
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    Ok(Project {
+        crates,
+        manifest: Some(file),
+    })
 }
 
 /// The program's imports that are not standard modules, each once, in

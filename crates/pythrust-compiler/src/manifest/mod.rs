@@ -160,9 +160,11 @@ fn check_path(path: &Str) -> Result<()> {
     if text.is_empty() {
         return error(path.span, "a binding's path must not be empty");
     }
-    let bytes = text.as_bytes();
-    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-    if text.starts_with('/') || text.starts_with('\\') || drive {
+    if text.contains('\\') {
+        return error(path.span, "write `/` in a binding's path, not `\\`");
+    }
+    // A `:` anywhere could name a Windows drive once the path is split.
+    if text.starts_with('/') || text.contains(':') {
         let message = "a binding's path must be relative to the directory of pythrust.toml";
         return error(path.span, message);
     }
@@ -275,8 +277,10 @@ mod tests {
             ),
             ("a = { path = \"\" }", "must not be empty"),
             ("a = { path = \"/abs\" }", "must be relative"),
-            ("a = { path = \"\\\\server\" }", "must be relative"),
+            ("a = { path = \"\\\\server\" }", "write `/`"),
+            ("a = { path = \"sub\\\\x\" }", "write `/`"),
             ("a = { path = \"C:/x\" }", "must be relative"),
+            ("a = { path = \"sub/C:/x\" }", "must be relative"),
         ];
         for (line, want) in cases {
             let got = err(&format!("{PACKAGE}[rust]\n{line}\n"));
