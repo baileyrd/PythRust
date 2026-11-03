@@ -1703,6 +1703,47 @@ fn fclone_tasks_matches_fclone_lite() -> Res<()> {
     Ok(())
 }
 
+/// Under a low open-file limit the task driver's pool can run out of
+/// descriptors where the serial fclone-lite, one file at a time, does
+/// not; the task driver still prints what the serial one prints, under
+/// CPython and natively (`run` runs each task at `submit`, one at a time).
+#[cfg(unix)]
+#[test]
+fn fclone_tasks_matches_fclone_lite_under_a_descriptor_limit() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("fclone-fds")?;
+    let root = dir.join("tree");
+    fs::create_dir(&root).map_err(|e| e.to_string())?;
+    let first = root.join("f00");
+    fs::write(&first, vec![7u8; 1 << 20]).map_err(|e| e.to_string())?;
+    for i in 1..=40 {
+        fs::hard_link(&first, root.join(format!("f{i:02}"))).map_err(|e| e.to_string())?;
+    }
+    let lite = fclone_app("fclone_lite.py");
+    let want = fclone_limited(python(), &["-I".as_ref(), lite.as_os_str()], &root)?;
+    let paths = want.stdout.lines().filter(|l| l.starts_with("  ")).count();
+    assert_eq!((want.status, paths), (0, 41), "{}", want.stdout);
+    let app = fclone_app("fclone_tasks.py");
+    let tasks = fclone_limited(python(), &["-I".as_ref(), app.as_os_str()], &root)?;
+    assert_eq!(tasks, want);
+    let exe = native_case(&dir, "fclone_tasks", &read(&app)?)?;
+    assert_eq!(fclone_limited(&exe, &[], &root)?, want);
+    cleanup(&dir)
+}
+
+/// Runs `program` with `args` over `root` with at most 8 open files,
+/// enough for a lone read but fewer than the pool opens at once.
+#[cfg(unix)]
+fn fclone_limited(
+    program: impl AsRef<std::ffi::OsStr>,
+    args: &[&std::ffi::OsStr],
+    root: &Path,
+) -> Res<Run> {
+    let mut sh = Command::new("sh");
+    sh.args(["-c", "ulimit -n 8 && exec \"$@\"", "sh"]);
+    run(sh.arg(program).args(args).arg(root), TIMEOUT)
+}
+
 /// The fclone tests' unreadable files stay unreadable to the programs
 /// even for root, while a private (mode 0700) parent of the app and the
 /// tree, like a checkout under `/root` or a private temp dir, stays
@@ -1781,24 +1822,27 @@ fn fclone_cpython(app: &Path, root: &Path) -> Res<Run> {
 }
 
 /// Runs `program` with `args` over `root`. When this user (root) can
-/// read the tree's mode-000 files, the program runs under `setpriv`
-/// without the two capabilities that bypass file modes, still as this
-/// user: the mode-000 files refuse it, while a private checkout, home or
-/// temp dir it owns stays reachable. Running as `nobody` instead would
-/// lose those. Needs util-linux's `setpriv` only when run as root.
+/// read the tree's mode-000 files on Linux, the program runs under
+/// util-linux's `setpriv` without the two capabilities that bypass file
+/// modes, still as this user: the mode-000 files refuse it, while a
+/// private checkout, home or temp dir it owns stays reachable (running
+/// as `nobody` would lose those). Root on another Unix has no such tool,
+/// so there the programs read the mode-000 files: they hold distinct
+/// bytes, so the outputs still match, but the unreadable-file path goes
+/// unexercised. Linux and non-root runs, CI's included, exercise it.
 #[cfg(unix)]
 fn fclone_run(
     program: impl AsRef<std::ffi::OsStr>,
     args: &[&std::ffi::OsStr],
     root: &Path,
 ) -> Res<Run> {
-    let mut cmd = match fs::read(root.join("locked")) {
-        Err(_) => Command::new(program),
-        Ok(_) => {
-            let mut setpriv = Command::new("setpriv");
-            setpriv.args(UNPRIVILEGED).arg(program);
-            setpriv
-        }
+    let readable = fs::read(root.join("locked")).is_ok();
+    let mut cmd = if readable && cfg!(target_os = "linux") {
+        let mut setpriv = Command::new("setpriv");
+        setpriv.args(UNPRIVILEGED).arg(program);
+        setpriv
+    } else {
+        Command::new(program)
     };
     run(cmd.args(args).arg(root), TIMEOUT)
 }

@@ -70,6 +70,13 @@ def main() -> None:
             candidates.append(path)
     with concurrent.futures.ThreadPoolExecutor() as ex:
         digests = list(ex.map(digest, candidates))
+    # An open in a task can fail only because the pool's other tasks hold
+    # files open (too many open files). Retry each failure one at a time
+    # once the pool is gone, as fclone_lite.py reads, so both skip
+    # exactly the files a lone read cannot open.
+    for i in range(len(candidates)):
+        if digests[i] == "":
+            digests[i] = digest(candidates[i])
     start = 0
     first = True
     for size in sizes:
