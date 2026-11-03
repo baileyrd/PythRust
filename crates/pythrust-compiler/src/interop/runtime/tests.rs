@@ -37,6 +37,16 @@ fn standalone_leaves_package_metadata_alone() {
     let manifest = "[package]\nmetadata = { tool = { workspace = true } }\nmetadata.other.workspace = true\n\"metadata\".x = { workspace = true }\n";
     let got = standalone(manifest, WORKSPACE_TOML);
     assert_eq!(got, Ok(format!("{manifest}\n[workspace]\n")));
+    let paths = [
+        "[package.metadata.tool.dependencies]\npath = \"some/tool/path\"\n",
+        "[package.metadata.tool]\ndependencies = { x = { path = \"p\" } }\n",
+        "[package]\nmetadata.dependencies.path = \"p\"\n",
+        "package.metadata.dev-dependencies.path = \"p\"\n",
+    ];
+    for manifest in paths {
+        let got = standalone(manifest, WORKSPACE_TOML);
+        assert_eq!(got, Ok(format!("{manifest}\n[workspace]\n")), "{manifest}");
+    }
 }
 
 /// The supported inheritance line keeps working through a trailing

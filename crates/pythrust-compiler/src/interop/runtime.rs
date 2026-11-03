@@ -112,13 +112,13 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
         if let Some(name) = header(&stmt.code) {
             table = name;
         }
-        if sets_path(&stmt.code, names_dependencies(&table)) {
+        let metadata = in_metadata(&table, &stmt.code);
+        if !metadata && sets_path(&stmt.code, names_dependencies(&table)) {
             return Err(format!(
                 "`{}` is a path dependency, which would resolve from the extracted copy; a runtime override cannot have one",
                 stmt.code.trim()
             ));
         }
-        let metadata = table == "package" && first_key_part(&stmt.code) == "metadata";
         let inherits = package_table(&table) && !metadata && inherited(&stmt.code);
         let rewritable = !own && table == "package";
         match (inherits, supported(&stmt.code).filter(|_| rewritable)) {
@@ -282,15 +282,22 @@ fn inherited(code: &str) -> bool {
         .any(|k| k.split('.').any(|p| unquoted(p) == "workspace"))
 }
 
-/// The first part of the key the statement `code` sets, unquoted.
-fn first_key_part(code: &str) -> &str {
-    let key = code.split_once('=').map_or("", |(k, _)| k);
-    unquoted(key.split('.').next().unwrap_or_default())
-}
-
 /// Whether the table `name` holds package fields: `[package]` or a
 /// subtable of one field, such as `[package.version]`, but not
 /// `[package.metadata.*]`, which cargo leaves to tools.
+/// Whether the statement `code` in `table` sets a key under
+/// `package.metadata`, which Cargo leaves to other tools.
+fn in_metadata(table: &str, code: &str) -> bool {
+    let key = code.split_once('=').map_or("", |(key, _)| key);
+    let parts: Vec<&str> = table
+        .split('.')
+        .chain(key.split('.'))
+        .map(unquoted)
+        .filter(|part| !part.is_empty())
+        .collect();
+    parts.starts_with(&["package", "metadata"])
+}
+
 fn package_table(name: &str) -> bool {
     name == "package" || name.starts_with("package.") && !name.starts_with("package.metadata")
 }
