@@ -67,6 +67,9 @@ use pythrust_compiler::ir::{Func, Inst, LocalId, Program};
 use pythrust_compiler::own::{self, Precision};
 use pythrust_compiler::{infer, lexer, lower, parser, rc, TokenKind};
 
+mod common;
+use common::Scratch;
+
 type Res<T> = std::result::Result<T, String>;
 
 /// What a program is expected to do, from its directives.
@@ -970,9 +973,9 @@ fn tempered_matches_loose() -> Res<()> {
         let got = run_pythrust(&copy)?;
         failures.extend(mismatch(&case, &got));
     }
-    cleanup(&dir)?;
     assert!(tempered > 0, "the corpus has no tempered program");
     report(failures);
+    dir.pass();
     Ok(())
 }
 
@@ -1235,8 +1238,8 @@ fn corpus_errors_fail_build() -> Res<()> {
             failures.push(format!("{}: build gave:\n{stderr}", case.source.display()));
         }
     }
-    cleanup(&dir)?;
     report(failures);
+    dir.pass();
     Ok(())
 }
 
@@ -1244,8 +1247,7 @@ fn corpus_errors_fail_build() -> Res<()> {
 fn corpus_matches_native() -> Res<()> {
     build_runtime()?;
     let memchecked = memcheck_requested();
-    let dir = std::env::temp_dir().join(format!("pythrust-native-{}", std::process::id()));
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = scratch("native")?;
     let mut failures = Vec::new();
     let mut built = Vec::new();
     for case in load_corpus(&corpus_dir()?)? {
@@ -1295,13 +1297,13 @@ fn corpus_matches_native() -> Res<()> {
         built.push(name);
     }
     failures.extend(leftover_build_dirs(&dir)?);
-    fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     for name in NATIVE {
         if !built.iter().any(|b| b == name) {
             failures.push(format!("{name}: must build natively"));
         }
     }
     report(failures);
+    dir.pass();
     Ok(())
 }
 
@@ -1364,7 +1366,6 @@ fn a_refused_thread_ends_the_program() -> Res<()> {
         .arg(&exe)
         .output()
         .map_err(|e| format!("cannot run sh: {e}"))?;
-    cleanup(&dir)?;
     let (stdout, stderr) = (
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -1378,6 +1379,7 @@ fn a_refused_thread_ends_the_program() -> Res<()> {
         stderr.contains("pythrust: cannot start a task's thread"),
         "{stderr}"
     );
+    dir.pass();
     Ok(())
 }
 
@@ -1457,7 +1459,8 @@ fn warnings_print_and_leave_output_and_status_unchanged() -> Res<()> {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
     assert_eq!(run.status.code(), Some(1));
     report(failures);
-    cleanup(&dir)
+    dir.pass();
+    Ok(())
 }
 
 fn pythrust(command: &str, source: &Path) -> Res<std::process::Output> {
@@ -1528,7 +1531,7 @@ fn os_matches_cpython_on_a_tree() -> Res<()> {
     assert!(want.stdout.contains("FileNotFoundError"), "{}", want.stdout);
     assert_eq!(run_pythrust(&source)?, want);
     assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
-    cleanup(&dir)?;
+    dir.pass();
     Ok(())
 }
 
@@ -1656,7 +1659,7 @@ fn files_match_cpython() -> Res<()> {
     assert!(!cfg!(unix) || want.stdout.contains(repr), "{}", want.stdout);
     assert_eq!(run_pythrust(&source)?, want);
     assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
-    cleanup(&dir)?;
+    dir.pass();
     Ok(())
 }
 
@@ -1678,7 +1681,7 @@ fn fclone_lite_matches_cpython() -> Res<()> {
     let run_app = ["run".as_ref(), app.as_os_str()];
     assert_eq!(fclone_run(pythrust_bin()?, &run_app, &root)?, want);
     assert_eq!(fclone_run(&exe, &[], &root)?, want);
-    cleanup(&dir)?;
+    dir.pass();
     Ok(())
 }
 
@@ -1699,7 +1702,7 @@ fn fclone_tasks_matches_fclone_lite() -> Res<()> {
     assert_eq!(fclone_run(pythrust_bin()?, &run_app, &root)?, want);
     let exe = native_case(&dir, "fclone_tasks", &read(&app)?)?;
     assert_eq!(fclone_run(&exe, &[], &root)?, want);
-    cleanup(&dir)?;
+    dir.pass();
     Ok(())
 }
 
@@ -1728,7 +1731,8 @@ fn fclone_tasks_matches_fclone_lite_under_a_descriptor_limit() -> Res<()> {
     assert_eq!(tasks, want);
     let exe = native_case(&dir, "fclone_tasks", &read(&app)?)?;
     assert_eq!(fclone_limited(&exe, &[], &root)?, want);
-    cleanup(&dir)
+    dir.pass();
+    Ok(())
 }
 
 /// Runs `program` with `args` over `root` with at most 8 open files,
@@ -1762,7 +1766,8 @@ fn fclone_runs_under_a_private_parent() -> Res<()> {
     let got = fclone_cpython(&app, &root)?;
     assert!(got.stdout.contains("2 bytes:"), "{}", got.stdout);
     assert!(!got.stdout.contains("locked"), "{}", got.stdout);
-    cleanup(&dir)
+    dir.pass();
+    Ok(())
 }
 
 /// `apps/fclone-lite/<name>`.
@@ -1868,7 +1873,7 @@ fn a_built_program_reads_its_arguments() -> Res<()> {
     let exe = native_case(&dir, "argv", src)?;
     let got = run(Command::new(&exe).args(["a b", "-x"]), TIMEOUT)?;
     assert_eq!((got.status, got.stdout.as_str()), (0, "3\na b\n-x\n"));
-    cleanup(&dir)?;
+    dir.pass();
     Ok(())
 }
 
@@ -1913,8 +1918,8 @@ fn native_matches_run_at_the_repr_limit() -> Res<()> {
     if (got.status, got.stdout.as_str()) != (0, "True\n") {
         failures.push(format!("{long}\n  native {got:?}"));
     }
-    cleanup(&dir)?;
     report(failures);
+    dir.pass();
     Ok(())
 }
 
@@ -1974,8 +1979,8 @@ fn the_race_detector_reports_injected_races() -> Res<()> {
             }
         }
     }
-    cleanup(&dir)?;
     report(failures);
+    dir.pass();
     Ok(())
 }
 
@@ -2062,7 +2067,8 @@ fn build_takes_option_like_directories_as_paths() -> Res<()> {
         }
     }
     report(failures);
-    cleanup(&root)
+    root.pass();
+    Ok(())
 }
 
 #[test]
@@ -2252,17 +2258,26 @@ fn run_reports_missing_binary() {
 }
 
 /// A fresh, empty directory under the system temp dir, unique to `name`.
-fn scratch(name: &str) -> Res<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("pythrust-conf-{}-{name}", std::process::id()));
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
-    }
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir)
+/// It goes only when its test calls [`Scratch::pass`]: a test that
+/// fails, by a panic or an `Err`, keeps it and prints its path.
+fn scratch(name: &str) -> Res<Scratch> {
+    Ok(common::scratch_until_pass("conf", name))
 }
 
-fn cleanup(dir: &Path) -> Res<()> {
-    fs::remove_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))
+/// A scratch directory goes once its test passes, and stays, its path
+/// printed, when the test returns an error before passing.
+#[test]
+fn a_scratch_directory_stays_until_its_test_passes() -> Res<()> {
+    let kept = scratch("stays")?;
+    let path = kept.to_path_buf();
+    drop(kept);
+    assert!(path.is_dir(), "{}", path.display());
+    std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+    let passed = scratch("goes")?;
+    let path = passed.to_path_buf();
+    passed.pass();
+    assert_eq!(path.exists(), std::env::var_os(common::KEEP).is_some());
+    Ok(())
 }
 
 fn write(path: &Path, text: &str) -> Res<()> {
@@ -2274,7 +2289,8 @@ fn missing_golden_fails_check() -> Res<()> {
     let dir = scratch("missing")?;
     write(&dir.join("p.pyr"), "print(1)\n")?;
     assert!(cpython_failures(&dir, false).is_err());
-    cleanup(&dir)
+    dir.pass();
+    Ok(())
 }
 
 #[test]
@@ -2284,7 +2300,8 @@ fn bless_creates_missing_golden() -> Res<()> {
     assert_eq!(cpython_failures(&dir, true)?, Vec::<String>::new());
     assert_eq!(read(&dir.join("p.out"))?, "1\n");
     assert_eq!(cpython_failures(&dir, false)?, Vec::<String>::new());
-    cleanup(&dir)
+    dir.pass();
+    Ok(())
 }
 
 #[test]
@@ -2294,7 +2311,8 @@ fn bless_keeps_golden_on_unexpected_exit() -> Res<()> {
     write(&dir.join("p.out"), "old\n")?;
     assert_eq!(cpython_failures(&dir, true)?.len(), 1);
     assert_eq!(read(&dir.join("p.out"))?, "old\n");
-    cleanup(&dir)
+    dir.pass();
+    Ok(())
 }
 
 #[test]
@@ -2304,7 +2322,8 @@ fn bless_skips_deviations() -> Res<()> {
     write(&dir.join("p.out"), "hand\n")?;
     assert_eq!(cpython_failures(&dir, true)?, Vec::<String>::new());
     assert_eq!(read(&dir.join("p.out"))?, "hand\n");
-    cleanup(&dir)
+    dir.pass();
+    Ok(())
 }
 
 #[test]
