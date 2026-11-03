@@ -1332,8 +1332,8 @@ fn import_comes_first_at_module_level() {
     assert_eq!(src_err("def f():\n    import sys\n"), late);
     assert_eq!(
         src_err("import json\n"),
-        "no module named `json`; the modules are: concurrent.futures, hashlib, os, sys; \
-         a Rust binding needs `--rust json=path`"
+        "`json` is not a standard module, and no pythrust.toml names it; \
+         the standard modules are: concurrent.futures, hashlib, os, sys"
     );
     assert!(src_err("import sys.argv\n").contains("import the top-level module"));
     assert_eq!(
@@ -1609,8 +1609,8 @@ fn a_binding_name_is_not_a_value() {
         err("import fastfs\ndef fastfs():\n    pass\n"),
         "`fastfs` names an imported Rust binding; choose another name"
     );
-    let msg = "no module named `fastfs`; the modules are: concurrent.futures, hashlib, os, sys; \
-               a Rust binding needs `--rust fastfs=path`";
+    let msg = "`fastfs` is not a standard module, and no pythrust.toml names it; \
+               the standard modules are: concurrent.futures, hashlib, os, sys";
     assert_eq!(src_err("import fastfs\n"), msg);
 }
 

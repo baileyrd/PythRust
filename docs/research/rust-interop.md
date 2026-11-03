@@ -10,7 +10,7 @@
 
 1. **Binding crate plus stub.** The app owns a *binding crate*: ordinary Rust with no Pythrust dependency. Its *stub* is a `.pyr` file of `temper def` signatures whose bodies are `...`. Outside a stub a `...` body is a named error ("stub bodies only; use pass"), a deliberate omission listed in the deviations, to revisit when Protocol or trait support lands. A stub parameter written `mut` or `owned` is a named error ("not supported in stubs yet"), since a change Rust makes would be lost.
 2. **`run` refuses for now.** The interpreter cannot call Rust: loading a library at run time needs `unsafe` in the compiler. `run` of a program that imports a binding is the named gap "run cannot call Rust bindings yet; use build". Revisit when an app needs `run` for interop programs.
-3. **Naming a binding: `--rust name=path`** on `check` and `build` (and on `run`, which then refuses). Interim: M6d's manifest supersedes it ([package-tool.md](package-tool.md), decided 2026-11-03).
+3. **Naming a binding: `--rust name=path`** on `check` and `build` (and on `run`, which then refuses). Interim: M6d's manifest replaced it ([package-tool.md](package-tool.md)); a binding is now `name = { path = "..." }` in `pythrust.toml`'s `[rust]`.
 4. **Driver:** fclone-lite hashing with xxh3 through a `fastfs` binding (below).
 5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/<stem>/` next to the output file, named by the output's file name without the executable extension, so `a.b.pyr` builds in `.pythrust/a.b/` (one directory per program, so two programs side by side never share a build), ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
 
@@ -43,9 +43,9 @@ The program writes `import fastfs` and calls `fastfs.file_xxh3(p)`. Imports keep
 
 ### Resolution
 
-- `--rust name=path` comes before the file and may repeat. `path` is the binding's directory, and the stub is `path/name.pyr`. `build` makes `path` absolute and writes it into the generated manifest as a TOML basic string with `\` and `"` escaped, so a relative path, a Windows path, a space or an apostrophe works.
+- M6d: each `name = { path = "..." }` of `pythrust.toml`'s `[rust]` gives a binding, `path` relative to the manifest (until M6d, `--rust name=path` before the file). `path` is the binding's directory, and the stub is `path/name.pyr`. `build` makes `path` absolute and writes it into the generated manifest as a TOML basic string with `\` and `"` escaped, so a relative path, a Windows path, a space or an apostrophe works.
 - `name` is the binding crate's library name, a Rust identifier, and the shim calls `name::function`: stub functions live at the crate root.
-- A name that is a standard module (`sys`, `os`, `hashlib`), a builtin (`len`, `print`), an exception class or a reserved word (`pause`, `shared`), or that repeats, is an error. So is a missing directory or stub, and an `import` of a name no `--rust` gives.
+- A name that is a standard module (`sys`, `os`, `hashlib`), a builtin (`len`, `print`), an exception class or a reserved word (`pause`, `shared`), is an error at its line in the manifest (a repeated key is a manifest error). So is a missing directory or stub, and an `import` of a name no `pythrust.toml` names.
 
 ### Front end
 

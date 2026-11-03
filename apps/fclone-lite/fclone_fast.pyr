@@ -3,7 +3,8 @@
 # docs/research/rust-interop.md#driver-fast-fclone-lite). The walk and the
 # grouping are fclone_lite.py's; an unreadable file has the digest "" and
 # is skipped, as fclone_lite.py skips its OSError. Build it with
-#   pythrust build --rust fastfs=apps/fclone-lite/fastfs apps/fclone-lite/fclone_fast.pyr
+#   pythrust build apps/fclone-lite/fclone_fast.pyr
+# which finds `fastfs` in apps/fclone-lite/pythrust.toml.
 import fastfs
 import os
 import sys

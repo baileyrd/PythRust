@@ -131,8 +131,10 @@ jobs:
       - run: cargo build --locked -p pythrust-compiler
       - name: Build the probe binding with Rust 1.88
         run: |
+          cp -R crates/pythrust-compiler/tests/rust/probe "$RUNNER_TEMP/probe"
+          printf '[package]\nname = "probe-check"\nversion = "0.1.0"\n\n[rust]\nprobe = { path = "probe" }\n' > "$RUNNER_TEMP/pythrust.toml"
           printf 'import probe\nprint(probe.double(21), probe.half(5.0))\n' > "$RUNNER_TEMP/main.pyr"
-          RUSTUP_TOOLCHAIN=1.88.0 ./target/debug/pythrust build --rust probe=crates/pythrust-compiler/tests/rust/probe "$RUNNER_TEMP/main.pyr"
+          RUSTUP_TOOLCHAIN=1.88.0 ./target/debug/pythrust build "$RUNNER_TEMP/main.pyr"
           test "$("$RUNNER_TEMP/main")" = "42 2.5"
 
   all:

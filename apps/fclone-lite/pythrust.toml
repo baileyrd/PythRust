@@ -1,0 +1,7 @@
+# fclone-lite's project: the Rust binding fclone_fast.pyr imports (M6d).
+[package]
+name = "fclone-lite"
+version = "0.1.0"
+
+[rust]
+fastfs = { path = "fastfs" }

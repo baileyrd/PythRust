@@ -1,5 +1,5 @@
 # expect-exit: 1
-# expect-error: no module named `nosuchmodule`
+# expect-error: `nosuchmodule` is not a standard module, and no pythrust.toml names it
 import nosuchmodule
 
 print("unreachable")
