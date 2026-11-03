@@ -127,9 +127,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: rustup toolchain install stable --profile minimal && rustup toolchain install 1.88.0 --profile minimal && rustup default stable
+      - run: rustup toolchain install stable --profile minimal && rustup toolchain install 1.97.0 --profile minimal && rustup default stable
       - run: cargo build --locked -p pythrust-compiler
-      - name: Lock two bindings and build one with Rust 1.88
+      - name: Lock two bindings and build one with Rust 1.97
         # The lock names `fastfs` and its crates.io dependency, which the
         # program does not import: the build resolves only what it uses.
         run: |
@@ -137,10 +137,10 @@ jobs:
           cp -R apps/fclone-lite/fastfs "$RUNNER_TEMP/fastfs"
           printf '[package]\nname = "probe-check"\nversion = "0.1.0"\n\n[rust]\nprobe = { path = "probe" }\nfastfs = { path = "fastfs" }\n' > "$RUNNER_TEMP/pythrust.toml"
           printf 'import probe\nprint(probe.double(21), probe.half(5.0))\n' > "$RUNNER_TEMP/main.pyr"
-          (cd "$RUNNER_TEMP" && RUSTUP_TOOLCHAIN=1.88.0 "$GITHUB_WORKSPACE/target/debug/pythrust" lock)
+          (cd "$RUNNER_TEMP" && RUSTUP_TOOLCHAIN=1.97.0 "$GITHUB_WORKSPACE/target/debug/pythrust" lock)
           grep -q 'name = "xxhash-rust"' "$RUNNER_TEMP/pythrust.lock"
           cp "$RUNNER_TEMP/pythrust.lock" "$RUNNER_TEMP/locked"
-          RUSTUP_TOOLCHAIN=1.88.0 ./target/debug/pythrust build "$RUNNER_TEMP/main.pyr"
+          RUSTUP_TOOLCHAIN=1.97.0 ./target/debug/pythrust build "$RUNNER_TEMP/main.pyr"
           test "$("$RUNNER_TEMP/main")" = "42 2.5"
           cmp "$RUNNER_TEMP/pythrust.lock" "$RUNNER_TEMP/locked"
       - name: Every app's lock matches its bindings

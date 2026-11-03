@@ -161,7 +161,7 @@ fn manifest_quotes_and_escapes_paths() {
     for part in [
         "name = \"pythrust_bindings\"",
         "crate-type = [\"staticlib\"]",
-        "rust-version = \"1.88\"",
+        "rust-version = \"1.97\"",
         "panic = \"unwind\"",
         "\n[workspace]\n",
     ] {
@@ -191,13 +191,19 @@ fn the_named_minimum_is_the_runtimes_rust_version() {
 /// choice 8).
 #[test]
 fn the_named_minimum_is_cis_oldest_toolchain() {
-    let ci = include_str!("../../../../../.github/workflows/ci.yml");
+    let ci = include_str!("../../../../../.github/workflows/ci.yml")
+        .split("\n  rust-version:\n")
+        .nth(1)
+        .and_then(|job| job.split("\n  compiler-rust-version:\n").next())
+        .expect("runtime minimum-version CI job");
     assert!(
         ci.contains(&format!("rustup toolchain install {MIN_RUST}.0 ")),
         "{ci}"
     );
-    assert!(
-        ci.contains(&format!("RUSTUP_TOOLCHAIN={MIN_RUST}.0 ")),
-        "{ci}"
+    assert_eq!(
+        ci.matches(&format!("RUSTUP_TOOLCHAIN={MIN_RUST}.0 "))
+            .count(),
+        2,
+        "both lock and build must use the runtime minimum: {ci}"
     );
 }

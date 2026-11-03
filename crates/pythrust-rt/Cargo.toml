@@ -6,9 +6,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 # Every program calling a Rust binding compiles this crate with the
-# user's toolchain (`docs/research/rust-interop.md#plumbing`): 1.88 for
-# `<[T]>::as_chunks`. A demonstrated lower bound, built in CI.
-rust-version = "1.88"
+# user's toolchain (`docs/research/rust-interop.md#plumbing`). Its minimum
+# matches the compiler and binding resolution target, checked in CI.
+rust-version = "1.97"
 
 [lib]
 # Linked into every program `pythrust build` compiles: as the staticlib,

@@ -75,7 +75,7 @@ The driver passes the parsed stubs to the parser (`parser::parse` gains the bind
 | Profile | the profile `pythrust` itself was built with, so the debug leak check stays on in tests; `panic = "unwind"` always |
 | Target | `--target` set to the host triple `pythrust` targets, so a `windows-gnu` default cannot meet MSVC's `link.exe` |
 | Directories | `--target-dir .pythrust/build/<stem>/target`; generated sources written to a temporary file and renamed. The object file and final link still use the private build directory (`private_dir`) |
-| Minimum toolchain | Rust 1.88, since every interop build compiles `pythrust-rt`, which uses `<[T]>::as_chunks` (1.88, in M6a's SHA-256; this note first said 1.87 for `usize::is_multiple_of`, and the plumbing PR's clippy MSRV check found the newer call); `#[unsafe(no_mangle)]` needs only 1.82. The plumbing PR records it as `pythrust-rt`'s `rust-version` and a CI job builds the probe with 1.88. This is a demonstrated lower bound, not a full MSRV audit. A missing `cargo` or an older rustc is a named error |
+| Minimum toolchain | Rust 1.97 for the runtime, generated binding crates and compiler (Nano, 2026-11-03). The runtime previously required 1.88 for `<[T]>::as_chunks`; the minimum now matches the compiler and dependency-resolution target. `pythrust-rt` declares `rust-version = "1.97"`, and CI locks bindings and builds the probe with 1.97. A missing `cargo` or an older rustc is a named error |
 
 ### The shim
 

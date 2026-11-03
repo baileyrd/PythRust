@@ -15,7 +15,7 @@ pub const CRATE_VERSION: &str = "0.0.0";
 /// The oldest Rust that builds `pythrust-rt`: its `rust-version`, which
 /// the generated crate declares so `pythrust lock` prefers crates that
 /// build on it.
-pub const MIN_RUST: &str = "1.88";
+pub const MIN_RUST: &str = "1.97";
 
 /// Words a Rust path cannot spell even as a raw identifier (`r#...`).
 const PATH_WORDS: &[&str] = &["self", "Self", "super", "crate", "_"];
