@@ -49,9 +49,12 @@ fastfs = { path = "fastfs" }
 - **Each binding stays its own workspace root**, as in M6b ([choice 7](#follow-on-choices)).
 - **Build directories** move to `.pythrust/` in the manifest's directory ([choice 4](#follow-on-choices)). Today they sit next to the output file; [rust-interop.md](rust-interop.md) says next to the `.pyr` file, and the code wins.
   - `.pythrust/build/<stem>-<hash>/` per program, where the hash covers the program's path relative to the manifest, so `a/main.pyr` and `b/main.pyr` never share a directory, and no program name can collide with the runtime's.
-  - `.pythrust/rt/<version>-<hash>/` for the runtime. Extraction writes to a temporary directory beside it and renames it into place; a build that loses the race uses the winner's copy, which is identical.
+  - `.pythrust/rt/<version>-<hash>/` for the runtime.
   - `.pythrust/lock/` for `pythrust lock`'s generated crate.
-  - A build holds an exclusive lock on its build directory for the whole build (generated files, cargo and the link), so two builds of the same program at once run one after the other.
+- **Concurrency.** Two file locks (std's `File::lock`, no new dependency) keep the shared paths consistent:
+  - *The project lock*, `.pythrust/project.lock`. A build holds it shared for its whole run, so nothing it reads (the runtime directory, `pythrust.lock`) changes under it. `pythrust lock`, and a build that must extract or repair the runtime, hold it exclusively.
+  - *The build lock*, in each program's build directory, held exclusively for the whole build (generated files, cargo and the link), so two builds of the same program run one after the other.
+- **Extraction.** A runtime directory is used only when every file matches the embedded source byte for byte, which also catches a half-written or edited copy. Otherwise the build drops its shared project lock, takes it exclusively, checks again (another build may have extracted it meanwhile), writes the files to a temporary directory, removes any mismatched copy and renames the new one into place, then goes back to a shared lock and checks once more. No build is running while it does this, since builds hold the lock shared.
 
 ## Why plain `--locked` now works
 
@@ -67,9 +70,11 @@ Checked on 2026-11-03 (cargo 1.99.1), with fclone-lite's generated crate:
 `pythrust lock` works as follows:
 
 1. It writes the generated `Cargo.toml` for all of `[rust]`.
-2. It copies in the current `pythrust.lock`, if one exists.
+2. It clears `.pythrust/lock/`'s `Cargo.lock` and copies in the current `pythrust.lock`, if one exists. With no `pythrust.lock`, resolution starts from nothing, so deleting the lock re-resolves everything; a test covers an update after an earlier lock.
 3. It runs `cargo metadata` without `--locked`. Cargo keeps every pin that still fits and resolves only what is new, as `cargo build` does.
-4. It copies the result back.
+4. It writes the result to a temporary file beside `pythrust.lock` and renames it into place.
+
+`pythrust lock` holds the project lock exclusively from step 1 to step 4, so two runs cannot share the scratch crate and no build reads a half-written `pythrust.lock`.
 
 `cargo update` is not wrapped in this cut ([choice 6](#follow-on-choices)). **To update dependencies**, delete `pythrust.lock` and run `pythrust lock`, which re-resolves everything; the user docs say so. A targeted update flag waits for a real need.
 
