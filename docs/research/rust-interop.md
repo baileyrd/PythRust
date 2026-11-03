@@ -10,7 +10,7 @@
 
 1. **Binding crate plus stub.** The app owns a *binding crate*: ordinary Rust with no Pythrust dependency. Its *stub* is a `.pyr` file of `temper def` signatures whose bodies are `...`. Outside a stub a `...` body is a named error ("stub bodies only; use pass"), a deliberate omission listed in the deviations, to revisit when Protocol or trait support lands. A stub parameter written `mut` or `owned` is a named error ("not supported in stubs yet"), since a change Rust makes would be lost.
 2. **`run` refuses for now.** The interpreter cannot call Rust: loading a library at run time needs `unsafe` in the compiler. `run` of a program that imports a binding is the named gap "run cannot call Rust bindings yet; use build". Revisit when an app needs `run` for interop programs.
-3. **Naming a binding: `--rust name=path`** on `check` and `build` (and on `run`, which then refuses). Interim: M6d's manifest supersedes it.
+3. **Naming a binding: `--rust name=path`** on `check` and `build` (and on `run`, which then refuses). Interim: M6d's manifest supersedes it ([package-tool.md](package-tool.md), decided 2026-11-03).
 4. **Driver:** fclone-lite hashing with xxh3 through a `fastfs` binding (below).
 5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/<stem>/` next to the program's `.pyr` file (one directory per program, so two programs side by side never share a build), ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
 
