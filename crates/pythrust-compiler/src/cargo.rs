@@ -1,6 +1,7 @@
 //! `build` for a program that calls Rust bindings (M6b,
 //! `docs/research/rust-interop.md#build`): writes the generated crate
-//! into `.pythrust/build/<stem>/` beside the program, resolves it from the
+//! into the project's `.pythrust/build/<stem>-<hash>/` (M6d), over the
+//! extracted runtime (`rt`), resolves it from the
 //! project's `pythrust.lock` and refuses any entry the lock does not
 //! cover (M6d), has cargo build it with `--locked`, and gives the
 //! staticlib to link in place of the plain runtime.
@@ -10,14 +11,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use pythrust_compiler::interop::gen::{self, CRATE, MIN_RUST};
+use pythrust_compiler::interop::runtime;
 
 use crate::json::{self, Json};
-use crate::lockfile::{self, Hold};
+use crate::lockfile;
 use crate::project::Found;
-use crate::Runtime;
-
-/// Where the runtime's source is, for an installed `pythrust`.
-const RT_SRC_ENV: &str = "PYTHRUST_RT_SRC";
+use crate::{rt, Runtime};
 
 /// The staticlib cargo writes for the generated crate.
 #[cfg(not(windows))]
@@ -64,12 +63,12 @@ pub(crate) fn build(
     out: &Path,
     project: &Found,
 ) -> Result<Runtime, String> {
-    let runtime = runtime_src()?;
     // The project lock first, then the build lock: never the other way.
-    let held_project = lockfile::hold(project.dir(), Hold::Shared)?;
+    let (runtime, held_project) = rt::extract(project.dir(), &rt::selected()?)?;
+    let runtime = crate::absolute(&runtime)?;
     let bindings = crates.iter().map(binding).collect::<Result<Vec<_>, _>>()?;
     let locked = lockfile::read(project)?;
-    let dir = crate_dir(out)?;
+    let dir = crate_dir(out, project)?;
     let held_build = lockfile::hold_build(&dir)?;
     write(&dir, "Cargo.toml", &manifest(&runtime, &bindings)?)?;
     write(&dir, "lib.rs", shims)?;
@@ -147,22 +146,6 @@ fn search_arg(value: &str) -> Option<String> {
         _ if cfg!(windows) => Some(format!("/LIBPATH:{path}")),
         _ => Some(format!("-L{path}")),
     }
-}
-
-/// `pythrust-rt`'s source: `$PYTHRUST_RT_SRC`, or where it was when this
-/// `pythrust` was compiled.
-pub(crate) fn runtime_src() -> Result<PathBuf, String> {
-    let dir = match std::env::var_os(RT_SRC_ENV) {
-        Some(dir) => PathBuf::from(dir),
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../pythrust-rt"),
-    };
-    if !dir.join("Cargo.toml").is_file() {
-        return Err(format!(
-            "pythrust: the runtime's source is not at {}; set {RT_SRC_ENV} to the pythrust-rt directory\n",
-            dir.display()
-        ));
-    }
-    crate::absolute(&dir)
 }
 
 /// `c` checked for cargo: a crate that is its own workspace, as
@@ -265,21 +248,26 @@ fn same(a: &Path, b: &Path) -> Result<bool, String> {
     Ok(canonical(a)? == canonical(b)?)
 }
 
-/// `.pythrust/build/<name>/` beside the executable `out`, apart from the
-/// project's own files in `.pythrust/`, named by its file name without
-/// the host's executable extension, which no other program's output in
-/// that directory shares (`a.pyr` builds `a`, `a.b.pyr` builds `a.b`,
-/// or `a.exe` and `a.b.exe`), created if missing.
-fn crate_dir(out: &Path) -> Result<PathBuf, String> {
+/// `.pythrust/build/<name>-<hash>/` in the directory of `project`, for
+/// the executable `out`: `<name>` is its file name without the host's
+/// executable extension, and `<hash>` covers its path from the project's
+/// directory, so `a/main.pyr` and `b/main.pyr` never share one. Created
+/// if missing.
+fn crate_dir(out: &Path, project: &Found) -> Result<PathBuf, String> {
     let name = match std::env::consts::EXE_EXTENSION {
         "" => out.file_name(),
         _ => out.file_stem(),
     }
-    .unwrap_or_default();
-    let dir = crate::output_dir(out)
+    .unwrap_or_default()
+    .to_string_lossy();
+    let out = crate::absolute(out)?;
+    let root = crate::absolute(project.dir())?;
+    let from_root = out.strip_prefix(&root).unwrap_or(&out);
+    let key = runtime::digest(from_root.to_string_lossy().as_bytes());
+    let dir = root
         .join(".pythrust")
         .join("build")
-        .join(name);
+        .join(format!("{name}-{key}"));
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("pythrust: cannot create {}: {e}\n", dir.display()))?;
     Ok(dir)

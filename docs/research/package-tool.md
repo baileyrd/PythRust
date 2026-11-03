@@ -26,7 +26,8 @@
    - On first use, the files are written to `.pythrust/rt/<version>-<hash>/`, where the hash covers the embedded sources. A build whose directory is missing or does not match writes it afresh. No cache is shared between projects in this cut.
    - The embedded set carries a standalone `Cargo.toml` for the runtime, with the workspace's inherited `version`, `edition`, `license` and `repository` written out and an empty `[workspace]`, since a copy outside the repository has no workspace to inherit from. The file-list test treats that `Cargo.toml` as the embedded counterpart of the repository's, and a test builds the extracted copy.
    - `PYTHRUST_RT_SRC` stays as a development override ([choice 5](#follow-on-choices)). When it is set, `build` prints one stderr line naming the path, and the extracted copy is keyed by that source's hash as for the embedded one.
-   - The PR reports first-build time.
+   - The PR reports first-build time (PR 4, release `pythrust`, a binding without dependencies, 4 CPUs, three runs each): a first build in a fresh project, which extracts the runtime and compiles it, took 2.02 to 2.22 s; a repeat build took 0.33 to 0.37 s.
+   - An override is snapshotted as its `Cargo.toml`, made standalone from the first workspace manifest above it when it inherits fields, and every file under `src/`. A copy's files must match; other files in it, such as cargo's, are not compared.
 
 ## The manifest
 
@@ -47,7 +48,7 @@ fastfs = { path = "fastfs" }
   - Diagnostics point into `pythrust.toml` with line and column.
 - **The generated crate depends only on the bindings a program imports** ([choice 1](#follow-on-choices)). `pythrust lock` resolves a crate that names every binding in `[rust]`. Plain `--locked` with that lock refuses a crate naming only some of them, since the generated crate's own entry lists every binding and cargo must rewrite it (found in PR 3, cargo 1.99.1; an earlier check here said otherwise). So `build` first lets cargo resolve the program's crate from the lock, which keeps every pin and drops what the program does not use, and refuses any entry the lock does not cover ([below](#how-build-uses-the-lock)). Nano chose this replacement on 2026-11-03 over building every binding for every program, which plain `--locked` would allow: any entry of a program's resolution the lock does not hold, or holds otherwise, is the stale-lock error. One lock fits every program, and a program never compiles or links a binding it does not import. PR 3 tests this on every CI OS and with Rust 1.97, the oldest toolchain a binding builds with, in CI's `rust-version` job. Tests also pin that an unimported binding, broken and missing from the lock, does not stop a build, and that an imported binding missing from the lock is the stale-lock error.
 - **Each binding stays its own workspace root**, as in M6b ([choice 7](#follow-on-choices)).
-- **Build directories** move to `.pythrust/` in the manifest's directory ([choice 4](#follow-on-choices)). Today they sit next to the output file, as [rust-interop.md](rust-interop.md) now says.
+- **Build directories** move to `.pythrust/` in the manifest's directory ([choice 4](#follow-on-choices)). Since PR 4 they do, as [rust-interop.md](rust-interop.md) says.
   - `.pythrust/build/<stem>-<hash>/` per program, where the hash covers the program's path relative to the manifest, so `a/main.pyr` and `b/main.pyr` never share a directory, and no program name can collide with the runtime's.
   - `.pythrust/rt/<version>-<hash>/` for the runtime.
   - `.pythrust/lock/` for `pythrust lock`'s generated crate.

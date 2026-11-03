@@ -11,6 +11,7 @@ use pythrust_compiler::interop::lock::{self, Lock};
 
 use crate::cargo::{self, Binding};
 use crate::project::Found;
+use crate::rt;
 
 /// The lock's file name, beside `pythrust.toml`.
 const FILE: &str = "pythrust.lock";
@@ -188,7 +189,7 @@ pub(crate) fn check(project: &Found) -> Result<PathBuf, String> {
 /// The lock cargo resolves for every binding of `project`, starting from
 /// `seed` (none: from nothing).
 fn fresh(project: &Found, seed: Option<&str>) -> Result<String, String> {
-    let runtime = cargo::runtime_src()?;
+    let runtime = crate::absolute(&rt::ensure(project.dir(), &rt::selected()?)?)?;
     let bindings = all_bindings(project)?;
     let dir = project.dir().join(DOT).join("lock");
     resolve(&dir, &runtime, &bindings, seed)

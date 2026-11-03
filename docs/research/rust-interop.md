@@ -12,7 +12,7 @@
 2. **`run` refuses for now.** The interpreter cannot call Rust: loading a library at run time needs `unsafe` in the compiler. `run` of a program that imports a binding is the named gap "run cannot call Rust bindings yet; use build". Revisit when an app needs `run` for interop programs.
 3. **Naming a binding: `--rust name=path`** on `check` and `build` (and on `run`, which then refuses). Interim: M6d's manifest replaced it ([package-tool.md](package-tool.md)); a binding is now `name = { path = "..." }` in `pythrust.toml`'s `[rust]`.
 4. **Driver:** fclone-lite hashing with xxh3 through a `fastfs` binding (below).
-5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/build/<stem>/` next to the output file, named by the output's file name without the executable extension, so `a.b.pyr` builds in `.pythrust/build/a.b/`, apart from the project's own files in `.pythrust/` (M6d PR 3) (one directory per program, so two programs side by side never share a build), ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
+5. **Toolchain and cache.** cargo and rustc are needed only for programs that import a binding; every other program builds exactly as today. The generated crate and cargo's target directory live in `.pythrust/build/<stem>-<hash>/` in the manifest's directory (M6d PR 4): `<stem>` is the output's file name without the executable extension, so `a.b.pyr` builds in `.pythrust/build/a.b-<hash>/`, and `<hash>` covers the output's path from the manifest's directory, so `x/main.pyr` and `y/main.pyr` never share a build. The directory is ignored by the repo's `.gitignore`, so a rebuild recompiles only what changed.
 
 ## Alternatives considered
 
@@ -57,7 +57,7 @@ The driver passes the parsed stubs to the parser (`parser::parse` gains the bind
 2. `build` writes a generated crate into `.pythrust/`: one `extern "C"` shim per stub function, which converts the arguments, calls the binding, and converts the result. It depends on every binding the program imports and on `pythrust-rt` by path, and cargo builds it as the one staticlib the program links in place of the plain runtime.
 3. **Reproducible dependencies.** The project's `pythrust.lock` decides every crates.io version (M6d, [package-tool.md](package-tool.md#how-build-uses-the-lock)). `pythrust lock` writes it: the generated crate's `Cargo.lock` over every binding of `[rust]`, resolved from the previous lock, under one header line. A binding's own `Cargo.lock` is ignored and never deleted. `build` then:
     1. refuses a missing lock ("no pythrust.lock; run `pythrust lock`") and a lock with a `git` package ("git dependencies are not supported yet; use a crates.io version");
-    2. copies the lock into `.pythrust/build/<stem>/Cargo.lock` and has cargo resolve the program's own crate from it, over only the bindings the program imports; cargo keeps every pin and drops the entries the program does not use;
+    2. copies the lock into the build directory's `Cargo.lock` and has cargo resolve the program's own crate from it, over only the bindings the program imports; cargo keeps every pin and drops the entries the program does not use;
     3. refuses any entry of that resolution the lock does not cover: an entry it lacks, another checksum, or a dependency the locked entry does not have, each named under "pythrust.lock is out of date; run `pythrust lock`". Dropped entries, and dependencies only an unimported binding's features added, are fine;
     4. runs `cargo rustc --locked` on that resolution.
 
@@ -70,11 +70,11 @@ The driver passes the parsed stubs to the parser (`parser::parse` gains the bind
 | Item | Choice |
 | --- | --- |
 | Runtime as a dependency | `pythrust-rt` gains `rlib` beside `staticlib` |
-| Runtime source | a path fixed when `pythrust` is compiled (its `CARGO_MANIFEST_DIR`), overridable by `PYTHRUST_RT_SRC`; an interop build ignores `PYTHRUST_RT` |
+| Runtime source | embedded in `pythrust` and extracted to `.pythrust/rt/<version>-<hash>/` (M6d PR 4, [package-tool.md](package-tool.md#the-manifest)); `PYTHRUST_RT_SRC` overrides it for development; an interop build ignores `PYTHRUST_RT` |
 | Generated manifest | edition 2021, an empty `[workspace]`, crate `pythrust_bindings` |
 | Profile | the profile `pythrust` itself was built with, so the debug leak check stays on in tests; `panic = "unwind"` always |
 | Target | `--target` set to the host triple `pythrust` targets, so a `windows-gnu` default cannot meet MSVC's `link.exe` |
-| Directories | `--target-dir .pythrust/build/<stem>/target`; generated sources written to a temporary file and renamed. The object file and final link still use the private build directory (`private_dir`) |
+| Directories | `--target-dir .pythrust/build/<stem>-<hash>/target`; generated sources written to a temporary file and renamed. The object file and final link still use the private build directory (`private_dir`) |
 | Minimum toolchain | Rust 1.97 for the runtime, generated binding crates and compiler (Nano, 2026-11-03). The runtime previously required 1.88 for `<[T]>::as_chunks`; the minimum now matches the compiler and dependency-resolution target. `pythrust-rt` declares `rust-version = "1.97"`, and CI locks bindings and builds the probe with 1.97. A missing `cargo` or an older rustc is a named error |
 
 ### The shim
@@ -159,7 +159,7 @@ Each waits for an app that needs it: named-builtin raises (`abi::Raise`); lists 
 | --- | --- |
 | `build` runs the binding's build scripts and fetches its crates | The same trust as `cargo build`; `[rust]` in the first `pythrust.toml` above the program names each binding explicitly, read only when the program imports one, and the lockfile check pins versions |
 | First build time (runtime plus binding with cargo, probably tens of seconds) | Incremental after that; measured in the plumbing PR, which fails if a first CI build exceeds 120 s |
-| Runtime source missing for an installed `pythrust` | `PYTHRUST_RT_SRC` names it; shipping it is M6d's |
+| Runtime source for an installed `pythrust` | shipped inside it since M6d PR 4; `PYTHRUST_RT_SRC` is a development override |
 | A binding's dependencies need system libraries | Taken from cargo's `native-static-libs` |
 | Binding output interleaving with Pythrust's buffered stdout | `call` flushes before every shim call; a binding calling `std::process::exit` loses unflushed output, a documented limit |
 | Windows linking | Target pinned to MSVC; the existing Windows job builds the probe |
