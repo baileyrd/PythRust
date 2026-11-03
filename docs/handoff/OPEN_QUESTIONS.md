@@ -15,3 +15,4 @@ Resolved items are checked and point to the D#/QA entry that answers them.
 - [x] Q10 (2026-11-03): the harness's quoted-string `mut`/`owned` stripping was fixed in #78 ("loosen keeps mut/owned inside string literals").
 - [x] Q11 (2026-11-03): #99 merged with `pythrust lock --check` (see roadmap M6d); #101 moved conformance scratch dirs onto the guard.
 - [ ] Q12 (2026-11-03, n): Design chat link for this project is unknown; paste it into SPEC.md when found.
+- [ ] Q13 (2026-11-03, n): A thread asks to silently widen `total = 0` / `total += 1.5` to float for fclone-lite. Reverses D3 [stated]; escalated to Nano. — interim: D3 stands (compile error with `0.0` fix-it).
