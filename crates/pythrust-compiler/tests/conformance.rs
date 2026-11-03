@@ -1692,6 +1692,7 @@ fn fclone_tasks_matches_fclone_lite() -> Res<()> {
     let dir = scratch("fclone-tasks")?;
     let root = fclone_tree(&dir)?;
     let want = fclone_cpython(&fclone_app("fclone_lite.py"), &root)?;
+    assert!(want.stdout.contains("2 bytes:"), "{}", want.stdout);
     let app = fclone_app("fclone_tasks.py");
     assert_eq!(fclone_cpython(&app, &root)?, want);
     let run_app = ["run".as_ref(), app.as_os_str()];
