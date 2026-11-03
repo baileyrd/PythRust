@@ -145,9 +145,13 @@ impl Package {
         format!("{} {}", self.name, self.version)
     }
 
-    /// The entry's identity: name, version and source.
+    fn id(&self) -> Id<'_> {
+        (&self.name, &self.version, self.source.as_deref())
+    }
+
+    /// Whether `other` has this entry's name, version and source.
     fn same_id(&self, other: &Package) -> bool {
-        self.name == other.name && self.version == other.version && self.source == other.source
+        self.id() == other.id()
     }
 }
 
@@ -157,30 +161,37 @@ impl Lock {
         self.packages.iter().find(|q| q.same_id(p))
     }
 
-    /// `p`'s dependencies as `(name, version)`. Cargo writes a bare name
-    /// when the lock holds one version of it, which differs between a
-    /// lock and its subset, so each is read against this lock.
-    fn edges(&self, p: &Package) -> BTreeSet<(String, String)> {
-        p.deps
-            .iter()
-            .filter_map(|dep| {
-                let mut parts = dep.split(' ');
-                let name = parts.next()?;
-                let version = match parts.next() {
-                    Some(v) => v.to_string(),
-                    None => self.only_version(name)?,
-                };
-                Some((name.to_string(), version))
-            })
-            .collect()
+    /// `p`'s dependencies, each the entry of this lock it names; `None`
+    /// when one names no single entry. Cargo writes a bare name or leaves
+    /// out the source when that is enough to tell entries apart, which
+    /// differs between a lock and its subset, so each is read against
+    /// this lock and compared by name, version and source.
+    fn edges(&self, p: &Package) -> Option<BTreeSet<Id<'_>>> {
+        p.deps.iter().map(|dep| self.named(dep)).collect()
     }
 
-    fn only_version(&self, name: &str) -> Option<String> {
-        let mut found = self.packages.iter().filter(|p| p.name == name);
+    /// The one entry the dependency `dep` names: `name`, `name version`
+    /// or `name version (source)`.
+    fn named(&self, dep: &str) -> Option<Id<'_>> {
+        let mut parts = dep.splitn(3, ' ');
+        let name = parts.next()?;
+        let version = parts.next();
+        let source = match parts.next() {
+            Some(s) => Some(s.strip_prefix('(')?.strip_suffix(')')?),
+            None => None,
+        };
+        let mut found = self.packages.iter().filter(|q| {
+            q.name == name
+                && version.is_none_or(|v| q.version == v)
+                && source.is_none_or(|s| q.source.as_deref() == Some(s))
+        });
         let first = found.next()?;
-        found.next().is_none().then(|| first.version.clone())
+        found.next().is_none().then(|| first.id())
     }
 }
+
+/// An entry's identity: name, version and source.
+type Id<'a> = (&'a str, &'a str, Option<&'a str>);
 
 /// The first git package of `lock`: its commit is not pinned the way a
 /// registry version is, so it is not supported yet.
@@ -221,7 +232,8 @@ pub fn uncovered(built: &Lock, locked: &Lock, root: &str) -> Vec<Change> {
             out.push(Change::Added(p.label()));
             continue;
         };
-        let covered = q.checksum == p.checksum && built.edges(p).is_subset(&locked.edges(q));
+        let edges = built.edges(p).zip(locked.edges(q));
+        let covered = q.checksum == p.checksum && edges.is_some_and(|(b, l)| b.is_subset(&l));
         if !covered {
             out.push(Change::Changed(p.label()));
         }

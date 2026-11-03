@@ -179,3 +179,33 @@ fn only_the_path_root_is_left_out() {
         [Change::Added("root 1.0.0".into())]
     );
 }
+
+/// Two entries of one name and version from different sources: an edge
+/// is known by its source too, so moving it from one to the other is a
+/// change, even though both entries stay in the lock.
+#[test]
+fn an_edge_that_switches_source_is_not_covered() {
+    const MIRROR: &str = "sparse+https://mirror.example/";
+    let text = |source: &str| {
+        let dep = format!("foo 1.0.0 ({source})");
+        lock_text("root", &["a"], &[("a", "0.1.0", &[dep.as_str()]), ("foo", "1.0.0", &[])])
+            + &format!("\n[[package]]\nname = \"foo\"\nversion = \"1.0.0\"\nsource = \"{MIRROR}\"\nchecksum = \"sum-mirror\"\n")
+    };
+    let parsed = |source: &str| parse(&text(source)).unwrap_or_else(|e| panic!("{e}"));
+    let locked = parsed(REG);
+    assert_eq!(uncovered(&parsed(REG), &locked, "root"), []);
+    assert_eq!(
+        uncovered(&parsed(MIRROR), &locked, "root"),
+        [Change::Changed("a 0.1.0".into())]
+    );
+}
+
+/// A dependency that names no single entry of its lock is never covered.
+#[test]
+fn an_unresolved_edge_is_not_covered() {
+    let locked = lock("root", &["a"], &[("a", "0.1.0", &["gone"])]);
+    assert_eq!(
+        uncovered(&locked.clone(), &locked, "root"),
+        [Change::Changed("a 0.1.0".into())]
+    );
+}
