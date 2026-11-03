@@ -282,9 +282,6 @@ fn inherited(code: &str) -> bool {
         .any(|k| k.split('.').any(|p| unquoted(p) == "workspace"))
 }
 
-/// Whether the table `name` holds package fields: `[package]` or a
-/// subtable of one field, such as `[package.version]`, but not
-/// `[package.metadata.*]`, which cargo leaves to tools.
 /// Whether the statement `code` in `table` sets a key under
 /// `package.metadata`, which Cargo leaves to other tools.
 fn in_metadata(table: &str, code: &str) -> bool {
@@ -298,6 +295,9 @@ fn in_metadata(table: &str, code: &str) -> bool {
     parts.starts_with(&["package", "metadata"])
 }
 
+/// Whether the table `name` holds package fields: `[package]` or a
+/// subtable of one field, such as `[package.version]`, but not
+/// `[package.metadata.*]`, which cargo leaves to tools.
 fn package_table(name: &str) -> bool {
     name == "package" || name.starts_with("package.") && !name.starts_with("package.metadata")
 }
