@@ -72,7 +72,7 @@ fn workspace_manifest(dir: &Path) -> Result<String, String> {
                 ));
             }
         };
-        if text.lines().any(|l| runtime::is_header(l, "workspace")) {
+        if runtime::is_workspace_root(&text) {
             return Ok(text);
         }
     }

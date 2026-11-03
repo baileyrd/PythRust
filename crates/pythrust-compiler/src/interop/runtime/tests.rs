@@ -42,6 +42,18 @@ fn standalone_reads_inheritance_in_every_spelling() {
     );
 }
 
+/// The manifest is read as statements, not lines: string and array
+/// contents are never headers or keys, a multi-line inherited value is
+/// copied whole, and only `[package]` fields are inherited.
+#[test]
+fn standalone_reads_statements_across_lines() {
+    let workspace = "[workspace]\n[workspace.package]\nauthors = [\n  \"a\",\n  \"b\", # c\n]\nversion = \"1.0.0\"\n";
+    let manifest = "[package]\ndescription = \"\"\"\n[workspace]\nversion.workspace = true\n\"\"\"\nkeywords = [\n  \"[workspace]\",\n]\nauthors.workspace = true\nversion.workspace = true\n\n[package.metadata.tool]\nfoo = { workspace = true }\n";
+    let got = standalone(manifest, workspace);
+    let want = "[package]\ndescription = \"\"\"\n[workspace]\nversion.workspace = true\n\"\"\"\nkeywords = [\n  \"[workspace]\",\n]\nauthors = [\n  \"a\",\n  \"b\", # c\n]\nversion = \"1.0.0\"\n\n[package.metadata.tool]\nfoo = { workspace = true }\n\n[workspace]\n";
+    assert_eq!(got, Ok(want.to_string()));
+}
+
 /// A manifest that is its own workspace root inherits from itself, and
 /// a header's trailing comment does not hide it.
 #[test]

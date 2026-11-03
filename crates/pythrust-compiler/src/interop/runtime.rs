@@ -95,29 +95,36 @@ pub fn embedded() -> Result<Vec<File>, String> {
 }
 
 /// `manifest` as a crate outside its workspace reads it: each
-/// `key.workspace = true` line becomes that key's line in `workspace`'s
-/// `[workspace.package]`, and an empty `[workspace]` ends it unless it
-/// already has one. A dependency with a `path` is refused, since it
-/// would resolve from wherever the manifest is copied.
+/// `[package]` field inherited with `key.workspace = true` (or
+/// `key = { workspace = true }`) becomes that key's value in the
+/// `[workspace.package]` of its own `[workspace]`, or else of
+/// `workspace`, and an empty `[workspace]` ends it unless it has one. A
+/// dependency with a `path` is refused, since it would resolve from
+/// wherever the manifest is copied.
 pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
-    let own = manifest.lines().any(|l| is_header(l, "workspace"));
-    let workspace = if own { manifest } else { workspace };
+    let stmts = statements(manifest);
+    let own = is_root(&stmts);
+    let theirs = if own {
+        None
+    } else {
+        Some(statements(workspace))
+    };
+    let ws = theirs.as_deref().unwrap_or(&stmts);
     let mut out = String::new();
-    let mut in_dependencies = false;
-    for line in manifest.lines() {
-        if let Some(name) = header(line) {
-            in_dependencies = names_dependencies(name);
+    let mut table = "";
+    for stmt in &stmts {
+        if let Some(name) = header(&stmt.code) {
+            table = name;
         }
-        let code = code(line);
-        if sets_path(code, in_dependencies) {
+        if sets_path(&stmt.code, names_dependencies(table)) {
             return Err(format!(
                 "`{}` is a path dependency, which would resolve from the extracted copy; a runtime override cannot have one",
-                code.trim()
+                stmt.code.trim()
             ));
         }
-        match inherited(code) {
-            Some(key) => out.push_str(&inherited_line(key, workspace)?),
-            None => out.push_str(line),
+        match inherited(&stmt.code).filter(|_| table == "package") {
+            Some(key) => out.push_str(&inherited_value(key, ws)?),
+            None => out.push_str(&stmt.lines.join("\n")),
         }
         out.push('\n');
     }
@@ -125,6 +132,111 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
         out.push_str("\n[workspace]\n");
     }
     Ok(out)
+}
+
+/// Whether the manifest `text` is a workspace root: it has a
+/// `[workspace]` table.
+pub fn is_workspace_root(text: &str) -> bool {
+    is_root(&statements(text))
+}
+
+fn is_root(stmts: &[Statement]) -> bool {
+    stmts.iter().any(|s| header(&s.code) == Some("workspace"))
+}
+
+/// One TOML statement: a header, or a key and its whole value, which may
+/// span lines (a multi-line array or string).
+#[derive(Default)]
+struct Statement<'a> {
+    lines: Vec<&'a str>,
+    /// Its lines without their comments, joined by newlines.
+    code: String,
+}
+
+/// The statements of `text`, read with the string, array and inline
+/// table context carried across lines.
+fn statements(text: &str) -> Vec<Statement<'_>> {
+    let mut out = Vec::new();
+    let mut scan = Scan::default();
+    let mut current = Statement::default();
+    for line in text.lines() {
+        let end = scan.line(line);
+        if !current.lines.is_empty() {
+            current.code.push('\n');
+        }
+        current.lines.push(line);
+        current.code.push_str(&line[..end]);
+        if !scan.open() {
+            out.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.lines.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// TOML's string openers, longest first.
+const QUOTES: [&str; 4] = ["\"\"\"", "'''", "\"", "'"];
+
+/// Where a scan of TOML is: inside which kind of string, and how deep in
+/// brackets and braces.
+#[derive(Default)]
+struct Scan {
+    string: Option<&'static str>,
+    depth: i32,
+}
+
+impl Scan {
+    /// Whether a statement continues on the next line.
+    fn open(&self) -> bool {
+        self.string.is_some() || self.depth > 0
+    }
+
+    /// Scans `line`, returning where its comment starts (its length when
+    /// it has none).
+    fn line(&mut self, line: &str) -> usize {
+        let b = line.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if let Some(close) = self.string {
+                i = self.in_string(b, i, close);
+                continue;
+            }
+            if let Some(open) = QUOTES
+                .into_iter()
+                .find(|q| b[i..].starts_with(q.as_bytes()))
+            {
+                self.string = Some(open);
+                i += open.len();
+                continue;
+            }
+            match b[i] {
+                b'#' => return i,
+                b'[' | b'{' => self.depth += 1,
+                b']' | b'}' => self.depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        if matches!(self.string, Some("\"" | "'")) {
+            self.string = None;
+        }
+        line.len()
+    }
+
+    /// Steps over one character of a string closed by `close`, at `i` in
+    /// `b`, and returns where the scan goes on.
+    fn in_string(&mut self, b: &[u8], i: usize, close: &'static str) -> usize {
+        if b[i] == b'\\' && close.starts_with('"') {
+            return i + 2;
+        }
+        if b[i..].starts_with(close.as_bytes()) {
+            self.string = None;
+            return i + close.len();
+        }
+        i + 1
+    }
 }
 
 /// Whether `line` sets a dependency's `path`: a key whose last dotted
@@ -147,36 +259,6 @@ fn sets_path(line: &str, in_dependencies: bool) -> bool {
         .any(|k| last_part(k) == "path")
 }
 
-/// The table name of the header `line`, such as `workspace` for
-/// `[workspace] # root`; `None` when `line` is not a header.
-fn header(line: &str) -> Option<&str> {
-    let rest = code(line).trim().strip_prefix('[')?;
-    Some(
-        rest.trim_end()
-            .trim_end_matches(']')
-            .trim_start_matches('[')
-            .trim(),
-    )
-}
-
-/// `line` without its comment: everything before a `#` outside a
-/// string.
-fn code(line: &str) -> &str {
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    for (i, c) in line.char_indices() {
-        match (quote, c) {
-            (Some('"'), '\\') => escaped = !escaped,
-            (Some(q), _) if c == q && !escaped => quote = None,
-            (Some(_), _) => escaped = false,
-            (None, '"' | '\'') => quote = Some(c),
-            (None, '#') => return &line[..i],
-            (None, _) => {}
-        }
-    }
-    line
-}
-
 /// The key a comment-free line inherits from the workspace, written as
 /// `key.workspace = true` or `key = { workspace = true }`.
 fn inherited(code: &str) -> Option<&str> {
@@ -187,11 +269,6 @@ fn inherited(code: &str) -> Option<&str> {
     }
     (value == "true").then_some(())?;
     key.trim().strip_suffix(".workspace").map(str::trim_end)
-}
-
-/// Whether `line` is the header of the table `name`.
-pub fn is_header(line: &str, name: &str) -> bool {
-    header(line) == Some(name)
 }
 
 /// Whether the dotted key or table name `name` has a part naming a
@@ -210,17 +287,33 @@ fn unquoted(part: &str) -> &str {
     part.trim().trim_matches(['"', '\''])
 }
 
-/// The line of `[workspace.package]` in `workspace` that sets `key`.
-fn inherited_line(key: &str, workspace: &str) -> Result<String, String> {
-    let mut lines = workspace
-        .lines()
-        .skip_while(|l| !is_header(l, "workspace.package"));
-    lines.next();
-    lines
-        .take_while(|l| !l.trim_start().starts_with('['))
-        .find(|l| l.split_once('=').is_some_and(|(k, _)| k.trim() == key))
-        .map(|l| l.trim().to_string())
-        .ok_or_else(|| format!("the workspace's [workspace.package] sets no `{key}`"))
+/// The table name of the header `code`, such as `workspace` for
+/// `[workspace]`; `None` when `code` is not a header.
+fn header(code: &str) -> Option<&str> {
+    let rest = code.trim().strip_prefix('[')?;
+    Some(rest.trim_end_matches(']').trim_start_matches('[').trim())
+}
+
+/// The statement of `[workspace.package]` in `workspace` that sets
+/// `key`, as written.
+fn inherited_value(key: &str, workspace: &[Statement]) -> Result<String, String> {
+    let mut table = "";
+    for stmt in workspace {
+        if let Some(name) = header(&stmt.code) {
+            table = name;
+            continue;
+        }
+        let sets = stmt
+            .code
+            .split_once('=')
+            .is_some_and(|(k, _)| k.trim() == key);
+        if table == "workspace.package" && sets {
+            return Ok(stmt.lines.join("\n"));
+        }
+    }
+    Err(format!(
+        "the workspace's [workspace.package] sets no `{key}`"
+    ))
 }
 
 /// The hash of `files` that names their extracted copy: FNV-1a over each
