@@ -173,13 +173,76 @@ fn statements(text: &str) -> Vec<Statement<'_>> {
         current.lines.push(line);
         current.code.push_str(&line[..end]);
         if !scan.open() {
-            out.push(std::mem::take(&mut current));
+            out.push(finished(std::mem::take(&mut current)));
         }
     }
     if !current.lines.is_empty() {
-        out.push(current);
+        out.push(finished(current));
     }
     out
+}
+
+/// `stmt` with the unicode escapes in its code decoded.
+fn finished(mut stmt: Statement<'_>) -> Statement<'_> {
+    stmt.code = decoded(&stmt.code);
+    stmt
+}
+
+/// `code` with each `\\uXXXX` or `\\UXXXXXXXX` escape in a basic string
+/// replaced by its character, so a quoted key reads as cargo decodes it.
+/// An escape that would make a quote, a backslash or a control
+/// character stays as written, so string bounds never move.
+fn decoded(code: &str) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut close: Option<&'static str> = None;
+    let mut i = 0;
+    while let Some(c) = code[i..].chars().next() {
+        let rest = &code[i..];
+        let step = match close {
+            None => QUOTES.into_iter().find(|q| rest.starts_with(q)).map(|q| {
+                close = Some(q);
+                out.push_str(q);
+                q.len()
+            }),
+            Some(q) if q.starts_with('"') && c == '\\' => Some(push_escape(rest, &mut out)),
+            Some(q) if rest.starts_with(q) => {
+                close = None;
+                let run = rest.bytes().take_while(|&b| b == q.as_bytes()[0]).count();
+                let len = if q.len() == 3 { run.min(5) } else { 1 };
+                out.push_str(&rest[..len]);
+                Some(len)
+            }
+            Some(_) => None,
+        };
+        i += step.unwrap_or_else(|| {
+            out.push(c);
+            c.len_utf8()
+        });
+    }
+    out
+}
+
+/// Pushes the escape at the start of `rest` onto `out`, decoded when it
+/// is a safe unicode escape, and returns its length.
+fn push_escape(rest: &str, out: &mut String) -> usize {
+    let digits = match rest.as_bytes().get(1) {
+        Some(b'u') => 4,
+        Some(b'U') => 8,
+        _ => 0,
+    };
+    let decoded = rest
+        .get(2..2 + digits)
+        .filter(|hex| digits > 0 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+        .and_then(char::from_u32)
+        .filter(|ch| !ch.is_control() && !matches!(ch, '"' | '\'' | '\\'));
+    if let Some(ch) = decoded {
+        out.push(ch);
+        return 2 + digits;
+    }
+    let len = 1 + rest[1..].chars().next().map_or(0, char::len_utf8);
+    out.push_str(&rest[..len]);
+    len
 }
 
 /// TOML's string openers, longest first.

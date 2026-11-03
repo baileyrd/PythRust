@@ -51,6 +51,23 @@ fn standalone_leaves_package_metadata_alone() {
     }
 }
 
+/// A `\\u`/`\\U` escape in a basic-string key reads as cargo decodes it,
+/// and an escape that makes a quote leaves the string's bounds alone.
+#[test]
+fn standalone_reads_escapes_in_basic_strings() {
+    let manifest =
+        "[package]\ndescription = \"a\\u0022 \\\" b\"\n\"\\u0076ersion\".workspace = true\n";
+    let got = standalone(manifest, WORKSPACE_TOML);
+    assert!(
+        got.as_ref()
+            .is_err_and(|e| e.contains("make the override's Cargo.toml standalone")),
+        "{got:?}"
+    );
+    let plain = "[package]\ndescription = \"a\\u0022 \\\" b\"\nversion.workspace = true\n";
+    let want = "[package]\ndescription = \"a\\u0022 \\\" b\"\nversion = \"0.3.0\"\n\n[workspace]\n";
+    assert_eq!(standalone(plain, WORKSPACE_TOML), Ok(want.to_string()));
+}
+
 /// The supported inheritance line keeps working through a trailing
 /// comment, and a `#` inside a string is not a comment.
 #[test]
@@ -177,6 +194,9 @@ fn standalone_refuses_a_path_dependency() {
         "target.'cfg(unix)' = { build-dependencies = { h = { path = \"h\" } } }\n",
         "target.'cfg(target_os = \"linux\")' = { dependencies = { helper = { path = \"../helper\" } } }\n",
         "[target.\"cfg(a = \\\"b\\\")\".dependencies]\nh = { path = \"h\" }\n",
+        "[dependencies]\nhelper = { \"\\u0070ath\" = \"../helper\" }\n",
+        "[dependencies.helper]\n\"\\U00000070ath\" = \"h\"\n",
+        "[\"dep\\u0065ndencies\".helper]\npath = \"h\"\n",
     ];
     for manifest in refused {
         let got = standalone(manifest, "");
@@ -188,6 +208,8 @@ fn standalone_refuses_a_path_dependency() {
     let lib =
         "[lib]\npath = \"src/lib.rs\"\n[package]\nname = \"path\"\n[dependencies]\nxpath = \"1\"\n";
     assert!(standalone(lib, "").is_ok());
+    let literal = "[dependencies.helper]\n'\\u0070ath' = \"h\"\n";
+    assert!(standalone(literal, "").is_ok());
 }
 
 #[test]
