@@ -119,7 +119,7 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
                 stmt.code.trim()
             ));
         }
-        let inherits = !metadata && inheritable(&table, &stmt.code) && inherited(&stmt.code);
+        let inherits = !metadata && inherited(&table, &stmt.code);
         let rewritable = !own && table == "package";
         match (inherits, supported(&stmt.code).filter(|_| rewritable)) {
             (false, _) => out.push_str(&stmt.lines.join("\n")),
@@ -268,22 +268,89 @@ fn sets_path(line: &str, in_dependencies: bool) -> bool {
         .any(|k| last_part(k) == "path")
 }
 
-/// Whether the statement `code` inherits from a workspace in any
-/// spelling: a key part named `workspace`, bare or quoted, in its key or,
-/// when its value is an inline table, in that table's keys. Recognized only to refuse what `supported` does
-/// not rewrite.
-fn inherited(code: &str) -> bool {
+/// Whether the statement `code` in `table` inherits from a workspace
+/// where cargo reads inheritance, in any spelling: a key part named
+/// `workspace`, bare or quoted, in its key or in the keys of an
+/// inline-table value, judged by each key's full path so a
+/// `package.metadata` subtree is skipped. Recognized only to refuse
+/// what `supported` does not rewrite.
+fn inherited(table: &str, code: &str) -> bool {
     let Some((key, value)) = code.split_once('=') else {
         return false;
     };
-    let table = value.trim_start().starts_with('{').then_some(value);
-    let keys = table
-        .into_iter()
-        .flat_map(|v| v.split(['{', ',']))
-        .filter_map(|part| part.split_once('=').map(|(k, _)| k));
-    std::iter::once(key)
-        .chain(keys)
-        .any(|k| k.split('.').any(|p| unquoted(p) == "workspace"))
+    let base = parts(table);
+    let mut keys = vec![key.trim().to_string()];
+    inline_keys(key.trim(), value, &mut keys);
+    keys.iter().any(|key| {
+        let own = parts(key);
+        let full: Vec<&str> = base.iter().chain(&own).copied().collect();
+        own.contains(&"workspace")
+            && !full.starts_with(&["package", "metadata"])
+            && inheritable(&full)
+    })
+}
+
+/// Pushes onto `out` the full dotted key, under `key`, of every key in
+/// the inline-table `value`, nested tables included. Array contents and
+/// string contents are skipped.
+fn inline_keys(key: &str, value: &str, out: &mut Vec<String>) {
+    let mut open: Vec<String> = Vec::new();
+    let mut last = key.to_string();
+    let mut name = String::new();
+    let mut naming = false;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut arrays = 0usize;
+    for c in value.chars() {
+        if let Some(q) = quote {
+            if naming {
+                name.push(c);
+            }
+            let closes = c == q && !escaped;
+            escaped = q == '"' && c == '\\' && !escaped;
+            if closes {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => {
+                quote = Some(c);
+                if naming {
+                    name.push(c);
+                }
+            }
+            '[' => arrays += 1,
+            ']' => arrays = arrays.saturating_sub(1),
+            _ if arrays > 0 => {}
+            '{' => {
+                open.push(std::mem::take(&mut last));
+                naming = true;
+            }
+            '}' => {
+                open.pop();
+                naming = false;
+            }
+            ',' => naming = !open.is_empty(),
+            '=' if naming => {
+                let prefix = open.last().map_or("", String::as_str);
+                last = format!("{prefix}.{}", name.trim());
+                out.push(last.clone());
+                name.clear();
+                naming = false;
+            }
+            _ if naming => name.push(c),
+            _ => {}
+        }
+    }
+}
+
+/// The unquoted, non-empty parts of the dotted key or table name `name`.
+fn parts(name: &str) -> Vec<&str> {
+    name.split('.')
+        .map(unquoted)
+        .filter(|part| !part.is_empty())
+        .collect()
 }
 
 /// Whether the statement `code` in `table` sets a key under
@@ -292,13 +359,11 @@ fn in_metadata(table: &str, code: &str) -> bool {
     path_parts(table, code).starts_with(&["package", "metadata"])
 }
 
-/// Whether the statement `code` in `table` is somewhere cargo reads
-/// workspace inheritance: a package field, a dependency, or `lints`,
-/// judged from the statement's full key path so a root-table
-/// `package.x` or `package = { ... }` counts as a package field.
+/// Whether the full key path `parts` is somewhere cargo reads workspace
+/// inheritance: a package field (a root-table `package.x` or
+/// `package = { ... }` included), a dependency, or `lints`.
 /// `package.metadata` is excluded by the caller.
-fn inheritable(table: &str, code: &str) -> bool {
-    let parts = path_parts(table, code);
+fn inheritable(parts: &[&str]) -> bool {
     match parts.first() {
         Some(&"workspace") | None => false,
         Some(&"lints") | Some(&"package") => true,
@@ -310,12 +375,9 @@ fn inheritable(table: &str, code: &str) -> bool {
 /// `table`; for a header, the table's own name.
 fn path_parts<'a>(table: &'a str, code: &'a str) -> Vec<&'a str> {
     let key = code.split_once('=').map_or("", |(key, _)| key);
-    table
-        .split('.')
-        .chain(key.split('.'))
-        .map(unquoted)
-        .filter(|part| !part.is_empty())
-        .collect()
+    let mut all = parts(table);
+    all.extend(parts(key));
+    all
 }
 
 /// The key of a `key.workspace = true` line with a bare key, the one

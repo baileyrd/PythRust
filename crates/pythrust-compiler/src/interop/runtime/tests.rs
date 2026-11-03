@@ -42,6 +42,8 @@ fn standalone_leaves_package_metadata_alone() {
         "[package.metadata.tool]\ndependencies = { x = { path = \"p\" } }\n",
         "[package]\nmetadata.dependencies.path = \"p\"\n",
         "package.metadata.dev-dependencies.path = \"p\"\n",
+        "package = { name = \"rt\", version = \"1.0.0\", metadata = { tool = { workspace = true } } }\n",
+        "package = { metadata = { a = { b = 1 }, tool = { \"workspace\" = true } }, name = \"rt\" }\n",
     ];
     for manifest in paths {
         let got = standalone(manifest, WORKSPACE_TOML);
@@ -83,6 +85,8 @@ fn standalone_refuses_other_inheritance_forms() {
         "[target.'cfg(unix)'.dev-dependencies]\nlibc = { version = \"1\", workspace = true }\n",
         "package.name = \"rt\"\npackage.version.workspace = true\npackage.edition = \"2021\"\n",
         "package = { name = \"rt\", version = { workspace = true } }\n",
+        "package = { metadata = { tool = { workspace = true } }, version = { workspace = true } }\n",
+        "package = { version = { workspace = true }, metadata = { workspace = true } }\n",
     ];
     for manifest in refused {
         let got = standalone(manifest, WORKSPACE_TOML);
