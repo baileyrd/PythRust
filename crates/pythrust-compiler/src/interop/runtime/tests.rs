@@ -54,6 +54,21 @@ fn standalone_reads_statements_across_lines() {
     assert_eq!(got, Ok(want.to_string()));
 }
 
+/// A closing run of four or five quotes ends a multi-line string, and a
+/// quoted table name is the table it names.
+#[test]
+fn standalone_reads_quote_runs_and_quoted_headers() {
+    let manifest = "[\"package\"]\nauthors = [\"\"\"A\"\"\"\"]\nnote = '''B'''''\nversion.workspace = true\n[dependencies.helper]\npath = \"../helper\"\n";
+    let got = standalone(manifest, WORKSPACE_TOML);
+    assert!(
+        got.as_ref().is_err_and(|e| e.contains("path dependency")),
+        "{got:?}"
+    );
+    let manifest = "[ 'package' ]\nauthors = [\"\"\"A\"\"\"\"]\nversion.workspace = true\n";
+    let got = standalone(manifest, WORKSPACE_TOML).unwrap();
+    assert!(got.contains("\nversion = \"0.3.0\"\n"), "{got}");
+}
+
 /// A manifest that is its own workspace root inherits from itself, and
 /// a header's trailing comment does not hide it.
 #[test]

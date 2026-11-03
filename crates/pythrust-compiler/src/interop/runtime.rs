@@ -111,12 +111,12 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
     };
     let ws = theirs.as_deref().unwrap_or(&stmts);
     let mut out = String::new();
-    let mut table = "";
+    let mut table = String::new();
     for stmt in &stmts {
         if let Some(name) = header(&stmt.code) {
             table = name;
         }
-        if sets_path(&stmt.code, names_dependencies(table)) {
+        if sets_path(&stmt.code, names_dependencies(&table)) {
             return Err(format!(
                 "`{}` is a path dependency, which would resolve from the extracted copy; a runtime override cannot have one",
                 stmt.code.trim()
@@ -141,7 +141,9 @@ pub fn is_workspace_root(text: &str) -> bool {
 }
 
 fn is_root(stmts: &[Statement]) -> bool {
-    stmts.iter().any(|s| header(&s.code) == Some("workspace"))
+    stmts
+        .iter()
+        .any(|s| header(&s.code).as_deref() == Some("workspace"))
 }
 
 /// One TOML statement: a header, or a key and its whole value, which may
@@ -231,11 +233,14 @@ impl Scan {
         if b[i] == b'\\' && close.starts_with('"') {
             return i + 2;
         }
-        if b[i..].starts_with(close.as_bytes()) {
-            self.string = None;
-            return i + close.len();
+        if !b[i..].starts_with(close.as_bytes()) {
+            return i + 1;
         }
-        i + 1
+        self.string = None;
+        // A multi-line string may end with up to two quotes of its own
+        // before its closing three: `"""a""""` is `a"`.
+        let run = b[i..].iter().take_while(|&&c| c == b[i]).count();
+        i + if close.len() == 3 { run.min(5) } else { 1 }
     }
 }
 
@@ -289,15 +294,16 @@ fn unquoted(part: &str) -> &str {
 
 /// The table name of the header `code`, such as `workspace` for
 /// `[workspace]`; `None` when `code` is not a header.
-fn header(code: &str) -> Option<&str> {
+fn header(code: &str) -> Option<String> {
     let rest = code.trim().strip_prefix('[')?;
-    Some(rest.trim_end_matches(']').trim_start_matches('[').trim())
+    let name = rest.trim_end_matches(']').trim_start_matches('[');
+    Some(name.split('.').map(unquoted).collect::<Vec<_>>().join("."))
 }
 
 /// The statement of `[workspace.package]` in `workspace` that sets
 /// `key`, as written.
 fn inherited_value(key: &str, workspace: &[Statement]) -> Result<String, String> {
-    let mut table = "";
+    let mut table = String::new();
     for stmt in workspace {
         if let Some(name) = header(&stmt.code) {
             table = name;
@@ -306,7 +312,7 @@ fn inherited_value(key: &str, workspace: &[Statement]) -> Result<String, String>
         let sets = stmt
             .code
             .split_once('=')
-            .is_some_and(|(k, _)| k.trim() == key);
+            .is_some_and(|(k, _)| unquoted(k) == unquoted(key));
         if table == "workspace.package" && sets {
             return Ok(stmt.lines.join("\n"));
         }
