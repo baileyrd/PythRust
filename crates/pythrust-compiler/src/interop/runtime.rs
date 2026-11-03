@@ -113,7 +113,7 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
             table = name;
         }
         let metadata = in_metadata(&table, &stmt.code);
-        if !metadata && sets_path(&stmt.code, names_dependencies(&table)) {
+        if sets_path(&table, &stmt.code) {
             return Err(format!(
                 "`{}` is a path dependency, which would resolve from the extracted copy; a runtime override cannot have one",
                 stmt.code.trim()
@@ -248,24 +248,40 @@ impl Scan {
     }
 }
 
-/// Whether `line` sets a dependency's `path`: a key whose last dotted
-/// part is `path`, bare or quoted, on the line or in its inline tables,
-/// where the table (`in_dependencies`) or the line's own dotted key names
-/// a dependency table. A line heuristic, not a TOML parser: it errs
-/// towards refusing, and a refusal costs only a named error.
-fn sets_path(line: &str, in_dependencies: bool) -> bool {
-    let Some((key, value)) = line.split_once('=') else {
-        return false;
+/// Whether the statement `code` in `table` sets a dependency's `path`:
+/// a key whose last part is `path`, bare or quoted, below a part naming
+/// a dependency table, judged by the full path of its key and of each
+/// key in an inline-table value, outside `package.metadata`. A
+/// heuristic, not a TOML parser: it errs towards refusing, and a
+/// refusal costs only a named error.
+fn sets_path(table: &str, code: &str) -> bool {
+    full_keys(table, code).iter().any(|full| {
+        let Some((last, above)) = full.split_last() else {
+            return false;
+        };
+        last == "path"
+            && !matches!(full.as_slice(), [a, b, ..] if a == "package" && b == "metadata")
+            && above.iter().any(|part| part.ends_with("dependencies"))
+    })
+}
+
+/// The full key path, as unquoted parts, of the statement `code` in
+/// `table` and of every key in its inline-table value.
+fn full_keys(table: &str, code: &str) -> Vec<Vec<String>> {
+    let Some((key, value)) = code.split_once('=') else {
+        return Vec::new();
     };
-    if !in_dependencies && !names_dependencies(key) {
-        return false;
-    }
-    let keys = value
-        .split(['{', ','])
-        .filter_map(|part| part.split_once('=').map(|(k, _)| k));
-    std::iter::once(key)
-        .chain(keys)
-        .any(|k| last_part(k) == "path")
+    let mut keys = vec![key.trim().to_string()];
+    inline_keys(key.trim(), value, &mut keys);
+    keys.iter()
+        .map(|key| {
+            parts(table)
+                .into_iter()
+                .chain(parts(key))
+                .map(str::to_string)
+                .collect()
+        })
+        .collect()
 }
 
 /// Whether the statement `code` in `table` inherits from a workspace
@@ -395,18 +411,6 @@ fn unsupported(code: &str) -> String {
         "`{}` inherits from a workspace in a form pythrust does not rewrite: only `key.workspace = true` in [package], from a workspace above; make the override's Cargo.toml standalone",
         code.trim()
     )
-}
-
-/// Whether the dotted key or table name `name` has a part naming a
-/// dependency table (`dependencies`, `dev-dependencies`, ...).
-fn names_dependencies(name: &str) -> bool {
-    name.split('.')
-        .any(|p| unquoted(p).ends_with("dependencies"))
-}
-
-/// The last part of the dotted key `key`, unquoted.
-fn last_part(key: &str) -> &str {
-    unquoted(key.rsplit('.').next().unwrap_or_default())
 }
 
 fn unquoted(part: &str) -> &str {

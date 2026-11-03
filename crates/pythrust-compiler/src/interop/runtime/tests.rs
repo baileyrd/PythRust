@@ -173,6 +173,8 @@ fn standalone_refuses_a_path_dependency() {
         "[dependencies.helper]\n\"path\" = \"../helper\"\n",
         "dependencies.helper.path = \"../helper\"\n[package]\n",
         "dependencies = { helper = { path = \"../helper\" } }\n",
+        "target = { 'cfg(unix)' = { dependencies = { helper = { path = \"../helper\" } } } }\n",
+        "target.'cfg(unix)' = { build-dependencies = { h = { path = \"h\" } } }\n",
     ];
     for manifest in refused {
         let got = standalone(manifest, "");
