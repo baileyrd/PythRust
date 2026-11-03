@@ -688,7 +688,17 @@ fn the_embedded_runtime_is_extracted_and_repaired() {
     assert_eq!(read(lib), original);
     assert!(rt.join("src/abi.rs").is_file());
     assert!(!rt.join("build.rs").exists());
-    assert_eq!(runtimes(&dir), [rt]);
+    assert_eq!(runtimes(&dir), std::slice::from_ref(&rt));
+
+    let hash = name.rsplit('-').next().unwrap();
+    let tmp = rt.with_file_name(format!(".{hash}.tmp"));
+    fs::remove_dir_all(&rt).unwrap();
+    fs::write(&rt, "not a directory").unwrap();
+    fs::write(&tmp, "not a directory").unwrap();
+    let built = build_only(&dir, "main.pyr");
+    assert!(built.status.success(), "{}", text(&built.stderr));
+    assert_eq!(read(rt.join("src/lib.rs")), original);
+    assert!(!tmp.exists());
 }
 
 /// Builds at once share one extraction: three of two programs into a

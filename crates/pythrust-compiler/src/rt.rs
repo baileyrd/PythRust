@@ -181,12 +181,19 @@ fn matches(dir: &Path, files: &[Source]) -> bool {
     files_in(dir).is_ok_and(|found| found == files)
 }
 
-/// Removes the directory `path` if it is there.
+/// Removes whatever is at `path`, if anything: a directory with all it
+/// holds, or a file or symbolic link, which is never followed.
 fn remove(path: &Path) -> Result<(), String> {
-    match std::fs::remove_dir_all(path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(format!("pythrust: cannot remove {}: {e}\n", path.display()))
-        }
-        _ => Ok(()),
-    }
+    let failed = |e: std::io::Error| format!("pythrust: cannot remove {}: {e}\n", path.display());
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(failed(e)),
+    };
+    let removed = if meta.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    removed.map_err(failed)
 }
