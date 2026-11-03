@@ -2050,7 +2050,7 @@ fn build_takes_option_like_directories_as_paths() -> Res<()> {
         let out = Command::new(pythrust_bin()?)
             .arg("build")
             .arg(&source)
-            .current_dir(&root)
+            .current_dir(&*root)
             .output()
             .map_err(|e| format!("cannot run pythrust build: {e}"))?;
         if !out.status.success() {

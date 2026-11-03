@@ -1,5 +1,8 @@
 //! Helpers the integration tests share: each test's scratch directory.
 
+// Each suite compiles this module on its own and uses only part of it.
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,7 +28,6 @@ impl std::ops::Deref for Scratch {
 
 impl Scratch {
     /// Ends a test that passed: the directory goes, unless under [`KEEP`].
-    #[allow(dead_code)] // Used by the suites made with `scratch_until_pass`.
     pub fn pass(mut self) {
         self.remove = true;
     }
@@ -56,7 +58,6 @@ pub fn scratch(suite: &str, test: &str) -> Scratch {
 
 /// [`scratch`], for a test that returns errors: kept, its path printed,
 /// unless the test calls [`Scratch::pass`].
-#[allow(dead_code)] // Used by the suites whose tests return `Result`.
 pub fn scratch_until_pass(suite: &str, test: &str) -> Scratch {
     Scratch {
         path: fresh(suite, test),
