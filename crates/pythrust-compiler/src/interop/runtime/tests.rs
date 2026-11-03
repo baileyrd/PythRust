@@ -73,6 +73,14 @@ fn standalone_refuses_other_inheritance_forms() {
         "[package]\nversion = { \"workspace\" = true }\n",
         "[package.version]\nworkspace = true\n",
         "[package]\nversion.workspace = true\n[workspace]\n[workspace.package]\nversion = \"1.0.0\"\n",
+        "[package]\nversion.workspace = true\n[workspace.package]\nversion = \"7.7.7\"\n",
+        "workspace.resolver = \"2\"\n[package]\nversion.workspace = true\n",
+        "[lints]\nworkspace = true\n",
+        "lints.workspace = true\n[package]\n",
+        "[dependencies]\nlibc = { workspace = true }\n",
+        "[dependencies]\nlibc.workspace = true\n",
+        "[dependencies.libc]\nworkspace = true\n",
+        "[target.'cfg(unix)'.dev-dependencies]\nlibc = { version = \"1\", workspace = true }\n",
     ];
     for manifest in refused {
         let got = standalone(manifest, WORKSPACE_TOML);
@@ -81,6 +89,28 @@ fn standalone_refuses_other_inheritance_forms() {
                 .is_err_and(|e| e.contains("make the override's Cargo.toml standalone")),
             "{manifest}: {got:?}"
         );
+    }
+    let features = "[features]\nworkspace = []\n[workspace.dependencies]\nx = \"1\"\n";
+    assert_eq!(standalone(features, ""), Ok(features.to_string()));
+}
+
+/// Any `workspace` table or root key makes a manifest its own workspace
+/// root, as cargo reads it; a bare `[workspace]` header is not needed.
+#[test]
+fn any_workspace_table_makes_a_root() {
+    for root in [
+        "[workspace]\n",
+        "[workspace.package]\nversion = \"1\"\n",
+        "[\"workspace\".lints]\n",
+        "workspace.members = []\n[package]\n",
+    ] {
+        assert!(is_workspace_root(root), "{root}");
+    }
+    for member in [
+        "[package]\nworkspace = \"..\"\n",
+        "[package.metadata.workspace]\n",
+    ] {
+        assert!(!is_workspace_root(member), "{member}");
     }
 }
 

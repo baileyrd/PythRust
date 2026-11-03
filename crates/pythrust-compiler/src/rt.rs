@@ -57,7 +57,7 @@ fn snapshot(dir: &Path) -> Result<Vec<Source>, String> {
 
 /// The workspace manifest above the crate at the canonical `dir`, for
 /// the fields its `Cargo.toml` inherits: the first `Cargo.toml` above
-/// with a `[workspace]`. Empty when there is none, so an inherited field
+/// with a `workspace` table. Empty when there is none, so an inherited field
 /// is a named error.
 fn workspace_manifest(dir: &Path) -> Result<String, String> {
     for up in dir.ancestors().skip(1) {

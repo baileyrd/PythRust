@@ -119,7 +119,7 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
                 stmt.code.trim()
             ));
         }
-        let inherits = package_table(&table) && !metadata && inherited(&stmt.code);
+        let inherits = !metadata && inheritable(&table, &stmt.code) && inherited(&stmt.code);
         let rewritable = !own && table == "package";
         match (inherits, supported(&stmt.code).filter(|_| rewritable)) {
             (false, _) => out.push_str(&stmt.lines.join("\n")),
@@ -135,15 +135,19 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
 }
 
 /// Whether the manifest `text` is a workspace root: it has a
-/// `[workspace]` table.
+/// `workspace` table, as a header or a root-table dotted key.
 pub fn is_workspace_root(text: &str) -> bool {
     is_root(&statements(text))
 }
 
 fn is_root(stmts: &[Statement]) -> bool {
-    stmts
-        .iter()
-        .any(|s| header(&s.code).as_deref() == Some("workspace"))
+    let mut table = String::new();
+    stmts.iter().any(|stmt| {
+        if let Some(name) = header(&stmt.code) {
+            table = name;
+        }
+        path_parts(&table, &stmt.code).first() == Some(&"workspace")
+    })
 }
 
 /// One TOML statement: a header, or a key and its whole value, which may
@@ -285,14 +289,30 @@ fn inherited(code: &str) -> bool {
 /// Whether the statement `code` in `table` sets a key under
 /// `package.metadata`, which Cargo leaves to other tools.
 fn in_metadata(table: &str, code: &str) -> bool {
+    path_parts(table, code).starts_with(&["package", "metadata"])
+}
+
+/// Whether the statement `code` in `table` is somewhere cargo reads
+/// workspace inheritance: a package field, a dependency, or `lints`.
+fn inheritable(table: &str, code: &str) -> bool {
+    let parts = path_parts(table, code);
+    match parts.first() {
+        Some(&"workspace") | None => false,
+        Some(&"lints") => true,
+        Some(_) => package_table(table) || parts.iter().any(|p| p.ends_with("dependencies")),
+    }
+}
+
+/// The unquoted parts of the full key the statement `code` sets in
+/// `table`; for a header, the table's own name.
+fn path_parts<'a>(table: &'a str, code: &'a str) -> Vec<&'a str> {
     let key = code.split_once('=').map_or("", |(key, _)| key);
-    let parts: Vec<&str> = table
+    table
         .split('.')
         .chain(key.split('.'))
         .map(unquoted)
         .filter(|part| !part.is_empty())
-        .collect();
-    parts.starts_with(&["package", "metadata"])
+        .collect()
 }
 
 /// Whether the table `name` holds package fields: `[package]` or a
