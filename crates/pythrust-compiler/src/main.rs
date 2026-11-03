@@ -201,9 +201,10 @@ fn main() -> ExitCode {
 fn lock(check: bool) -> ExitCode {
     let locked = project::here().and_then(|found| {
         eprintln!("pythrust: using {}", found.path.display());
-        match check {
-            true => lockfile::check(&found),
-            false => lockfile::lock(&found),
+        if check {
+            lockfile::check(&found)
+        } else {
+            lockfile::lock(&found)
         }
     });
     match locked {

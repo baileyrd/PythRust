@@ -227,17 +227,41 @@ fn a_path_package_named_like_the_root_is_checked() {
     );
 }
 
+/// `lock --check` compares exactly: an edge dropped, which `build`
+/// accepts, and the root's own edges are differences.
 #[test]
-fn removed_names_what_a_new_lock_dropped() {
+fn differences_compare_edges_exactly() {
     let old = lock(
         "root",
-        &["a"],
-        &[("a", "0.1.0", &[]), ("itoa", "1.0.1", &[])],
+        &["a", "b"],
+        &[
+            ("a", "0.1.0", &["itoa"]),
+            ("b", "0.1.0", &["itoa"]),
+            ("itoa", "1.0.1", &[]),
+        ],
     );
-    let new = lock("root", &[], &[("itoa", "1.0.1", &[])]);
+    let new = lock(
+        "root",
+        &["a", "b"],
+        &[
+            ("a", "0.1.0", &[]),
+            ("b", "0.1.0", &["itoa"]),
+            ("itoa", "1.0.1", &[]),
+        ],
+    );
+    assert_eq!(uncovered(&new, &old, ROOT), []);
+    assert_eq!(differences(&old, &new), [Change::Changed("a 0.1.0".into())]);
+    let fewer = lock(
+        "root",
+        &["b"],
+        &[("b", "0.1.0", &["itoa"]), ("itoa", "1.0.1", &[])],
+    );
     assert_eq!(
-        removed(&old, &new, ROOT),
-        [Change::Removed("a 0.1.0".into())]
+        differences(&old, &fewer),
+        [
+            Change::Changed("root 0.1.0".into()),
+            Change::Removed("a 0.1.0".into())
+        ]
     );
-    assert_eq!(removed(&old, &old, ROOT), []);
+    assert_eq!(differences(&old, &old), []);
 }

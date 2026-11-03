@@ -245,14 +245,23 @@ pub fn uncovered(built: &Lock, locked: &Lock, root: (&str, &str)) -> Vec<Change>
     out
 }
 
-/// Each entry of `locked` but `root`'s that `new` no longer holds.
-pub fn removed(locked: &Lock, new: &Lock, root: (&str, &str)) -> Vec<Change> {
-    locked
-        .packages
-        .iter()
-        .filter(|p| p.id() != (root.0, root.1, None) && new.find(p).is_none())
-        .map(|p| Change::Removed(p.label()))
-        .collect()
+/// Every entry in which `new`, a fresh lock, differs from `old`: added,
+/// changed (another checksum or other dependencies, exactly) or removed.
+/// Unlike [`uncovered`], the generated crate counts and no edge may drop.
+pub fn differences(old: &Lock, new: &Lock) -> Vec<Change> {
+    let mut out = Vec::new();
+    for p in &new.packages {
+        let Some(q) = old.find(p) else {
+            out.push(Change::Added(p.label()));
+            continue;
+        };
+        if q.checksum != p.checksum || new.edges(p).is_none() || new.edges(p) != old.edges(q) {
+            out.push(Change::Changed(p.label()));
+        }
+    }
+    let gone = old.packages.iter().filter(|p| new.find(p).is_none());
+    out.extend(gone.map(|p| Change::Removed(p.label())));
+    out
 }
 
 #[cfg(test)]

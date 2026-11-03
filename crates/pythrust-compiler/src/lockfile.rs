@@ -164,7 +164,7 @@ pub(crate) fn lock(project: &Found) -> Result<PathBuf, String> {
 
 /// `pythrust lock --check`: whether `pythrust lock` would leave the lock
 /// of `project` as it is. Otherwise the error names each entry that
-/// differs. Writes nothing; gives the lock's path.
+/// differs. Never touches `pythrust.lock`; gives its path.
 pub(crate) fn check(project: &Found) -> Result<PathBuf, String> {
     let _held = hold(project.dir(), Hold::Exclusive)?;
     let locked = read(project)?;
@@ -174,9 +174,12 @@ pub(crate) fn check(project: &Found) -> Result<PathBuf, String> {
         return Ok(path);
     }
     let new = parsed(&path, &text)?;
-    let mut changes = lock::uncovered(&new, &locked.lock, ROOT);
-    changes.extend(lock::removed(&locked.lock, &new, ROOT));
-    let listed: String = changes.iter().map(|c| format!("  {c}\n")).collect();
+    let changes = lock::differences(&locked.lock, &new);
+    let listed: String = if changes.is_empty() {
+        "  the same entries, written otherwise\n".to_string()
+    } else {
+        changes.iter().map(|c| format!("  {c}\n")).collect()
+    };
     Err(format!(
         "pythrust: pythrust.lock does not match the bindings; run `pythrust lock`\n{listed}"
     ))
