@@ -30,6 +30,18 @@ fn standalone_names_a_field_the_workspace_does_not_set() {
     );
 }
 
+/// Inheritance is read in every TOML spelling: a trailing comment, a
+/// `#` inside a string, and the inline-table form.
+#[test]
+fn standalone_reads_inheritance_in_every_spelling() {
+    let manifest = "[package]\nversion.workspace = true # shared\nedition = { workspace = true }\nname = \"a#b\" # c\ndescription = \"q\\\"#\" # d\nreadme = 'a#b' # e\n";
+    let got = standalone(manifest, WORKSPACE_TOML);
+    assert_eq!(
+        got,
+        Ok("[package]\nversion = \"0.3.0\"\nedition = \"2021\"\nname = \"a#b\" # c\ndescription = \"q\\\"#\" # d\nreadme = 'a#b' # e\n\n[workspace]\n".to_string())
+    );
+}
+
 /// A manifest that is its own workspace root inherits from itself, and
 /// a header's trailing comment does not hide it.
 #[test]

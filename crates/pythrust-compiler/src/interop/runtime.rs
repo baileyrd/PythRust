@@ -108,17 +108,14 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
         if let Some(name) = header(line) {
             in_dependencies = names_dependencies(name);
         }
-        if sets_path(line, in_dependencies) {
+        let code = code(line);
+        if sets_path(code, in_dependencies) {
             return Err(format!(
                 "`{}` is a path dependency, which would resolve from the extracted copy; a runtime override cannot have one",
-                line.trim()
+                code.trim()
             ));
         }
-        let inherited = line
-            .split_once('=')
-            .filter(|(_, v)| v.trim() == "true")
-            .and_then(|(k, _)| k.trim().strip_suffix(".workspace"));
-        match inherited {
+        match inherited(code) {
             Some(key) => out.push_str(&inherited_line(key, workspace)?),
             None => out.push_str(line),
         }
@@ -153,9 +150,43 @@ fn sets_path(line: &str, in_dependencies: bool) -> bool {
 /// The table name of the header `line`, such as `workspace` for
 /// `[workspace] # root`; `None` when `line` is not a header.
 fn header(line: &str) -> Option<&str> {
-    let rest = line.trim().strip_prefix('[')?;
-    let rest = rest.split('#').next().unwrap_or_default().trim_end();
-    Some(rest.trim_end_matches(']').trim_start_matches('[').trim())
+    let rest = code(line).trim().strip_prefix('[')?;
+    Some(
+        rest.trim_end()
+            .trim_end_matches(']')
+            .trim_start_matches('[')
+            .trim(),
+    )
+}
+
+/// `line` without its comment: everything before a `#` outside a
+/// string.
+fn code(line: &str) -> &str {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (Some('"'), '\\') => escaped = !escaped,
+            (Some(q), _) if c == q && !escaped => quote = None,
+            (Some(_), _) => escaped = false,
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '#') => return &line[..i],
+            (None, _) => {}
+        }
+    }
+    line
+}
+
+/// The key a comment-free line inherits from the workspace, written as
+/// `key.workspace = true` or `key = { workspace = true }`.
+fn inherited(code: &str) -> Option<&str> {
+    let (key, value) = code.split_once('=')?;
+    let value: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+    if value == "{workspace=true}" {
+        return Some(key.trim());
+    }
+    (value == "true").then_some(())?;
+    key.trim().strip_suffix(".workspace").map(str::trim_end)
 }
 
 /// Whether `line` is the header of the table `name`.
