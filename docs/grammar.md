@@ -166,9 +166,9 @@ Decided for M6d (Nano, 2026-11-03; [research/package-tool.md](research/package-t
 manifest = { line } ;
 line     = ws [ header | pair ] ws [ comment ] newline ;
 header   = '[' ws bare ws ']' ;
-pair     = bare ws '=' ws value ;
-value    = string | inline ;
-inline   = '{' ws [ pair { ws ',' ws pair } ] ws '}' ;   (* no trailing comma *)
+pair     = bare ws '=' ws ( string | inline ) ;
+inline   = '{' ws [ ipair { ws ',' ws ipair } ] ws '}' ;  (* no trailing comma *)
+ipair    = bare ws '=' ws string ;                        (* values inside an inline table are strings *)
 string   = '"' { char | escape } '"' ;                    (* one line *)
 escape   = '\' ( '"' | '\' | 'b' | 't' | 'n' | 'f' | 'r' | 'u' HEX*4 | 'U' HEX*8 ) ;
 bare     = ( ALPHA | DIGIT | '_' | '-' ) { ALPHA | DIGIT | '_' | '-' } ;
@@ -177,7 +177,10 @@ comment  = '#' { any character but a control character other than tab } ;
 newline  = '\n' | '\r\n' ;                                (* the last line may omit it *)
 ```
 
-- A `char` is any character except `"`, `\` and a control character other than tab, as in TOML. A `\u` or `\U` escape must name a Unicode scalar value.
+- `ALPHA`, `DIGIT` and `HEX` are ASCII only (`A-Z a-z`, `0-9`, `0-9 A-F a-f`).
+- A control character is U+0000 to U+001F or U+007F, as in TOML 1.0. Other characters, U+0085 included, are allowed in strings and comments.
+- A `char` is any character except `"`, `\` and a control character other than tab. A `\u` or `\U` escape must name a Unicode scalar value.
+- The file is UTF-8. Invalid UTF-8, a byte-order mark and a carriage return not followed by a line feed are each a named error.
 - **Each of these is a named error** that says what to write instead:
   - literal (`'...'`) and multi-line strings;
   - quoted and dotted keys, and dotted table headers (`[a.b]`);
@@ -188,7 +191,7 @@ newline  = '\n' | '\r\n' ;                                (* the last line may o
   - A table or key defined twice is an error.
   - A key outside the schema is an error, and so is a key before the first table.
 - **Schema:**
-  - `[package]` is required, with `name` and `version`, both strings.
+  - `[package]` is required, with `name` and `version`, both strings. `name` is ASCII letters, digits, `-` and `_`, starting with a letter.
   - `[rust]` maps a binding name to `{ path = "..." }`.
   - `[python]` and `[pythrust]` are reserved: present at all, each is an error.
 
