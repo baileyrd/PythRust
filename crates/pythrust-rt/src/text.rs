@@ -51,6 +51,57 @@ pub fn replace(s: &str, old: &str, new: &str) -> String {
     s.replace(old, new)
 }
 
+/// Python's `repr` of a string: single quotes unless the text holds a
+/// single quote and no double quote; `\\`, `\n`, `\r`, `\t` and the
+/// quote escaped, and every [`escaped`] code point as `\x`, `\u` or
+/// `\U` (D54).
+pub fn repr(s: &str) -> String {
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if escaped(c) => out.push_str(&hex_escape(c)),
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
+}
+
+/// Whether `repr` escapes `c`, as CPython does what `str.isprintable`
+/// rejects: controls (Cc), separators other than space (Zs, Zl, Zp) and
+/// private use (Co). Format characters (Cf) and unassigned code points
+/// (Cn) need a category table, so they print raw, a listed deviation
+/// (D54).
+pub fn escaped(c: char) -> bool {
+    let separator = c.is_whitespace() && !c.is_control() && c != ' ';
+    let private = matches!(c, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}');
+    c.is_control() || separator || private
+}
+
+/// `\xhh` up to U+00FF, `\uhhhh` up to U+FFFF, `\Uhhhhhhhh` above.
+fn hex_escape(c: char) -> String {
+    let n = u32::from(c);
+    match n {
+        0..=0xff => format!("\\x{n:02x}"),
+        0x100..=0xffff => format!("\\u{n:04x}"),
+        _ => format!("\\U{n:08x}"),
+    }
+}
+
 /// The message of the `ValueError` an empty separator raises.
 pub const EMPTY_SEPARATOR: &str = "empty separator";
 
@@ -106,6 +157,25 @@ mod tests {
         assert_eq!(strip("ßaß", Some("ß"), Side::Left), "aß");
         assert_eq!(strip("aa", Some(""), Side::Both), "aa");
         assert_eq!(strip("", None, Side::Both), "");
+    }
+
+    #[test]
+    fn repr_escapes_what_cpython_escapes_but_cf_and_cn() {
+        assert_eq!(repr("a b"), "'a b'");
+        assert_eq!(repr("it's"), "\"it's\"");
+        assert_eq!(
+            repr("\\\n\t\u{0}\u{7f}\u{85}"),
+            "'\\\\\\n\\t\\x00\\x7f\\x85'"
+        );
+        assert_eq!(
+            repr("\u{a0}\u{3000}\u{2028}\u{2029}"),
+            "'\\xa0\\u3000\\u2028\\u2029'"
+        );
+        assert_eq!(
+            repr("\u{e000}\u{f0000}\u{10fffd}"),
+            "'\\ue000\\U000f0000\\U0010fffd'"
+        );
+        assert_eq!(repr("ßΣ中\u{200b}"), "'ßΣ中\u{200b}'");
     }
 
     #[test]

@@ -8,15 +8,12 @@ use std::rc::Rc;
 use super::builtins::Args;
 use super::table::{Key, TableRef};
 use super::value::{File, ListRef, Value};
-use super::{raised, rt_err, stdlib, Exec};
+use super::{raised, rt_err, stdlib, text, Exec};
 use crate::ast::Ident;
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::infer::View;
 use crate::span::Span;
-
-#[path = "../../../pythrust-rt/src/text.rs"]
-mod text;
 
 /// A method's name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

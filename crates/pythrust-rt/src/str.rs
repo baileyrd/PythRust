@@ -93,41 +93,9 @@ fn compare(a: &PtStr, b: &PtStr) -> i64 {
     }
 }
 
-/// Python's `repr` of a string: single quotes unless the text holds a
-/// single quote and no double quote.
+/// Python's `repr` of a string ([`text::repr`]).
 pub(crate) fn repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if c.is_control() => out.push_str(&control_escape(c)),
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
-fn control_escape(c: char) -> String {
-    let n = u32::from(c);
-    if n <= 0xff {
-        format!("\\x{n:02x}")
-    } else {
-        format!("\\u{n:04x}")
-    }
+    text::repr(s)
 }
 
 pub(crate) fn into_ptr(s: PtStr) -> *mut PtStr {

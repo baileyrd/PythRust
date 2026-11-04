@@ -1,0 +1,2 @@
+# deviation: `repr` prints format characters (Cf) and unassigned code points raw, where CPython escapes them (D54); here U+200B, U+00AD and U+FEFF.
+print(["a​b", "­", "﻿"])

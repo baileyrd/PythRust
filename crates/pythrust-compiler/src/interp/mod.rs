@@ -14,6 +14,8 @@ mod ops;
 mod stdlib;
 mod table;
 mod tasks;
+#[path = "../../../pythrust-rt/src/text.rs"]
+mod text;
 mod value;
 
 #[cfg(test)]

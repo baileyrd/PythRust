@@ -805,32 +805,9 @@ fn write_items(
     Ok(())
 }
 
-/// Python's `repr` of a string: single quotes unless the text holds a
-/// single quote and no double quote.
+/// Python's `repr` of a string, shared with the runtime (D54).
 pub(super) fn str_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if c.is_control() => out.push_str(&control_escape(c)),
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
+    super::text::repr(s)
 }
 
 /// Python's `repr` of `bytes`: quoted as `str` is, with `\t`, `\n`,
@@ -859,15 +836,6 @@ pub(super) fn bytes_repr(data: &[u8]) -> String {
     }
     out.push(char::from(quote));
     out
-}
-
-fn control_escape(c: char) -> String {
-    let n = u32::from(c);
-    if n <= 0xff {
-        format!("\\x{n:02x}")
-    } else {
-        format!("\\u{n:04x}")
-    }
 }
 
 /// Python's `repr` of a float: shortest round-trip digits, positional
