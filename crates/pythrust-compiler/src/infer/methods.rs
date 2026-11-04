@@ -169,15 +169,16 @@ impl Checker {
     }
 
     /// `sep.join(xs)`: `xs` is a `list[str]`. Another iterable of `str`
-    /// is not supported yet, a listed deviation; its element type is
-    /// checked first, so a wrong one is the ordinary type error.
+    /// (a dict's being its keys) is not supported yet, a listed
+    /// deviation; its element type is checked first, so a wrong one is
+    /// the ordinary type error.
     fn join_arg(&mut self, arg: &Arg) -> Result<()> {
         let t = self.expr(&arg.value)?;
         let at = arg.value.span;
         let what = "the items `str.join` joins";
         let resolved = self.subst.resolve(&t);
         let elems: Vec<Type> = match &resolved {
-            Type::Set(e) | Type::View(_, e) => vec![(**e).clone()],
+            Type::Set(e) | Type::View(_, e) | Type::Dict(e, _) => vec![(**e).clone()],
             Type::Tuple(items) => items.clone(),
             Type::Str => Vec::new(),
             _ => {
@@ -348,6 +349,16 @@ mod tests {
         );
         let msg = refused("print(\",\".join({1}))\n");
         assert!(msg.contains("the items `str.join` joins"), "{msg}");
+        let msg = refused("print(\",\".join({\"k\": 1}))\n");
+        assert!(
+            msg.contains("`str.join` of dict[str, int] is not supported yet"),
+            "{msg}"
+        );
+        let msg = refused("print(\",\".join({1: \"v\"}))\n");
+        assert!(
+            msg.contains("the items `str.join` joins") && msg.contains("int"),
+            "{msg}"
+        );
     }
 
     #[test]
