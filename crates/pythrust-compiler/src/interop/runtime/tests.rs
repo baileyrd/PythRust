@@ -110,6 +110,21 @@ fn standalone_refuses_other_inheritance_forms() {
     assert_eq!(standalone(features, ""), Ok(features.to_string()));
 }
 
+/// A dependency named `workspace` is a dependency, not inheritance; the
+/// `workspace` field of `[package]` still is refused.
+#[test]
+fn standalone_accepts_a_dependency_named_workspace() {
+    for manifest in [
+        "[dependencies]\nworkspace = \"0.1\"\n",
+        "[dependencies.workspace]\nversion = \"0.1\"\n",
+    ] {
+        let got = standalone(manifest, "");
+        assert!(got.is_ok(), "{manifest}: {got:?}");
+    }
+    let field = standalone("[package]\nworkspace = \"..\"\n", "");
+    assert!(field.is_err(), "{field:?}");
+}
+
 /// Any `workspace` table or root key makes a manifest its own workspace
 /// root, as cargo reads it; a bare `[workspace]` header is not needed.
 #[test]

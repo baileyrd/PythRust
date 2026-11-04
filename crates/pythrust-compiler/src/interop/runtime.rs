@@ -368,7 +368,9 @@ fn full_keys(table: &str, code: &str) -> Vec<Vec<String>> {
 /// where cargo reads inheritance, in any spelling: a key part named
 /// `workspace`, bare or quoted, in its key or in the keys of an
 /// inline-table value, judged by each key's full path so a
-/// `package.metadata` subtree is skipped. Recognized only to refuse
+/// `package.metadata` subtree is skipped. A dependency named `workspace`
+/// (`workspace = "0.1"` in a dependency table) is not inheritance; its
+/// inline keys still are checked. Recognized only to refuse
 /// what `supported` does not rewrite.
 fn inherited(table: &str, code: &str) -> bool {
     let Some((key, value)) = assignment(code) else {
@@ -377,7 +379,9 @@ fn inherited(table: &str, code: &str) -> bool {
     let base = parts(table);
     let mut keys = vec![key.trim().to_string()];
     inline_keys(key.trim(), value, &mut keys);
-    keys.iter().any(|key| {
+    let named = names_dependency(&base) && parts(key.trim()) == ["workspace"];
+    let dependency = named && value.trim() != "true";
+    keys.iter().skip(usize::from(dependency)).any(|key| {
         let own = parts(key);
         let full: Vec<&str> = base.iter().chain(&own).copied().collect();
         own.contains(&"workspace")

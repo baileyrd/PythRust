@@ -107,7 +107,7 @@ fn walk(root: &Path, dir: &Path, links: Links, out: &mut Vec<Source>) -> Result<
         let entry = entry.map_err(|e| failed(dir, e))?;
         let path = entry.path();
         let kind = entry.file_type().map_err(|e| failed(&path, e))?;
-        if kind.is_dir() && dir == root && entry.file_name() == "target" {
+        if dir == root && entry.file_name() == "target" {
             continue;
         }
         if kind.is_dir() {
@@ -167,8 +167,8 @@ pub(crate) fn extract(project: &Path, files: &[Source]) -> Result<(PathBuf, File
 }
 
 /// The extracted runtime of the project in `project`, written afresh
-/// unless it matches `files`. The caller holds the project lock
-/// exclusively.
+/// unless it matches `files`; a copy that does not read back as written
+/// is an error. The caller holds the project lock exclusively.
 pub(crate) fn ensure(project: &Path, files: &[Source]) -> Result<PathBuf, String> {
     let dir = rt_dir(project, files);
     if matches(&dir, files) {
@@ -191,7 +191,13 @@ pub(crate) fn ensure(project: &Path, files: &[Source]) -> Result<PathBuf, String
     }
     remove(&dir)?;
     std::fs::rename(&tmp, &dir).map_err(|e| created(&dir, e))?;
-    Ok(dir)
+    match matches(&dir, files) {
+        true => Ok(dir),
+        false => Err(format!(
+            "pythrust: the runtime copy at {} does not read back as written\n",
+            dir.display()
+        )),
+    }
 }
 
 /// `.pythrust/rt/<version>-<hash>/` of the project in `project`.
@@ -303,6 +309,38 @@ mod tests {
         let files = snapshot(&tmp.join("rt")).unwrap();
         let text = String::from_utf8(files[0].text.clone()).unwrap();
         assert!(text.contains("version = \"2.0.0\""), "{text}");
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// A copy that never reads back as written is a named error, not a
+    /// repair that `extract` retries forever.
+    #[test]
+    fn a_copy_that_does_not_read_back_is_a_named_error() {
+        let tmp = scratch("readback");
+        let mut files = files();
+        files.push(files[1].clone());
+        files[2].text = b"//! other\n".to_vec();
+        let got = ensure(&tmp.join("p"), &files).map(|_| ());
+        assert!(
+            got.as_ref()
+                .is_err_and(|e| e.contains("does not read back as written")),
+            "{got:?}"
+        );
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// A top-level `target` of an override is skipped whatever it is: a
+    /// directory or a link to one elsewhere.
+    #[test]
+    fn an_override_target_link_is_skipped() {
+        let tmp = scratch("target");
+        let (rt, fast) = (tmp.join("rt"), tmp.join("fast"));
+        std::fs::create_dir_all(&rt).unwrap();
+        std::fs::create_dir_all(&fast).unwrap();
+        std::fs::write(rt.join("Cargo.toml"), "[package]\n").unwrap();
+        symlink(&fast, rt.join("target")).unwrap();
+        let got = snapshot(&rt).map(|f| f.len());
+        assert_eq!(got, Ok(1));
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
