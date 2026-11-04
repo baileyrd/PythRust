@@ -1,0 +1,6 @@
+# expect-exit: 1
+# An uncaught `str.index` miss ends the program with
+# `ValueError: substring not found` (D50).
+print("αβγ".index("β"))
+print("αβγ".index("δ"))
+print("unreachable")

@@ -56,13 +56,22 @@ const fn m(owner: Owner, name: &'static str, min: usize, max: usize) -> Method {
 }
 
 /// Every method but an executor's.
-const METHODS: [Method; 15] = [
+const METHODS: [Method; 24] = [
     m(Owner::Str, "split", 0, 2),
     m(Owner::Str, "join", 1, 1),
     m(Owner::Str, "strip", 0, 1),
     m(Owner::Str, "lstrip", 0, 1),
     m(Owner::Str, "rstrip", 0, 1),
     m(Owner::Str, "replace", 2, 3),
+    m(Owner::Str, "startswith", 1, 3),
+    m(Owner::Str, "endswith", 1, 3),
+    m(Owner::Str, "find", 1, 3),
+    m(Owner::Str, "rfind", 1, 3),
+    m(Owner::Str, "index", 1, 3),
+    m(Owner::Str, "rindex", 1, 3),
+    m(Owner::Str, "count", 1, 3),
+    m(Owner::Str, "upper", 0, 0),
+    m(Owner::Str, "lower", 0, 0),
     m(Owner::List, "append", 1, 1),
     m(Owner::Set, "add", 1, 1),
     m(Owner::Dict, "get", 1, 2),
@@ -100,7 +109,9 @@ impl Checker {
         let Some(first) = lookup(&METHODS, name, None) else {
             let msg = format!(
                 "unknown method `.{name}`; the methods are `str.split`, `.join`, \
-                 `.strip`, `.lstrip`, `.rstrip` and `.replace`, `list.append`, `set.add`, \
+                 `.strip`, `.lstrip`, `.rstrip`, `.replace`, `.startswith`, \
+                 `.endswith`, `.find`, `.rfind`, `.index`, `.rindex`, `.count`, \
+                 `.upper` and `.lower`, `list.append`, `set.add`, \
                  `dict.get`, `.keys`, `.values` and `.items`, a file's `.read` \
                  and `.close`, an executor's `.submit` and `.map`, and a future's \
                  `.result`"
@@ -162,10 +173,7 @@ impl Checker {
             let what = format!("argument of `str.{name}`");
             self.expect(arg.value.span, &Type::Str, &t, &what)?;
         }
-        if name == "split" {
-            return Ok(Type::List(Box::new(Type::Str)));
-        }
-        Ok(Type::Str)
+        Ok(str_result(name))
     }
 
     /// `sep.join(xs)`: `xs` is a `list[str]`. Another iterable of `str`
@@ -265,13 +273,33 @@ impl Checker {
     }
 }
 
+/// What `str.{name}` gives: `split` a `list[str]`, the tests a `bool`,
+/// the searches an `int` index or count, the rest a `str`.
+fn str_result(name: &str) -> Type {
+    match name {
+        "split" => Type::List(Box::new(Type::Str)),
+        "startswith" | "endswith" => Type::Bool,
+        "find" | "rfind" | "index" | "rindex" | "count" => Type::Int,
+        _ => Type::Str,
+    }
+}
+
 /// The first argument of a `str` method not supported yet (D53), with
-/// what it is: `maxsplit`, `replace`'s `count`, or `None`. A literal
-/// `""` separator of `split` is refused too: it can only raise.
+/// what it is: `maxsplit`, `replace`'s `count`, a search's `start` (and
+/// so `end`), a tuple of prefixes or suffixes, or `None`. A literal `""`
+/// separator of `split` is refused too: it can only raise.
 fn unsupported_arg<'a>(name: &str, args: &'a [Arg]) -> Option<(&'a Arg, &'static str)> {
+    let search = matches!(
+        name,
+        "startswith" | "endswith" | "find" | "rfind" | "index" | "rindex" | "count"
+    );
     match (name, args) {
         ("split", [_, extra]) => return Some((extra, "`maxsplit`")),
         ("replace", [_, _, extra]) => return Some((extra, "`count`")),
+        (_, [_, start, ..]) if search => return Some((start, "`start`")),
+        ("startswith" | "endswith", [affix]) if matches!(affix.value.kind, ExprKind::Tuple(_)) => {
+            return Some((affix, "a tuple"));
+        }
         _ => {}
     }
     args.iter()
@@ -291,7 +319,8 @@ fn method_arity(name: &str, args: &[Arg], min: usize, max: usize, span: Span) ->
     let expected = match (min, max) {
         (0, 0) => "no arguments".to_string(),
         (1, 1) => "1 argument".to_string(),
-        _ => format!("{min} or {max} arguments"),
+        _ if max == min + 1 => format!("{min} or {max} arguments"),
+        _ => format!("{min} to {max} arguments"),
     };
     let msg = format!("`{name}` takes {expected} but {} were given", args.len());
     Err(error(span, msg))
@@ -379,6 +408,44 @@ mod tests {
         }
         let msg = refused("print(\"a\".strip(\"a\", \"b\"))\n");
         assert!(msg.contains("takes"), "{msg}");
+    }
+
+    #[test]
+    fn str_b_methods_give_bools_ints_and_strings() {
+        let src = "s = \"αβγ\"\n\
+                   ok: bool = s.startswith(\"α\") and s.endswith(\"γ\")\n\
+                   at: int = s.find(\"β\") + s.rfind(\"β\") + s.index(\"β\") + s.rindex(\"β\")\n\
+                   n: int = s.count(\"β\")\n\
+                   t: str = s.upper() + s.lower()\n\
+                   print(ok, at, n, t)\n";
+        assert_eq!(checked(src), Ok(()));
+        let msg = refused("print(\"a\".find(1))\n");
+        assert!(msg.contains("argument of `str.find`"), "{msg}");
+        let msg = refused("print(\"a\".upper(\"b\"))\n");
+        assert!(msg.contains("`upper` takes no arguments"), "{msg}");
+        let msg = refused("print(\"a\".count())\n");
+        assert!(msg.contains("`count` takes 1 to 3 arguments"), "{msg}");
+    }
+
+    #[test]
+    fn start_end_and_prefix_tuples_are_not_supported_yet() {
+        let cases = [
+            ("\"a\".find(\"a\", 1)", "`start` of `str.find`"),
+            ("\"a\".count(\"a\", 0, 1)", "`start` of `str.count`"),
+            ("\"a\".startswith(\"a\", 1)", "`start` of `str.startswith`"),
+            (
+                "\"a\".startswith((\"a\", \"b\"))",
+                "a tuple of `str.startswith`",
+            ),
+            ("\"a\".endswith((\"a\",))", "a tuple of `str.endswith`"),
+        ];
+        for (call, want) in cases {
+            let msg = refused(&format!("print({call})\n"));
+            assert!(
+                msg.contains(want) && msg.contains("not supported yet"),
+                "{call}: {msg}"
+            );
+        }
     }
 
     #[test]

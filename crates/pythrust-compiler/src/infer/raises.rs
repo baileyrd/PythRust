@@ -594,7 +594,9 @@ impl<'a> Cx<'_, 'a> {
                     ExprKind::Name(name) => self.call(name, args.first(), e.span, out),
                     ExprKind::Attr { value, attr } => {
                         self.expr(value, out);
-                        let method = StdFn::file_method(&attr.name).and_then(StdFn::raises);
+                        let method = StdFn::file_method(&attr.name)
+                            .or_else(|| StdFn::str_method(&attr.name))
+                            .and_then(StdFn::raises);
                         method.into_iter().for_each(|k| out.add(k, e.span));
                     }
                     _ => self.expr(func, out),
@@ -843,6 +845,25 @@ def g(xs: list[int]) -> int raises Exception:
         assert_eq!(raises("def c(f):\n    f.close()\n", "c"), "");
         let open = "def o(p: str):\n    return open(p, \"rb\")\n";
         assert_eq!(raises(open, "o"), "OSError");
+    }
+
+    #[test]
+    fn index_and_rindex_raise_value_error_but_find_does_not() {
+        assert_eq!(
+            raises("def i(s: str) -> int:\n    return s.index(\"a\")\n", "i"),
+            "ValueError"
+        );
+        assert_eq!(
+            raises("def r(s: str) -> int:\n    return s.rindex(\"a\")\n", "r"),
+            "ValueError"
+        );
+        assert_eq!(
+            raises("def f(s: str) -> int:\n    return s.find(\"a\")\n", "f"),
+            ""
+        );
+        let caught = "def c(s: str) -> int:\n    try:\n        return s.index(\"a\")\n    \
+                      except ValueError:\n        return -1\n";
+        assert_eq!(raises(caught, "c"), "");
     }
 
     #[test]

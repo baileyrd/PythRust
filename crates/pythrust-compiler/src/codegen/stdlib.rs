@@ -74,6 +74,22 @@ impl FnGen<'_, '_, '_> {
                 self.call_rt_value(Rt::StrReplace, &[*s, *old, *new])
             }
             (StdFn::StrJoin, [sep, xs]) => self.call_rt_value(Rt::StrJoin, &[*sep, *xs]),
+            (StdFn::Startswith | StdFn::Endswith, [s, affix]) => {
+                let end = self.flag(f == StdFn::Endswith);
+                self.call_rt_value(Rt::StrAffix, &[*s, *affix, end])
+            }
+            (StdFn::Find | StdFn::Rfind | StdFn::Index | StdFn::Rindex, [s, sub]) => {
+                let right = self.flag(matches!(f, StdFn::Rfind | StdFn::Rindex));
+                let raise = self.flag(matches!(f, StdFn::Index | StdFn::Rindex));
+                let site = self.site(span)?;
+                let args = [[*s, *sub, right, raise].as_slice(), &site].concat();
+                self.call_rt_value(Rt::StrFind, &args)
+            }
+            (StdFn::Count, [s, sub]) => self.call_rt_value(Rt::StrCount, &[*s, *sub]),
+            (StdFn::Upper | StdFn::Lower, [s]) => {
+                let upper = self.flag(f == StdFn::Upper);
+                self.call_rt_value(Rt::StrCase, &[*s, upper])
+            }
             (StdFn::Close, [f]) => {
                 self.call_rt(Rt::FileClose, &[*f]);
                 Ok(self.b.ins().iconst(types::I8, 0))
@@ -133,6 +149,11 @@ impl FnGen<'_, '_, '_> {
             out = next;
         }
         Ok(out)
+    }
+
+    /// A runtime call's `u8` switch.
+    fn flag(&mut self, on: bool) -> Value {
+        self.b.ins().iconst(types::I8, i64::from(on))
     }
 
     /// A null pointer: an argument left out.

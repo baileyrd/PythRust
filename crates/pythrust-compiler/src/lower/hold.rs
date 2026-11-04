@@ -159,7 +159,16 @@ fn std_changes_lists(f: StdFn) -> bool {
         | StdFn::Strip
         | StdFn::Lstrip
         | StdFn::Rstrip
-        | StdFn::Replace => false,
+        | StdFn::Replace
+        | StdFn::Startswith
+        | StdFn::Endswith
+        | StdFn::Find
+        | StdFn::Rfind
+        | StdFn::Index
+        | StdFn::Rindex
+        | StdFn::Count
+        | StdFn::Upper
+        | StdFn::Lower => false,
     }
 }
 

@@ -1,0 +1,5 @@
+# deviation: a search's `start` and `end` and a tuple of prefixes or suffixes are not supported yet (D53); CPython accepts them.
+# expect-exit: 1
+# expect-error: `start` of `str.find` is not supported yet
+
+print("abcabc".find("a", 1))
