@@ -1521,6 +1521,10 @@ wrap(2)\ngrow([1])\n";
         msg.contains("uses tasks, so its ownership checks cannot be skipped"),
         "{msg}"
     );
+    assert!(
+        msg.contains("but they run on the native lowering, which fails here: the native backend does not support"),
+        "{msg}"
+    );
     assert!(msg.contains("does not support"), "{msg}");
     // Without tasks, the same gap stays the conservative fallback.
     let plain = "x = print(7)\ndef print(n):\n    return 1\n";
@@ -1537,6 +1541,10 @@ grow([1])\n";
     let (msg, span) = mode_err(src);
     assert!(
         msg.contains("has a tempered function, so its ownership checks cannot be skipped"),
+        "{msg}"
+    );
+    assert!(
+        msg.contains("but they run on the native lowering, which fails here: the native backend does not support"),
         "{msg}"
     );
     assert!(msg.contains("does not support"), "{msg}");
