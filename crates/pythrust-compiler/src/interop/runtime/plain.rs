@@ -35,8 +35,8 @@ fn plain_header(code: &str) -> bool {
 /// Whether the statement `key = value` in `table` is plain. A statement
 /// reaching a guarded table from the root table, by a dotted key or an
 /// inline table, is never plain; inside a guarded table the key is one
-/// bare part (or `key.workspace = true` in `[package]`), and only a
-/// dependency may be a flat inline table of bare keys.
+/// bare part (or `key.workspace = true` in `[package]`), and no value is
+/// an inline table (D43).
 fn plain_key(table: &str, key: &str, value: &str) -> bool {
     let mut keys = vec![key.trim().to_string()];
     inline_keys(key.trim(), value, &mut keys);
@@ -54,10 +54,7 @@ fn plain_key(table: &str, key: &str, value: &str) -> bool {
     if table.is_empty() || !guarded_owned(&full(key)) {
         return false;
     }
-    let multiline = value.contains("\"\"\"") || value.contains("'''");
-    plain_assignment(table, key.trim(), value)
-        && flat_inline(table, key.trim(), &keys[1..])
-        && !(multiline && keys.len() > 1)
+    plain_assignment(table, key.trim(), value) && !value.trim_start().starts_with('{')
 }
 
 /// Whether `key = value` in the guarded `table` has a plain key.
@@ -69,21 +66,6 @@ fn plain_assignment(table: &str, key: &str, value: &str) -> bool {
         }
         _ => false,
     }
-}
-
-/// Whether the inline-table keys `inner` of `key` in `table` are plain:
-/// none, or, in a dependency table, one level of bare keys.
-fn flat_inline(table: &str, key: &str, inner: &[String]) -> bool {
-    if inner.is_empty() {
-        return true;
-    }
-    let dependency = names_dependency(&parts(table));
-    let depth = dotted(key).len() + 1;
-    dependency
-        && inner.iter().all(|k| {
-            let raw = dotted(k);
-            raw.len() == depth && raw.last().is_some_and(|last| bare(last))
-        })
 }
 
 /// Whether the full key or table path `parts` is guarded: in
@@ -169,7 +151,7 @@ pub(super) fn quoted(code: &str) -> Result<(), String> {
 
 fn refused(code: &str) -> String {
     format!(
-        "`{}` is not a spelling pythrust checks in a runtime override's [package], [workspace.package] or dependency tables (bare keys, one header per table, flat inline dependencies only); write the override's Cargo.toml as a plainly written standalone manifest",
+        "`{}` is not a spelling pythrust checks in a runtime override's [package], [workspace.package] or dependency tables (bare keys, one header per table, plain-string dependencies or `[dependencies.<name>]` tables only); write the override's Cargo.toml as a plainly written standalone manifest",
         code.trim()
     )
 }

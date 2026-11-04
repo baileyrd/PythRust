@@ -338,6 +338,9 @@ fn standalone_refuses_spellings_it_does_not_plainly_read() {
         "[target.'cfg(unix)'.\"dependencies\"]\nh = \"1\"\n",
         "[dependencies.target.'x']\nversion = \"1\"\n",
         "[package]\n\"metadata.x\" = 1\n",
+        "[dependencies]\nlibc = { version = \"0.2\", features = [\"std\"] }\n",
+        "[dependencies]\nlibc = {}\n",
+        "[target.'cfg(unix)'.dependencies]\nlibc = { version = \"0.2\" }\n",
     ];
     for manifest in refused {
         let got = standalone(manifest, WORKSPACE_TOML);
@@ -346,14 +349,14 @@ fn standalone_refuses_spellings_it_does_not_plainly_read() {
 }
 
 /// The plain spellings still pass: bare keys, one header per table, a
-/// flat inline dependency, a quoted target cfg, and anything outside the
-/// guarded tables.
+/// plain-string or `[dependencies.<name>]` dependency, a quoted target
+/// cfg, and anything outside the guarded tables.
 #[test]
 fn standalone_accepts_plain_spellings() {
     let plain = [
         "[package]\nname = \"rt\"\nkeywords = [\"a\", \"b\"]\n",
-        "[dependencies]\nlibc = { version = \"0.2\", features = [\"std\"] }\nlog = \"0.4\"\n",
-        "[dependencies.libc]\nversion = \"0.2\"\n",
+        "[dependencies]\nlog = \"0.4\"\n",
+        "[dependencies.libc]\nversion = \"0.2\"\nfeatures = [\"std\"]\n",
         "[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n",
         "[target.'cfg(target_os = \"linux\")'.dev-dependencies]\nlibc = \"0.2\"\n",
         "[package.metadata.\"tool\"]\n\"x\".y = { z = { a = 1 } }\n",
