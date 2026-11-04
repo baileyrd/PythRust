@@ -5,7 +5,7 @@ Resolved items are checked and point to the D#/QA entry that answers them.
 
 - [ ] Q1 (2026-11-03, n): Does `docs/handoff.md` stay as the historical Step-0/threads doc now that `docs/handoff/` exists, or merge into the pack? — interim: keep both; `CLAUDE.md` read-first still lists `docs/handoff.md`.
 - [x] Q2 (2026-11-03): 1.97 floor landed in #99 and the docs follow (grammar.md, rust-interop.md); see D34.
-- [ ] Q3 (2026-11-03, n): Shared-list conflicts: "pending Nano's pick" between per-function coarse sharing and a call-site check (roadmap M6c rule 4 coarseness). — interim: coarse rule stands.
+- [x] Q3 (2026-11-03): Shared-list conflicts, per-function coarse sharing vs a call-site check (roadmap M6c rule 4 coarseness). Answered: Nano 2026-11-02 kept the conservative parameter aliasing, no call-site check, revisit only if a real program is rejected (remind-me mem_a7dfad0156c44c9c97c0ec9035e7e5fe item 1, a model paraphrase, so no [stated] row); parked in roadmap M6c (#107).
 - [ ] Q4 (2026-11-03, n): "Ownership checks in tempered programs": a lowering gap in a program containing `temper def` should be a named error. Not started; Nano decides on its own (roadmap). — interim: current behaviour.
 - [ ] Q5 (2026-11-03, n): Relax `for k in d: d[k] = ...` in tempered code (unmodified loop variable)? Revisit only if fclone-lite or the corpus shows the idiom matters (roadmap). — interim: error stays.
 - [ ] Q6 (2026-11-03, n): File-type `mut` rule gaps (copies, calls) once a file type is spellable (roadmap M6a follow-up). — interim: syntactic rule only.
