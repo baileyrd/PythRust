@@ -31,7 +31,8 @@ def _mapping(loader: StrictLoader, node: yaml.MappingNode) -> dict:
 StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
 
 EXPECTED_JOBS = {
-    "check", "memcheck", "miri", "race", "rust-version", "compiler-rust-version", "all"
+    "check", "memcheck", "miri", "race", "rust-version", "compiler-rust-version", "driver",
+    "all",
 }
 EXPECTED_OS = {"ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "windows-latest"}
 GATE = "all"

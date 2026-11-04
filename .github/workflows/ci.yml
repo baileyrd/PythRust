@@ -158,12 +158,38 @@ jobs:
       - run: rustup toolchain install 1.97.0 --profile minimal
       - run: cargo +1.97.0 check --locked -p pythrust-compiler --all-targets
 
+  driver:
+    # M6d's driver (docs/research/package-tool.md#pr-order, PR 5): a copy
+    # of apps/fclone-lite outside the repository builds fclone_fast.pyr
+    # from its own manifest and lock, with no flags and no PYTHRUST_*
+    # variables, so the runtime comes from inside pythrust. Its groups
+    # must match fclone_lite.py's under CPython.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: cargo build --locked -p pythrust-compiler
+      - name: Build fclone-lite outside the repository and compare its groups
+        shell: bash
+        run: |
+          cp -R apps/fclone-lite "$RUNNER_TEMP/fclone-lite"
+          cd "$RUNNER_TEMP/fclone-lite"
+          "$GITHUB_WORKSPACE/target/debug/pythrust" build fclone_fast.pyr
+          python "$GITHUB_WORKSPACE/ci/fclone_driver.py" fclone_fast fclone_lite.py
+
   all:
     # One check standing for every job above: it fails unless each
     # succeeded, every `check` platform included. A job that was skipped
     # or cancelled is not a pass. `ci/check_jobs.py` (the "CI jobs"
     # workflow) checks that this list names every job.
-    needs: [check, memcheck, miri, race, rust-version, compiler-rust-version]
+    needs: [check, memcheck, miri, race, rust-version, compiler-rust-version, driver]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -173,4 +199,4 @@ jobs:
         run: |
           echo "results: $RESULTS"
           for r in $RESULTS; do test "$r" = success; done
-          test "$(echo $RESULTS | wc -w)" -eq 6
+          test "$(echo $RESULTS | wc -w)" -eq 7
