@@ -38,7 +38,10 @@ impl FnBuilder<'_, '_> {
     }
 
     /// `sum(xs)` or `sum(xs, start)`: ints and bools added as checked
-    /// ints, floats by the runtime's compensated sum, as CPython's.
+    /// ints, floats by the runtime's compensated sum, as CPython's. In a
+    /// generic function a float `sum` with no `start` is refused: `run`,
+    /// which does not specialize it, gives an empty one as the int `0`,
+    /// where this would give `0.0` (D59).
     pub(super) fn sum(&mut self, ops: &[Operand], span: Span) -> Result<Operand> {
         let (xs, start) = match ops {
             [xs] => (*xs, None),
@@ -46,6 +49,10 @@ impl FnBuilder<'_, '_> {
             _ => return Err(internal(span, "`sum` of other than 1 or 2 arguments")),
         };
         if self.ty_at(span)? == Ty::Float {
+            if start.is_none() && self.generic {
+                let what = "a `sum` of floats with no `start` in a generic function";
+                return Err(unsupported(span, what));
+            }
             let start = start.unwrap_or(Operand::Float(0.0));
             let v = self.temp(
                 Ty::Float,

@@ -590,6 +590,11 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a generic function storing a bool key into an int-keyed table: `run` cannot \
          always tell the table is int-keyed, so `build` refuses rather than differ",
     ),
+    (
+        "builtin_sum_empty_float_generic",
+        "a generic function's `sum` of floats with no `start`: `run` gives an empty one \
+         as the int `0`, so `build` refuses rather than differ",
+    ),
 ];
 
 const NATIVE_UNSUPPORTED: &str = "backend error: the native backend does not support";

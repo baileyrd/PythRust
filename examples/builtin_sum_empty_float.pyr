@@ -1,5 +1,5 @@
 # deviation: a `sum` of floats is a float, so an empty one is `0.0` (D50); CPython gives the int `0`.
-def total(xs):
+def total(xs: list[float]) -> float:
     return sum(xs)
 
 

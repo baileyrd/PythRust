@@ -680,6 +680,7 @@ impl<'m> Interp<'m, '_> {
                 self.tag(on, value.span);
             }
         }
+        let sum = matches!(callee, Value::Builtin(Builtin::Sum));
         let out = match callee {
             Value::Func(f) => self.call_func(f, evaluated)?,
             Value::Builtin(Builtin::Std(f)) => self.std(f, &evaluated)?,
@@ -691,13 +692,17 @@ impl<'m> Interp<'m, '_> {
             }
         };
         self.tag(&out, span);
-        Ok(self.fit(out, span))
+        match sum {
+            true => Ok(self.float_sum(out, span)),
+            false => Ok(out),
+        }
     }
 
-    /// `v` as the type of the call at `span`: a `float` call that gave an
-    /// int, which only an empty `sum` does (D50), even from generic code
-    /// whose own node leaves the type open, gives that int as a float.
-    fn fit(&self, v: Value<'m>, span: Span) -> Value<'m> {
+    /// The `sum` at `span` as its type: an empty one typed `float` is
+    /// `0.0` (D50). In generic code the node leaves the type open, so
+    /// an empty one stays the int `0`, as in CPython; `build` refuses
+    /// that `sum` rather than differ (D59).
+    fn float_sum(&self, v: Value<'m>, span: Span) -> Value<'m> {
         match (v, self.types.at(span)) {
             (Value::Int(n), Some(Type::Float)) => Value::Float(n as f64),
             (v, _) => v,
