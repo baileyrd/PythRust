@@ -236,7 +236,7 @@ fn unchecked(module: &Module, gap: &Diagnostic) -> Result<()> {
         span: gap.span,
         message: format!(
             "this program {why}, so its ownership checks cannot be skipped, \
-             but they cannot run: {}",
+             but they run on the native lowering, which fails here: {}",
             gap.message
         ),
         kind: DiagKind::Type,
