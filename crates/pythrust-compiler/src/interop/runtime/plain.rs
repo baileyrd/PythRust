@@ -3,11 +3,12 @@
 //! spellings the checks plainly read are accepted. Anything else is a
 //! named error, so a spelling the scanner misses can only over-refuse.
 
-use super::{assignment, inline_keys, parts, unquoted};
+use super::{assignment, inline_keys, names_dependency, parts, unquoted};
 
 /// Checks that the statement `code`, in the table named `table` (its
 /// parts unquoted; empty for the root table), is plainly written.
 pub(super) fn check(table: &str, code: &str) -> Result<(), String> {
+    quoted(code)?;
     let ok = match assignment(code) {
         _ if code.trim().is_empty() => true,
         None => plain_header(code),
@@ -28,7 +29,7 @@ fn plain_header(code: &str) -> bool {
     }
     raw.iter()
         .enumerate()
-        .all(|(i, part)| bare(part) || i > 0 && names[i - 1] == "target")
+        .all(|(i, part)| bare(part) || i == 1 && names[0] == "target")
 }
 
 /// Whether the statement `key = value` in `table` is plain. A statement
@@ -42,7 +43,7 @@ fn plain_key(table: &str, key: &str, value: &str) -> bool {
     let full = |key: &str| -> Vec<String> {
         parts(table)
             .into_iter()
-            .chain(parts(key))
+            .chain(dotted(key).into_iter().map(unquoted))
             .map(str::to_string)
             .collect()
     };
@@ -53,7 +54,10 @@ fn plain_key(table: &str, key: &str, value: &str) -> bool {
     if table.is_empty() || !guarded_owned(&full(key)) {
         return false;
     }
-    plain_assignment(table, key.trim(), value) && flat_inline(table, key.trim(), &keys[1..])
+    let multiline = value.contains("\"\"\"") || value.contains("'''");
+    plain_assignment(table, key.trim(), value)
+        && flat_inline(table, key.trim(), &keys[1..])
+        && !(multiline && keys.len() > 1)
 }
 
 /// Whether `key = value` in the guarded `table` has a plain key.
@@ -73,7 +77,7 @@ fn flat_inline(table: &str, key: &str, inner: &[String]) -> bool {
     if inner.is_empty() {
         return true;
     }
-    let dependency = parts(table).iter().any(|p| p.ends_with("dependencies"));
+    let dependency = names_dependency(&parts(table));
     let depth = dotted(key).len() + 1;
     dependency
         && inner.iter().all(|k| {
@@ -89,7 +93,7 @@ fn guarded(parts: &[&str]) -> bool {
     match parts {
         ["package", "metadata", ..] => false,
         ["package", ..] | ["workspace", "package", ..] => true,
-        _ => parts.iter().any(|p| p.ends_with("dependencies")),
+        _ => names_dependency(parts),
     }
 }
 
@@ -131,6 +135,36 @@ fn dotted(name: &str) -> Vec<&str> {
     }
     out.push(name[start..].trim());
     out
+}
+
+/// Checks that no quoted key or header part in the statement `code`
+/// holds a `.` or a backslash, anywhere in the manifest: the other
+/// checks split names at dots and read escapes only partly, so such a
+/// part is refused rather than misread (D42).
+pub(super) fn quoted(code: &str) -> Result<(), String> {
+    let mut names = Vec::new();
+    match assignment(code) {
+        Some((key, value)) => {
+            names.push(key.trim().to_string());
+            inline_keys(key.trim(), value, &mut names);
+        }
+        None if code.trim_start().starts_with('[') => names.push(code.trim().to_string()),
+        None => {}
+    }
+    let tricky = |part: &&str| {
+        let quoted = part.starts_with('"') || part.starts_with('\'');
+        quoted && (part.contains('\\') || unquoted(part).contains('.'))
+    };
+    let plain = names.iter().all(|name| {
+        let name = name.trim_start_matches('[').trim_end_matches(']');
+        !dotted(name).iter().any(tricky)
+    });
+    plain.then_some(()).ok_or_else(|| {
+        format!(
+            "`{}` has a quoted key with a `.` or an escape in it, which pythrust does not read in a runtime override or its workspace manifest; spell the key without dots or escapes",
+            code.trim()
+        )
+    })
 }
 
 fn refused(code: &str) -> String {

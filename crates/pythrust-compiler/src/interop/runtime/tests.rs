@@ -102,9 +102,7 @@ fn standalone_refuses_other_inheritance_forms() {
     for manifest in refused {
         let got = standalone(manifest, WORKSPACE_TOML);
         assert!(
-            got.as_ref().is_err_and(|e| {
-                e.contains("make the override's Cargo.toml standalone") || e.contains(PLAIN)
-            }),
+            refused_with(&got, "make the override's Cargo.toml standalone"),
             "{manifest}: {got:?}"
         );
     }
@@ -122,13 +120,13 @@ fn any_workspace_table_makes_a_root() {
         "[\"workspace\".lints]\n",
         "workspace.members = []\n[package]\n",
     ] {
-        assert!(is_workspace_root(root), "{root}");
+        assert_eq!(is_workspace_root(root), Ok(true), "{root}");
     }
     for member in [
         "[package]\nworkspace = \"..\"\n",
         "[package.metadata.workspace]\n",
     ] {
-        assert!(!is_workspace_root(member), "{member}");
+        assert_eq!(is_workspace_root(member), Ok(false), "{member}");
     }
 }
 
@@ -187,6 +185,11 @@ fn standalone_refuses_a_path_dependency() {
         "[dependencies.helper]\n\"path\" = \"../helper\"\n",
         "dependencies.helper.path = \"../helper\"\n[package]\n",
         "dependencies = { helper = { path = \"../helper\" } }\n",
+        "[dependencies]\nlibc = { x = \"\"\"a\"b\"\"\", path = \"../libc\" }\n",
+        "[dependencies]\nlibc = { x = '''a'b''', path = \"../libc\" }\n",
+        "[patch.crates-io]\nlibc = { path = \"../libc\" }\n",
+        "[patch.crates-io.libc]\npath = \"../libc\"\n",
+        "[replace]\nfoo = { path = \"f\" }\n",
         "target = { 'cfg(unix)' = { dependencies = { helper = { path = \"../helper\" } } } }\n",
         "target.'cfg(unix)' = { build-dependencies = { h = { path = \"h\" } } }\n",
         "target.'cfg(target_os = \"linux\")' = { dependencies = { helper = { path = \"../helper\" } } }\n",
@@ -197,18 +200,14 @@ fn standalone_refuses_a_path_dependency() {
     ];
     for manifest in refused {
         let got = standalone(manifest, "");
-        assert!(
-            got.as_ref()
-                .is_err_and(|e| e.contains("path dependency") || e.contains(PLAIN)),
-            "{manifest}: {got:?}"
-        );
+        assert!(refused_with(&got, "path dependency"), "{manifest}: {got:?}");
     }
     let lib =
         "[lib]\npath = \"src/lib.rs\"\n[package]\nname = \"path\"\n[dependencies]\nxpath = \"1\"\n";
     assert!(standalone(lib, "").is_ok());
     let literal = "[dependencies.helper]\n'\\u0070ath' = \"h\"\n";
     let got = standalone(literal, "");
-    assert!(got.as_ref().is_err_and(|e| e.contains(PLAIN)), "{got:?}");
+    assert!(refused_with(&got, PLAIN), "{got:?}");
 }
 
 #[test]
@@ -279,6 +278,40 @@ fn embedded_files_are_the_runtime_made_standalone() {
 }
 
 const PLAIN: &str = "plainly written standalone manifest";
+const QUOTED: &str = "without dots or escapes";
+
+/// Whether `got` is a refusal: the `specific` error, or a fail-closed one.
+fn refused_with(got: &Result<String, String>, specific: &str) -> bool {
+    got.as_ref()
+        .is_err_and(|e| [specific, PLAIN, QUOTED].iter().any(|m| e.contains(m)))
+}
+
+/// A quoted key or header part holding a `.` or an escape is refused
+/// wherever it is, in the override or in its workspace manifest, since
+/// cargo may read it differently from the checks (D42).
+#[test]
+fn quoted_parts_with_dots_or_escapes_are_refused() {
+    let overrides = [
+        "[target.'cfg(unix)'.\"\\x64ependencies\"]\npb = { path = \"../pb\" }\n",
+        "[\"\\x77orkspace\".package]\nversion = \"1\"\n[package]\nversion.workspace = true\n",
+        "[features]\n\"a.b\" = []\n",
+    ];
+    for manifest in overrides {
+        let got = standalone(manifest, WORKSPACE_TOML);
+        assert!(
+            got.as_ref().is_err_and(|e| e.contains(QUOTED)),
+            "{manifest}: {got:?}"
+        );
+    }
+    let parent = "[workspace]\n[\"workspace.package\"]\nversion = \"6.6.6\"\n";
+    let got = standalone("[package]\nversion.workspace = true\n", parent);
+    assert!(got.as_ref().is_err_and(|e| e.contains(QUOTED)), "{got:?}");
+    let escaped = is_workspace_root("[\"\\x77orkspace\"]\n");
+    assert!(
+        escaped.as_ref().is_err_and(|e| e.contains(QUOTED)),
+        "{escaped:?}"
+    );
+}
 
 /// Fail closed (D42): in `[package]`, `[workspace.package]` and
 /// dependency tables, a spelling the check does not plainly read is the
@@ -303,13 +336,12 @@ fn standalone_refuses_spellings_it_does_not_plainly_read() {
         "target = { 'cfg(unix)' = { dependencies = { h = \"1\" } } }\n",
         "[target.'cfg(unix)']\ndependencies = { h = \"1\" }\n",
         "[target.'cfg(unix)'.\"dependencies\"]\nh = \"1\"\n",
+        "[dependencies.target.'x']\nversion = \"1\"\n",
+        "[package]\n\"metadata.x\" = 1\n",
     ];
     for manifest in refused {
         let got = standalone(manifest, WORKSPACE_TOML);
-        assert!(
-            got.as_ref().is_err_and(|e| e.contains(PLAIN)),
-            "{manifest}: {got:?}"
-        );
+        assert!(refused_with(&got, PLAIN), "{manifest}: {got:?}");
     }
 }
 
@@ -323,7 +355,7 @@ fn standalone_accepts_plain_spellings() {
         "[dependencies]\nlibc = { version = \"0.2\", features = [\"std\"] }\nlog = \"0.4\"\n",
         "[dependencies.libc]\nversion = \"0.2\"\n",
         "[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n",
-        "[target.\"cfg(target_os = \\\"linux\\\")\".dev-dependencies]\nlibc = \"0.2\"\n",
+        "[target.'cfg(target_os = \"linux\")'.dev-dependencies]\nlibc = \"0.2\"\n",
         "[package.metadata.\"tool\"]\n\"x\".y = { z = { a = 1 } }\n",
         "[lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = [\"cfg(x)\"] }\n",
         "[features]\n\"a-b\" = []\n",
