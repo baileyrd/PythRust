@@ -1,0 +1,33 @@
+# A computed empty separator raises `ValueError: empty separator` inside
+# a function, so a call to it can fault (D53): caught after a direct
+# call, after a task's `result()`, and from a tempered function.
+import concurrent.futures
+
+
+def bad(s: str) -> list[str]:
+    return s.split(s.replace(s, ""))
+
+
+temper def parts(s: str, sep: str) -> list[str]:
+    return s.split(sep)
+
+
+def main() -> None:
+    try:
+        print(bad("zz"))
+    except ValueError as e:
+        print("direct:", e)
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(bad, "yy")
+        try:
+            print(f.result())
+        except ValueError as e:
+            print("task:", e)
+    print(parts("a b", " "))
+    try:
+        print(parts("a b", ""))
+    except ValueError as e:
+        print("tempered:", e)
+
+
+main()

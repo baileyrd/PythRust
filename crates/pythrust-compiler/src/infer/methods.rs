@@ -1,7 +1,7 @@
 //! Method calls, looked up by the receiver's type: a type's own method
 //! comes first, so two types can share a method name.
 
-use crate::ast::{Arg, Expr, Ident};
+use crate::ast::{Arg, Expr, ExprKind, Ident};
 use crate::diag::Result;
 use crate::span::Span;
 
@@ -13,6 +13,7 @@ use super::{error, Checker};
 /// with the tasks (`Checker::task`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Owner {
+    Str,
     List,
     Set,
     Dict,
@@ -24,6 +25,7 @@ impl Owner {
     /// The owner of a resolved type, if it has methods.
     fn of(ty: &Type) -> Option<Owner> {
         match ty {
+            Type::Str => Some(Owner::Str),
             Type::List(_) => Some(Owner::List),
             Type::Set(_) => Some(Owner::Set),
             Type::Dict(..) => Some(Owner::Dict),
@@ -34,7 +36,8 @@ impl Owner {
     }
 }
 
-/// One method: its owner, its name, and how many arguments it takes.
+/// One method: its owner, its name, and how many arguments it takes
+/// (CPython's count; a `str` method refuses those not supported yet).
 #[derive(Debug, Clone, Copy)]
 struct Method {
     owner: Owner,
@@ -53,7 +56,13 @@ const fn m(owner: Owner, name: &'static str, min: usize, max: usize) -> Method {
 }
 
 /// Every method but an executor's.
-const METHODS: [Method; 9] = [
+const METHODS: [Method; 15] = [
+    m(Owner::Str, "split", 0, 2),
+    m(Owner::Str, "join", 1, 1),
+    m(Owner::Str, "strip", 0, 1),
+    m(Owner::Str, "lstrip", 0, 1),
+    m(Owner::Str, "rstrip", 0, 1),
+    m(Owner::Str, "replace", 2, 3),
     m(Owner::List, "append", 1, 1),
     m(Owner::Set, "add", 1, 1),
     m(Owner::Dict, "get", 1, 2),
@@ -90,7 +99,8 @@ impl Checker {
         }
         let Some(first) = lookup(&METHODS, name, None) else {
             let msg = format!(
-                "unknown method `.{name}`; the methods are `list.append`, `set.add`, \
+                "unknown method `.{name}`; the methods are `str.split`, `.join`, \
+                 `.strip`, `.lstrip`, `.rstrip` and `.replace`, `list.append`, `set.add`, \
                  `dict.get`, `.keys`, `.values` and `.items`, a file's `.read` \
                  and `.close`, an executor's `.submit` and `.map`, and a future's \
                  `.result`"
@@ -100,14 +110,88 @@ impl Checker {
         let receiver = self.expr(value)?;
         let here = Owner::of(&self.subst.resolve(&receiver));
         let found = lookup(&METHODS, name, here).unwrap_or(first);
-        method_arity(name, args, found.min, found.max, attr.span)?;
+        if found.owner != Owner::Str {
+            method_arity(name, args, found.min, found.max, attr.span)?;
+        }
         match found.owner {
+            Owner::Str => self.str_method(found, value.span, &receiver, args, attr.span),
             Owner::List | Owner::Set => self.insert(name, value.span, &receiver, &args[0]),
             Owner::Dict if name == "get" => self.get(value.span, &receiver, args, attr.span),
             Owner::Dict => self.view(name, value.span, &receiver),
             Owner::File => self.file(name, value.span, &receiver),
             Owner::Future => self.result(value.span, &receiver),
         }
+    }
+
+    /// A `str` method (D53): its arguments are `str`s, positional, and
+    /// only those supported yet.
+    fn str_method(
+        &mut self,
+        found: Method,
+        at: Span,
+        receiver: &Type,
+        args: &[Arg],
+        span: Span,
+    ) -> Result<Type> {
+        let name = found.name;
+        if let Some(arg) = args.iter().find(|a| a.name.is_some()) {
+            let kw = arg.name.as_ref().map_or("", |n| n.name.as_str());
+            let msg = format!("`{kw}=` of `str.{name}` is not supported yet");
+            return Err(error(arg.span, msg));
+        }
+        method_arity(name, args, found.min, found.max, span)?;
+        if let Some((arg, what)) = unsupported_arg(name, args) {
+            let msg = format!("{what} of `str.{name}` is not supported yet");
+            return Err(error(arg.span, msg));
+        }
+        if let ("split", [sep]) = (name, args) {
+            if matches!(&sep.value.kind, ExprKind::Str(s) if s.is_empty()) {
+                let msg = "`str.split` of an empty separator raises \
+                           `ValueError: empty separator`";
+                return Err(error(sep.span, msg.to_string()));
+            }
+        }
+        let needs = format!("`{name}` needs a str");
+        self.expect(at, &Type::Str, receiver, &needs)?;
+        if name == "join" {
+            self.join_arg(&args[0])?;
+            return Ok(Type::Str);
+        }
+        for arg in args {
+            let t = self.expr(&arg.value)?;
+            let what = format!("argument of `str.{name}`");
+            self.expect(arg.value.span, &Type::Str, &t, &what)?;
+        }
+        if name == "split" {
+            return Ok(Type::List(Box::new(Type::Str)));
+        }
+        Ok(Type::Str)
+    }
+
+    /// `sep.join(xs)`: `xs` is a `list[str]`. Another iterable of `str`
+    /// (a dict's being its keys) is not supported yet, a listed
+    /// deviation; its element type is checked first, so a wrong one is
+    /// the ordinary type error.
+    fn join_arg(&mut self, arg: &Arg) -> Result<()> {
+        let t = self.expr(&arg.value)?;
+        let at = arg.value.span;
+        let what = "the items `str.join` joins";
+        let resolved = self.subst.resolve(&t);
+        let elems: Vec<Type> = match &resolved {
+            Type::Set(e) | Type::View(_, e) | Type::Dict(e, _) => vec![(**e).clone()],
+            Type::Tuple(items) => items.clone(),
+            Type::Str => Vec::new(),
+            _ => {
+                let list = Type::List(Box::new(Type::Str));
+                return self.expect(at, &list, &t, "`str.join` needs a list of str");
+            }
+        };
+        for e in &elems {
+            self.expect(at, &Type::Str, e, what)?;
+        }
+        let shown = self.subst.zonk(&t);
+        let msg = format!("`str.join` of {shown} is not supported yet; use `list(...)`");
+        Err(error(at, msg))
     }
 
     /// `f.read()` is `bytes`; `f.close()` is `None`.
@@ -181,6 +265,20 @@ impl Checker {
     }
 }
 
+/// The first argument of a `str` method not supported yet (D53), with
+/// what it is: `maxsplit`, `replace`'s `count`, or `None`. A literal
+/// `""` separator of `split` is refused too: it can only raise.
+fn unsupported_arg<'a>(name: &str, args: &'a [Arg]) -> Option<(&'a Arg, &'static str)> {
+    match (name, args) {
+        ("split", [_, extra]) => return Some((extra, "`maxsplit`")),
+        ("replace", [_, _, extra]) => return Some((extra, "`count`")),
+        _ => {}
+    }
+    args.iter()
+        .find(|a| matches!(a.value.kind, ExprKind::None))
+        .map(|a| (a, "a `None` argument"))
+}
+
 /// Checks a method call's argument count; methods take no keywords.
 fn method_arity(name: &str, args: &[Arg], min: usize, max: usize, span: Span) -> Result<()> {
     if let Some(arg) = args.iter().find(|a| a.name.is_some()) {
@@ -202,6 +300,101 @@ fn method_arity(name: &str, args: &[Arg], min: usize, max: usize, span: Span) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{infer, lexer, parser};
+
+    /// `check`'s result for `src`: `Ok` or the first error's message.
+    fn checked(src: &str) -> std::result::Result<(), String> {
+        let module = lexer::lex(src)
+            .and_then(|t| parser::parse(&t))
+            .map_err(|d| format!("parse: {}", d.message))?;
+        infer::infer(&module).map(|_| ()).map_err(|d| d.message)
+    }
+
+    fn refused(src: &str) -> String {
+        match checked(src) {
+            Ok(()) => panic!("accepted: {src}"),
+            Err(msg) => msg,
+        }
+    }
+
+    #[test]
+    fn str_methods_take_and_give_strings() {
+        let src = "def f(s, sep):\n    \
+                   return sep.join(s.replace(\"a\", \"b\").strip().split(sep))\n\
+                   print(f(\" a,b \", \",\"))\n\
+                   print(\"x\".lstrip(\"y\") + \"x\".rstrip() + \"\".join([]))\n";
+        assert_eq!(checked(src), Ok(()));
+    }
+
+    #[test]
+    fn str_methods_need_a_str_receiver_and_str_arguments() {
+        assert!(refused("x = 1\nprint(x.split())\n").contains("`split` needs a str"));
+        let msg = refused("print(\"a\".replace(\"a\", 1))\n");
+        assert!(msg.contains("argument of `str.replace`"), "{msg}");
+        let msg = refused("print(\",\".join([1]))\n");
+        assert!(msg.contains("`str.join` needs a list of str"), "{msg}");
+    }
+
+    #[test]
+    fn join_of_another_iterable_names_its_type_after_its_elements() {
+        let msg = refused("print(\",\".join({\"a\"}))\n");
+        assert!(
+            msg.contains("`str.join` of set[str] is not supported yet; use `list(...)`"),
+            "{msg}"
+        );
+        let msg = refused("print(\",\".join(\"ab\"))\n");
+        assert!(
+            msg.contains("`str.join` of str is not supported yet"),
+            "{msg}"
+        );
+        let msg = refused("print(\",\".join({1}))\n");
+        assert!(msg.contains("the items `str.join` joins"), "{msg}");
+        let msg = refused("print(\",\".join({\"k\": 1}))\n");
+        assert!(
+            msg.contains("`str.join` of dict[str, int] is not supported yet"),
+            "{msg}"
+        );
+        let msg = refused("print(\",\".join({1: \"v\"}))\n");
+        assert!(
+            msg.contains("the items `str.join` joins") && msg.contains("int"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn arguments_not_supported_yet_are_named() {
+        let cases = [
+            ("\"a\".split(\",\", 1)", "`maxsplit` of `str.split`"),
+            ("\"a\".split(sep=\",\")", "`sep=` of `str.split`"),
+            ("\"a\".replace(\"a\", \"b\", 1)", "`count` of `str.replace`"),
+            ("\"a\".strip(chars=\"a\")", "`chars=` of `str.strip`"),
+            ("\"a\".split(None)", "a `None` argument of `str.split`"),
+        ];
+        for (call, want) in cases {
+            let msg = refused(&format!("print({call})\n"));
+            assert!(
+                msg.contains(want) && msg.contains("not supported yet"),
+                "{call}: {msg}"
+            );
+        }
+        let msg = refused("print(\"a\".strip(\"a\", \"b\"))\n");
+        assert!(msg.contains("takes"), "{msg}");
+    }
+
+    #[test]
+    fn only_a_literal_empty_separator_is_a_compile_error() {
+        let msg = refused("print(\"a\".split(\"\"))\n");
+        assert!(
+            msg.contains("raises `ValueError: empty separator`"),
+            "{msg}"
+        );
+        let computed = "sep = \"x\".replace(\"x\", \"\")\nprint(\"a\".split(sep))\n";
+        assert_eq!(checked(computed), Ok(()));
+        assert_eq!(
+            checked("print(\"a\".replace(\"\", \"-\").strip(\"\"))\n"),
+            Ok(())
+        );
+    }
 
     #[test]
     fn every_method_name_has_one_owner() {
@@ -233,7 +426,7 @@ mod tests {
 
     #[test]
     fn a_name_no_type_has_is_not_found() {
-        assert!(lookup(&METHODS, "split", None).is_none());
-        assert!(lookup(&METHODS, "split", Some(Owner::List)).is_none());
+        assert!(lookup(&METHODS, "splitlines", None).is_none());
+        assert!(lookup(&METHODS, "splitlines", Some(Owner::Str)).is_none());
     }
 }

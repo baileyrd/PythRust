@@ -34,6 +34,7 @@ mod sync;
 pub mod sys;
 pub mod table;
 pub mod task;
+pub mod text;
 
 use std::io::{self, Write};
 use std::sync::atomic::AtomicUsize;

@@ -84,7 +84,14 @@ impl Checker {
             StdFn::Executor => (0, 0, Type::Executor),
             StdFn::Open => return self.open(args, span),
             StdFn::Sha256 => return self.sha256(args, span),
-            StdFn::Read | StdFn::Close => {
+            StdFn::Read
+            | StdFn::Close
+            | StdFn::Split
+            | StdFn::StrJoin
+            | StdFn::Strip
+            | StdFn::Lstrip
+            | StdFn::Rstrip
+            | StdFn::Replace => {
                 let msg = format!("internal: `{name}` is a method");
                 return Err(error(span, msg));
             }

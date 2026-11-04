@@ -1,0 +1,14 @@
+5 Σίσυφος,|ßtraße|,|x|y
+3   Σίσυφος| ßtraße |　x y 
+Σίσυφος- ßtraße -　x y
+[Σίσυφος, ßtraße ,　x y]
+[ίσυφος, ßtraße ,　x y ]
+[  Σίσυφος, ßtraße ,　x]
+ίσυφος, ßtraße
+['Σίσυφος,', 'sstrasse', ',', 'x', 'y']
+-a-b- ba x
+['a', '', 'b', ''] [''] [] []
+ αβ a←→b←→c
+a aa 
+['naïve', 'café', '中文']
+ValueError: empty separator

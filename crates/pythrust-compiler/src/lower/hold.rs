@@ -153,7 +153,13 @@ fn std_changes_lists(f: StdFn) -> bool {
         | StdFn::Read
         | StdFn::Close
         | StdFn::Sha256
-        | StdFn::Executor => false,
+        | StdFn::Executor
+        | StdFn::Split
+        | StdFn::StrJoin
+        | StdFn::Strip
+        | StdFn::Lstrip
+        | StdFn::Rstrip
+        | StdFn::Replace => false,
     }
 }
 

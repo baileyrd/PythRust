@@ -14,6 +14,8 @@
 use std::cmp::Ordering;
 use std::fmt::Write;
 
+use crate::text;
+
 /// A string object. Immutable; its count is atomic once marked (see
 /// `sync.rs`), when a task may reach it.
 #[derive(Debug)]
@@ -262,6 +264,125 @@ pub unsafe extern "C" fn pt_str_contains(hay: *const PtStr, needle: *const PtStr
     // SAFETY: guaranteed by the caller.
     let (hay, needle) = unsafe { (borrow(hay), borrow(needle)) };
     u8::from(hay.text.contains(needle.text()))
+}
+
+/// The text of `p`, or `None` for null.
+///
+/// # Safety
+///
+/// `p` is null or a live string.
+unsafe fn text_or_none<'a>(p: *const PtStr) -> Option<&'a str> {
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: guaranteed by the caller.
+    Some(unsafe { borrow(p) }.text())
+}
+
+/// `s.split()` (`sep` null) or `s.split(sep)`: a new list of type
+/// `desc` (`list[str]`), or null with CPython's `ValueError: empty
+/// separator` pending.
+///
+/// # Safety
+///
+/// `s` is a live string and `sep` null or one; `desc` points to `len`
+/// bytes of the compiler's descriptor of `list[str]` and `head`/`tail`
+/// as for [`crate::os::site`], all living for the whole program.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // The site's four words, as `pt_os_listdir` takes them.
+pub unsafe extern "C" fn pt_str_split(
+    s: *const PtStr,
+    sep: *const PtStr,
+    desc: *const u8,
+    len: usize,
+    head: *const u8,
+    head_len: usize,
+    tail: *const u8,
+    tail_len: usize,
+) -> *mut crate::seq::PtSeq {
+    // SAFETY: guaranteed by the caller.
+    let (s, sep, desc, at) = unsafe {
+        (
+            borrow(s).text(),
+            text_or_none(sep),
+            std::slice::from_raw_parts(desc, len),
+            crate::os::site(head, head_len, tail, tail_len),
+        )
+    };
+    let parts = match sep {
+        None => text::split_space(s),
+        Some(sep) => match text::split(s, sep) {
+            Some(parts) => parts,
+            None => {
+                at.raise_text(crate::exc::VALUE_ERROR, text::EMPTY_SEPARATOR.to_string());
+                return std::ptr::null_mut();
+            }
+        },
+    };
+    let items = parts
+        .into_iter()
+        .map(|p| into_ptr(PtStr::new(p.into())) as u64)
+        .collect();
+    crate::seq::new_seq(desc, items)
+}
+
+/// `s.strip(chars)`, `lstrip` or `rstrip` (`side` 0, 1 or 2): a new
+/// string. A null `chars` strips spaces.
+///
+/// # Safety
+///
+/// `s` is a live string and `chars` null or one.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_strip(
+    s: *const PtStr,
+    chars: *const PtStr,
+    side: u8,
+) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller.
+    let (s, chars) = unsafe { (borrow(s).text(), text_or_none(chars)) };
+    let side = match side {
+        1 => text::Side::Left,
+        2 => text::Side::Right,
+        _ => text::Side::Both,
+    };
+    into_ptr(PtStr::new(text::strip(s, chars, side).into()))
+}
+
+/// `s.replace(old, new)`: a new string.
+///
+/// # Safety
+///
+/// `s`, `old` and `new` are live strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_replace(
+    s: *const PtStr,
+    old: *const PtStr,
+    new: *const PtStr,
+) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller.
+    let (s, old, new) = unsafe { (borrow(s).text(), borrow(old).text(), borrow(new).text()) };
+    into_ptr(PtStr::new(text::replace(s, old, new).into()))
+}
+
+/// `sep.join(xs)` of a `list[str]`: a new string.
+///
+/// # Safety
+///
+/// `sep` is a live string and `xs` a live list of live strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_join(
+    sep: *const PtStr,
+    xs: *const crate::seq::PtSeq,
+) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller.
+    let (sep, xs) = unsafe { (borrow(sep).text(), &*xs) };
+    let items = xs.items.borrow();
+    // SAFETY: each item of a `list[str]` is a live string.
+    let parts: Vec<&str> = items
+        .iter()
+        .map(|&p| unsafe { borrow(p as *const PtStr) }.text())
+        .collect();
+    into_ptr(PtStr::new(parts.join(sep).into()))
 }
 
 /// `str(n)` for an int.

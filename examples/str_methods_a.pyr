@@ -1,0 +1,33 @@
+# str A (D53): split, join, strip/lstrip/rstrip and replace, on
+# non-ASCII text checked against CPython (D47, D49). Bare split and
+# strip use CPython's whitespace set, so U+3000, U+00A0 and U+001F
+# count and the reprs below stay printable.
+s = "  Σίσυφος, ßtraße ,　x\u001f y "
+words = s.split()
+print(len(words), "|".join(words))
+print(len(s.split(",")), "|".join(s.split(",")))
+print("-".join(s.split(",")).strip())
+print("[" + s.strip() + "]")
+print("[" + s.lstrip(" Σ") + "]")
+print("[" + s.rstrip(" y\u001f") + "]")
+print(s.strip(" ,xy　\u001f Σ"))
+print(s.replace("ß", "ss").split())
+print("ab".replace("", "-"), "aaa".replace("aa", "b"), "".replace("", "x"))
+print("a,,b,".split(","), "".split(","), "".split(), " \t\n".split())
+print(",".join([]), "".join(["α", "β"]), "←→".join(["a", "b", "c"]))
+print("xyaxy".strip("yx"), "aa".strip(""), "".strip())
+
+
+def fields(line: str) -> list[str]:
+    parts = []
+    for p in line.split(";"):
+        parts.append(p.strip())
+    return parts
+
+
+print(fields(" naïve ; café;  中文 "))
+sep = "x".replace("x", "")
+try:
+    print("a".split(sep))
+except ValueError as e:
+    print("ValueError:", e)

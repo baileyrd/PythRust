@@ -787,7 +787,7 @@ impl<'a> FnBuilder<'_, 'a> {
         }
         let ty = self.ty_at(span)?;
         let v = self.temp(ty, Rvalue::Std(f, ops), span);
-        if f.raises().is_some() {
+        if f.may_raise() {
             self.check_raised(span)?;
         }
         Ok(v)

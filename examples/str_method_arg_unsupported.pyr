@@ -1,0 +1,5 @@
+# deviation: `maxsplit`, `sep=`, `replace`'s `count`, `strip`'s `chars=` and a `None` argument are not supported yet (D53); CPython accepts them.
+# expect-exit: 1
+# expect-error: `maxsplit` of `str.split` is not supported yet
+
+print("a,b,c".split(",", 1))

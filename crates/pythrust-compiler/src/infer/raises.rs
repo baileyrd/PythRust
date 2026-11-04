@@ -594,7 +594,7 @@ impl<'a> Cx<'_, 'a> {
                     ExprKind::Name(name) => self.call(name, args.first(), e.span, out),
                     ExprKind::Attr { value, attr } => {
                         self.expr(value, out);
-                        let method = StdFn::method(&attr.name).and_then(StdFn::raises);
+                        let method = StdFn::file_method(&attr.name).and_then(StdFn::raises);
                         method.into_iter().for_each(|k| out.add(k, e.span));
                     }
                     _ => self.expr(func, out),
