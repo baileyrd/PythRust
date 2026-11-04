@@ -1,0 +1,5 @@
+# deviation: `str.join` takes a `list[str]` only (D53); CPython joins any iterable of `str`, such as this set.
+# expect-exit: 1
+# expect-error: `str.join` of set[str] is not supported yet; use `list(...)`
+
+print("-".join({"ä"}))

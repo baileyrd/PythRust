@@ -47,6 +47,33 @@ impl FnGen<'_, '_, '_> {
             }
             (StdFn::Sha256, [b]) => self.call_rt_value(Rt::Sha256Hex, &[*b]),
             (StdFn::Executor, []) => self.call_rt_value(Rt::ExecNew, &[]),
+            (StdFn::Split, [s, rest @ ..]) => {
+                let sep = match rest {
+                    [sep] => *sep,
+                    _ => self.null(),
+                };
+                let (desc, len) = self.descriptor(ty)?;
+                let site = self.site(span)?;
+                let args = [[*s, sep, desc, len].as_slice(), &site].concat();
+                self.call_rt_value(Rt::StrSplit, &args)
+            }
+            (StdFn::Strip | StdFn::Lstrip | StdFn::Rstrip, [s, rest @ ..]) => {
+                let chars = match rest {
+                    [chars] => *chars,
+                    _ => self.null(),
+                };
+                let side = match f {
+                    StdFn::Lstrip => 1,
+                    StdFn::Rstrip => 2,
+                    _ => 0,
+                };
+                let side = self.b.ins().iconst(types::I8, side);
+                self.call_rt_value(Rt::StrStrip, &[*s, chars, side])
+            }
+            (StdFn::Replace, [s, old, new]) => {
+                self.call_rt_value(Rt::StrReplace, &[*s, *old, *new])
+            }
+            (StdFn::StrJoin, [sep, xs]) => self.call_rt_value(Rt::StrJoin, &[*sep, *xs]),
             (StdFn::Close, [f]) => {
                 self.call_rt(Rt::FileClose, &[*f]);
                 Ok(self.b.ins().iconst(types::I8, 0))
@@ -106,6 +133,11 @@ impl FnGen<'_, '_, '_> {
             out = next;
         }
         Ok(out)
+    }
+
+    /// A null pointer: an argument left out.
+    fn null(&mut self) -> Value {
+        self.b.ins().iconst(self.cg.ptr, 0)
     }
 
     /// `os.path.isdir` (`which` 0), `isfile` (1) or `islink` (2).

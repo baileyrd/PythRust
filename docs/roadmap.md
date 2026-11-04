@@ -174,6 +174,6 @@ Cards, in order (one PR or more each):
 Nano's post-M6 order (2026-11-03), step 1: where a string method lacks full Unicode behavior, a named error or listed deviation; oracle fixtures include non-ASCII text (D47). One PR each, in order (D48); Unicode rules in D49, what raises in D50, `enumerate`/`zip` in D51:
 
 - [x] *Receiver-typed method lookup, no surface change:* `infer/methods.rs` keeps one table of methods by owner; the receiver's type picks its own method, and while it is unknown the one type with the name fixes it. A shared name on a receiver still unknown waits for its type (D52), added with the first one (list `index`/`count`); until then a test refuses shared names.
-- [ ] *str A:* `split join strip lstrip rstrip replace`.
+- [x] *str A:* `split join strip lstrip rstrip replace` (D53). Shared CPython algorithms in `pythrust-rt/src/text.rs`, which the interpreter compiles too; native calls `pt_str_split`, `pt_str_strip`, `pt_str_replace` and `pt_str_join`. Corpus `str_methods_a` (non-ASCII, checked against CPython), `str_join_not_list`, `str_split_empty_sep`, `str_method_arg_unsupported`.
 - [ ] *str B:* `startswith endswith find rfind index rindex count upper lower`.
 - [ ] *Builtins:* `enumerate zip min max sum any all abs ord chr`.

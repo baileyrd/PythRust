@@ -166,10 +166,14 @@ enum Rt {
     FutDec,
     ResultsNext,
     ListReverse,
+    StrSplit,
+    StrStrip,
+    StrReplace,
+    StrJoin,
 }
 
 impl Rt {
-    const ALL: [Rt; 90] = [
+    const ALL: [Rt; 94] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -260,6 +264,10 @@ impl Rt {
         Rt::FutDec,
         Rt::ResultsNext,
         Rt::ListReverse,
+        Rt::StrSplit,
+        Rt::StrStrip,
+        Rt::StrReplace,
+        Rt::StrJoin,
     ];
 
     fn symbol(self) -> &'static str {
@@ -345,6 +353,10 @@ impl Rt {
             Rt::FileRead => "pt_file_read",
             Rt::FileClose => "pt_file_close",
             Rt::Sha256Hex => "pt_sha256_hex",
+            Rt::StrSplit => "pt_str_split",
+            Rt::StrStrip => "pt_str_strip",
+            Rt::StrReplace => "pt_str_replace",
+            Rt::StrJoin => "pt_str_join",
             Rt::Mark => "pt_mark",
             Rt::ExecNew => "pt_exec_new",
             Rt::ExecEnd => "pt_exec_end",
@@ -428,6 +440,10 @@ impl Rt {
             Rt::ExecEnd | Rt::FutInc | Rt::FutDec | Rt::ListReverse => (vec![ptr], None),
             Rt::Submit => (vec![ptr; 6], Some(ptr)),
             Rt::TaskResult | Rt::ResultsNext => (vec![ptr], Some(I64)),
+            Rt::StrSplit => (vec![ptr; 8], Some(ptr)),
+            Rt::StrStrip => (vec![ptr, ptr, I8], Some(ptr)),
+            Rt::StrReplace => (vec![ptr; 3], Some(ptr)),
+            Rt::StrJoin => (vec![ptr, ptr], Some(ptr)),
         }
     }
 }

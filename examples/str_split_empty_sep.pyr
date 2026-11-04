@@ -1,0 +1,6 @@
+# deviation: `split` with a literal empty separator is a compile error (D53); CPython raises `ValueError: empty separator` when it runs.
+# expect-exit: 1
+# expect-error: `str.split` of an empty separator raises `ValueError: empty separator`
+
+print("before")
+print("a b".split(""))

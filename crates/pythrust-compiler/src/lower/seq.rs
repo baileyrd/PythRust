@@ -153,8 +153,8 @@ impl FnBuilder<'_, '_> {
         Ok(self.temp(ty, Rvalue::Field(t, k), span))
     }
 
-    /// `list.append(v)`, a dict's or set's method, or a file's `read`
-    /// or `close`.
+    /// `list.append(v)`, a dict's or set's method, a file's `read` or
+    /// `close`, or a `str` method.
     pub(super) fn method(
         &mut self,
         value: &Expr,
@@ -167,8 +167,11 @@ impl FnBuilder<'_, '_> {
         if let Ty::Dict(_) | Ty::Set(_) = ty {
             return self.table_method(list, attr, args, span);
         }
-        if let (Ty::File, Some(f), []) = (ty, StdFn::method(attr), args) {
+        if let (Ty::File, Some(f), []) = (ty, StdFn::file_method(attr), args) {
             return self.std(f, vec![list], span);
+        }
+        if let (Ty::Str, Some(f)) = (ty, StdFn::str_method(attr)) {
+            return self.str_method(f, list, args, span);
         }
         let ([arg], "append", Ty::List(_)) = (args, attr, ty) else {
             return Err(unsupported(span, "methods other than `list.append(x)`"));
@@ -181,6 +184,16 @@ impl FnBuilder<'_, '_> {
         let value = self.expect(v, elem, arg.span)?;
         self.emit(Inst::Append { list, value, span });
         Ok(Operand::None)
+    }
+
+    /// A `str` method (D53): the receiver, then its positional
+    /// arguments, which inference checked.
+    fn str_method(&mut self, f: StdFn, s: Operand, args: &[Arg], span: Span) -> Result<Operand> {
+        let mut ops = vec![s];
+        for arg in args {
+            ops.push(self.expr(&arg.value)?);
+        }
+        self.std(f, ops, span)
     }
 
     /// `list[index] = v`, the list and index evaluated now.

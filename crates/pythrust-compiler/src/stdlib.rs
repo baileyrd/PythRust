@@ -90,10 +90,23 @@ pub enum StdFn {
     /// `concurrent.futures.ThreadPoolExecutor()`: an executor, used only
     /// as a `with` block's value (M6c).
     Executor,
+    /// `s.split()` or `s.split(sep)` (D53): a new `list[str]`. An empty
+    /// `sep` raises a `ValueError`, untracked.
+    Split,
+    /// `sep.join(xs)` of a `list[str]` (D53).
+    StrJoin,
+    /// `s.strip()` or `s.strip(chars)`.
+    Strip,
+    /// `s.lstrip()` or `s.lstrip(chars)`.
+    Lstrip,
+    /// `s.rstrip()` or `s.rstrip(chars)`.
+    Rstrip,
+    /// `s.replace(old, new)`.
+    Replace,
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 12] = [
+    pub const ALL: [StdFn; 18] = [
         StdFn::Argv,
         StdFn::Listdir,
         StdFn::Join,
@@ -106,6 +119,12 @@ impl StdFn {
         StdFn::Close,
         StdFn::Sha256,
         StdFn::Executor,
+        StdFn::Split,
+        StdFn::StrJoin,
+        StdFn::Strip,
+        StdFn::Lstrip,
+        StdFn::Rstrip,
+        StdFn::Replace,
     ];
 
     /// The builtin name stages call it by: the dotted name a program
@@ -125,6 +144,12 @@ impl StdFn {
             StdFn::Close => "BufferedReader.close",
             StdFn::Sha256 => "hashlib.sha256",
             StdFn::Executor => "concurrent.futures.ThreadPoolExecutor",
+            StdFn::Split => "str.split",
+            StdFn::StrJoin => "str.join",
+            StdFn::Strip => "str.strip",
+            StdFn::Lstrip => "str.lstrip",
+            StdFn::Rstrip => "str.rstrip",
+            StdFn::Replace => "str.replace",
         }
     }
 
@@ -137,14 +162,33 @@ impl StdFn {
         }
     }
 
-    /// The file method called `attr`: `read` or `close`. Each method
-    /// name belongs to one type, so the name alone decides.
-    pub fn method(attr: &str) -> Option<StdFn> {
+    /// A file's method called `attr`: `read` or `close`.
+    pub fn file_method(attr: &str) -> Option<StdFn> {
         match attr {
             "read" => Some(StdFn::Read),
             "close" => Some(StdFn::Close),
             _ => None,
         }
+    }
+
+    /// A `str`'s method called `attr` (D53).
+    pub fn str_method(attr: &str) -> Option<StdFn> {
+        match attr {
+            "split" => Some(StdFn::Split),
+            "join" => Some(StdFn::StrJoin),
+            "strip" => Some(StdFn::Strip),
+            "lstrip" => Some(StdFn::Lstrip),
+            "rstrip" => Some(StdFn::Rstrip),
+            "replace" => Some(StdFn::Replace),
+            _ => None,
+        }
+    }
+
+    /// Whether a call may leave an exception pending, tracked or not:
+    /// what [`StdFn::raises`] names, and `split`'s untracked
+    /// `ValueError` for an empty separator (D53).
+    pub fn may_raise(self) -> bool {
+        self.raises().is_some() || self == StdFn::Split
     }
 
     /// The class of what it may raise, tracked in `raises` (D8). An
@@ -161,7 +205,13 @@ impl StdFn {
             | StdFn::Islink
             | StdFn::Close
             | StdFn::Sha256
-            | StdFn::Executor => None,
+            | StdFn::Executor
+            | StdFn::Split
+            | StdFn::StrJoin
+            | StdFn::Strip
+            | StdFn::Lstrip
+            | StdFn::Rstrip
+            | StdFn::Replace => None,
         }
     }
 
@@ -268,15 +318,23 @@ mod tests {
     }
 
     #[test]
-    fn file_methods_are_unwritable_names() {
+    fn file_and_str_methods_are_unwritable_names() {
         for attr in ["read", "close"] {
-            let Some(f) = StdFn::method(attr) else {
+            let Some(f) = StdFn::file_method(attr) else {
                 panic!("{attr} is a file method")
             };
             assert!(f.name().ends_with(&format!(".{attr}")));
             assert!(MODULES.iter().all(|m| !m.exposes(f.name())));
         }
-        assert_eq!(StdFn::method("write"), None);
+        assert_eq!(StdFn::file_method("write"), None);
+        for attr in ["split", "join", "strip", "lstrip", "rstrip", "replace"] {
+            let Some(f) = StdFn::str_method(attr) else {
+                panic!("{attr} is a str method")
+            };
+            assert_eq!(f.name(), format!("str.{attr}"));
+            assert!(MODULES.iter().all(|m| !m.exposes(f.name())));
+        }
+        assert_eq!(StdFn::str_method("read"), None);
         assert_eq!(StdFn::from_name("open"), Some(StdFn::Open));
     }
 

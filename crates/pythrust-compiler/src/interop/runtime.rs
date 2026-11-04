@@ -71,6 +71,10 @@ pub const EMBEDDED: &[(&str, &str)] = &[
         "src/task.rs",
         include_str!("../../../pythrust-rt/src/task.rs"),
     ),
+    (
+        "src/text.rs",
+        include_str!("../../../pythrust-rt/src/text.rs"),
+    ),
 ];
 
 /// The workspace manifest whose `[workspace.package]` the runtime's
