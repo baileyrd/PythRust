@@ -656,10 +656,15 @@ impl<'m> Interp<'m, '_> {
             keywords: Vec::new(),
             span,
         };
+        // Every argument is evaluated before any is consumed, as in CPython.
+        let values = args
+            .iter()
+            .map(|arg| self.eval(&arg.value))
+            .collect::<Exec<'m, Vec<Value<'m>>>>()?;
         // `any` and `all` take `map`'s results until one decides.
         let decides = matches!(callee, Value::Builtin(Builtin::Any | Builtin::All));
-        for arg in args {
-            let v = match self.eval(&arg.value)? {
+        for (arg, v) in args.iter().zip(values) {
+            let v = match v {
                 // `list`, `sorted`, `set`, `sum`, `min` or `max` of `map`'s results.
                 Value::Results(r) if !decides => tasks::drain(&r)?,
                 v => v,
@@ -686,7 +691,17 @@ impl<'m> Interp<'m, '_> {
             }
         };
         self.tag(&out, span);
-        Ok(out)
+        Ok(self.fit(out, span))
+    }
+
+    /// `v` as the type of the call at `span`: a `float` call that gave an
+    /// int, which only an empty `sum` does (D50), even from generic code
+    /// whose own node leaves the type open, gives that int as a float.
+    fn fit(&self, v: Value<'m>, span: Span) -> Value<'m> {
+        match (v, self.types.at(span)) {
+            (Value::Int(n), Some(Type::Float)) => Value::Float(n as f64),
+            (v, _) => v,
+        }
     }
 
     fn call_func(&mut self, func: Rc<Func<'m>>, args: Args<'m>) -> Exec<'m, Value<'m>> {

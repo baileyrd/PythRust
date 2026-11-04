@@ -20,3 +20,5 @@ min/max: min() iterable argument is empty
 5 4
 True False
 any: three
+start evaluated
+sum: three

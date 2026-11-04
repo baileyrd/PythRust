@@ -2471,6 +2471,7 @@ fn reducing_builtins_refuse_what_cannot_be_typed() {
         ("print(sum([(1,)]))\n", "`sum` of tuple[int] is not supported yet"),
         ("print(sum([1.5], 0))\n", "`start` of `sum` must be a float, such as `0.0`"),
         ("print(sum([1], 0, 1))\n", "`sum` takes 1 to 2 arguments"),
+        ("print(sum(start=[1, 2]))\n", "`sum` needs its iterable before `start=`"),
         ("print(min([1], key=abs))\n", "`key=` of `min` is not supported yet"),
         ("print(max([1], default=0))\n", "`default=` of `max` is not supported yet"),
         ("print(min(1, 2.5))\n", "`min` of int and float: convert with `float(...)`"),

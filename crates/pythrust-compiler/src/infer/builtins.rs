@@ -320,6 +320,12 @@ impl Checker {
     /// iterates over (D57). `start`, by position or keyword, has the
     /// total's type.
     fn sum(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        if let Some(Arg { name: Some(kw), .. }) = args.first() {
+            if kw.name == "start" {
+                let msg = "`sum` needs its iterable before `start=`".to_string();
+                return Err(error(kw.span, msg));
+            }
+        }
         let args: Vec<Arg> = args
             .iter()
             .map(|a| match &a.name {

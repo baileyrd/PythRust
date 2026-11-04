@@ -432,6 +432,7 @@ const NATIVE: &[&str] = &[
     "builtin_ord_length",
     "builtin_chr_surrogate",
     "builtin_abs_overflow",
+    "builtin_sum_empty_float",
     "call_before_def",
     "chained_compare",
     "collatz",
