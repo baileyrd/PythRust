@@ -42,8 +42,6 @@ fn standalone_leaves_package_metadata_alone() {
         "[package.metadata.tool]\ndependencies = { x = { path = \"p\" } }\n",
         "[package]\nmetadata.dependencies.path = \"p\"\n",
         "package.metadata.dev-dependencies.path = \"p\"\n",
-        "package = { name = \"rt\", version = \"1.0.0\", metadata = { tool = { workspace = true } } }\n",
-        "package = { metadata = { a = { b = 1 }, tool = { \"workspace\" = true } }, name = \"rt\" }\n",
     ];
     for manifest in paths {
         let got = standalone(manifest, WORKSPACE_TOML);
@@ -58,11 +56,7 @@ fn standalone_reads_escapes_in_basic_strings() {
     let manifest =
         "[package]\ndescription = \"a\\u0022 \\\" b\"\n\"\\u0076ersion\".workspace = true\n";
     let got = standalone(manifest, WORKSPACE_TOML);
-    assert!(
-        got.as_ref()
-            .is_err_and(|e| e.contains("make the override's Cargo.toml standalone")),
-        "{got:?}"
-    );
+    assert!(got.as_ref().is_err_and(|e| e.contains(PLAIN)), "{got:?}");
     let plain = "[package]\ndescription = \"a\\u0022 \\\" b\"\nversion.workspace = true\n";
     let want = "[package]\ndescription = \"a\\u0022 \\\" b\"\nversion = \"0.3.0\"\n\n[workspace]\n";
     assert_eq!(standalone(plain, WORKSPACE_TOML), Ok(want.to_string()));
@@ -108,8 +102,9 @@ fn standalone_refuses_other_inheritance_forms() {
     for manifest in refused {
         let got = standalone(manifest, WORKSPACE_TOML);
         assert!(
-            got.as_ref()
-                .is_err_and(|e| e.contains("make the override's Cargo.toml standalone")),
+            got.as_ref().is_err_and(|e| {
+                e.contains("make the override's Cargo.toml standalone") || e.contains(PLAIN)
+            }),
             "{manifest}: {got:?}"
         );
     }
@@ -150,18 +145,20 @@ fn standalone_reads_statements_across_lines() {
 }
 
 /// A closing run of four or five quotes ends a multi-line string, and a
-/// quoted table name is the table it names.
+/// quoted guarded header is refused as not plain (D42).
 #[test]
 fn standalone_reads_quote_runs_and_quoted_headers() {
-    let manifest = "[\"package\"]\nauthors = [\"\"\"A\"\"\"\"]\nnote = '''B'''''\nversion.workspace = true\n[dependencies.helper]\npath = \"../helper\"\n";
+    let manifest = "[package]\nauthors = [\"\"\"A\"\"\"\"]\nnote = '''B'''''\nversion.workspace = true\n[dependencies.helper]\npath = \"../helper\"\n";
     let got = standalone(manifest, WORKSPACE_TOML);
     assert!(
         got.as_ref().is_err_and(|e| e.contains("path dependency")),
         "{got:?}"
     );
-    let manifest = "[ 'package' ]\nauthors = [\"\"\"A\"\"\"\"]\nversion.workspace = true\n";
+    let manifest = "[package]\nauthors = [\"\"\"A\"\"\"\"]\nversion.workspace = true\n";
     let got = standalone(manifest, WORKSPACE_TOML).unwrap();
     assert!(got.contains("\nversion = \"0.3.0\"\n"), "{got}");
+    let got = standalone("[ 'package' ]\nversion.workspace = true\n", WORKSPACE_TOML);
+    assert!(got.as_ref().is_err_and(|e| e.contains(PLAIN)), "{got:?}");
 }
 
 /// A manifest that is its own workspace root is kept as it is, and a
@@ -201,7 +198,8 @@ fn standalone_refuses_a_path_dependency() {
     for manifest in refused {
         let got = standalone(manifest, "");
         assert!(
-            got.as_ref().is_err_and(|e| e.contains("path dependency")),
+            got.as_ref()
+                .is_err_and(|e| e.contains("path dependency") || e.contains(PLAIN)),
             "{manifest}: {got:?}"
         );
     }
@@ -209,7 +207,8 @@ fn standalone_refuses_a_path_dependency() {
         "[lib]\npath = \"src/lib.rs\"\n[package]\nname = \"path\"\n[dependencies]\nxpath = \"1\"\n";
     assert!(standalone(lib, "").is_ok());
     let literal = "[dependencies.helper]\n'\\u0070ath' = \"h\"\n";
-    assert!(standalone(literal, "").is_ok());
+    let got = standalone(literal, "");
+    assert!(got.as_ref().is_err_and(|e| e.contains(PLAIN)), "{got:?}");
 }
 
 #[test]
@@ -277,4 +276,60 @@ fn embedded_files_are_the_runtime_made_standalone() {
     assert!(!manifest.contains(".workspace = true"), "{manifest}");
     assert!(manifest.contains(&format!("\nversion = \"{}\"\n", env!("CARGO_PKG_VERSION"))));
     assert!(manifest.ends_with("\n[workspace]\n"), "{manifest}");
+}
+
+const PLAIN: &str = "plainly written standalone manifest";
+
+/// Fail closed (D42): in `[package]`, `[workspace.package]` and
+/// dependency tables, a spelling the check does not plainly read is the
+/// named error, whatever it would mean to cargo.
+#[test]
+fn standalone_refuses_spellings_it_does_not_plainly_read() {
+    let refused = [
+        "[package]\n\"name\" = \"rt\"\n",
+        "[package]\n'name' = \"rt\"\n",
+        "[ 'package' ]\nname = \"rt\"\n",
+        "[\"dep\\u0065ndencies\".helper]\nversion = \"1\"\n",
+        "[dependencies]\nhelper.version = \"1\"\n",
+        "[dependencies]\nhelper = { \"version\" = \"1\" }\n",
+        "[dependencies]\nhelper = { version = \"1\", nested = { a = 1 } }\n",
+        "[package]\nmetadata2 = { a = 1 }\n",
+        "[package]\nversion.workspace = false\n",
+        "[workspace.package]\n\"version\" = \"1\"\n",
+        "package.name = \"rt\"\n",
+        "package = { name = \"rt\" }\n",
+        "package = { name = \"rt\", metadata = { tool = { workspace = true } } }\n",
+        "dependencies.helper = \"1\"\n",
+        "target = { 'cfg(unix)' = { dependencies = { h = \"1\" } } }\n",
+        "[target.'cfg(unix)']\ndependencies = { h = \"1\" }\n",
+        "[target.'cfg(unix)'.\"dependencies\"]\nh = \"1\"\n",
+    ];
+    for manifest in refused {
+        let got = standalone(manifest, WORKSPACE_TOML);
+        assert!(
+            got.as_ref().is_err_and(|e| e.contains(PLAIN)),
+            "{manifest}: {got:?}"
+        );
+    }
+}
+
+/// The plain spellings still pass: bare keys, one header per table, a
+/// flat inline dependency, a quoted target cfg, and anything outside the
+/// guarded tables.
+#[test]
+fn standalone_accepts_plain_spellings() {
+    let plain = [
+        "[package]\nname = \"rt\"\nkeywords = [\"a\", \"b\"]\n",
+        "[dependencies]\nlibc = { version = \"0.2\", features = [\"std\"] }\nlog = \"0.4\"\n",
+        "[dependencies.libc]\nversion = \"0.2\"\n",
+        "[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n",
+        "[target.\"cfg(target_os = \\\"linux\\\")\".dev-dependencies]\nlibc = \"0.2\"\n",
+        "[package.metadata.\"tool\"]\n\"x\".y = { z = { a = 1 } }\n",
+        "[lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = [\"cfg(x)\"] }\n",
+        "[features]\n\"a-b\" = []\n",
+    ];
+    for manifest in plain {
+        let got = standalone(manifest, WORKSPACE_TOML);
+        assert!(got.is_ok(), "{manifest}: {got:?}");
+    }
 }

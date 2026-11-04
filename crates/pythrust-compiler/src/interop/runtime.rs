@@ -112,6 +112,7 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
         if let Some(name) = header(&stmt.code) {
             table = name;
         }
+        plain::check(&table, &stmt.code)?;
         let metadata = in_metadata(&table, &stmt.code);
         if sets_path(&table, &stmt.code) {
             return Err(format!(
@@ -518,7 +519,7 @@ fn inherited_value(key: &str, workspace: &[Statement]) -> Result<String, String>
             table = name;
             continue;
         }
-        let sets = assignment(&stmt.code).is_some_and(|(k, _)| unquoted(k) == unquoted(key));
+        let sets = assignment(&stmt.code).is_some_and(|(k, _)| k.trim() == key);
         if table == "workspace.package" && sets {
             return Ok(stmt.lines.join("\n"));
         }
@@ -552,3 +553,5 @@ pub fn digest(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests;
+
+mod plain;
