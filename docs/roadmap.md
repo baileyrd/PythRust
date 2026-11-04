@@ -168,3 +168,12 @@ Cards, in order (one PR or more each):
   - [x] *Shipped runtime (#102, #104, #105):* `pythrust-rt`'s source embedded with `include_str!`, a test that the embedded list matches the runtime directory, extraction to `.pythrust/rt/<version>-<hash>/`, a binding build with `PYTHRUST_RT_SRC` unset outside the checkout; first-build time reported. No shared cache.
   - [x] *Driver (#106):* CI builds fclone-lite's `fclone_fast.pyr` from a copy outside the repository, from its manifest and lock alone, on Linux, macOS and Windows, and checks its groups against `fclone_lite.py`'s. Exit: that build, plus the named errors for a missing lock, a stale lock and a `[python]` table. Done: CI's `driver` job copies `apps/fclone-lite` to the runner's temp directory and runs `pythrust build fclone_fast.pyr` there with no flags and no `PYTHRUST_*` variables; `ci/fclone_driver.py` runs both programs over a small tree (two duplicated payloads of one size, an empty pair, a unique file) and compares group sets, reading `\` as `/` (Pythrust's `os.path.join` is POSIX everywhere, a listed deviation). The named errors were already tested: `a_build_without_a_lock_names_pythrust_lock` and `a_stale_lock_names_what_changed` (`tests/interop.rs`) and the reserved `[python]` table (`tests/cli.rs`).
 - [ ] **M6e. Python typed bridge.** Waits for a second app that needs it.
+
+## Post-M6 step 1: strings and builtins
+
+Nano's post-M6 order (2026-11-03), step 1: where a string method lacks full Unicode behavior, a named error or listed deviation; oracle fixtures include non-ASCII text (D47). One PR each, in order (D48); Unicode rules in D49, what raises in D50, `enumerate`/`zip` in D51:
+
+- [x] *Receiver-typed method lookup, no surface change:* `infer/methods.rs` keeps one table of methods by owner; the receiver's type picks its own method, and while it is unknown the one type with the name fixes it. A shared name on a receiver still unknown waits for its type (D52), added with the first one (list `index`/`count`); until then a test refuses shared names.
+- [ ] *str A:* `split join strip lstrip rstrip replace`.
+- [ ] *str B:* `startswith endswith find rfind index rindex count upper lower`.
+- [ ] *Builtins:* `enumerate zip min max sum any all abs ord chr`.
