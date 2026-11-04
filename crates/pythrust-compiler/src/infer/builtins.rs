@@ -91,7 +91,16 @@ impl Checker {
             | StdFn::Strip
             | StdFn::Lstrip
             | StdFn::Rstrip
-            | StdFn::Replace => {
+            | StdFn::Replace
+            | StdFn::Startswith
+            | StdFn::Endswith
+            | StdFn::Find
+            | StdFn::Rfind
+            | StdFn::Index
+            | StdFn::Rindex
+            | StdFn::Count
+            | StdFn::Upper
+            | StdFn::Lower => {
                 let msg = format!("internal: `{name}` is a method");
                 return Err(error(span, msg));
             }

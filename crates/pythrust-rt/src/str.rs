@@ -332,6 +332,86 @@ pub unsafe extern "C" fn pt_str_replace(
     into_ptr(PtStr::new(text::replace(s, old, new).into()))
 }
 
+/// `s.startswith(affix)` (`end` 0) or `s.endswith(affix)`: 1 or 0.
+///
+/// # Safety
+///
+/// `s` and `affix` are live strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_affix(s: *const PtStr, affix: *const PtStr, end: u8) -> u8 {
+    // SAFETY: guaranteed by the caller.
+    let (s, affix) = unsafe { (borrow(s).text(), borrow(affix).text()) };
+    let found = if end == 0 {
+        s.starts_with(affix)
+    } else {
+        s.ends_with(affix)
+    };
+    u8::from(found)
+}
+
+/// `s.find(sub)` (`right` 0) or `s.rfind(sub)`: the code-point index,
+/// or -1. With `raise` set, `index` or `rindex`: a missing `sub` raises
+/// `ValueError` at the site instead (D50).
+///
+/// # Safety
+///
+/// `s` and `sub` are live strings, and the site's words as
+/// [`crate::os::site`] takes them.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // The site's four words, as `pt_str_split` takes them.
+pub unsafe extern "C" fn pt_str_find(
+    s: *const PtStr,
+    sub: *const PtStr,
+    right: u8,
+    raise: u8,
+    head: *const u8,
+    head_len: usize,
+    tail: *const u8,
+    tail_len: usize,
+) -> i64 {
+    // SAFETY: guaranteed by the caller.
+    let (s, sub) = unsafe { (borrow(s).text(), borrow(sub).text()) };
+    if let Some(at) = text::find(s, sub, right != 0) {
+        return as_int(at);
+    }
+    if raise != 0 {
+        // SAFETY: guaranteed by the caller.
+        let site = unsafe { crate::os::site(head, head_len, tail, tail_len) };
+        site.raise_text(crate::exc::VALUE_ERROR, text::NOT_FOUND.to_string());
+    }
+    -1
+}
+
+/// `s.count(sub)`.
+///
+/// # Safety
+///
+/// `s` and `sub` are live strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_count(s: *const PtStr, sub: *const PtStr) -> i64 {
+    // SAFETY: guaranteed by the caller.
+    let (s, sub) = unsafe { (borrow(s).text(), borrow(sub).text()) };
+    as_int(text::count(s, sub))
+}
+
+/// A code-point index or count as an `int`: a `str` holds fewer than
+/// `i64::MAX` code points, so it always fits.
+fn as_int(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// `s.upper()` (`upper` 1) or `s.lower()`: a new string.
+///
+/// # Safety
+///
+/// `s` is a live string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_case(s: *const PtStr, upper: u8) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { borrow(s).text() };
+    into_ptr(PtStr::new(text::case(s, upper != 0).into()))
+}
+
 /// `sep.join(xs)` of a `list[str]`: a new string.
 ///
 /// # Safety

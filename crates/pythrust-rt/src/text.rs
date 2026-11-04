@@ -51,9 +51,45 @@ pub fn replace(s: &str, old: &str, new: &str) -> String {
     s.replace(old, new)
 }
 
+/// The code-point index where byte offset `at` of `s` starts.
+fn chars_before(s: &str, at: usize) -> usize {
+    s[..at].chars().count()
+}
+
+/// `s.find(sub)` (`right` false) or `s.rfind(sub)`: the code-point
+/// index of the first or last `sub`, or `None`. An empty `sub` is found
+/// at 0, or at the end from the right, as in CPython.
+pub fn find(s: &str, sub: &str, right: bool) -> Option<usize> {
+    let at = if right { s.rfind(sub) } else { s.find(sub) }?;
+    Some(chars_before(s, at))
+}
+
+/// `s.count(sub)`: non-overlapping matches, left to right; an empty
+/// `sub` matches between every two code points and at both ends.
+pub fn count(s: &str, sub: &str) -> usize {
+    if sub.is_empty() {
+        return s.chars().count() + 1;
+    }
+    s.matches(sub).count()
+}
+
+/// `s.upper()` (`upper` true) or `s.lower()`: Rust's full Unicode case
+/// mappings, special casing and final sigma included, as CPython's;
+/// their Unicode version may be newer than CPython 3.13's 15.1 (D49).
+pub fn case(s: &str, upper: bool) -> String {
+    if upper {
+        s.to_uppercase()
+    } else {
+        s.to_lowercase()
+    }
+}
+
+/// The message of the `ValueError` `index` and `rindex` raise.
+pub const NOT_FOUND: &str = "substring not found";
+
 /// Python's `repr` of a string: single quotes unless the text holds a
 /// single quote and no double quote; `\\`, `\n`, `\r`, `\t` and the
-/// quote escaped, and every [`escaped`] code point as `\x`, `\u` or
+/// quote escaped, and every `escaped` code point as `\x`, `\u` or
 /// `\U` (D54).
 pub fn repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') {
@@ -86,7 +122,7 @@ pub fn repr(s: &str) -> String {
 /// private use (Co). Format characters (Cf) and unassigned code points
 /// (Cn) need a category table, so they print raw, a listed deviation
 /// (D54).
-pub fn escaped(c: char) -> bool {
+fn escaped(c: char) -> bool {
     let separator = c.is_whitespace() && !c.is_control() && c != ' ';
     let private = matches!(c, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}');
     c.is_control() || separator || private
@@ -176,6 +212,27 @@ mod tests {
             "'\\ue000\\U000f0000\\U0010fffd'"
         );
         assert_eq!(repr("ßΣ中\u{200b}"), "'ßΣ中\u{200b}'");
+    }
+
+    #[test]
+    fn find_and_count_count_code_points() {
+        assert_eq!(find("αβγβ", "β", false), Some(1));
+        assert_eq!(find("αβγβ", "β", true), Some(3));
+        assert_eq!(find("αβ", "x", false), None);
+        assert_eq!(find("αβ", "", false), Some(0));
+        assert_eq!(find("αβ", "", true), Some(2));
+        assert_eq!(count("aaaa", "aa"), 2);
+        assert_eq!(count("αβ", ""), 3);
+        assert_eq!(count("", ""), 1);
+        assert_eq!(count("中文中", "中"), 2);
+    }
+
+    #[test]
+    fn case_maps_in_full() {
+        assert_eq!(case("ΣΑΣ ΑΣ.", false), "σας ας.");
+        assert_eq!(case("ß ŉ ﬁ", true), "SS ʼN FI");
+        assert_eq!(case("İ", false), "i\u{307}");
+        assert_eq!(case("", true), "");
     }
 
     #[test]

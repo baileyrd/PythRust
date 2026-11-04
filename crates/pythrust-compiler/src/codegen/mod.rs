@@ -170,10 +170,14 @@ enum Rt {
     StrStrip,
     StrReplace,
     StrJoin,
+    StrAffix,
+    StrFind,
+    StrCount,
+    StrCase,
 }
 
 impl Rt {
-    const ALL: [Rt; 94] = [
+    const ALL: [Rt; 98] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -268,6 +272,10 @@ impl Rt {
         Rt::StrStrip,
         Rt::StrReplace,
         Rt::StrJoin,
+        Rt::StrAffix,
+        Rt::StrFind,
+        Rt::StrCount,
+        Rt::StrCase,
     ];
 
     fn symbol(self) -> &'static str {
@@ -357,6 +365,10 @@ impl Rt {
             Rt::StrStrip => "pt_str_strip",
             Rt::StrReplace => "pt_str_replace",
             Rt::StrJoin => "pt_str_join",
+            Rt::StrAffix => "pt_str_affix",
+            Rt::StrFind => "pt_str_find",
+            Rt::StrCount => "pt_str_count",
+            Rt::StrCase => "pt_str_case",
             Rt::Mark => "pt_mark",
             Rt::ExecNew => "pt_exec_new",
             Rt::ExecEnd => "pt_exec_end",
@@ -444,6 +456,10 @@ impl Rt {
             Rt::StrStrip => (vec![ptr, ptr, I8], Some(ptr)),
             Rt::StrReplace => (vec![ptr; 3], Some(ptr)),
             Rt::StrJoin => (vec![ptr, ptr], Some(ptr)),
+            Rt::StrAffix => (vec![ptr, ptr, I8], Some(I8)),
+            Rt::StrFind => (vec![ptr, ptr, I8, I8, ptr, ptr, ptr, ptr], Some(I64)),
+            Rt::StrCount => (vec![ptr, ptr], Some(I64)),
+            Rt::StrCase => (vec![ptr, I8], Some(ptr)),
         }
     }
 }

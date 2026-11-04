@@ -103,10 +103,28 @@ pub enum StdFn {
     Rstrip,
     /// `s.replace(old, new)`.
     Replace,
+    /// `s.startswith(prefix)`.
+    Startswith,
+    /// `s.endswith(suffix)`.
+    Endswith,
+    /// `s.find(sub)`: a code-point index, or -1.
+    Find,
+    /// `s.rfind(sub)`: a code-point index, or -1.
+    Rfind,
+    /// `s.index(sub)`: as `find`, raising a tracked `ValueError` when absent (D50).
+    Index,
+    /// `s.rindex(sub)`: as `rfind`, raising a tracked `ValueError` when absent.
+    Rindex,
+    /// `s.count(sub)`: non-overlapping matches.
+    Count,
+    /// `s.upper()`: full Unicode case mapping (D49).
+    Upper,
+    /// `s.lower()`: full Unicode case mapping (D49).
+    Lower,
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 18] = [
+    pub const ALL: [StdFn; 27] = [
         StdFn::Argv,
         StdFn::Listdir,
         StdFn::Join,
@@ -125,6 +143,15 @@ impl StdFn {
         StdFn::Lstrip,
         StdFn::Rstrip,
         StdFn::Replace,
+        StdFn::Startswith,
+        StdFn::Endswith,
+        StdFn::Find,
+        StdFn::Rfind,
+        StdFn::Index,
+        StdFn::Rindex,
+        StdFn::Count,
+        StdFn::Upper,
+        StdFn::Lower,
     ];
 
     /// The builtin name stages call it by: the dotted name a program
@@ -150,6 +177,15 @@ impl StdFn {
             StdFn::Lstrip => "str.lstrip",
             StdFn::Rstrip => "str.rstrip",
             StdFn::Replace => "str.replace",
+            StdFn::Startswith => "str.startswith",
+            StdFn::Endswith => "str.endswith",
+            StdFn::Find => "str.find",
+            StdFn::Rfind => "str.rfind",
+            StdFn::Index => "str.index",
+            StdFn::Rindex => "str.rindex",
+            StdFn::Count => "str.count",
+            StdFn::Upper => "str.upper",
+            StdFn::Lower => "str.lower",
         }
     }
 
@@ -180,6 +216,15 @@ impl StdFn {
             "lstrip" => Some(StdFn::Lstrip),
             "rstrip" => Some(StdFn::Rstrip),
             "replace" => Some(StdFn::Replace),
+            "startswith" => Some(StdFn::Startswith),
+            "endswith" => Some(StdFn::Endswith),
+            "find" => Some(StdFn::Find),
+            "rfind" => Some(StdFn::Rfind),
+            "index" => Some(StdFn::Index),
+            "rindex" => Some(StdFn::Rindex),
+            "count" => Some(StdFn::Count),
+            "upper" => Some(StdFn::Upper),
+            "lower" => Some(StdFn::Lower),
             _ => None,
         }
     }
@@ -198,6 +243,7 @@ impl StdFn {
     pub fn raises(self) -> Option<ExcKind> {
         match self {
             StdFn::Listdir | StdFn::Getsize | StdFn::Open | StdFn::Read => Some(ExcKind::Os),
+            StdFn::Index | StdFn::Rindex => Some(ExcKind::Value),
             StdFn::Argv
             | StdFn::Join
             | StdFn::Isdir
@@ -211,7 +257,14 @@ impl StdFn {
             | StdFn::Strip
             | StdFn::Lstrip
             | StdFn::Rstrip
-            | StdFn::Replace => None,
+            | StdFn::Replace
+            | StdFn::Startswith
+            | StdFn::Endswith
+            | StdFn::Find
+            | StdFn::Rfind
+            | StdFn::Count
+            | StdFn::Upper
+            | StdFn::Lower => None,
         }
     }
 
@@ -327,7 +380,24 @@ mod tests {
             assert!(MODULES.iter().all(|m| !m.exposes(f.name())));
         }
         assert_eq!(StdFn::file_method("write"), None);
-        for attr in ["split", "join", "strip", "lstrip", "rstrip", "replace"] {
+        let str_methods = [
+            "split",
+            "join",
+            "strip",
+            "lstrip",
+            "rstrip",
+            "replace",
+            "startswith",
+            "endswith",
+            "find",
+            "rfind",
+            "index",
+            "rindex",
+            "count",
+            "upper",
+            "lower",
+        ];
+        for attr in str_methods {
             let Some(f) = StdFn::str_method(attr) else {
                 panic!("{attr} is a str method")
             };

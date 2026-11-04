@@ -1,0 +1,44 @@
+# `str.startswith`, `.endswith`, `.find`, `.rfind`, `.index`, `.rindex`,
+# `.count`, `.upper` and `.lower` (D48, D49): indices count code points,
+# case maps in full, and `index` raises `ValueError` where `find` gives -1
+# (D50): caught after a direct call, a task's `result()` and from a
+# tempered function that declares it.
+import concurrent.futures
+
+
+temper def where(s: str, sub: str) -> int raises ValueError:
+    return s.index(sub)
+
+
+def last(s: str, sub: str) -> int:
+    return s.rindex(sub)
+
+
+def main() -> None:
+    s = "αβγβ"
+    print(s.startswith("αβ"), s.endswith("β"), s.startswith(""), "".endswith("x"))
+    print(s.startswith("β"), "中文".endswith("中"), "ab".startswith("abc"))
+    print(s.find("β"), s.rfind("β"), s.find("x"), s.find(""), s.rfind(""))
+    print("中文中文".find("文中"), "naïve café".rfind("é"), "ab".find("abc"))
+    print(s.index("γ"), s.rindex("β"), where("straße", "e"), last("aβaβ", "a"))
+    print(s.count("β"), s.count(""), "".count(""), "aaaa".count("aa"), "ßßß".count("ß"))
+    print("ΣΑΣ ΑΣ.".lower(), "ΌΣΟΣ".lower(), "straße ŉ ﬁ".upper())
+    print("İ".lower() == "i̇", "Ǆǅǆ".lower(), "ǅ".upper(), "".upper() == "")
+    print("Hello, World".upper().lower().find("world"))
+    try:
+        print(where(s, "x"))
+    except ValueError as e:
+        print("tempered:", e)
+    try:
+        print(s.rindex(""), s.index("δ"))
+    except ValueError as e:
+        print("direct:", e)
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(last, "abc", "ü")
+        try:
+            print(f.result())
+        except ValueError as e:
+            print("task:", e)
+
+
+main()

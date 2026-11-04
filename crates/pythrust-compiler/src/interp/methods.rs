@@ -1,5 +1,6 @@
-//! Methods: `str.split`, `.join`, `.strip`, `.lstrip`, `.rstrip` and
-//! `.replace`, `list.append`, `set.add`, `dict.get`, `.keys`, `.values`,
+//! Methods: `str.split`, `.join`, `.strip`, `.lstrip`, `.rstrip`,
+//! `.replace`, `.startswith`, `.endswith`, `.find`, `.rfind`, `.index`,
+//! `.rindex`, `.count`, `.upper` and `.lower`, `list.append`, `set.add`, `dict.get`, `.keys`, `.values`,
 //! `.items`, and a file's `.read` and `.close`. `x.name` binds the
 //! method to `x`; calling the bound method runs it.
 
@@ -24,6 +25,15 @@ pub(super) enum Name {
     Lstrip,
     Rstrip,
     Replace,
+    Startswith,
+    Endswith,
+    Find,
+    Rfind,
+    Index,
+    Rindex,
+    Count,
+    Upper,
+    Lower,
     Append,
     Add,
     Get,
@@ -43,6 +53,15 @@ impl Name {
             Name::Lstrip => "lstrip",
             Name::Rstrip => "rstrip",
             Name::Replace => "replace",
+            Name::Startswith => "startswith",
+            Name::Endswith => "endswith",
+            Name::Find => "find",
+            Name::Rfind => "rfind",
+            Name::Index => "index",
+            Name::Rindex => "rindex",
+            Name::Count => "count",
+            Name::Upper => "upper",
+            Name::Lower => "lower",
             Name::Append => "append",
             Name::Add => "add",
             Name::Get => "get",
@@ -58,9 +77,16 @@ impl Name {
 impl Name {
     /// Whether it is a `str` method.
     fn on_str(self) -> bool {
-        matches!(
+        !matches!(
             self,
-            Name::Split | Name::Join | Name::Strip | Name::Lstrip | Name::Rstrip | Name::Replace
+            Name::Append
+                | Name::Add
+                | Name::Get
+                | Name::Keys
+                | Name::Values
+                | Name::Items
+                | Name::Read
+                | Name::Close
         )
     }
 }
@@ -116,6 +142,15 @@ pub(super) fn bind<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
         "lstrip" => Some(Name::Lstrip),
         "rstrip" => Some(Name::Rstrip),
         "replace" => Some(Name::Replace),
+        "startswith" => Some(Name::Startswith),
+        "endswith" => Some(Name::Endswith),
+        "find" => Some(Name::Find),
+        "rfind" => Some(Name::Rfind),
+        "index" => Some(Name::Index),
+        "rindex" => Some(Name::Rindex),
+        "count" => Some(Name::Count),
+        "upper" => Some(Name::Upper),
+        "lower" => Some(Name::Lower),
         "append" => Some(Name::Append),
         "add" => Some(Name::Add),
         "get" => Some(Name::Get),
@@ -162,9 +197,22 @@ pub(super) fn call<'m>(m: &Method<'m>, args: Args<'m>) -> Exec<'m, Value<'m>> {
     let (min, max) = match m.name() {
         Name::Split | Name::Strip | Name::Lstrip | Name::Rstrip => (0, 1),
         Name::Join | Name::Append | Name::Add => (1, 1),
+        Name::Startswith
+        | Name::Endswith
+        | Name::Find
+        | Name::Rfind
+        | Name::Index
+        | Name::Rindex
+        | Name::Count => (1, 1),
         Name::Replace => (2, 2),
         Name::Get => (1, 2),
-        Name::Keys | Name::Values | Name::Items | Name::Read | Name::Close => (0, 0),
+        Name::Keys
+        | Name::Values
+        | Name::Items
+        | Name::Read
+        | Name::Close
+        | Name::Upper
+        | Name::Lower => (0, 0),
     };
     if pos.len() < min || pos.len() > max {
         let msg = match (min, max) {
@@ -244,9 +292,13 @@ fn str_call<'m>(name: Name, s: &str, args: Vec<Value<'m>>, span: Span) -> Exec<'
         Name::Rstrip => text::Side::Right,
         _ => text::Side::Both,
     };
+    if let Some(found) = search(name, s, text(0), span)? {
+        return Ok(found);
+    }
     let out = match name {
         Name::Split => return split(s, text(0), span),
         Name::Join => return join(s, args.first(), span),
+        Name::Upper | Name::Lower => text::case(s, name == Name::Upper),
         Name::Strip | Name::Lstrip | Name::Rstrip => text::strip(s, text(0), side).to_string(),
         Name::Replace => match (text(0), text(1)) {
             (Some(old), Some(new)) => text::replace(s, old, new),
@@ -255,6 +307,36 @@ fn str_call<'m>(name: Name, s: &str, args: Vec<Value<'m>>, span: Span) -> Exec<'
         _ => return Err(rt_err(span, format!("`{}` is not a str method", name.as_str())).into()),
     };
     Ok(Value::str(&out))
+}
+
+/// A `str` method that looks for `sub` in `s`: a test, an index or a
+/// count. `None` for any other method; `index` and `rindex` raise a
+/// `ValueError` where `find` gives -1 (D50).
+fn search<'m>(name: Name, s: &str, sub: Option<&str>, span: Span) -> Exec<'m, Option<Value<'m>>> {
+    let Some(sub) = sub else {
+        return Ok(None);
+    };
+    let right = matches!(name, Name::Rfind | Name::Rindex);
+    let at = || text::find(s, sub, right);
+    let value = match name {
+        Name::Startswith => Value::Bool(s.starts_with(sub)),
+        Name::Endswith => Value::Bool(s.ends_with(sub)),
+        Name::Find | Name::Rfind => at().map_or(Ok(Value::Int(-1)), |i| int(i, span))?,
+        Name::Index | Name::Rindex => match at() {
+            Some(i) => int(i, span)?,
+            None => return Err(raised(ExcKind::Value, text::NOT_FOUND.to_string(), span)),
+        },
+        Name::Count => int(text::count(s, sub), span)?,
+        _ => return Ok(None),
+    };
+    Ok(Some(value))
+}
+
+/// A code-point index or count as an `int`.
+fn int<'m>(n: usize, span: Span) -> Exec<'m, Value<'m>> {
+    i64::try_from(n)
+        .map(Value::Int)
+        .map_err(|_| rt_err(span, "OverflowError: index too large".to_string()).into())
 }
 
 /// `s.split()` or `s.split(sep)`: a new list of the parts.

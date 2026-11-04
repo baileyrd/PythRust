@@ -1,0 +1,3 @@
+# deviation: `upper` and `lower` follow Rust's Unicode tables, which may be newer than CPython 3.13's 15.1 (D49, D55); here U+0264 and U+019B gained uppercase forms in Unicode 16.
+print("ɤ ƛ".upper())
+print("ɤ ƛ".upper().lower())
