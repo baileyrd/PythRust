@@ -106,12 +106,16 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
     let stmts = statements(manifest);
     let own = is_root(&stmts);
     let ws = statements(workspace);
+    for stmt in &ws {
+        plain::quoted(&stmt.code)?;
+    }
     let mut out = String::new();
     let mut table = String::new();
     for stmt in &stmts {
         if let Some(name) = header(&stmt.code) {
             table = name;
         }
+        plain::check(&table, &stmt.code)?;
         let metadata = in_metadata(&table, &stmt.code);
         if sets_path(&table, &stmt.code) {
             return Err(format!(
@@ -136,8 +140,12 @@ pub fn standalone(manifest: &str, workspace: &str) -> Result<String, String> {
 
 /// Whether the manifest `text` is a workspace root: it has a
 /// `workspace` table, as a header or a root-table dotted key.
-pub fn is_workspace_root(text: &str) -> bool {
-    is_root(&statements(text))
+pub fn is_workspace_root(text: &str) -> Result<bool, String> {
+    let stmts = statements(text);
+    for stmt in &stmts {
+        plain::quoted(&stmt.code)?;
+    }
+    Ok(is_root(&stmts))
 }
 
 fn is_root(stmts: &[Statement]) -> bool {
@@ -324,8 +332,17 @@ fn sets_path(table: &str, code: &str) -> bool {
         };
         last == "path"
             && !matches!(full.as_slice(), [a, b, ..] if a == "package" && b == "metadata")
-            && above.iter().any(|part| part.ends_with("dependencies"))
+            && names_dependency(above)
     })
+}
+
+/// Whether the key or table path `parts` reaches a dependency table:
+/// a part naming one (`dependencies`, `dev-dependencies`, ...), or a
+/// `[patch]` or `[replace]` table, whose entries are dependencies too.
+fn names_dependency<S: AsRef<str>>(parts: &[S]) -> bool {
+    let first = parts.first().map(AsRef::as_ref);
+    matches!(first, Some("patch" | "replace"))
+        || parts.iter().any(|p| p.as_ref().ends_with("dependencies"))
 }
 
 /// The full key path, as unquoted parts, of the statement `code` in
@@ -377,28 +394,28 @@ fn inline_keys(key: &str, value: &str, out: &mut Vec<String>) {
     let mut last = key.to_string();
     let mut name = String::new();
     let mut naming = false;
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
+    let mut quote: Option<&'static str> = None;
     let mut arrays = 0usize;
-    for c in value.chars() {
-        if let Some(q) = quote {
-            if naming {
-                name.push(c);
+    let mut i = 0;
+    while let Some(c) = value[i..].chars().next() {
+        let rest = &value[i..];
+        let opener = QUOTES.into_iter().find(|q| rest.starts_with(q));
+        let len = match (quote, opener) {
+            (Some(q), _) => string_step(rest, q, &mut quote),
+            (None, Some(q)) => {
+                quote = Some(q);
+                q.len()
             }
-            let closes = c == q && !escaped;
-            escaped = q == '"' && c == '\\' && !escaped;
-            if closes {
-                quote = None;
-            }
+            (None, None) => c.len_utf8(),
+        };
+        if naming && (quote.is_some() || opener.is_some()) {
+            name.push_str(&rest[..len]);
+        }
+        i += len;
+        if quote.is_some() || opener.is_some() {
             continue;
         }
         match c {
-            '"' | '\'' => {
-                quote = Some(c);
-                if naming {
-                    name.push(c);
-                }
-            }
             '[' => arrays += 1,
             ']' => arrays = arrays.saturating_sub(1),
             _ if arrays > 0 => {}
@@ -421,6 +438,26 @@ fn inline_keys(key: &str, value: &str, out: &mut Vec<String>) {
             _ if naming => name.push(c),
             _ => {}
         }
+    }
+}
+
+/// Steps over the start of `rest` inside a string closed by `q`: an
+/// escape in a basic string, the closing quote run (clearing `quote`),
+/// or one character. Returns how far it stepped.
+fn string_step(rest: &str, q: &'static str, quote: &mut Option<&'static str>) -> usize {
+    let one = |s: &str| s.chars().next().map_or(0, char::len_utf8);
+    if q.starts_with('"') && rest.starts_with('\\') {
+        return 1 + one(&rest[1..]);
+    }
+    if !rest.starts_with(q) {
+        return one(rest);
+    }
+    *quote = None;
+    let run = rest.bytes().take_while(|&b| b == q.as_bytes()[0]).count();
+    if q.len() == 3 {
+        run.min(5)
+    } else {
+        1
     }
 }
 
@@ -467,7 +504,7 @@ fn inheritable(parts: &[&str]) -> bool {
     match parts.first() {
         Some(&"workspace") | None => false,
         Some(&"lints") | Some(&"package") => true,
-        Some(_) => parts.iter().any(|p| p.ends_with("dependencies")),
+        Some(_) => names_dependency(parts),
     }
 }
 
@@ -518,7 +555,7 @@ fn inherited_value(key: &str, workspace: &[Statement]) -> Result<String, String>
             table = name;
             continue;
         }
-        let sets = assignment(&stmt.code).is_some_and(|(k, _)| unquoted(k) == unquoted(key));
+        let sets = assignment(&stmt.code).is_some_and(|(k, _)| k.trim() == key);
         if table == "workspace.package" && sets {
             return Ok(stmt.lines.join("\n"));
         }
@@ -552,3 +589,5 @@ pub fn digest(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests;
+
+mod plain;

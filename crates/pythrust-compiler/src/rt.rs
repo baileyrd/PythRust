@@ -72,7 +72,9 @@ fn workspace_manifest(dir: &Path) -> Result<String, String> {
                 ));
             }
         };
-        if runtime::is_workspace_root(&text) {
+        let root = runtime::is_workspace_root(&text)
+            .map_err(|e| format!("pythrust: {RT_SRC_ENV}: {}: {e}\n", candidate.display()))?;
+        if root {
             return Ok(text);
         }
     }
