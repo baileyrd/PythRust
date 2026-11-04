@@ -121,10 +121,18 @@ pub enum StdFn {
     Upper,
     /// `s.lower()`: full Unicode case mapping (D49).
     Lower,
+    /// The builtin `ord(c)` (D56): a fault unless `c` is one character.
+    Ord,
+    /// The builtin `chr(n)` (D56): raises `ValueError` out of range or
+    /// for a surrogate.
+    Chr,
+    /// The builtin `sum` of floats in a list, tuple or view, from
+    /// `start`: CPython's compensated sum (D57).
+    FloatSum,
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 27] = [
+    pub const ALL: [StdFn; 30] = [
         StdFn::Argv,
         StdFn::Listdir,
         StdFn::Join,
@@ -152,6 +160,9 @@ impl StdFn {
         StdFn::Count,
         StdFn::Upper,
         StdFn::Lower,
+        StdFn::Ord,
+        StdFn::Chr,
+        StdFn::FloatSum,
     ];
 
     /// The builtin name stages call it by: the dotted name a program
@@ -186,6 +197,9 @@ impl StdFn {
             StdFn::Count => "str.count",
             StdFn::Upper => "str.upper",
             StdFn::Lower => "str.lower",
+            StdFn::Ord => "builtins.ord",
+            StdFn::Chr => "builtins.chr",
+            StdFn::FloatSum => "builtins.sum",
         }
     }
 
@@ -243,7 +257,7 @@ impl StdFn {
     pub fn raises(self) -> Option<ExcKind> {
         match self {
             StdFn::Listdir | StdFn::Getsize | StdFn::Open | StdFn::Read => Some(ExcKind::Os),
-            StdFn::Index | StdFn::Rindex => Some(ExcKind::Value),
+            StdFn::Index | StdFn::Rindex | StdFn::Chr => Some(ExcKind::Value),
             StdFn::Argv
             | StdFn::Join
             | StdFn::Isdir
@@ -264,7 +278,9 @@ impl StdFn {
             | StdFn::Rfind
             | StdFn::Count
             | StdFn::Upper
-            | StdFn::Lower => None,
+            | StdFn::Lower
+            | StdFn::Ord
+            | StdFn::FloatSum => None,
         }
     }
 

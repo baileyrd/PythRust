@@ -768,6 +768,20 @@ pub unsafe extern "C" fn pt_list_copy(s: *const PtSeq) -> *mut PtSeq {
     new_seq(s.desc, items.clone())
 }
 
+/// `sum(s, start)` of a list, tuple or view of floats: CPython's
+/// compensated sum ([`crate::fsum`], D57).
+///
+/// # Safety
+///
+/// `s` is a live list, tuple or view whose items are floats.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_seq_fsum(s: *const PtSeq, start: f64) -> f64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let items = s.items.borrow();
+    crate::fsum::fsum(start, items.iter().map(|&w| f64::from_bits(w)))
+}
+
 /// `len(s)`.
 ///
 /// # Safety

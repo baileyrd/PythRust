@@ -1,0 +1,6 @@
+# deviation: ints are i64, so `abs(i64::MIN)` overflows, as `-i64::MIN` does; CPython has bigints.
+# expect-exit: 1
+n = -9223372036854775807 - 1
+print(abs(n + 1))
+print(abs(n))
+print("unreachable")

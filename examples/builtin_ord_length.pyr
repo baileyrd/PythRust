@@ -1,0 +1,9 @@
+# deviation: `ord` of a computed string whose length is not 1 stops the program with CPython's message as a fault, since `TypeError` is not a class here (D56); `try` does not catch it.
+# expect-exit: 1
+word = "αβ"
+print(ord(word[0]))
+try:
+    print(ord(word))
+except Exception:
+    print("caught")
+print("unreachable")

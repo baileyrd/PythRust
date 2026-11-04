@@ -9,6 +9,8 @@
 //! Runtime errors).
 
 mod builtins;
+#[path = "../../../pythrust-rt/src/fsum.rs"]
+mod fsum;
 mod methods;
 mod ops;
 mod stdlib;
@@ -654,10 +656,12 @@ impl<'m> Interp<'m, '_> {
             keywords: Vec::new(),
             span,
         };
+        // `any` and `all` take `map`'s results until one decides.
+        let decides = matches!(callee, Value::Builtin(Builtin::Any | Builtin::All));
         for arg in args {
             let v = match self.eval(&arg.value)? {
-                // `list`, `sorted` or `set` of `map`'s results.
-                Value::Results(r) => tasks::drain(&r)?,
+                // `list`, `sorted`, `set`, `sum`, `min` or `max` of `map`'s results.
+                Value::Results(r) if !decides => tasks::drain(&r)?,
                 v => v,
             };
             self.tag(&v, arg.value.span);

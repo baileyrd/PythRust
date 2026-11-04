@@ -193,6 +193,18 @@ pub(super) fn drain<'m>(results: &RefCell<VecDeque<Outcome<'m>>>) -> Exec<'m, Va
     Ok(Value::list(values))
 }
 
+/// `any` (`any` true) or `all` of `map`'s results: takes them until one
+/// decides, as CPython's stop at it, so a later task's exception is
+/// never raised (D57).
+pub(super) fn decide<'m>(results: &RefCell<VecDeque<Outcome<'m>>>, any: bool) -> Exec<'m, bool> {
+    while let Some(outcome) = next(results) {
+        if taken(outcome)?.truthy() == any {
+            return Ok(any);
+        }
+    }
+    Ok(!any)
+}
+
 /// The next result. One that raises ends the iteration, as an
 /// exception ends Python's generator: nothing after it is taken.
 fn next<'m>(results: &RefCell<VecDeque<Outcome<'m>>>) -> Option<Outcome<'m>> {
