@@ -1,0 +1,19 @@
+# deviation: a program containing a `temper def` that lowering cannot express is a compile error naming why, so its ownership checks are never skipped silently (Nano 2026-11-03); CPython runs it.
+# expect-exit: 1
+# expect-error: this program has a tempered function, so its ownership checks cannot be skipped
+
+# `print` called before the `def` that shadows it: a lowering gap that,
+# without a `temper def`, leaves the program to the conservative
+# fallback (the loose neighbour in `own::tests`).
+x = print(7)
+
+
+def print(n):
+    return 1
+
+
+temper def grow(mut xs: list[int]) -> None:
+    xs.append(1)
+
+
+grow([1])
