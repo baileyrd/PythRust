@@ -19,6 +19,7 @@ mod tasks;
 #[path = "../../../pythrust-rt/src/text.rs"]
 mod text;
 mod value;
+mod zip;
 
 #[cfg(test)]
 mod tests;
@@ -362,6 +363,15 @@ impl<'m> Interp<'m, '_> {
         body: &'m Block,
         orelse: &'m Block,
     ) -> Exec<'m, Flow<'m>> {
+        if let Some(mut z) = self.lazy(iter)? {
+            while let Some(v) = z.step()? {
+                self.assign(target, v)?;
+                if let Some(flow) = loop_exit(self.exec_block(body)?) {
+                    return Ok(flow);
+                }
+            }
+            return self.exec_block(orelse);
+        }
         let mut items = match self.dict_view(iter)? {
             Some(items) => items,
             None => match self.eval(iter)? {
@@ -651,6 +661,16 @@ impl<'m> Interp<'m, '_> {
             return out;
         }
         let callee = self.eval(func)?;
+        if let Some(mut z) = self.lazy_call(&callee, args, span)? {
+            // `list`, `sorted`, `set`, `sum`, `min`, `max` or `all` of it.
+            return z.drain();
+        }
+        if let (Value::Builtin(Builtin::Any), [arg]) = (&callee, args) {
+            // Its items are tuples, all true: the first decides.
+            if let Some(mut z) = self.lazy(&arg.value)? {
+                return Ok(Value::Bool(z.step()?.is_some()));
+            }
+        }
         let mut evaluated = Args {
             positional: Vec::new(),
             keywords: Vec::new(),
@@ -707,6 +727,67 @@ impl<'m> Interp<'m, '_> {
             (Value::Int(n), Some(Type::Float)) => Value::Float(n as f64),
             (v, _) => v,
         }
+    }
+
+    /// `e` as an `enumerate(...)` or `zip(...)` to step, its arguments
+    /// evaluated; `None` for any other expression.
+    fn lazy(&mut self, e: &'m Expr) -> Exec<'m, Option<zip::Zipped<'m>>> {
+        let ExprKind::Call { func, args } = &e.kind else {
+            return Ok(None);
+        };
+        let ExprKind::Name(name) = &func.kind else {
+            return Ok(None);
+        };
+        if !matches!(name.as_str(), "enumerate" | "zip") {
+            return Ok(None);
+        }
+        let callee = self.eval(func)?;
+        self.lazy_call(&callee, args, e.span)
+    }
+
+    /// A call of `callee` with `args` at `span` as an `enumerate(...)`
+    /// or `zip(...)` to step; `None` for any other callee. An argument
+    /// that is itself one is stepped too (D58).
+    fn lazy_call(
+        &mut self,
+        callee: &Value<'m>,
+        args: &'m [Arg],
+        span: Span,
+    ) -> Exec<'m, Option<zip::Zipped<'m>>> {
+        let Value::Builtin(b @ (Builtin::Enumerate | Builtin::Zip)) = callee else {
+            return Ok(None);
+        };
+        let mut sources = Vec::new();
+        let mut start = 0;
+        for arg in args {
+            let is_start = *b == Builtin::Enumerate && (arg.name.is_some() || !sources.is_empty());
+            if is_start {
+                start = self.eval(&arg.value)?.int().unwrap_or_default();
+                continue;
+            }
+            sources.push(self.source(&arg.value)?);
+        }
+        Ok(Some(match (b, sources.pop()) {
+            (Builtin::Enumerate, Some(source)) if sources.is_empty() => {
+                zip::Zipped::enumerate(source, start, span)
+            }
+            (Builtin::Zip, last) => {
+                sources.extend(last);
+                zip::Zipped::zip(sources, span)
+            }
+            _ => return Err(rt_err(span, "internal: `enumerate` arity".to_string()).into()),
+        }))
+    }
+
+    /// An argument of `enumerate` or `zip`, as it is stepped.
+    fn source(&mut self, e: &'m Expr) -> Exec<'m, zip::Source<'m>> {
+        if let Some(z) = self.lazy(e)? {
+            return Ok(zip::Source::Zip(Box::new(z)));
+        }
+        Ok(match self.eval(e)? {
+            Value::Results(r) => zip::Source::Results(r),
+            v => zip::Source::Items(v.iter(e.span)?, e.span),
+        })
     }
 
     fn call_func(&mut self, func: Rc<Func<'m>>, args: Args<'m>) -> Exec<'m, Value<'m>> {

@@ -1,0 +1,10 @@
+# deviation: `zip(...)` is accepted only where it is consumed directly (D51, D58); CPython makes it an iterator value.
+# expect-exit: 1
+# expect-error: `zip(...)` is not a value yet; use `list(zip(...))`
+
+def pairs(xs: list[int], ys: list[str]):
+    return zip(xs, ys)
+
+
+for x, y in pairs([1], ["a"]):
+    print(x, y)

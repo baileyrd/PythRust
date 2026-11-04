@@ -185,7 +185,7 @@ impl Checker {
     /// deviation; its element type is checked first, so a wrong one is
     /// the ordinary type error.
     fn join_arg(&mut self, arg: &Arg) -> Result<()> {
-        let t = self.expr(&arg.value)?;
+        let t = self.consumed(&arg.value)?;
         let at = arg.value.span;
         let what = "the items `str.join` joins";
         let resolved = self.subst.resolve(&t);

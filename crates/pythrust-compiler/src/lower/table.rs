@@ -24,7 +24,7 @@ pub(super) enum Part {
 }
 
 /// The `RuntimeError` a `for` over a table whose size changed ends with.
-fn changed_size(ty: Ty) -> &'static str {
+pub(super) fn changed_size(ty: Ty) -> &'static str {
     match ty {
         Ty::Set(_) => "RuntimeError: Set changed size during iteration",
         _ => "RuntimeError: dictionary changed size during iteration",

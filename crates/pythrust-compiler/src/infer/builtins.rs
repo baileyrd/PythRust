@@ -3,7 +3,7 @@
 //! and the builtin exception classes (D6, B4), which build an `Exception`
 //! when called.
 
-use crate::ast::{Arg, ExprKind};
+use crate::ast::{Arg, Expr, ExprKind};
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::span::Span;
@@ -44,6 +44,8 @@ pub fn is_builtin(name: &str) -> bool {
             | "max"
             | "any"
             | "all"
+            | "enumerate"
+            | "zip"
     );
     function || is_exception(name) || StdFn::from_name(name).is_some()
 }
@@ -54,7 +56,7 @@ pub fn is_builtin(name: &str) -> bool {
 pub fn reads_results(name: &str) -> bool {
     matches!(
         name,
-        "list" | "sorted" | "set" | "sum" | "min" | "max" | "any" | "all"
+        "list" | "sorted" | "set" | "sum" | "min" | "max" | "any" | "all" | "enumerate" | "zip"
     )
 }
 
@@ -104,6 +106,12 @@ impl Checker {
                 Ok(Type::Bool)
             }
             "float" => self.number("float", Type::Float, args, span),
+            "enumerate" | "zip" if self.consumed != Some(span) => {
+                let msg = format!("`{name}(...)` is not a value yet; use `list({name}(...))`");
+                Err(error(span, msg))
+            }
+            "enumerate" => self.enumerate(args, span),
+            "zip" => self.zip(args, span),
             // Any one value as the message, as `str(x)` takes.
             _ if StdFn::from_name(name).is_some() => self.std(name, args, span),
             _ if is_exception(name) => {
@@ -320,26 +328,7 @@ impl Checker {
     /// iterates over (D57). `start`, by position or keyword, has the
     /// total's type.
     fn sum(&mut self, args: &[Arg], span: Span) -> Result<Type> {
-        if let Some(Arg { name: Some(kw), .. }) = args.first() {
-            if kw.name == "start" {
-                let msg = "`sum` needs its iterable before `start=`".to_string();
-                return Err(error(kw.span, msg));
-            }
-        }
-        let args: Vec<Arg> = args
-            .iter()
-            .map(|a| match &a.name {
-                Some(kw) if kw.name == "start" => Ok(Arg {
-                    name: None,
-                    ..a.clone()
-                }),
-                Some(kw) => {
-                    let msg = format!("`sum` got an unexpected keyword argument `{}`", kw.name);
-                    Err(error(kw.span, msg))
-                }
-                None => Ok(a.clone()),
-            })
-            .collect::<Result<_>>()?;
+        let args = keyword_last("sum", "start", args)?;
         let mut found = self.positional("sum", &args, 1, 2, span)?.into_iter();
         let Some((iterable, _)) = found.next() else {
             return Err(error(span, "internal: `sum` without arguments".to_string()));
@@ -445,10 +434,113 @@ impl Checker {
             );
             return Err(error(span, msg));
         }
-        args.iter()
-            .map(|a| Ok((self.expr(&a.value)?, a.value.span)))
-            .collect()
+        let mut found = Vec::new();
+        for (k, a) in args.iter().enumerate() {
+            let t = match consumes(name, args.len(), k) {
+                true => self.consumed(&a.value)?,
+                false => self.expr(&a.value)?,
+            };
+            found.push((t, a.value.span));
+        }
+        Ok(found)
     }
+
+    /// `e`, where it is consumed directly: an `enumerate(...)` or
+    /// `zip(...)` there is allowed (D51).
+    pub(super) fn consumed(&mut self, e: &Expr) -> Result<Type> {
+        let outer = self.consumed.replace(e.span);
+        let t = self.expr(e);
+        self.consumed = outer;
+        t
+    }
+
+    /// `enumerate(xs)` or `enumerate(xs, start)`, `start` by position or
+    /// keyword an int: the `(index, item)` pairs, typed as a list of
+    /// them, though they are never one (D51).
+    fn enumerate(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        let args = keyword_last("enumerate", "start", args)?;
+        let found = self.positional("enumerate", &args, 1, 2, span)?;
+        let mut found = found.into_iter();
+        let Some((iterable, _)) = found.next() else {
+            return Err(error(
+                span,
+                "internal: `enumerate` without arguments".to_string(),
+            ));
+        };
+        if let Some((start, at)) = found.next() {
+            if !self.subst.resolve(&start).is_intlike() {
+                self.expect(at, &Type::Int, &start, "`start` of `enumerate`")?;
+            }
+        }
+        let elem = self.subst.fresh();
+        let need = Need::Iter {
+            iterable,
+            elem: elem.clone(),
+        };
+        self.need(need, span);
+        let pair = Type::Tuple(vec![Type::Int, elem]);
+        Ok(Type::List(Box::new(pair)))
+    }
+
+    /// `zip(xs, ys, ...)`: tuples of one item of each, to the shortest,
+    /// typed as a list of them, though they are never one (D51).
+    fn zip(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        if let Some(kw) = args.iter().find_map(|a| a.name.as_ref()) {
+            let msg = match kw.name.as_str() {
+                "strict" => "`strict=` of `zip` is not supported yet".to_string(),
+                other => format!("`zip` got an unexpected keyword argument `{other}`"),
+            };
+            return Err(error(kw.span, msg));
+        }
+        let mut items = Vec::new();
+        for (iterable, _) in self.positional("zip", args, 0, usize::MAX, span)? {
+            let elem = self.subst.fresh();
+            let need = Need::Iter {
+                iterable,
+                elem: elem.clone(),
+            };
+            self.need(need, span);
+            items.push(elem);
+        }
+        Ok(Type::List(Box::new(Type::Tuple(items))))
+    }
+}
+
+/// Whether builtin `name` given `n` positional arguments consumes its
+/// `k`th directly, so an `enumerate(...)` or `zip(...)` may be it (D51,
+/// D58).
+fn consumes(name: &str, n: usize, k: usize) -> bool {
+    match name {
+        "zip" => true,
+        "sum" | "enumerate" => k == 0,
+        "list" | "sorted" | "set" | "min" | "max" | "any" | "all" => n == 1,
+        _ => false,
+    }
+}
+
+/// `args` with keyword `kw`, the one `name` takes, as its last
+/// positional argument; another keyword, or `kw` before the iterable
+/// `name` takes first, is refused.
+fn keyword_last(name: &str, kw: &str, args: &[Arg]) -> Result<Vec<Arg>> {
+    if let Some(Arg { name: Some(k), .. }) = args.first() {
+        if k.name == kw {
+            let msg = format!("`{name}` needs its iterable before `{kw}=`");
+            return Err(error(k.span, msg));
+        }
+    }
+    args.iter()
+        .map(|a| match &a.name {
+            Some(k) if k.name == kw => Ok(Arg {
+                name: None,
+                ..a.clone()
+            }),
+            Some(k) => {
+                let msg = format!("`{name}` got an unexpected keyword argument `{}`", k.name);
+                Err(error(k.span, msg))
+            }
+            None => Ok(a.clone()),
+        })
+        .collect()
 }
 
 /// The code point a `chr` argument spells as a literal: an int, a

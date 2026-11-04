@@ -216,6 +216,11 @@ fn next<'m>(results: &RefCell<VecDeque<Outcome<'m>>>) -> Option<Outcome<'m>> {
     Some(outcome)
 }
 
+/// The next of `map`'s results, taken: what its task raised is raised.
+pub(super) fn take<'m>(results: &RefCell<VecDeque<Outcome<'m>>>) -> Exec<'m, Option<Value<'m>>> {
+    next(results).map(taken).transpose()
+}
+
 fn taken<'m>(outcome: Outcome<'m>) -> Exec<'m, Value<'m>> {
     outcome.map_err(|(exc, at)| Unwind::Raise(exc, at))
 }

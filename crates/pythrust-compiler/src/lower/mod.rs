@@ -20,6 +20,7 @@ mod table;
 mod tasks;
 mod types;
 mod vars;
+mod zip;
 
 #[cfg(test)]
 mod tests;
