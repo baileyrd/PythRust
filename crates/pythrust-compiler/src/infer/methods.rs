@@ -151,8 +151,7 @@ impl Checker {
             return Err(error(arg.span, msg));
         }
         method_arity(name, args, found.min, found.max, span)?;
-        if let Some((arg, what)) = unsupported_arg(name, args) {
-            let msg = format!("{what} of `str.{name}` is not supported yet");
+        if let Some((arg, msg)) = unsupported_arg(name, args) {
             return Err(error(arg.span, msg));
         }
         if let ("split", [sep]) = (name, args) {
@@ -284,11 +283,21 @@ fn str_result(name: &str) -> Type {
     }
 }
 
-/// The first argument of a `str` method not supported yet (D53), with
-/// what it is: `maxsplit`, `replace`'s `count`, a search's `start` (and
-/// so `end`), a tuple of prefixes or suffixes, or `None`. A literal `""`
-/// separator of `split` is refused too: it can only raise.
-fn unsupported_arg<'a>(name: &str, args: &'a [Arg]) -> Option<(&'a Arg, &'static str)> {
+/// The first argument of a `str` method not supported yet, with its
+/// error: `maxsplit`, `replace`'s `count` or `None` (D53), a search's
+/// `start` (and so `end`) or a tuple of prefixes or suffixes (D55). A
+/// literal `""` separator of `split` is refused too: it can only raise.
+fn unsupported_arg<'a>(name: &str, args: &'a [Arg]) -> Option<(&'a Arg, String)> {
+    let (arg, what) = unsupported(name, args)?;
+    let msg = match what {
+        "a tuple" => format!("`str.{name}` of a tuple is not supported yet"),
+        _ => format!("{what} of `str.{name}` is not supported yet"),
+    };
+    Some((arg, msg))
+}
+
+/// [`unsupported_arg`]'s argument and what it is.
+fn unsupported<'a>(name: &str, args: &'a [Arg]) -> Option<(&'a Arg, &'static str)> {
     let search = matches!(
         name,
         "startswith" | "endswith" | "find" | "rfind" | "index" | "rindex" | "count"
@@ -435,9 +444,9 @@ mod tests {
             ("\"a\".startswith(\"a\", 1)", "`start` of `str.startswith`"),
             (
                 "\"a\".startswith((\"a\", \"b\"))",
-                "a tuple of `str.startswith`",
+                "`str.startswith` of a tuple",
             ),
-            ("\"a\".endswith((\"a\",))", "a tuple of `str.endswith`"),
+            ("\"a\".endswith((\"a\",))", "`str.endswith` of a tuple"),
         ];
         for (call, want) in cases {
             let msg = refused(&format!("print({call})\n"));
