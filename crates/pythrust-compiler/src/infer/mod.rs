@@ -15,6 +15,7 @@
 
 mod builtins;
 mod expr;
+mod methods;
 mod pause;
 mod raises;
 pub(crate) mod scope;

@@ -6,7 +6,7 @@ use crate::span::Span;
 
 use super::scope;
 use super::solve::{Access, Binary, Need};
-use super::ty::{FuncType, Type, View};
+use super::ty::{FuncType, Type};
 use super::{builtins, error, Checker, Func, TruthUse};
 
 /// Why `errs = (ValueError, IndexError)` and `except errs:` are errors.
@@ -375,104 +375,6 @@ impl Checker {
         }
     }
 
-    /// A method call: `list.append`, `set.add`, `dict.get`, `.keys`,
-    /// `.values`, `.items`, and a file's `.read` and `.close`. Each name
-    /// belongs to one type, so the name alone fixes the receiver's.
-    fn method(&mut self, value: &Expr, attr: &Ident, args: &[Arg]) -> Result<Type> {
-        let name = attr.name.as_str();
-        let (min, max) = match name {
-            "append" | "add" => (1, 1),
-            "get" => (1, 2),
-            "keys" | "values" | "items" | "read" | "close" | "result" => (0, 0),
-            "submit" | "map" => return self.task(value, attr, args),
-            _ => {
-                let msg = format!(
-                    "unknown method `.{name}`; the methods are `list.append`, `set.add`, \
-                     `dict.get`, `.keys`, `.values` and `.items`, a file's `.read` \
-                     and `.close`, an executor's `.submit` and `.map`, and a future's \
-                     `.result`"
-                );
-                return Err(error(attr.span, msg));
-            }
-        };
-        let receiver = self.expr(value)?;
-        method_arity(name, args, min, max, attr.span)?;
-        match name {
-            "append" | "add" => self.insert(name, value.span, &receiver, &args[0]),
-            "get" => self.get(value.span, &receiver, args, attr.span),
-            "read" | "close" => {
-                let needs = format!("`{name}` needs a file from `open`");
-                self.expect(value.span, &Type::File, &receiver, &needs)?;
-                Ok(if name == "read" {
-                    Type::Bytes
-                } else {
-                    Type::None
-                })
-            }
-            "result" => self.result(value.span, &receiver),
-            _ => self.view(name, value.span, &receiver),
-        }
-    }
-
-    /// `xs.append(v)` or `s.add(v)`: `v` flows into the element type.
-    fn insert(&mut self, name: &str, at: Span, receiver: &Type, arg: &Arg) -> Result<Type> {
-        let elem = self.subst.fresh();
-        let (container, needs) = match name {
-            "append" => (Type::List(Box::new(elem.clone())), "`append` needs a list"),
-            _ => (Type::Set(Box::new(elem.clone())), "`add` needs a set"),
-        };
-        self.expect(at, &container, receiver, needs)?;
-        let item = self.checked(&arg.value, &elem)?;
-        if name == "add" {
-            let need = Need::Key {
-                key: elem,
-                index: item,
-            };
-            self.need(need, arg.value.span);
-            return Ok(Type::None);
-        }
-        let what = "appended value does not match the list";
-        self.expect(arg.value.span, &elem, &item, what)?;
-        Ok(Type::None)
-    }
-
-    /// `d.get(k)` is `V | None`; `d.get(k, default)` is `V`.
-    fn get(&mut self, at: Span, receiver: &Type, args: &[Arg], span: Span) -> Result<Type> {
-        let (key, value) = (self.subst.fresh(), self.subst.fresh());
-        let dict = Type::Dict(Box::new(key.clone()), Box::new(value.clone()));
-        self.expect(at, &dict, receiver, "`get` needs a dict")?;
-        let k = self.checked(&args[0].value, &key)?;
-        self.need(Need::Key { key, index: k }, args[0].value.span);
-        if let Some(default) = args.get(1) {
-            let d = self.checked(&default.value, &value)?;
-            let what = "the default of `get` must match the dict's values";
-            self.expect(default.value.span, &value, &d, what)?;
-            return Ok(value);
-        }
-        let out = self.subst.fresh();
-        let need = Need::OrNone {
-            value,
-            out: out.clone(),
-        };
-        self.need(need, span);
-        Ok(out)
-    }
-
-    /// `d.keys()`, `d.values()` or `d.items()`: a view of the keys,
-    /// values or `(key, value)` pairs, in insertion order.
-    fn view(&mut self, name: &str, at: Span, receiver: &Type) -> Result<Type> {
-        let (key, value) = (self.subst.fresh(), self.subst.fresh());
-        let dict = Type::Dict(Box::new(key.clone()), Box::new(value.clone()));
-        let needs = format!("`{name}` needs a dict");
-        self.expect(at, &dict, receiver, &needs)?;
-        let (view, item) = match name {
-            "keys" => (View::Keys, key),
-            "values" => (View::Values, value),
-            _ => (View::Items, Type::Tuple(vec![key, value])),
-        };
-        Ok(Type::View(view, Box::new(item)))
-    }
-
     /// Infers `e` against a known `expected` type, so list and tuple
     /// literals take their element types from it: with
     /// `xs: list[int | None] = [None, 1]` the elements need not agree.
@@ -611,24 +513,6 @@ impl Checker {
             (Some(_), Some(_)) => Err(error(span, "`list` takes one type argument".to_string())),
         }
     }
-}
-
-/// Checks a method call's argument count; methods take no keywords.
-fn method_arity(name: &str, args: &[Arg], min: usize, max: usize, span: Span) -> Result<()> {
-    if let Some(arg) = args.iter().find(|a| a.name.is_some()) {
-        let msg = format!("`{name}` takes no keyword arguments");
-        return Err(error(arg.span, msg));
-    }
-    if (min..=max).contains(&args.len()) {
-        return Ok(());
-    }
-    let expected = match (min, max) {
-        (0, 0) => "no arguments".to_string(),
-        (1, 1) => "1 argument".to_string(),
-        _ => format!("{min} or {max} arguments"),
-    };
-    let msg = format!("`{name}` takes {expected} but {} were given", args.len());
-    Err(error(span, msg))
 }
 
 /// The parameter a positional argument binds to. `next` is `None` once a
