@@ -346,11 +346,16 @@ fn a_body_with_try_and_raise_is_checked() {
 }
 
 #[test]
-fn a_conservative_analysis_diagnoses_nothing() {
-    // A lowering gap elsewhere leaves `grow` unchecked until it lowers.
+fn a_conservative_analysis_of_a_tempered_program_is_named() {
+    // A lowering gap elsewhere would leave `grow` unchecked (D2), so it
+    // is the named error instead (D44), not a missing mode error.
     let src = "temper def grow(xs: list[int]) -> None:\n    xs.append(1)\nx = print(7)\ndef print(n):\n    return 1\n";
     conservative(src);
-    assert_eq!(checked(src), Ok(()));
+    let (msg, _) = mode_err(src);
+    assert!(
+        msg.starts_with("this program has a tempered function"),
+        "{msg}"
+    );
 }
 
 #[test]
@@ -811,10 +816,17 @@ fn calls_from_any_caller_are_checked() {
 }
 
 #[test]
-fn a_conservative_analysis_rejects_no_call() {
+fn a_conservative_analysis_names_the_gap_not_a_call() {
+    // A5 cannot judge `push(a, a)` without the analysis: the error is
+    // the gap's (D44), never a guessed aliasing error.
     let src = "temper def push(mut xs: list[int], ys: list[int]) -> None:\n    xs.append(len(ys))\na = [1]\npush(a, a)\nx = print(7)\ndef print(n):\n    return 1\n";
     conservative(src);
-    assert_eq!(checked(src), Ok(()));
+    let (msg, span) = mode_err(src);
+    assert!(
+        msg.starts_with("this program has a tempered function"),
+        "{msg}"
+    );
+    assert_eq!(span, "print(7)");
 }
 
 const PUSH: &str =
@@ -1513,6 +1525,26 @@ wrap(2)\ngrow([1])\n";
     // Without tasks, the same gap stays the conservative fallback.
     let plain = "x = print(7)\ndef print(n):\n    return 1\n";
     assert_eq!(checked(plain), Ok(()));
+}
+
+#[test]
+fn a_tempered_program_never_falls_back_silently() {
+    // A lowering gap would skip D2 and A5 for every tempered function:
+    // a program with a `temper def` that does not lower is a named error.
+    let src = "x = print(7)\ndef print(n):\n    return 1\n\
+temper def grow(xs: list[int]) -> None:\n    xs.append(1)\n\
+grow([1])\n";
+    let (msg, span) = mode_err(src);
+    assert!(
+        msg.contains("has a tempered function, so its ownership checks cannot be skipped"),
+        "{msg}"
+    );
+    assert!(msg.contains("does not support"), "{msg}");
+    assert_eq!(span, "print(7)");
+    // The same gap in loose code stays the conservative fallback.
+    let loose =
+        "x = print(7)\ndef print(n):\n    return 1\ndef grow(xs):\n    xs.append(1)\ngrow([1])\n";
+    assert_eq!(checked(loose), Ok(()));
 }
 
 /// Task functions for rule 4's programs.

@@ -13,7 +13,7 @@
 //! [`analyze`] is the coverage gate: a program lowering cannot express
 //! gets [`Precision::Conservative`] summaries, never an error, so a
 //! lowering gap is never a new language restriction, except in a
-//! program that uses tasks (M6c, [`check`]). A task lowers as a call of
+//! program that uses tasks (M6c) or has a `temper def` ([`check`]). A task lowers as a call of
 //! its function where it is submitted, so its body is summarized like
 //! any callee's.
 //!
@@ -223,17 +223,19 @@ pub fn check(module: &Module, analysis: &Analysis) -> Result<()> {
 }
 
 /// A lowering gap is never an error, except in a program that uses
-/// tasks (M6c): there a skipped ownership check would hide what the
-/// tasks need, so the gap is a named error naming why the program's
-/// checks cannot run (Nano, 2026-11-02).
+/// tasks (M6c) or has a `temper def`: there a skipped ownership check
+/// would hide what the tasks need or what a tempered function promises
+/// (D2, A5), so the gap is a named error naming why the program's checks
+/// cannot run (Nano, 2026-11-02 for tasks, D28; 2026-11-03 for tempered code,
+/// D44).
 fn unchecked(module: &Module, gap: &Diagnostic) -> Result<()> {
-    if !uses_tasks(module) {
+    let Some(why) = needs_checks(module) else {
         return Ok(());
-    }
+    };
     Err(Diagnostic {
         span: gap.span,
         message: format!(
-            "this program uses tasks, so its ownership checks cannot be skipped, \
+            "this program {why}, so its ownership checks cannot be skipped, \
              but they cannot run: {}",
             gap.message
         ),
@@ -241,12 +243,24 @@ fn unchecked(module: &Module, gap: &Diagnostic) -> Result<()> {
     })
 }
 
-/// Whether a function of `module` opens an executor.
-fn uses_tasks(module: &Module) -> bool {
-    module.body.iter().any(|s| match &s.kind {
-        StmtKind::FuncDef(f) => !crate::infer::scope::withs(&f.body).is_empty(),
-        _ => false,
-    })
+/// Why `module`'s ownership checks may not be skipped, if they may not:
+/// a function of it opens an executor, or one is tempered.
+fn needs_checks(module: &Module) -> Option<&'static str> {
+    let funcs = module.body.iter().filter_map(|s| match &s.kind {
+        StmtKind::FuncDef(f) => Some(f),
+        _ => None,
+    });
+    let funcs: Vec<_> = funcs.collect();
+    if funcs
+        .iter()
+        .any(|f| !crate::infer::scope::withs(&f.body).is_empty())
+    {
+        return Some("uses tasks");
+    }
+    funcs
+        .iter()
+        .any(|f| f.mode == crate::ast::Mode::Tempered)
+        .then_some("has a tempered function")
 }
 
 /// One summary per function of `program`, indexed by `FuncId`: the
