@@ -169,6 +169,11 @@ impl Checker {
         }
         for arg in args {
             let t = self.expr(&arg.value)?;
+            let affix = matches!(name, "startswith" | "endswith");
+            if affix && matches!(self.subst.resolve(&t), Type::Tuple(_)) {
+                let msg = format!("`str.{name}` of a tuple is not supported yet");
+                return Err(error(arg.value.span, msg));
+            }
             let what = format!("argument of `str.{name}`");
             self.expect(arg.value.span, &Type::Str, &t, &what)?;
         }
@@ -454,6 +459,11 @@ mod tests {
                 msg.contains(want) && msg.contains("not supported yet"),
                 "{call}: {msg}"
             );
+        }
+        for name in ["startswith", "endswith"] {
+            let held = refused(&format!("t = (\"a\", \"b\")\nprint(\"abc\".{name}(t))\n"));
+            let want = format!("`str.{name}` of a tuple is not supported yet");
+            assert!(held.contains(&want), "{name}: {held}");
         }
     }
 
