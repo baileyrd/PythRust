@@ -1,14 +1,15 @@
 //! Which functions may return with a catchable fault pending: a division
 //! by zero, an index out of range, a wrong unpacking arity
-//! (docs/research/faults.md), a read of a closed file or a NUL in the
-//! path given to `open`. Such a fault is never in a `raises` set,
+//! (docs/research/faults.md), a read of a closed file, a NUL in the
+//! path given to `open`, or an empty separator given to `split` (D53). Such a fault is never in a `raises` set,
 //! so lowering tests the pending flag after a call to one of these as it
 //! does after a call whose set is not empty.
 //!
 //! Syntactic and conservative: `/`, `//` and `%` by anything but a
 //! nonzero literal, an index into anything but a tuple, and unpacking
 //! anything but a tuple fault, as do any `.read()` (a file's, whatever
-//! the receiver's inferred type) and any call to `open`; a call by name to a function that faults
+//! the receiver's inferred type), any `.split(sep)` and any call to
+//! `open`; a call by name to a function that faults
 //! does too, closed over the call graph, and so does a body that
 //! starts a task of one (`submit` or `map`), which takes its results.
 
@@ -147,7 +148,8 @@ impl<'a> Sites<'a> {
                         self.calls.insert(name);
                     }
                     ExprKind::Attr { value, attr } => {
-                        self.faults |= attr.name == "read";
+                        self.faults |=
+                            attr.name == "read" || (attr.name == "split" && !args.is_empty());
                         self.expr(value);
                     }
                     _ => self.expr(func),

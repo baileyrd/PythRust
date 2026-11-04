@@ -534,6 +534,8 @@ const NATIVE: &[&str] = &[
     "str_index_error",
     "str_loop_exits",
     "str_repeat_error",
+    "str_methods_a",
+    "str_split_caught",
     "strings",
     "sys_argv",
     "tasks_arguments",
