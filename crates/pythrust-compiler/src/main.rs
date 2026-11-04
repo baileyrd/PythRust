@@ -16,6 +16,7 @@ mod cargo;
 mod json;
 mod lockfile;
 mod project;
+mod rt;
 
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
