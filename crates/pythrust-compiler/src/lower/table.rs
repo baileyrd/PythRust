@@ -319,7 +319,13 @@ impl FnBuilder<'_, '_> {
     }
 
     /// `part` of entry `i` of dict or set `t`, a new temporary.
-    fn entry(&mut self, t: Operand, i: Operand, part: Part, span: Span) -> Result<Operand> {
+    pub(super) fn entry(
+        &mut self,
+        t: Operand,
+        i: Operand,
+        part: Part,
+        span: Span,
+    ) -> Result<Operand> {
         let ty = self.ty(t);
         let (key, value) = match ty {
             Ty::Dict(_) => self.key_value(ty, span)?,

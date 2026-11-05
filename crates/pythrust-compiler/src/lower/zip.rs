@@ -6,11 +6,11 @@
 
 use crate::ast::{Arg, Expr, ExprKind};
 use crate::diag::Result;
-use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty};
+use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty, View};
 use crate::span::Span;
 
 use super::stmt::Looped;
-use super::table::{changed_size, ItemRead};
+use super::table::{changed_size, ItemRead, Part};
 use super::FnBuilder;
 
 /// An `enumerate(...)` or `zip(...)` whose arguments are evaluated.
@@ -35,12 +35,12 @@ enum Source {
         fixed: Option<Operand>,
         span: Span,
     },
-    /// A dict's keys or a set's elements; a size change stops the
-    /// program as `for` over it does.
+    /// A dict's keys, values or items, or a set's elements; a size
+    /// change stops the program as `for` over it does.
     Table {
         t: Operand,
         size: Operand,
-        item: Ty,
+        part: Part,
         span: Span,
     },
     /// `map`'s results in `build`: each step takes one.
@@ -50,6 +50,13 @@ enum Source {
         span: Span,
     },
     Zip(Box<Zip>),
+}
+
+/// An evaluated argument of a [`Zip`], not yet a [`Source`]: a nested
+/// one, or a value with the part of it a dict view passed directly reads.
+enum Pending {
+    Zip(Zip),
+    Value(Operand, Option<Part>, Span),
 }
 
 impl FnBuilder<'_, '_> {
@@ -76,16 +83,21 @@ impl FnBuilder<'_, '_> {
     pub(super) fn zip(&mut self, name: &str, args: &[Arg], span: Span) -> Result<Zip> {
         let list = self.ty_at(span)?;
         let item = self.cx.seqs.elem(list).unwrap_or(Ty::None);
-        let mut sources = Vec::new();
+        let mut pending = Vec::new();
         let mut start = None;
         for a in args {
-            if name == "enumerate" && (a.name.is_some() || !sources.is_empty()) {
+            if name == "enumerate" && (a.name.is_some() || !pending.is_empty()) {
                 let op = self.expr(&a.value)?;
                 let n = self.as_int(op, a.value.span);
                 start = Some(self.temp(Ty::Int, Rvalue::Use(n), a.value.span));
                 continue;
             }
-            sources.push(self.source(&a.value)?);
+            pending.push(self.pending(&a.value)?);
+        }
+        // As CPython's, every argument is evaluated before any is iterated.
+        let mut sources = Vec::new();
+        for p in pending {
+            sources.push(self.source(p)?);
         }
         if name == "enumerate" {
             start = start.or(Some(Operand::Int(0)));
@@ -98,15 +110,36 @@ impl FnBuilder<'_, '_> {
         })
     }
 
-    /// An argument of `enumerate` or `zip`, evaluated, with the loop
-    /// holding its own reference.
-    fn source(&mut self, e: &Expr) -> Result<Source> {
+    /// An argument of `enumerate` or `zip`, evaluated: a nested one, or
+    /// the value, or for a dict view passed directly, its dict.
+    fn pending(&mut self, e: &Expr) -> Result<Pending> {
         if let Some(z) = self.zip_of(e)? {
-            return Ok(Source::Zip(Box::new(z)));
+            return Ok(Pending::Zip(z));
+        }
+        if let Some((d, view)) = self.dict_view(e) {
+            let d = self.expr(d)?;
+            let part = match view {
+                View::Keys => Part::Key,
+                View::Values => Part::Value,
+                View::Items => {
+                    let (k, v) = self.key_value(self.ty(d), e.span)?;
+                    Part::Item(self.cx.seqs.tuple(vec![k, v]))
+                }
+            };
+            return Ok(Pending::Value(d, Some(part), e.span));
         }
         let v = self.expr(e)?;
         self.reads_results(e)?;
-        let span = e.span;
+        Ok(Pending::Value(v, None, e.span))
+    }
+
+    /// The argument `p` as it is stepped, with the loop holding its own
+    /// reference: a table's size is taken now, once all are evaluated.
+    fn source(&mut self, p: Pending) -> Result<Source> {
+        let (v, part, span) = match p {
+            Pending::Zip(z) => return Ok(Source::Zip(Box::new(z))),
+            Pending::Value(v, part, span) => (v, part, span),
+        };
         let s = self.own(v, span);
         Ok(match self.ty(s) {
             Ty::Results => Source::Results {
@@ -117,17 +150,16 @@ impl FnBuilder<'_, '_> {
             Ty::Dict(_) | Ty::Set(_) => {
                 let size = self.new_local(Ty::Int);
                 self.assign(size, Rvalue::Len(s), span);
-                let (item, _) = self.items_of(s, span)?;
                 Source::Table {
                     t: s,
                     size: Operand::Local(size),
-                    item,
+                    part: part.unwrap_or(Part::Key),
                     span,
                 }
             }
             ty => {
                 let (item, read) = self.items_of(s, span)?;
-                let fixed = (ty == Ty::Range).then(|| self.count(s, span));
+                let fixed = (ty == Ty::Range).then(|| self.steps(s, span));
                 Source::Seq {
                     s,
                     item,
@@ -250,7 +282,7 @@ impl FnBuilder<'_, '_> {
             Source::Table {
                 t,
                 size,
-                item,
+                part,
                 span,
             } => {
                 let span = *span;
@@ -258,7 +290,7 @@ impl FnBuilder<'_, '_> {
                 let changed = changed_size(self.ty(*t));
                 self.fail_if(Rvalue::Cmp(CmpOp::Ne, n, *size), span, changed);
                 self.step_if(Rvalue::Cmp(CmpOp::Lt, cur, *size), other, span);
-                Ok(self.temp(*item, Rvalue::Entry(*t, cur, 0), span))
+                self.entry(*t, cur, *part, span)
             }
             Source::Results { rs, item, span } => {
                 let n = self.temp(Ty::Int, Rvalue::Len(*rs), *span);
@@ -288,5 +320,26 @@ impl FnBuilder<'_, '_> {
         let pool: Vec<LocalId> = self.pools.last().cloned().unwrap_or_default();
         pool.into_iter().for_each(|t| self.emit(Inst::Release(t)));
         self.jump_away(Term::Goto(other));
+    }
+
+    /// How many items the range `r` gives, as a step count: one past
+    /// `i64::MAX` cannot be reached, so a longer range counts as that.
+    fn steps(&mut self, r: Operand, span: Span) -> Operand {
+        let n = self.new_local(Ty::Int);
+        self.assign(n, Rvalue::Len(r), span);
+        let (wide, done) = (self.new_block(), self.new_block());
+        // The runtime gives -1 for a length past `i64::MAX`.
+        let too_long = Rvalue::Cmp(CmpOp::Lt, Operand::Local(n), Operand::Int(0));
+        let cond = self.temp(Ty::Bool, too_long, span);
+        self.terminate(Term::Branch {
+            cond,
+            then: wide,
+            orelse: done,
+        });
+        self.switch_to(wide);
+        self.assign(n, Rvalue::Use(Operand::Int(i64::MAX)), span);
+        self.terminate(Term::Goto(done));
+        self.switch_to(done);
+        Operand::Local(n)
     }
 }

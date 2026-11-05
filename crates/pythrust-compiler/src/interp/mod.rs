@@ -396,31 +396,11 @@ impl<'m> Interp<'m, '_> {
     /// snapshot; `None` for any other iterable, which is evaluated as
     /// usual.
     fn dict_view(&mut self, iter: &'m Expr) -> Exec<'m, Option<value::Iter<'m>>> {
-        let ExprKind::Call { func, args } = &iter.kind else {
+        let Some((receiver, view)) = view_call(iter) else {
             return Ok(None);
         };
-        let ExprKind::Attr { value, attr } = &func.kind else {
-            return Ok(None);
-        };
-        let view = match attr.name.as_str() {
-            "keys" => View::Keys,
-            "values" => View::Values,
-            "items" => View::Items,
-            _ => return Ok(None),
-        };
-        if !args.is_empty() {
-            return Ok(None);
-        }
-        // Inference allows these methods only on a dict.
-        let receiver = self.eval(value)?;
-        match receiver.iter_view(view) {
-            Some(items) => Ok(Some(items)),
-            None => Err(rt_err(
-                iter.span,
-                format!("internal: `{}` of a non-dict", attr.name),
-            )
-            .into()),
-        }
+        let receiver = self.eval(receiver)?;
+        Ok(Some(live_view(&receiver, view, iter.span)?))
     }
 
     /// `def`: evaluates defaults now, as Python does, and binds the name.
@@ -757,16 +737,21 @@ impl<'m> Interp<'m, '_> {
         let Value::Builtin(b @ (Builtin::Enumerate | Builtin::Zip)) = callee else {
             return Ok(None);
         };
-        let mut sources = Vec::new();
+        let mut pending = Vec::new();
         let mut start = 0;
         for arg in args {
-            let is_start = *b == Builtin::Enumerate && (arg.name.is_some() || !sources.is_empty());
+            let is_start = *b == Builtin::Enumerate && (arg.name.is_some() || !pending.is_empty());
             if is_start {
                 start = self.eval(&arg.value)?.int().unwrap_or_default();
                 continue;
             }
-            sources.push(self.source(&arg.value)?);
+            pending.push(self.source(&arg.value)?);
         }
+        // As CPython's, every argument is evaluated before any is iterated.
+        let mut sources = pending
+            .into_iter()
+            .map(Pending::source)
+            .collect::<Result<Vec<_>>>()?;
         Ok(Some(match (b, sources.pop()) {
             (Builtin::Enumerate, Some(source)) if sources.is_empty() => {
                 zip::Zipped::enumerate(source, start, span)
@@ -779,15 +764,16 @@ impl<'m> Interp<'m, '_> {
         }))
     }
 
-    /// An argument of `enumerate` or `zip`, as it is stepped.
-    fn source(&mut self, e: &'m Expr) -> Exec<'m, zip::Source<'m>> {
+    /// An argument of `enumerate` or `zip`, evaluated: a nested one is
+    /// already stepping, and a dict view passed directly keeps its dict.
+    fn source(&mut self, e: &'m Expr) -> Exec<'m, Pending<'m>> {
         if let Some(z) = self.lazy(e)? {
-            return Ok(zip::Source::Zip(Box::new(z)));
+            return Ok(Pending::Zip(z));
         }
-        Ok(match self.eval(e)? {
-            Value::Results(r) => zip::Source::Results(r),
-            v => zip::Source::Items(v.iter(e.span)?, e.span),
-        })
+        if let Some((receiver, view)) = view_call(e) {
+            return Ok(Pending::View(self.eval(receiver)?, view, e.span));
+        }
+        Ok(Pending::Value(self.eval(e)?, e.span))
     }
 
     fn call_func(&mut self, func: Rc<Func<'m>>, args: Args<'m>) -> Exec<'m, Value<'m>> {
@@ -808,6 +794,50 @@ impl<'m> Interp<'m, '_> {
         self.frames.pop();
         Ok(unlooped(flow?)?.map_or(Value::None, |(v, _)| v))
     }
+}
+
+/// An evaluated argument of `enumerate` or `zip`, not yet iterated.
+enum Pending<'m> {
+    Zip(zip::Zipped<'m>),
+    /// `d.keys()`, `d.values()` or `d.items()`: the dict `d` and the view.
+    View(Value<'m>, View, Span),
+    Value(Value<'m>, Span),
+}
+
+impl<'m> Pending<'m> {
+    /// The argument as it is stepped.
+    fn source(self) -> Result<zip::Source<'m>> {
+        Ok(match self {
+            Pending::Zip(z) => zip::Source::Zip(Box::new(z)),
+            Pending::View(d, view, span) => zip::Source::Items(live_view(&d, view, span)?, span),
+            Pending::Value(Value::Results(r), _) => zip::Source::Results(r),
+            Pending::Value(v, span) => zip::Source::Items(v.iter(span)?, span),
+        })
+    }
+}
+
+/// The receiver and view of `e` if it is a call of `keys`, `values` or
+/// `items` with no arguments, which inference allows only on a dict.
+fn view_call(e: &Expr) -> Option<(&Expr, View)> {
+    let ExprKind::Call { func, args } = &e.kind else {
+        return None;
+    };
+    let ExprKind::Attr { value, attr } = &func.kind else {
+        return None;
+    };
+    let view = match attr.name.as_str() {
+        "keys" => View::Keys,
+        "values" => View::Values,
+        "items" => View::Items,
+        _ => return None,
+    };
+    args.is_empty().then_some((value.as_ref(), view))
+}
+
+/// Live iteration over `view` of the dict `d`, as Python's view gives.
+fn live_view<'m>(d: &Value<'m>, view: View, span: Span) -> Result<value::Iter<'m>> {
+    d.iter_view(view)
+        .ok_or_else(|| rt_err(span, "internal: a view of a non-dict".to_string()))
 }
 
 /// Binds call arguments to parameters, as Python does: positional first,

@@ -1,0 +1,33 @@
+# The arguments of `enumerate` and `zip` are all evaluated before any is
+# iterated, a dict view passed directly is read live, and a range too long
+# for an int still steps (D58).
+
+def grow(d: dict[int, int]) -> list[int]:
+    d[3] = 30
+    return [0, 1, 2]
+
+def later(d: dict[int, int]) -> int:
+    d[4] = 40
+    return 5
+
+d = {1: 10, 2: 20}
+print(list(zip(d, grow(d))))
+print(list(enumerate(d, later(d))))
+
+e = {1: 10, 2: 20}
+for i, v in enumerate(e.values()):
+    if i == 0:
+        e[2] = 99
+    print(i, v)
+for k, kv in zip(e.keys(), e.items()):
+    e[3 - k] = k * 7
+    print(k, kv)
+print(list(enumerate(e.items())), sorted(zip(e.values(), e)))
+
+wide = range(-9223372036854775808, 9223372036854775807)
+print(any(zip(wide)))
+for i, x in enumerate(wide):
+    print(i, x)
+    break
+for x, y in zip(wide, "ab"):
+    print(x, y)

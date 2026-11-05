@@ -435,6 +435,7 @@ const NATIVE: &[&str] = &[
     "builtin_sum_empty_float",
     "enumerate_zip",
     "zip_changed_size",
+    "zip_sources",
     "enumerate_overflow",
     "call_before_def",
     "chained_compare",
