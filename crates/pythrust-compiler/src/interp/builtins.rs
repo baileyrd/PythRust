@@ -245,16 +245,25 @@ fn extreme<'m>(b: Builtin, args: &[Value<'m>], span: Span) -> Exec<'m, Value<'m>
         [xs] => Box::new(xs.iter(span)?),
         _ => Box::new(args.iter().cloned()),
     };
+    extreme_of(b, || Ok(items.next()), span)
+}
+
+/// `min` or `max` (`b`) of the items `next` gives one at a time.
+pub(super) fn extreme_of<'m>(
+    b: Builtin,
+    mut next: impl FnMut() -> Exec<'m, Option<Value<'m>>>,
+    span: Span,
+) -> Exec<'m, Value<'m>> {
     let op = if b == Builtin::Min {
         CmpOp::Lt
     } else {
         CmpOp::Gt
     };
-    let Some(mut best) = items.next() else {
+    let Some(mut best) = next()? else {
         let msg = format!("{}() iterable argument is empty", b.name());
         return Err(raised(ExcKind::Value, msg, span));
     };
-    for x in items {
+    while let Some(x) = next()? {
         if compare(op, &x, &best, span)? {
             best = x;
         }

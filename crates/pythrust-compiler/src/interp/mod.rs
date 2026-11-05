@@ -645,11 +645,8 @@ impl<'m> Interp<'m, '_> {
             // `list`, `sorted`, `set`, `sum`, `min`, `max` or `all` of it.
             return z.drain();
         }
-        if let (Value::Builtin(Builtin::Any), [arg]) = (&callee, args) {
-            // Its items are tuples, all true: the first decides.
-            if let Some(mut z) = self.lazy(&arg.value)? {
-                return Ok(Value::Bool(z.step()?.is_some()));
-            }
+        if let Some(out) = self.reduce_lazy(&callee, args, span)? {
+            return Ok(out);
         }
         let mut evaluated = Args {
             positional: Vec::new(),
@@ -707,6 +704,36 @@ impl<'m> Interp<'m, '_> {
             (Value::Int(n), Some(Type::Float)) => Value::Float(n as f64),
             (v, _) => v,
         }
+    }
+
+    /// `any`, `all`, `min` or `max` of an `enumerate(...)` or `zip(...)`,
+    /// stepped without collecting its items; `None` for any other call.
+    /// Its items are tuples, all true: `any` stops at the first.
+    fn reduce_lazy(
+        &mut self,
+        callee: &Value<'m>,
+        args: &'m [Arg],
+        span: Span,
+    ) -> Exec<'m, Option<Value<'m>>> {
+        let (Value::Builtin(b), [arg]) = (callee, args) else {
+            return Ok(None);
+        };
+        if arg.name.is_some()
+            || !matches!(b, Builtin::Any | Builtin::All | Builtin::Min | Builtin::Max)
+        {
+            return Ok(None);
+        }
+        let Some(mut z) = self.lazy(&arg.value)? else {
+            return Ok(None);
+        };
+        Ok(Some(match b {
+            Builtin::Any => Value::Bool(z.step()?.is_some()),
+            Builtin::All => {
+                while z.step()?.is_some() {}
+                Value::Bool(true)
+            }
+            _ => builtins::extreme_of(*b, || z.step(), span)?,
+        }))
     }
 
     /// `e` as an `enumerate(...)` or `zip(...)` to step, its arguments

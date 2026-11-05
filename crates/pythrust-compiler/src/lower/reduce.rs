@@ -161,6 +161,25 @@ impl FnBuilder<'_, '_> {
         Ok(Operand::Local(out))
     }
 
+    /// `best = x` when `x` beats it under `op` or `seen` is false, then
+    /// `seen` is true: the first item no later one beats.
+    pub(super) fn keep_best(
+        &mut self,
+        op: CmpOp,
+        best: LocalId,
+        seen: LocalId,
+        x: Operand,
+        span: Span,
+    ) {
+        let seen_op = Operand::Local(seen);
+        self.either(
+            seen_op,
+            |b| b.beat(op, best, x, span),
+            |b| b.put(best, x, span),
+        );
+        self.assign(seen, Rvalue::Use(Operand::Bool(true)), span);
+    }
+
     /// `best = x` when `x` beats it under `op`.
     fn beat(&mut self, op: CmpOp, best: LocalId, x: Operand, span: Span) {
         let wins = self.temp(Ty::Bool, Rvalue::Cmp(op, x, Operand::Local(best)), span);

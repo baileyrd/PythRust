@@ -31,3 +31,18 @@ for i, x in enumerate(wide):
     break
 for x, y in zip(wide, "ab"):
     print(x, y)
+
+# An empty tuple gives no items; the sources before it are still read.
+xs: list[tuple[int, int]] = list(enumerate(()))
+ys: list[tuple[str, int]] = list(zip("ab", ()))
+zs: list[tuple[int, tuple[int, str]]] = list(enumerate(zip((), "c")))
+print(xs, ys, zs)
+
+# `min`, `max` and `all` step their items without collecting them.
+big = range(100000)
+print(max(enumerate(big)), min(zip(big, big)), all(enumerate(big)), all(zip()))
+print(max(zip("ba", "xy")), min(enumerate("cab", 1)), max(enumerate([2.5, 2.5])))
+try:
+    print(min(zip("", "a")))
+except ValueError as err:
+    print(err)

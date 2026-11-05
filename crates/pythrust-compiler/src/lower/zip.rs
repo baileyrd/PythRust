@@ -6,6 +6,7 @@
 
 use crate::ast::{Arg, Expr, ExprKind};
 use crate::diag::Result;
+use crate::exc::ExcKind;
 use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty, View};
 use crate::span::Span;
 
@@ -95,9 +96,17 @@ impl FnBuilder<'_, '_> {
             pending.push(self.pending(&a.value)?);
         }
         // As CPython's, every argument is evaluated before any is iterated.
+        let fields: Vec<Ty> = self
+            .cx
+            .seqs
+            .fields(item)
+            .map(<[Ty]>::to_vec)
+            .unwrap_or_default();
+        let skip = usize::from(name == "enumerate");
         let mut sources = Vec::new();
-        for p in pending {
-            sources.push(self.source(p)?);
+        for (k, p) in pending.into_iter().enumerate() {
+            let want = fields.get(k + skip).copied().unwrap_or(Ty::None);
+            sources.push(self.source(p, want)?);
         }
         if name == "enumerate" {
             start = start.or(Some(Operand::Int(0)));
@@ -135,7 +144,8 @@ impl FnBuilder<'_, '_> {
 
     /// The argument `p` as it is stepped, with the loop holding its own
     /// reference: a table's size is taken now, once all are evaluated.
-    fn source(&mut self, p: Pending) -> Result<Source> {
+    /// `want` is the type of its items, which an empty tuple has none of.
+    fn source(&mut self, p: Pending, want: Ty) -> Result<Source> {
         let (v, part, span) = match p {
             Pending::Zip(z) => return Ok(Source::Zip(Box::new(z))),
             Pending::Value(v, part, span) => (v, part, span),
@@ -157,6 +167,13 @@ impl FnBuilder<'_, '_> {
                     span,
                 }
             }
+            ty if self.cx.seqs.fields(ty).is_some_and(<[Ty]>::is_empty) => Source::Seq {
+                s,
+                item: want,
+                read: Rvalue::Index,
+                fixed: Some(Operand::Int(0)),
+                span,
+            },
             ty => {
                 let (item, read) = self.items_of(s, span)?;
                 let fixed = (ty == Ty::Range).then(|| self.steps(s, span));
@@ -188,12 +205,16 @@ impl FnBuilder<'_, '_> {
         let [arg] = args else {
             return Ok(None);
         };
-        if name != "any" || arg.name.is_some() {
+        let reads = matches!(name, "any" | "all" | "min" | "max");
+        if !reads || arg.name.is_some() {
             return Ok(None);
         }
         let Some(z) = self.zip_of(&arg.value)? else {
             return Ok(None);
         };
+        if name != "any" {
+            return self.fold_zip(name, &z, span).map(Some);
+        }
         let first = self.collect_zip(&z, true)?;
         let n = self.temp(Ty::Int, Rvalue::Len(first), span);
         Ok(Some(self.temp(
@@ -234,6 +255,35 @@ impl FnBuilder<'_, '_> {
         };
         self.for_zip(&collect, z)?;
         Ok(Operand::Local(out))
+    }
+
+    /// `all`, `min` or `max` (`name`) of `z`, stepped without collecting
+    /// its items: they are tuples, all true, so `all` is true once every
+    /// one is read, and an empty one raises CPython's `ValueError` for
+    /// `min` and `max`.
+    fn fold_zip(&mut self, name: &str, z: &Zip, span: Span) -> Result<Operand> {
+        let op = match name {
+            "min" => Some(CmpOp::Lt),
+            "max" => Some(CmpOp::Gt),
+            _ => None,
+        };
+        let best = self.pooled(z.item);
+        let seen = self.new_local(Ty::Bool);
+        self.assign(seen, Rvalue::Use(Operand::Bool(false)), span);
+        let fold = Looped::Fold {
+            op,
+            best,
+            seen,
+            span,
+        };
+        self.for_zip(&fold, z)?;
+        if op.is_none() {
+            return Ok(Operand::Bool(true));
+        }
+        let message = format!("{name}() iterable argument is empty");
+        let empty = Rvalue::Cmp(CmpOp::Eq, Operand::Local(seen), Operand::Bool(false));
+        self.raise_if(empty, ExcKind::Value, &message, span)?;
+        Ok(Operand::Local(best))
     }
 
     /// The next item of `z` at step `cur`, as a new tuple; at the first

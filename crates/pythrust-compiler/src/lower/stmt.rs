@@ -38,6 +38,16 @@ pub(super) enum Looped<'s> {
         first: bool,
         span: Span,
     },
+    /// An `enumerate(...)` or `zip(...)` that `min` (`Lt`) or `max`
+    /// (`Gt`) reads, or `all` (`None`), stepped without collecting:
+    /// `best` keeps the item no later one beats, once `seen` is true
+    /// ([`FnBuilder::fold_zip`]).
+    Fold {
+        op: Option<CmpOp>,
+        best: LocalId,
+        seen: LocalId,
+        span: Span,
+    },
 }
 
 /// A generic function's result type that no `return` decides first.
@@ -426,7 +436,7 @@ impl FnBuilder<'_, '_> {
             // bound and keeps whatever it held; only `else` runs.
             return match l {
                 Looped::For { orelse, .. } => self.block(orelse),
-                Looped::Map { .. } | Looped::Collect { .. } => Ok(()),
+                Looped::Map { .. } | Looped::Collect { .. } | Looped::Fold { .. } => Ok(()),
             };
         }
         let item = match self.ty(s) {
@@ -548,6 +558,22 @@ impl FnBuilder<'_, '_> {
                     Ok(())
                 })?;
                 self.terminate(Term::Goto(if *first { end } else { latch }));
+                Ok(())
+            }
+            Looped::Fold {
+                op,
+                best,
+                seen,
+                span,
+            } => {
+                self.pooled_stmt(|b| {
+                    let x = next(b)?;
+                    if let Some(op) = op {
+                        b.keep_best(*op, *best, *seen, x, *span);
+                    }
+                    Ok(())
+                })?;
+                self.terminate(Term::Goto(latch));
                 Ok(())
             }
         }
