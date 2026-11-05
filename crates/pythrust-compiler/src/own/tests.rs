@@ -112,6 +112,22 @@ fn list_plus_and_times_in_place_are_mut() {
 }
 
 #[test]
+fn extending_keeps_only_what_appending_each_element_keeps() {
+    // `xs += ys` stores `ys`'s elements, not `ys`: as the loop does.
+    let flat = "def add(xs: list[int], ys: list[int]):\n    xs += ys\ndef loop(xs: list[int], ys: list[int]):\n    for y in ys:\n        xs.append(y)\nadd([0], [1])\nloop([0], [1])\n";
+    assert_eq!(modes(flat, "add"), (vec![MUT, READ], vec![false, false]));
+    assert_eq!(modes(flat, "add"), modes(flat, "loop"));
+    let nested = "def add(xs: list[list[int]], ys: list[list[int]]):\n    xs += ys\ndef loop(xs: list[list[int]], ys: list[list[int]]):\n    for y in ys:\n        xs.append(y)\nadd([[0]], [[1]])\nloop([[0]], [[1]])\n";
+    assert_eq!(modes(nested, "add"), modes(nested, "loop"));
+    let words = "def add(xs: list[str], ys: list[str]):\n    xs += ys\ndef loop(xs: list[str], ys: list[str]):\n    for y in ys:\n        xs.append(y)\nadd([\"a\"], [\"b\"])\nloop([\"a\"], [\"b\"])\n";
+    assert_eq!(modes(words, "add"), modes(words, "loop"));
+    assert_eq!(strs(words, "add"), strs(words, "loop"));
+    let tempered =
+        "temper def add(mut xs: list[int], ys: list[int]) -> None:\n    xs += ys\nadd([0], [1])\n";
+    assert_eq!(checked(tempered), Ok(()));
+}
+
+#[test]
 fn a_local_container_is_not_the_parameter() {
     let src = "def count(xs: list[int]) -> int:\n    box = [xs]\n    box.append([1])\n    return len(box)\ndef through(xs: list[int]):\n    box = [xs]\n    box[0].append(1)\nprint(count([0]))\nthrough([0])\n";
     assert_eq!(modes(src, "count"), (vec![READ], vec![false]));
