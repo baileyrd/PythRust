@@ -202,16 +202,19 @@ fn sum<'m>(args: &Args<'m>) -> Result<Value<'m>> {
         ([xs], start) | ([xs, _], start @ None) => (xs, start.or(args.positional.get(1))),
         _ => return Err(arity_error(Builtin::Sum, 1, 2, args.positional.len(), span)),
     };
-    let items: Vec<Value<'m>> = xs.iter(span)?.collect();
-    let floats = matches!(start, Some(Value::Float(_)))
-        || items.iter().any(|x| matches!(x, Value::Float(_)));
-    if floats {
-        let start = start.and_then(Value::num).map_or(0.0, Num::float);
-        let xs = items.iter().filter_map(Value::num).map(Num::float);
-        return Ok(Value::Float(fsum::fsum(start, xs)));
-    }
-    let mut total = start.and_then(Value::int).unwrap_or(0);
-    for x in &items {
+    // Items are read one at a time, so a large range needs no memory. As
+    // CPython's, an int total turns float at the first float item.
+    let mut items = xs.iter(span)?;
+    let mut total = match start {
+        Some(Value::Float(f)) => return Ok(Value::Float(float_sum(*f, items))),
+        Some(v) => v.int().unwrap_or(0),
+        None => 0,
+    };
+    while let Some(x) = items.next() {
+        if let Value::Float(f) = x {
+            let rest = std::iter::once(Value::Float(f)).chain(items);
+            return Ok(Value::Float(float_sum(total as f64, rest)));
+        }
         let x = x
             .int()
             .ok_or_else(|| rt_err(span, "TypeError: sum() of a non-number".to_string()))?;
@@ -220,20 +223,26 @@ fn sum<'m>(args: &Args<'m>) -> Result<Value<'m>> {
     Ok(Value::Int(total))
 }
 
+/// CPython's compensated float sum of `xs` from `start`.
+fn float_sum<'m>(start: f64, xs: impl Iterator<Item = Value<'m>>) -> f64 {
+    fsum::fsum(start, xs.filter_map(|x| x.num()).map(Num::float))
+}
+
 /// `min` or `max` of an iterable, or of two or more arguments: the
 /// first item no later one beats, as CPython keeps (D57). An empty
 /// iterable raises a catchable `ValueError`.
 fn extreme<'m>(b: Builtin, args: &[Value<'m>], span: Span) -> Exec<'m, Value<'m>> {
-    let items: Vec<Value<'m>> = match args {
-        [xs] => xs.iter(span)?.collect(),
-        _ => args.to_vec(),
+    // An iterable is read one item at a time, so a large range needs no
+    // memory.
+    let mut items: Box<dyn Iterator<Item = Value<'m>> + '_> = match args {
+        [xs] => Box::new(xs.iter(span)?),
+        _ => Box::new(args.iter().cloned()),
     };
     let op = if b == Builtin::Min {
         CmpOp::Lt
     } else {
         CmpOp::Gt
     };
-    let mut items = items.into_iter();
     let Some(mut best) = items.next() else {
         let msg = format!("{}() iterable argument is empty", b.name());
         return Err(raised(ExcKind::Value, msg, span));
