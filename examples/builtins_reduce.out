@@ -11,6 +11,7 @@ nan 1.0 a
 aé 世 x [1, 5]
 True False False True True False
 False True True True False
+True False True False
 True 65
 True 1114111
 chr: chr() arg not in range(0x110000)

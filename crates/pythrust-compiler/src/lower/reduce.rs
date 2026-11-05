@@ -143,7 +143,8 @@ impl FnBuilder<'_, '_> {
             };
             return Err(unsupported(span, what));
         }
-        self.each(xs, span, |b, x| {
+        // The first item that decides ends the loop, as CPython stops there.
+        self.each_until(xs, span, |b, x| {
             let t = b.truthy(x, span);
             let decided = b.temp(
                 Ty::Bool,
@@ -155,7 +156,7 @@ impl FnBuilder<'_, '_> {
                 |b| b.assign(out, Rvalue::Use(Operand::Bool(any)), span),
                 |_| {},
             );
-            Ok(())
+            Ok(Some(decided))
         })?;
         Ok(Operand::Local(out))
     }

@@ -372,6 +372,17 @@ impl FnBuilder<'_, '_> {
         span: Span,
         mut f: impl FnMut(&mut Self, Operand) -> Result<()>,
     ) -> Result<()> {
+        self.each_until(s, span, |b, x| f(b, x).map(|()| None))
+    }
+
+    /// As [`FnBuilder::each`], but a condition `f` gives ends the loop
+    /// where it is true, so a decided `any` stops there.
+    pub(super) fn each_until(
+        &mut self,
+        s: Operand,
+        span: Span,
+        mut f: impl FnMut(&mut Self, Operand) -> Result<Option<Operand>>,
+    ) -> Result<()> {
         let (item, read) = self.items_of(s, span)?;
         let n = self.count(s, span);
         let counter = self.new_local(Ty::Int);
@@ -387,10 +398,19 @@ impl FnBuilder<'_, '_> {
             orelse: end,
         });
         self.switch_to(body);
-        self.pooled_stmt(|b| {
+        let stop = self.pooled_stmt(|b| {
             let x = b.temp(item, read(s, cur), span);
             f(b, x)
         })?;
+        if let Some(cond) = stop {
+            let step = self.new_block();
+            self.terminate(Term::Branch {
+                cond,
+                then: end,
+                orelse: step,
+            });
+            self.switch_to(step);
+        }
         self.assign(counter, Rvalue::Int(IntOp::Add, cur, Operand::Int(1)), span);
         self.terminate(Term::Goto(head));
         self.switch_to(end);

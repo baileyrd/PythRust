@@ -38,6 +38,7 @@ def main() -> None:
     print(max(["ab", "aé", "a"]), min("世界"), max({"x": 1}.keys()), min([[2], [1, 5]]))
     print(any([0, 0, 1]), all([1, 1, 0]), any([]), all([]), any("ab"), all(["a", ""]))
     print(any({0: 1}), all(range(1, 4)), any([[], [0]]), all({1: 2}.values()), any(range(0)))
+    print(any(range(1, 1000000000000)), all(range(1000000000000)), any("ab" * 1), all(["", "x"]))
     for n in [65, 1114111, -1, 1114112]:
         try:
             print(letter(n) == chr(n), ord(letter(n)))
