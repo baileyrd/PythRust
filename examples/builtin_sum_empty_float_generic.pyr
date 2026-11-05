@@ -1,0 +1,12 @@
+# An empty `sum` of floats from a generic function is the int `0` under `run`, as in CPython; build refuses it (D59, NATIVE_GAPS).
+def boxed(xs):
+    return [sum(xs)]
+
+
+def main() -> None:
+    xs: list[float] = []
+    print(boxed(xs))
+    print(boxed([1.5, 2.5]))
+
+
+main()

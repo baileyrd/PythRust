@@ -168,7 +168,10 @@ fn std_changes_lists(f: StdFn) -> bool {
         | StdFn::Rindex
         | StdFn::Count
         | StdFn::Upper
-        | StdFn::Lower => false,
+        | StdFn::Lower
+        | StdFn::Ord
+        | StdFn::Chr
+        | StdFn::FloatSum => false,
     }
 }
 

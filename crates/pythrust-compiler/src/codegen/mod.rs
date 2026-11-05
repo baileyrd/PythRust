@@ -174,10 +174,13 @@ enum Rt {
     StrFind,
     StrCount,
     StrCase,
+    StrOrd,
+    StrChr,
+    SeqFsum,
 }
 
 impl Rt {
-    const ALL: [Rt; 98] = [
+    const ALL: [Rt; 101] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -276,6 +279,9 @@ impl Rt {
         Rt::StrFind,
         Rt::StrCount,
         Rt::StrCase,
+        Rt::StrOrd,
+        Rt::StrChr,
+        Rt::SeqFsum,
     ];
 
     fn symbol(self) -> &'static str {
@@ -369,6 +375,9 @@ impl Rt {
             Rt::StrFind => "pt_str_find",
             Rt::StrCount => "pt_str_count",
             Rt::StrCase => "pt_str_case",
+            Rt::StrOrd => "pt_str_ord",
+            Rt::StrChr => "pt_str_chr",
+            Rt::SeqFsum => "pt_seq_fsum",
             Rt::Mark => "pt_mark",
             Rt::ExecNew => "pt_exec_new",
             Rt::ExecEnd => "pt_exec_end",
@@ -460,6 +469,9 @@ impl Rt {
             Rt::StrFind => (vec![ptr, ptr, I8, I8, ptr, ptr, ptr, ptr], Some(I64)),
             Rt::StrCount => (vec![ptr, ptr], Some(I64)),
             Rt::StrCase => (vec![ptr, I8], Some(ptr)),
+            Rt::StrOrd => (vec![ptr], Some(I64)),
+            Rt::StrChr => (vec![I64, ptr, ptr, ptr, ptr], Some(ptr)),
+            Rt::SeqFsum => (vec![ptr, F64], Some(F64)),
         }
     }
 }

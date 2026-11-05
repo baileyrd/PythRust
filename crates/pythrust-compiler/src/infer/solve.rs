@@ -83,6 +83,13 @@ pub(super) enum Need {
         value: Type,
         out: Type,
     },
+    /// `abs(arg)`, or `sum` of `arg`s, named by `func`, is `out`: an
+    /// int of ints or bools, a float of floats.
+    Numeric {
+        func: &'static str,
+        arg: Type,
+        out: Type,
+    },
     /// `int(x)` / `float(x)`, named by `func`.
     ToNumber {
         func: &'static str,
@@ -233,6 +240,11 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             out: r(out),
         },
         Need::ToNumber { func, arg } => Need::ToNumber { func, arg: r(arg) },
+        Need::Numeric { func, arg, out } => Need::Numeric {
+            func,
+            arg: r(arg),
+            out: r(out),
+        },
         Need::Assign {
             target,
             value,
@@ -253,7 +265,10 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Len(t) | Need::Hashable(t) | Need::Comparable(t) | Need::ToNumber { arg: t, .. } => {
             vec![t]
         }
-        Need::OrNone { value, out } => vec![value, out],
+        Need::OrNone { value, out }
+        | Need::Numeric {
+            arg: value, out, ..
+        } => vec![value, out],
         Need::Probe { container, item } => vec![container, item],
         Need::ToList { arg, elem } => vec![arg, elem],
         Need::Key { key, index } => vec![key, index],
@@ -289,6 +304,7 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         Need::ToList { arg, elem } => to_list(s, c, arg, elem),
         Need::Key { key, index } => dict_key(s, c, key, index),
         Need::ToNumber { func, arg } => to_number(s, c, func, arg),
+        Need::Numeric { func, arg, out } => numeric(s, c, func, arg, out),
         Need::Assign {
             target,
             value,
@@ -774,6 +790,45 @@ fn default_or_none(s: &mut Subst, c: &Constraint, value: &Type, out: &Type) -> R
             expect(s, c, out, &Type::None)
         }
     }
+}
+
+/// `abs` of, or `sum` over, a number (D57): what `sum` cannot total is
+/// named, as is a `start` of the wrong type.
+fn numeric(s: &mut Subst, c: &Constraint, func: &str, arg: &Type, out: &Type) -> Result<Step> {
+    let Some(t) = known(s, arg) else {
+        return Ok(Step::Waiting);
+    };
+    let result = match (&t, func) {
+        (Type::Int | Type::Bool, _) => Type::Int,
+        (Type::Float, _) => Type::Float,
+        (Type::Str, "sum") => {
+            let msg = "sum() can't sum strings [use ''.join(seq) instead]";
+            return Err(error(c, msg.to_string()));
+        }
+        (Type::List(_) | Type::Tuple(_), "sum") => {
+            let msg = format!("`sum` of {} is not supported yet", s.zonk(&t));
+            return Err(error(c, msg));
+        }
+        (_, "sum") => {
+            let msg = format!("unsupported operand type for `sum`: {}", s.zonk(&t));
+            return Err(error(c, msg));
+        }
+        _ => {
+            let msg = format!("bad operand type for {func}(): {}", s.zonk(&t));
+            return Err(error(c, msg));
+        }
+    };
+    let start = known(s, out);
+    if func == "sum" && start.as_ref().is_some_and(|o| *o != result) {
+        let (name, zero) = match result {
+            Type::Float => ("a float", "0.0"),
+            _ => ("an int", "0"),
+        };
+        let msg = format!("`start` of `sum` must be {name}, such as `{zero}`");
+        return Err(error(c, msg));
+    }
+    expect(s, c, out, &result)?;
+    Ok(Step::Done(vec![]))
 }
 
 fn to_number(s: &mut Subst, c: &Constraint, func: &str, arg: &Type) -> Result<Step> {

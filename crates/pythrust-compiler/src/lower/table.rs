@@ -11,6 +11,9 @@ use crate::span::Span;
 
 use super::{internal, unsupported, FnBuilder};
 
+/// Reads the item of an iterable at an index ([`FnBuilder::items_of`]).
+pub(super) type ItemRead = fn(Operand, Operand) -> Rvalue;
+
 /// What a `for` over a dict or set binds each time: a key (a set's
 /// element), a value, or a `(key, value)` tuple of this type.
 #[derive(Clone, Copy)]
@@ -95,7 +98,7 @@ impl FnBuilder<'_, '_> {
     }
 
     /// A set's element type, or a view's item type.
-    fn elem_of(&self, ty: Ty, span: Span) -> Result<Ty> {
+    pub(super) fn elem_of(&self, ty: Ty, span: Span) -> Result<Ty> {
         self.cx
             .seqs
             .elem(ty)
@@ -333,15 +336,9 @@ impl FnBuilder<'_, '_> {
         })
     }
 
-    /// Calls `f` on each item `s` iterates, in order: a string's
-    /// characters, a list's, tuple's or view's items, a range's ints, a
-    /// dict's keys or a set's elements. Nothing `f` does changes `s`.
-    pub(super) fn each(
-        &mut self,
-        s: Operand,
-        span: Span,
-        mut f: impl FnMut(&mut Self, Operand) -> Result<()>,
-    ) -> Result<()> {
+    /// The type of the items `s` iterates, and how to read the one at an
+    /// index: [`FnBuilder::each`]'s iterables.
+    pub(super) fn items_of(&self, s: Operand, span: Span) -> Result<(Ty, ItemRead)> {
         let ty = self.ty(s);
         let item = match ty {
             Ty::Str => Ty::Str,
@@ -351,14 +348,43 @@ impl FnBuilder<'_, '_> {
             Ty::Tuple(_) => self.tuple_item(ty, span)?,
             _ => return Err(unsupported(span, "iterating this type")),
         };
-        let read: fn(Operand, Operand) -> Rvalue = match ty {
+        let read: ItemRead = match ty {
             Ty::Dict(_) | Ty::Set(_) => |t, i| Rvalue::Entry(t, i, 0),
             _ => Rvalue::Index,
         };
-        let n = match ty {
+        Ok((item, read))
+    }
+
+    /// How many items `s` iterates, one of [`FnBuilder::each`]'s.
+    pub(super) fn count(&mut self, s: Operand, span: Span) -> Operand {
+        match self.ty(s) {
             Ty::Range => self.range_len(s, span),
             _ => self.temp(Ty::Int, Rvalue::Len(s), span),
-        };
+        }
+    }
+
+    /// Calls `f` on each item `s` iterates, in order: a string's
+    /// characters, a list's, tuple's or view's items, a range's ints, a
+    /// dict's keys or a set's elements. Nothing `f` does changes `s`.
+    pub(super) fn each(
+        &mut self,
+        s: Operand,
+        span: Span,
+        mut f: impl FnMut(&mut Self, Operand) -> Result<()>,
+    ) -> Result<()> {
+        self.each_until(s, span, |b, x| f(b, x).map(|()| None))
+    }
+
+    /// As [`FnBuilder::each`], but a condition `f` gives ends the loop
+    /// where it is true, so a decided `any` stops there.
+    pub(super) fn each_until(
+        &mut self,
+        s: Operand,
+        span: Span,
+        mut f: impl FnMut(&mut Self, Operand) -> Result<Option<Operand>>,
+    ) -> Result<()> {
+        let (item, read) = self.items_of(s, span)?;
+        let n = self.count(s, span);
         let counter = self.new_local(Ty::Int);
         self.assign(counter, Rvalue::Use(Operand::Int(0)), span);
         let cur = Operand::Local(counter);
@@ -372,10 +398,19 @@ impl FnBuilder<'_, '_> {
             orelse: end,
         });
         self.switch_to(body);
-        self.pooled_stmt(|b| {
+        let stop = self.pooled_stmt(|b| {
             let x = b.temp(item, read(s, cur), span);
             f(b, x)
         })?;
+        if let Some(cond) = stop {
+            let step = self.new_block();
+            self.terminate(Term::Branch {
+                cond,
+                then: end,
+                orelse: step,
+            });
+            self.switch_to(step);
+        }
         self.assign(counter, Rvalue::Int(IntOp::Add, cur, Operand::Int(1)), span);
         self.terminate(Term::Goto(head));
         self.switch_to(end);

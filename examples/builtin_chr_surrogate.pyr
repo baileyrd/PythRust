@@ -1,0 +1,6 @@
+# deviation: `chr` of a surrogate raises `ValueError: chr() arg is a surrogate, which a str cannot hold`, where CPython returns a lone surrogate (D56).
+for n in [55295, 55296, 57343, 57344]:
+    try:
+        print(ord(chr(n)))
+    except ValueError as e:
+        print(e)

@@ -544,7 +544,7 @@ impl<'a> FnBuilder<'_, 'a> {
             ops.push(self.expr(&a.value)?);
         }
         let Some(def) = def else {
-            if matches!(name.as_str(), "list" | "sorted" | "set") {
+            if crate::infer::reads_results(name) {
                 args.iter().try_for_each(|a| self.reads_results(&a.value))?;
                 return self.results_builtin(name, args, ops, span);
             }
@@ -569,6 +569,9 @@ impl<'a> FnBuilder<'_, 'a> {
             return self.builtin(name, args, ops, span);
         };
         let at = args.get(k).map_or(span, |a| a.value.span);
+        if let "any" | "all" = name {
+            return self.truth(name == "any", ops[k], at);
+        }
         ops[k] = self.drain_results(ops[k], at)?;
         match name {
             "list" => Ok(ops[k]),
@@ -742,9 +745,9 @@ impl<'a> FnBuilder<'_, 'a> {
         // its operand is already in place (`os.listdir(path=p)`).
         let positional = StdFn::from_name(name).and_then(StdFn::keyword);
         let keyword = |a: &Arg| {
-            a.name
-                .as_ref()
-                .is_some_and(|k| Some(k.name.as_str()) != positional)
+            a.name.as_ref().is_some_and(|k| {
+                Some(k.name.as_str()) != positional && (name, k.name.as_str()) != ("sum", "start")
+            })
         };
         if args.iter().any(keyword) {
             return Err(unsupported(span, "keyword arguments"));
@@ -755,6 +758,24 @@ impl<'a> FnBuilder<'_, 'a> {
             }
             "set" => self.new_set(&ops, span),
             "sorted" => self.sorted(&ops, span),
+            "abs" => match ops.as_slice() {
+                [x] => self.abs(*x, span),
+                _ => Err(unsupported(span, "`abs` of other than one argument")),
+            },
+            "ord" => self.std(StdFn::Ord, ops, span),
+            "chr" => {
+                let ops = ops.iter().map(|op| self.as_int(*op, span)).collect();
+                self.std(StdFn::Chr, ops, span)
+            }
+            "sum" => self.sum(&ops, span),
+            "min" | "max" => self.extreme(name, &ops, span),
+            "any" | "all" => match ops.as_slice() {
+                [xs] => self.truth(name == "any", *xs, span),
+                _ => Err(unsupported(
+                    span,
+                    &format!("`{name}` of other than one argument"),
+                )),
+            },
             "range" => {
                 let (start, stop, step) = self.range_bounds(args, &ops, span)?;
                 let items = vec![start, stop, step];

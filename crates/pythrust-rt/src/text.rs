@@ -1,4 +1,4 @@
-//! `str` methods as CPython computes them, on `&str`: safe Rust with no
+//! `str` methods, `ord` and `chr` as CPython computes them, on `&str`: safe Rust with no
 //! dependency, shared by the runtime's ABI (`str.rs`) and the
 //! interpreter, which compiles this file too. Indices and lengths are
 //! code points (D49).
@@ -141,6 +141,38 @@ fn hex_escape(c: char) -> String {
 /// The message of the `ValueError` an empty separator raises.
 pub const EMPTY_SEPARATOR: &str = "empty separator";
 
+/// `ord(s)`: the code point of a one-character `s`, or `Err` with its
+/// length in code points, for CPython's `TypeError` (D56).
+pub fn ord(s: &str) -> Result<u32, usize> {
+    let mut chars = s.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => Ok(u32::from(c)),
+        _ => Err(s.chars().count()),
+    }
+}
+
+/// The message of the fault `ord` of a string of length `n` gives.
+pub fn ord_message(n: usize) -> String {
+    format!("TypeError: ord() expected a character, but string of length {n} found")
+}
+
+/// `chr(n)`, or `Err` with the message of the `ValueError` it raises:
+/// out of range, or a surrogate, which a `str` cannot hold (D56).
+pub fn chr(n: i64) -> Result<char, &'static str> {
+    let code = u32::try_from(n)
+        .ok()
+        .filter(|&c| c < 0x11_0000)
+        .ok_or(CHR_RANGE)?;
+    char::from_u32(code).ok_or(CHR_SURROGATE)
+}
+
+/// The message of the `ValueError` `chr` out of range raises.
+pub const CHR_RANGE: &str = "chr() arg not in range(0x110000)";
+
+/// The message of the `ValueError` `chr` of a surrogate raises, where
+/// CPython gives a lone surrogate (D56).
+pub const CHR_SURROGATE: &str = "chr() arg is a surrogate, which a str cannot hold";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +265,22 @@ mod tests {
         assert_eq!(case("ß ŉ ﬁ", true), "SS ʼN FI");
         assert_eq!(case("İ", false), "i\u{307}");
         assert_eq!(case("", true), "");
+    }
+
+    #[test]
+    fn ord_and_chr_round_trip_and_refuse_the_rest() {
+        assert_eq!(ord("é"), Ok(0xe9));
+        assert_eq!(ord("\u{10ffff}"), Ok(0x10ffff));
+        assert_eq!(ord(""), Err(0));
+        assert_eq!(ord("中文"), Err(2));
+        assert_eq!(chr(0xe9), Ok('é'));
+        assert_eq!(chr(0), Ok('\0'));
+        assert_eq!(chr(0x10ffff), Ok('\u{10ffff}'));
+        assert_eq!(chr(0x110000), Err(CHR_RANGE));
+        assert_eq!(chr(-1), Err(CHR_RANGE));
+        assert_eq!(chr(0xd800), Err(CHR_SURROGATE));
+        assert_eq!(chr(0xdfff), Err(CHR_SURROGATE));
+        assert!(ord_message(2).ends_with("string of length 2 found"));
     }
 
     #[test]

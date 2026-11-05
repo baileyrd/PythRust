@@ -428,6 +428,11 @@ const NATIVE: &[&str] = &[
     "arithmetic",
     "bools_as_ints",
     "builtins",
+    "builtins_reduce",
+    "builtin_ord_length",
+    "builtin_chr_surrogate",
+    "builtin_abs_overflow",
+    "builtin_sum_empty_float",
     "call_before_def",
     "chained_compare",
     "collatz",
@@ -584,6 +589,11 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "dict_bool_key_generic",
         "a generic function storing a bool key into an int-keyed table: `run` cannot \
          always tell the table is int-keyed, so `build` refuses rather than differ",
+    ),
+    (
+        "builtin_sum_empty_float_generic",
+        "a generic function's `sum` of floats with no `start`: `run` gives an empty one \
+         as the int `0`, so `build` refuses rather than differ",
     ),
 ];
 

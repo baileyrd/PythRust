@@ -1,5 +1,5 @@
 //! The closed builtin functions: `print len list set sorted range str int
-//! float bool open`,
+//! float bool open abs ord chr sum min max any all` (D56, D57),
 //! and the builtin exception classes (D6, B4), which build an `Exception`
 //! when called.
 
@@ -9,6 +9,7 @@ use crate::exc::ExcKind;
 use crate::span::Span;
 use crate::stdlib::StdFn;
 
+use super::expr::int_literal;
 use super::solve::Need;
 use super::ty::Type;
 use super::{error, Checker};
@@ -25,9 +26,36 @@ pub(super) fn exception_names() -> String {
 pub fn is_builtin(name: &str) -> bool {
     let function = matches!(
         name,
-        "print" | "len" | "list" | "set" | "sorted" | "range" | "str" | "int" | "float" | "bool"
+        "print"
+            | "len"
+            | "list"
+            | "set"
+            | "sorted"
+            | "range"
+            | "str"
+            | "int"
+            | "float"
+            | "bool"
+            | "abs"
+            | "ord"
+            | "chr"
+            | "sum"
+            | "min"
+            | "max"
+            | "any"
+            | "all"
     );
     function || is_exception(name) || StdFn::from_name(name).is_some()
+}
+
+/// Whether builtin `name` reads `map`'s results where it is called,
+/// taking each task's result: `list`, `sorted` and `set`, and the
+/// reducing builtins (D57).
+pub fn reads_results(name: &str) -> bool {
+    matches!(
+        name,
+        "list" | "sorted" | "set" | "sum" | "min" | "max" | "any" | "all"
+    )
 }
 
 pub(super) fn is_exception(name: &str) -> bool {
@@ -54,6 +82,27 @@ impl Checker {
                 Ok(if name == "str" { Type::Str } else { Type::Bool })
             }
             "int" => self.number("int", Type::Int, args, span),
+            "abs" => {
+                let (arg, _) = self.one(name, args, span)?;
+                let out = self.subst.fresh();
+                let need = Need::Numeric {
+                    func: "abs",
+                    arg,
+                    out: out.clone(),
+                };
+                self.need(need, span);
+                Ok(out)
+            }
+            "ord" => self.ord(args, span),
+            "chr" => self.chr(args, span),
+            "sum" => self.sum(args, span),
+            "min" | "max" => self.extreme(name, args, span),
+            "any" | "all" => {
+                let (iterable, _) = self.one(name, args, span)?;
+                let elem = self.subst.fresh();
+                self.need(Need::Iter { iterable, elem }, span);
+                Ok(Type::Bool)
+            }
             "float" => self.number("float", Type::Float, args, span),
             // Any one value as the message, as `str(x)` takes.
             _ if StdFn::from_name(name).is_some() => self.std(name, args, span),
@@ -100,8 +149,11 @@ impl Checker {
             | StdFn::Rindex
             | StdFn::Count
             | StdFn::Upper
-            | StdFn::Lower => {
-                let msg = format!("internal: `{name}` is a method");
+            | StdFn::Lower
+            | StdFn::Ord
+            | StdFn::Chr
+            | StdFn::FloatSum => {
+                let msg = format!("internal: `{name}` is not called by its name");
                 return Err(error(span, msg));
             }
         };
@@ -220,6 +272,152 @@ impl Checker {
         Ok(out)
     }
 
+    /// `ord(c)`: the code point of a one-character `str` (D56). A literal
+    /// of another length can only fail, so it is refused here.
+    fn ord(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        if let [Arg {
+            name: None, value, ..
+        }] = args
+        {
+            if let ExprKind::Str(lit) = &value.kind {
+                let n = lit.chars().count();
+                if n != 1 {
+                    let msg = format!(
+                        "`ord` of a string of length {n} raises `TypeError: ord() expected a \
+                         character, but string of length {n} found`"
+                    );
+                    return Err(error(value.span, msg));
+                }
+            }
+        }
+        let (t, at) = self.one("ord", args, span)?;
+        if self.subst.resolve(&t) == Type::Bytes {
+            return Err(error(at, "`ord` of bytes is not supported yet".to_string()));
+        }
+        self.expect(at, &Type::Str, &t, "argument of `ord`")?;
+        Ok(Type::Int)
+    }
+
+    /// `chr(n)`: the one-character `str` of code point `n`, an int or
+    /// bool (D56). A literal that can only fail is refused here.
+    fn chr(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        if let [Arg {
+            name: None, value, ..
+        }] = args
+        {
+            if let Some(msg) = chr_literal(value).and_then(chr_refusal) {
+                return Err(error(value.span, msg));
+            }
+        }
+        let (t, at) = self.one("chr", args, span)?;
+        if !self.subst.resolve(&t).is_intlike() {
+            self.expect(at, &Type::Int, &t, "argument of `chr`")?;
+        }
+        Ok(Type::Str)
+    }
+
+    /// `sum(xs)` or `sum(xs, start)`: the int or float total of what `xs`
+    /// iterates over (D57). `start`, by position or keyword, has the
+    /// total's type.
+    fn sum(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        if let Some(Arg { name: Some(kw), .. }) = args.first() {
+            if kw.name == "start" {
+                let msg = "`sum` needs its iterable before `start=`".to_string();
+                return Err(error(kw.span, msg));
+            }
+        }
+        let args: Vec<Arg> = args
+            .iter()
+            .map(|a| match &a.name {
+                Some(kw) if kw.name == "start" => Ok(Arg {
+                    name: None,
+                    ..a.clone()
+                }),
+                Some(kw) => {
+                    let msg = format!("`sum` got an unexpected keyword argument `{}`", kw.name);
+                    Err(error(kw.span, msg))
+                }
+                None => Ok(a.clone()),
+            })
+            .collect::<Result<_>>()?;
+        let mut found = self.positional("sum", &args, 1, 2, span)?.into_iter();
+        let Some((iterable, _)) = found.next() else {
+            return Err(error(span, "internal: `sum` without arguments".to_string()));
+        };
+        let elem = self.subst.fresh();
+        let need = Need::Iter {
+            iterable,
+            elem: elem.clone(),
+        };
+        self.need(need, span);
+        let out = found.next().map_or_else(|| self.subst.fresh(), |(t, _)| t);
+        let need = Need::Numeric {
+            func: "sum",
+            arg: elem,
+            out: out.clone(),
+        };
+        self.need(need, span);
+        Ok(out)
+    }
+
+    /// `min(xs)` / `max(xs)`, of what `xs` iterates over, or `min(a, b,
+    /// ...)`: arguments of one ordered type (D57). An empty `xs` raises.
+    fn extreme(&mut self, name: &str, args: &[Arg], span: Span) -> Result<Type> {
+        if let Some(kw) = args.iter().find_map(|a| a.name.as_ref()) {
+            let msg = format!("`{}=` of `{name}` is not supported yet", kw.name);
+            return Err(error(kw.span, msg));
+        }
+        if args.is_empty() {
+            let msg = format!("`{name}` takes 1 or more arguments but 0 were given");
+            return Err(error(span, msg));
+        }
+        let found = self.positional(name, args, 1, usize::MAX, span)?;
+        let (first, rest) = match found.split_first() {
+            Some((first, rest)) => (first.0.clone(), rest),
+            None => return Err(error(span, format!("internal: `{name}` without arguments"))),
+        };
+        let elem = if rest.is_empty() {
+            let elem = self.subst.fresh();
+            let need = Need::Iter {
+                iterable: first,
+                elem: elem.clone(),
+            };
+            self.need(need, span);
+            elem
+        } else {
+            for (t, at) in rest {
+                self.same_extreme(name, &first, t, *at)?;
+            }
+            first
+        };
+        let order = Need::Order {
+            left: elem.clone(),
+            right: elem.clone(),
+        };
+        self.need(order, span);
+        Ok(elem)
+    }
+
+    /// `t`, another argument of `min` or `max`, has `first`'s type; mixed
+    /// numbers are named, since one fixed result type cannot hold both.
+    fn same_extreme(&mut self, name: &str, first: &Type, t: &Type, at: Span) -> Result<()> {
+        let (a, b) = (self.subst.resolve(first), self.subst.resolve(t));
+        if a.is_numeric() && b.is_numeric() && a != b {
+            let (a, b) = (self.subst.zonk(&a), self.subst.zonk(&b));
+            let msg = format!("`{name}` of {a} and {b}: convert with `float(...)`");
+            return Err(error(at, msg));
+        }
+        self.expect(at, first, t, &format!("argument of `{name}`"))
+    }
+
+    /// The one positional argument of `name`.
+    fn one(&mut self, name: &str, args: &[Arg], span: Span) -> Result<(Type, Span)> {
+        let mut found = self.positional(name, args, 1, 1, span)?.into_iter();
+        found
+            .next()
+            .ok_or_else(|| error(span, format!("internal: `{name}` without its argument")))
+    }
+
     /// Infers `min..=max` positional arguments, rejecting keywords.
     fn positional(
         &mut self,
@@ -251,6 +449,28 @@ impl Checker {
             .map(|a| Ok((self.expr(&a.value)?, a.value.span)))
             .collect()
     }
+}
+
+/// The code point a `chr` argument spells as a literal: an int, a
+/// negated int or a bool.
+pub(super) fn chr_literal(e: &crate::ast::Expr) -> Option<i64> {
+    match e.kind {
+        ExprKind::Bool(b) => Some(i64::from(b)),
+        _ => int_literal(e),
+    }
+}
+
+/// Why `chr(n)` of the literal `n` can only fail, if it does: out of
+/// range, or a surrogate, which a `str` cannot hold (D56).
+pub(super) fn chr_refusal(n: i64) -> Option<String> {
+    if !(0..0x11_0000).contains(&n) {
+        return Some(format!(
+            "`chr` of {n} raises `ValueError: chr() arg not in range(0x110000)`"
+        ));
+    }
+    (0xd800..0xe000)
+        .contains(&n)
+        .then(|| format!("`chr` of a surrogate (U+{n:04X}): a str cannot hold one"))
 }
 
 /// `args` with a keyword argument naming `f`'s [`StdFn::keyword`]

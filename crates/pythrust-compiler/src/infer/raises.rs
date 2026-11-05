@@ -586,12 +586,11 @@ impl<'a> Cx<'_, 'a> {
         match &e.kind {
             ExprKind::Call { func, args } => {
                 args.iter().for_each(|a| self.expr(&a.value, out));
-                if matches!(&func.kind, ExprKind::Name(n) if matches!(n.as_str(), "list" | "sorted" | "set"))
-                {
+                if matches!(&func.kind, ExprKind::Name(n) if builtins::reads_results(n)) {
                     args.iter().for_each(|a| self.read(&a.value, out));
                 }
                 match &func.kind {
-                    ExprKind::Name(name) => self.call(name, args.first(), e.span, out),
+                    ExprKind::Name(name) => self.call(name, args, e.span, out),
                     ExprKind::Attr { value, attr } => {
                         self.expr(value, out);
                         let method = StdFn::file_method(&attr.name)
@@ -655,7 +654,8 @@ impl<'a> Cx<'_, 'a> {
     /// number; a module function raises what [`StdFn::raises`] says.
     /// A call may reach a builtin that a `def` shadows when the `def` may
     /// not have run yet, so both count.
-    fn call(&self, name: &str, first: Option<&Arg>, at: Span, out: &mut Raises) {
+    fn call(&self, name: &str, args: &[Arg], at: Span, out: &mut Raises) {
+        let first = args.first();
         // Only a `def` or a stub has a set; a stub's is declared.
         if let Some(set) = self.a.sets.get(name) {
             set.escapes().for_each(|e| out.add(e, at));
@@ -666,7 +666,12 @@ impl<'a> Cx<'_, 'a> {
         let parses = matches!(name, "int" | "float")
             && first
                 .is_some_and(|arg| !self.a.typed || may_be_str(self.a.types.at(arg.value.span)));
-        if parses {
+        // `chr` out of range, or `min`/`max` of an empty iterable (D56,
+        // D57); a literal `chr` argument in range cannot fail.
+        let chr =
+            name == "chr" && !first.is_some_and(|a| builtins::chr_literal(&a.value).is_some());
+        let extreme = matches!(name, "min" | "max") && args.len() == 1;
+        if parses || chr || extreme {
             out.add(ExcKind::Value, at);
         }
         if let Some(kind) = StdFn::from_name(name).and_then(StdFn::raises) {
@@ -845,6 +850,26 @@ def g(xs: list[int]) -> int raises Exception:
         assert_eq!(raises("def c(f):\n    f.close()\n", "c"), "");
         let open = "def o(p: str):\n    return open(p, \"rb\")\n";
         assert_eq!(raises(open, "o"), "OSError");
+    }
+
+    #[test]
+    fn chr_and_min_max_of_an_iterable_raise_value_error() {
+        assert_eq!(
+            raises("def c(n: int) -> str:\n    return chr(n)\n", "c"),
+            "ValueError"
+        );
+        assert_eq!(
+            raises("def c() -> str:\n    return chr(65) + chr(True)\n", "c"),
+            ""
+        );
+        let m = "def m(xs: list[int]) -> int:\n    return min(xs) + max(xs)\n";
+        assert_eq!(raises(m, "m"), "ValueError");
+        assert_eq!(
+            raises("def m(a: int, b: int) -> int:\n    return min(a, b)\n", "m"),
+            ""
+        );
+        let rest = "def r(xs: list[int]) -> int:\n    return sum(xs) + abs(xs[0]) + ord(\"a\")\n";
+        assert_eq!(raises(rest, "r"), "");
     }
 
     #[test]

@@ -1,0 +1,13 @@
+# deviation: a `sum` of floats is a float, so an empty one is `0.0` (D50); CPython gives the int `0`.
+def total(xs: list[float]) -> float:
+    return sum(xs)
+
+
+def main() -> None:
+    xs: list[float] = []
+    print(sum(xs), sum(xs) + 1)
+    print(total(xs))
+    print(sum({"a": 1.5}.values()) - 1.5)
+
+
+main()

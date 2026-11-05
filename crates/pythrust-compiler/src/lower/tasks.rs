@@ -363,7 +363,7 @@ impl<'a> FnBuilder<'_, 'a> {
     /// A loop taking each of `map`'s results left in `rs`, of type
     /// `item`, and running `step` on it as one statement; a condition
     /// `step` gives ends the loop when true.
-    fn take_each(
+    pub(super) fn take_each(
         &mut self,
         rs: Operand,
         item: Ty,

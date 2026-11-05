@@ -1,0 +1,5 @@
+# deviation: `min`/`max` of mixed int, float and bool arguments is a compile error, where CPython returns whichever object wins (D57).
+# expect-exit: 1
+# expect-error: `min` of int and float: convert with `float(...)`
+
+print(min(1, 2.5))

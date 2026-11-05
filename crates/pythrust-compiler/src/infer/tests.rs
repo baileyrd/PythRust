@@ -2430,3 +2430,60 @@ fn a_redefined_class_refuses_calls_to_stubs_that_raise_it() {
         );
     }
 }
+
+#[test]
+fn reducing_builtins_type_their_results() {
+    let ret = |body: &str| ret_of(&format!("def f():\n    return {body}\n"));
+    assert_eq!(ret("abs(-2)"), "int");
+    assert_eq!(ret("abs(-2.5)"), "float");
+    assert_eq!(ret("abs(True)"), "int");
+    assert_eq!(ret("ord(\"é\")"), "int");
+    assert_eq!(ret("chr(233)"), "str");
+    assert_eq!(ret("chr(True)"), "str");
+    assert_eq!(ret("sum([1, 2])"), "int");
+    assert_eq!(ret("sum([1.5], 0.5)"), "float");
+    assert_eq!(ret("sum([True, False])"), "int");
+    assert_eq!(ret("sum({1: 2}, start=3)"), "int");
+    assert_eq!(ret("sum(range(4))"), "int");
+    assert_eq!(ret("min([2, 1])"), "int");
+    assert_eq!(ret("max(\"héllo\")"), "str");
+    assert_eq!(ret("min(1, 2, 3)"), "int");
+    assert_eq!(ret("max((1.5, 2.5))"), "float");
+    assert_eq!(ret("max([(1, \"a\")])"), "tuple[int, str]");
+    assert_eq!(ret("any([0, 1])"), "bool");
+    assert_eq!(ret("all([\"\", \"a\"])"), "bool");
+    assert_eq!(ret("all({1: 2}.values())"), "bool");
+}
+
+#[test]
+fn reducing_builtins_refuse_what_cannot_be_typed() {
+    let cases = [
+        ("print(abs(\"a\"))\n", "bad operand type for abs(): str"),
+        ("print(ord(1))\n", "argument of `ord`"),
+        ("print(ord(\"ab\"))\n", "`ord` of a string of length 2 raises `TypeError: ord() expected a character, but string of length 2 found`"),
+        ("print(ord(\"\"))\n", "string of length 0 found"),
+        ("print(chr(\"a\"))\n", "argument of `chr`"),
+        ("print(chr(1114112))\n", "`chr` of 1114112 raises `ValueError: chr() arg not in range(0x110000)`"),
+        ("print(chr(-1))\n", "`chr` of -1 raises `ValueError: chr() arg not in range(0x110000)`"),
+        ("print(chr(55296))\n", "`chr` of a surrogate (U+D800): a str cannot hold one"),
+        ("print(sum([\"a\"]))\n", "sum() can't sum strings [use ''.join(seq) instead]"),
+        ("print(sum([[1]]))\n", "`sum` of list[int] is not supported yet"),
+        ("print(sum([(1,)]))\n", "`sum` of tuple[int] is not supported yet"),
+        ("print(sum([1.5], 0))\n", "`start` of `sum` must be a float, such as `0.0`"),
+        ("print(sum([1], 0, 1))\n", "`sum` takes 1 to 2 arguments"),
+        ("print(sum(start=[1, 2]))\n", "`sum` needs its iterable before `start=`"),
+        ("print(min([1], key=abs))\n", "`key=` of `min` is not supported yet"),
+        ("print(max([1], default=0))\n", "`default=` of `max` is not supported yet"),
+        ("print(min(1, 2.5))\n", "`min` of int and float: convert with `float(...)`"),
+        ("print(max(True, 2))\n", "`max` of bool and int: convert with `float(...)`"),
+        ("print(max(\"a\", 1))\n", "argument of `max`"),
+        ("print(min())\n", "`min` takes"),
+        ("print(min([{1}]))\n", "cannot order set[int] against set[int]"),
+        ("print(any(1))\n", "int"),
+        ("print(all([1], [2]))\n", "`all` takes 1 arguments"),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src:?}: {got}");
+    }
+}

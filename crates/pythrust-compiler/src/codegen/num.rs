@@ -146,7 +146,7 @@ impl FnGen<'_, '_, '_> {
 
     /// Like `fail_if`, for a `message` with a [`MID`] that `mid` fills at
     /// run time with a new string. The rest is rendered now.
-    fn fail_mid_if(
+    pub(super) fn fail_mid_if(
         &mut self,
         cond: Value,
         span: Span,

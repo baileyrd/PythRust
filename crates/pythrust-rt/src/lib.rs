@@ -23,6 +23,7 @@
 
 pub mod abi;
 pub mod exc;
+pub mod fsum;
 pub mod num;
 pub mod obj;
 pub mod os;

@@ -1,0 +1,4 @@
+55295
+chr() arg is a surrogate, which a str cannot hold
+chr() arg is a surrogate, which a str cannot hold
+57344

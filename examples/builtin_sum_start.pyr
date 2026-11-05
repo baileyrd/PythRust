@@ -1,0 +1,5 @@
+# deviation: `sum`'s `start` must have the result's type, where CPython accepts an int start for floats (D57).
+# expect-exit: 1
+# expect-error: `start` of `sum` must be a float, such as `0.0`
+
+print(sum([1.5, 2.5], 0))

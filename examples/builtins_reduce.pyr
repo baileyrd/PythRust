@@ -1,0 +1,66 @@
+# `abs`, `ord`, `chr`, `sum`, `min`, `max`, `any` and `all` (D56, D57),
+# over every iterable `for` takes, with non-ASCII text: `chr` and an
+# empty `min`/`max` raise `ValueError`, caught after a direct call, from
+# a tempered function that declares it, and after `map`'s results.
+import concurrent.futures
+
+
+temper def letter(n: int) -> str raises ValueError:
+    return chr(n)
+
+
+def square(x: int) -> int:
+    if x == 3:
+        raise ValueError("three")
+    return x * x
+
+
+def marker() -> int:
+    print("start evaluated")
+    return 0
+
+
+def main() -> None:
+    print(abs(-3), abs(2.5), abs(-0.0), abs(True), abs(-9223372036854775807))
+    word = "héllo, 世界"
+    print(ord("é"), ord(word[7]), ord("\U0001f600"), chr(233), chr(19990), letter(128512))
+    total = 0
+    for c in word:
+        total += ord(c)
+    print(total, chr(True) == "\x01", chr(0) == "\x00")
+    print(sum([1, 2, 3]), sum([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]))
+    print(sum([True, True, False]), sum([], 0.5), sum(range(5), 10), sum({1: "a", 2: "b"}))
+    print(sum((1.5, 2.5), start=1.0), sum([1e100, 1.0, -1e100, 1.0]), sum([1.0, float("inf")]))
+    print(sum({"a": 2.5, "b": 0.5}.values()), sum({7, 8}))
+    print(min([3, 1, 2]), max(word), min(word), min(2, 1, 3), max(1.5, -2.5))
+    print(min(["b", "a", "é"]), max({3, 9, 1}), max([(1, "b"), (1, "c")]), min(range(3, 9)))
+    print(max([float("nan"), 1.0]), max([1.0, float("nan")]), min({"k": 1, "a": 2}))
+    print(max(["ab", "aé", "a"]), min("世界"), max({"x": 1}.keys()), min([[2], [1, 5]]))
+    print(any([0, 0, 1]), all([1, 1, 0]), any([]), all([]), any("ab"), all(["a", ""]))
+    print(any({0: 1}), all(range(1, 4)), any([[], [0]]), all({1: 2}.values()), any(range(0)))
+    print(any(range(1, 1000000000000)), all(range(1000000000000)), any("ab" * 1), all(["", "x"]))
+    print(sum(range(3000000)), min(range(3000000, 0, -1)), max(range(3000000)))
+    for n in [65, 1114111, -1, 1114112]:
+        try:
+            print(letter(n) == chr(n), ord(letter(n)))
+        except ValueError as e:
+            print("chr:", e)
+    for xs in [[2, 1], []]:
+        try:
+            print(min(xs), max(xs))
+        except ValueError as e:
+            print("min/max:", e)
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print(sum(ex.map(square, [1, 2])), max(ex.map(square, [1, 2])))
+        print(any(ex.map(square, [1, 3])), all(ex.map(square, [0, 3])))
+        try:
+            print(any(ex.map(square, [0, 3, 1])))
+        except ValueError as e:
+            print("any:", e)
+        try:
+            print(sum(ex.map(square, [3]), marker()))
+        except ValueError as e:
+            print("sum:", e)
+
+
+main()

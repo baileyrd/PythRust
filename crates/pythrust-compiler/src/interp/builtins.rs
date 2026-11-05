@@ -1,13 +1,14 @@
 //! The closed set of builtins: `print len list set sorted range str int
-//! float bool`,
+//! float bool abs ord chr sum min max any all`,
 //! and the builtin exceptions, which build an exception value when called.
 
 use std::io::Write;
 use std::rc::Rc;
 
+use super::ops::overflow;
 use super::table::{Key, Table};
 use super::value::{compare, str_repr, Exc, ExcArg, Num, Range, Value};
-use super::{raised, rt_err, Exec};
+use super::{fsum, raised, rt_err, tasks, text, Exec};
 use crate::ast::{CmpOp, Ident};
 use crate::diag::Result;
 use crate::exc::ExcKind;
@@ -26,6 +27,14 @@ pub(super) enum Builtin {
     Int,
     Float,
     Bool,
+    Abs,
+    Ord,
+    Chr,
+    Sum,
+    Min,
+    Max,
+    Any,
+    All,
     Exception(ExcKind),
     /// A module function; the interpreter calls it (`Interp::std`).
     Std(StdFn),
@@ -51,6 +60,14 @@ impl Builtin {
             "int" => Builtin::Int,
             "float" => Builtin::Float,
             "bool" => Builtin::Bool,
+            "abs" => Builtin::Abs,
+            "ord" => Builtin::Ord,
+            "chr" => Builtin::Chr,
+            "sum" => Builtin::Sum,
+            "min" => Builtin::Min,
+            "max" => Builtin::Max,
+            "any" => Builtin::Any,
+            "all" => Builtin::All,
             _ => {
                 if let Some(f) = StdFn::from_name(name) {
                     return Some(Builtin::Std(f));
@@ -72,6 +89,14 @@ impl Builtin {
             Builtin::Int => "int",
             Builtin::Float => "float",
             Builtin::Bool => "bool",
+            Builtin::Abs => "abs",
+            Builtin::Ord => "ord",
+            Builtin::Chr => "chr",
+            Builtin::Sum => "sum",
+            Builtin::Min => "min",
+            Builtin::Max => "max",
+            Builtin::Any => "any",
+            Builtin::All => "all",
             Builtin::Exception(kind) => kind.name(),
             Builtin::Std(f) => f.name(),
         }
@@ -89,7 +114,7 @@ impl Builtin {
 /// Calls a builtin. `print` is the only one that writes to `out`; `int`
 /// and `float` of a malformed string raise a catchable `ValueError`.
 pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<'m, Value<'m>> {
-    if b != Builtin::Print {
+    if !matches!(b, Builtin::Print | Builtin::Sum) {
         reject_keywords(b.name(), &args)?;
     }
     let (pos, span) = (args.positional.as_slice(), args.span);
@@ -108,6 +133,32 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
         }
         Builtin::Bool => Value::Bool(opt(b, pos, span)?.is_some_and(Value::truthy)),
         Builtin::Print => print(&args, out)?,
+        Builtin::Abs => abs(one(b, pos, span)?, span)?,
+        Builtin::Ord => {
+            let Value::Str(s) = one(b, pos, span)? else {
+                return Err(rt_err(span, "TypeError: ord() expects a str".to_string()).into());
+            };
+            let code = text::ord(s).map_err(|n| rt_err(span, text::ord_message(n)))?;
+            Value::Int(i64::from(code))
+        }
+        Builtin::Chr => {
+            let n = one(b, pos, span)?.int().unwrap_or(-1);
+            let c = text::chr(n).map_err(|msg| raised(ExcKind::Value, msg.to_string(), span))?;
+            Value::str(&c.to_string())
+        }
+        Builtin::Sum => sum(&args)?,
+        Builtin::Min | Builtin::Max => extreme(b, pos, span)?,
+        Builtin::Any | Builtin::All => {
+            let any = b == Builtin::Any;
+            let decided = match one(b, pos, span)? {
+                Value::Results(r) => tasks::decide(r, any)?,
+                v => {
+                    let mut items = v.iter(span)?;
+                    items.any(|x| x.truthy() == any) == any
+                }
+            };
+            Value::Bool(decided)
+        }
         Builtin::Exception(kind) => {
             let arg = ExcArg::of(opt(b, pos, span)?.cloned());
             Value::Exc(Rc::new(Exc { kind, arg }))
@@ -117,6 +168,91 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
             return Err(rt_err(span, msg).into());
         }
     })
+}
+
+/// `abs(x)` of an int, float or bool; `abs(i64::MIN)` overflows, as
+/// `-i64::MIN` does.
+fn abs<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
+    match v.num() {
+        Some(Num::Int(i)) => i
+            .checked_abs()
+            .map(Value::Int)
+            .ok_or_else(|| overflow(span)),
+        Some(Num::Float(f)) => Ok(Value::Float(f.abs())),
+        None => Err(rt_err(
+            span,
+            "TypeError: bad operand type for abs()".to_string(),
+        )),
+    }
+}
+
+/// `sum(xs, start=0)`: ints and bools total as a checked int, floats as
+/// CPython's compensated sum (D57).
+fn sum<'m>(args: &Args<'m>) -> Result<Value<'m>> {
+    let span = args.span;
+    if let Some((name, _)) = args.keywords.iter().find(|(n, _)| n.name != "start") {
+        let msg = format!(
+            "TypeError: sum() got an unexpected keyword argument '{}'",
+            name.name
+        );
+        return Err(rt_err(name.span, msg));
+    }
+    let start = args.keywords.first().map(|(_, v)| v);
+    let (xs, start) = match (args.positional.as_slice(), start) {
+        ([xs], start) | ([xs, _], start @ None) => (xs, start.or(args.positional.get(1))),
+        _ => return Err(arity_error(Builtin::Sum, 1, 2, args.positional.len(), span)),
+    };
+    // Items are read one at a time, so a large range needs no memory. As
+    // CPython's, an int total turns float at the first float item.
+    let mut items = xs.iter(span)?;
+    let mut total = match start {
+        Some(Value::Float(f)) => return Ok(Value::Float(float_sum(*f, items))),
+        Some(v) => v.int().unwrap_or(0),
+        None => 0,
+    };
+    while let Some(x) = items.next() {
+        if let Value::Float(f) = x {
+            let rest = std::iter::once(Value::Float(f)).chain(items);
+            return Ok(Value::Float(float_sum(total as f64, rest)));
+        }
+        let x = x
+            .int()
+            .ok_or_else(|| rt_err(span, "TypeError: sum() of a non-number".to_string()))?;
+        total = total.checked_add(x).ok_or_else(|| overflow(span))?;
+    }
+    Ok(Value::Int(total))
+}
+
+/// CPython's compensated float sum of `xs` from `start`.
+fn float_sum<'m>(start: f64, xs: impl Iterator<Item = Value<'m>>) -> f64 {
+    fsum::fsum(start, xs.filter_map(|x| x.num()).map(Num::float))
+}
+
+/// `min` or `max` of an iterable, or of two or more arguments: the
+/// first item no later one beats, as CPython keeps (D57). An empty
+/// iterable raises a catchable `ValueError`.
+fn extreme<'m>(b: Builtin, args: &[Value<'m>], span: Span) -> Exec<'m, Value<'m>> {
+    // An iterable is read one item at a time, so a large range needs no
+    // memory.
+    let mut items: Box<dyn Iterator<Item = Value<'m>> + '_> = match args {
+        [xs] => Box::new(xs.iter(span)?),
+        _ => Box::new(args.iter().cloned()),
+    };
+    let op = if b == Builtin::Min {
+        CmpOp::Lt
+    } else {
+        CmpOp::Gt
+    };
+    let Some(mut best) = items.next() else {
+        let msg = format!("{}() iterable argument is empty", b.name());
+        return Err(raised(ExcKind::Value, msg, span));
+    };
+    for x in items {
+        if compare(op, &x, &best, span)? {
+            best = x;
+        }
+    }
+    Ok(best)
 }
 
 fn reject_keywords(func: &str, args: &Args) -> Result<()> {

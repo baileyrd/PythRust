@@ -412,6 +412,48 @@ pub unsafe extern "C" fn pt_str_case(s: *const PtStr, upper: u8) -> *mut PtStr {
     into_ptr(PtStr::new(text::case(s, upper != 0).into()))
 }
 
+/// `ord(s)`: the code point of a one-character `s`, or, for any other
+/// length `n`, `-(n + 1)`, for which generated code stops the program
+/// with CPython's `TypeError` message (D56).
+///
+/// # Safety
+///
+/// `s` is a live string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_ord(s: *const PtStr) -> i64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { borrow(s).text() };
+    match text::ord(s) {
+        Ok(code) => i64::from(code),
+        Err(n) => -as_int(n) - 1,
+    }
+}
+
+/// `chr(n)`: a new one-character string; out of range or a surrogate
+/// raises `ValueError` at the site, giving null (D56).
+///
+/// # Safety
+///
+/// The site's words, as [`crate::os::site`] takes them.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_chr(
+    n: i64,
+    head: *const u8,
+    head_len: usize,
+    tail: *const u8,
+    tail_len: usize,
+) -> *mut PtStr {
+    match text::chr(n) {
+        Ok(c) => into_ptr(PtStr::new(c.to_string().into())),
+        Err(msg) => {
+            // SAFETY: guaranteed by the caller.
+            let site = unsafe { crate::os::site(head, head_len, tail, tail_len) };
+            site.raise_text(crate::exc::VALUE_ERROR, msg.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// `sep.join(xs)` of a `list[str]`: a new string.
 ///
 /// # Safety

@@ -36,7 +36,7 @@ use crate::ast::{Block, FuncDef, Module, StmtKind, StubDef, TypeExpr};
 use crate::diag::{DiagKind, Diagnostic, Result, Warning};
 use crate::span::Span;
 
-pub use builtins::is_builtin;
+pub use builtins::{is_builtin, reads_results};
 pub use raises::Raises;
 use solve::{Constraint, Need};
 use subst::Subst;

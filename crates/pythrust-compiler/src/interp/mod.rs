@@ -9,6 +9,8 @@
 //! Runtime errors).
 
 mod builtins;
+#[path = "../../../pythrust-rt/src/fsum.rs"]
+mod fsum;
 mod methods;
 mod ops;
 mod stdlib;
@@ -654,10 +656,17 @@ impl<'m> Interp<'m, '_> {
             keywords: Vec::new(),
             span,
         };
-        for arg in args {
-            let v = match self.eval(&arg.value)? {
-                // `list`, `sorted` or `set` of `map`'s results.
-                Value::Results(r) => tasks::drain(&r)?,
+        // Every argument is evaluated before any is consumed, as in CPython.
+        let values = args
+            .iter()
+            .map(|arg| self.eval(&arg.value))
+            .collect::<Exec<'m, Vec<Value<'m>>>>()?;
+        // `any` and `all` take `map`'s results until one decides.
+        let decides = matches!(callee, Value::Builtin(Builtin::Any | Builtin::All));
+        for (arg, v) in args.iter().zip(values) {
+            let v = match v {
+                // `list`, `sorted`, `set`, `sum`, `min` or `max` of `map`'s results.
+                Value::Results(r) if !decides => tasks::drain(&r)?,
                 v => v,
             };
             self.tag(&v, arg.value.span);
@@ -671,6 +680,7 @@ impl<'m> Interp<'m, '_> {
                 self.tag(on, value.span);
             }
         }
+        let sum = matches!(callee, Value::Builtin(Builtin::Sum));
         let out = match callee {
             Value::Func(f) => self.call_func(f, evaluated)?,
             Value::Builtin(Builtin::Std(f)) => self.std(f, &evaluated)?,
@@ -682,7 +692,21 @@ impl<'m> Interp<'m, '_> {
             }
         };
         self.tag(&out, span);
-        Ok(out)
+        match sum {
+            true => Ok(self.float_sum(out, span)),
+            false => Ok(out),
+        }
+    }
+
+    /// The `sum` at `span` as its type: an empty one typed `float` is
+    /// `0.0` (D50). In generic code the node leaves the type open, so
+    /// an empty one stays the int `0`, as in CPython; `build` refuses
+    /// that `sum` rather than differ (D59).
+    fn float_sum(&self, v: Value<'m>, span: Span) -> Value<'m> {
+        match (v, self.types.at(span)) {
+            (Value::Int(n), Some(Type::Float)) => Value::Float(n as f64),
+            (v, _) => v,
+        }
     }
 
     fn call_func(&mut self, func: Rc<Func<'m>>, args: Args<'m>) -> Exec<'m, Value<'m>> {

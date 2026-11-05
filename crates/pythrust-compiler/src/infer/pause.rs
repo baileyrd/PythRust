@@ -103,7 +103,7 @@ fn wait(e: &Expr, pausing: &BTreeSet<&str>, types: &Types) -> Option<String> {
                 future.then(|| "`result()`".to_string())
             }
             ExprKind::Name(n) if pausing.contains(n.as_str()) => Some(format!("calling `{n}`")),
-            ExprKind::Name(n) if matches!(n.as_str(), "list" | "sorted" | "set") => {
+            ExprKind::Name(n) if super::builtins::reads_results(n) => {
                 let reads = args.iter().any(|a| results(&a.value, types));
                 reads.then(|| format!("`{n}` of `map`'s results"))
             }

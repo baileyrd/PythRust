@@ -13,6 +13,7 @@ mod faults;
 mod globals;
 mod hold;
 mod opt;
+mod reduce;
 mod seq;
 mod stmt;
 mod table;

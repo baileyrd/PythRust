@@ -312,15 +312,16 @@ impl<'a> Body<'a> {
     }
 
     /// No call takes one, but the methods that make and take them,
-    /// `append` to a local list, and the builtins `len`, `list`, `sorted`
-    /// and `set` (not a `def` of that name), which read them where they are.
+    /// `append` to a local list, and `len` and the builtins that read
+    /// them ([`super::builtins::reads_results`], not a `def` of that
+    /// name), which read them where they are.
     fn call(&self, e: &Expr) -> Result<()> {
         let ExprKind::Call { func, args } = &e.kind else {
             return Ok(());
         };
         let (callee, checked) = match &func.kind {
             ExprKind::Name(n)
-                if matches!(n.as_str(), "len" | "list" | "sorted" | "set")
+                if (n == "len" || super::builtins::reads_results(n))
                     && !self.defs.contains(n.as_str()) =>
             {
                 return Ok(())

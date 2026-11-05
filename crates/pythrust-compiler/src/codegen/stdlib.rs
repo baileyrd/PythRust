@@ -3,6 +3,7 @@
 //! raises at `span`'s site and gives a placeholder; lowering tests the
 //! flag next. Also calls to Rust bindings' shims ([`crate::interop`]).
 
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{types, AbiParam, InstBuilder, Value};
 use cranelift_module::{Linkage, Module};
 
@@ -12,6 +13,10 @@ use crate::interop::gen::symbol;
 use crate::ir::{LocalId, Operand, Ty};
 use crate::span::Span;
 use crate::stdlib::StdFn;
+
+/// The head of the fault `ord` of a string of length other than 1
+/// gives, before the length (D56).
+const ORD_HEAD: &str = "TypeError: ord() expected a character, but string of length ";
 
 impl FnGen<'_, '_, '_> {
     /// `f`'s result, of type `ty`, from `args`. Lowering gave `os.listdir`
@@ -90,6 +95,21 @@ impl FnGen<'_, '_, '_> {
                 let upper = self.flag(f == StdFn::Upper);
                 self.call_rt_value(Rt::StrCase, &[*s, upper])
             }
+            (StdFn::Ord, [s]) => {
+                let code = self.call_rt_value(Rt::StrOrd, &[*s])?;
+                let bad = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, code, 0);
+                let message = format!("{}\0 found", ORD_HEAD);
+                self.fail_mid_if(bad, span, &message, |g| {
+                    let n = g.b.ins().bnot(code);
+                    g.call_rt_value(Rt::StrFromInt, &[n])
+                })?;
+                Ok(code)
+            }
+            (StdFn::Chr, [n]) => {
+                let site = self.site(span)?;
+                self.call_rt_value(Rt::StrChr, &[[*n].as_slice(), &site].concat())
+            }
+            (StdFn::FloatSum, [xs, start]) => self.call_rt_value(Rt::SeqFsum, &[*xs, *start]),
             (StdFn::Close, [f]) => {
                 self.call_rt(Rt::FileClose, &[*f]);
                 Ok(self.b.ins().iconst(types::I8, 0))
