@@ -7,7 +7,7 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{types, AbiParam, InstBuilder, Value};
 use cranelift_module::{Linkage, Module};
 
-use super::{backend, module_err, FnGen, Rt};
+use super::{backend, foreign_param, module_err, FnGen, Rt};
 use crate::diag::Result;
 use crate::interop::gen::symbol;
 use crate::ir::{LocalId, Operand, Ty};
@@ -135,11 +135,11 @@ impl FnGen<'_, '_, '_> {
         let mut sig = self.cg.module.make_signature();
         for a in args {
             sig.params
-                .push(AbiParam::new(self.cg.clif_ty(self.func.ty(*a))));
+                .push(foreign_param(self.cg.clif_ty(self.func.ty(*a))));
         }
         sig.params.extend([AbiParam::new(self.cg.ptr); 4]);
         sig.returns
-            .push(AbiParam::new(self.cg.clif_ty(self.func.locals[dest.0])));
+            .push(foreign_param(self.cg.clif_ty(self.func.locals[dest.0])));
         let id = self
             .cg
             .module
