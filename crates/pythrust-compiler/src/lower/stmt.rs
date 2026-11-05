@@ -30,6 +30,24 @@ pub(super) enum Looped<'s> {
         exec: Option<Operand>,
         span: Span,
     },
+    /// An `enumerate(...)` or `zip(...)` that a builtin reads: appends
+    /// each item to `out`, or only the first where `first`
+    /// ([`FnBuilder::collect_zip`]).
+    Collect {
+        out: LocalId,
+        first: bool,
+        span: Span,
+    },
+    /// An `enumerate(...)` or `zip(...)` that `min` (`Lt`) or `max`
+    /// (`Gt`) reads, or `all` (`None`), stepped without collecting:
+    /// `best` keeps the item no later one beats, once `seen` is true
+    /// ([`FnBuilder::fold_zip`]).
+    Fold {
+        op: Option<CmpOp>,
+        best: LocalId,
+        seen: LocalId,
+        span: Span,
+    },
 }
 
 /// A generic function's result type that no `return` decides first.
@@ -344,6 +362,9 @@ impl FnBuilder<'_, '_> {
             orelse,
             takes,
         };
+        if let Some(z) = self.zip_of(iter)? {
+            return self.for_zip(&looped, &z);
+        }
         if let Some(args) = self.range_args(iter) {
             let mut ops = Vec::new();
             for a in args {
@@ -415,7 +436,7 @@ impl FnBuilder<'_, '_> {
             // bound and keeps whatever it held; only `else` runs.
             return match l {
                 Looped::For { orelse, .. } => self.block(orelse),
-                Looped::Map { .. } => Ok(()),
+                Looped::Map { .. } | Looped::Collect { .. } | Looped::Fold { .. } => Ok(()),
             };
         }
         let item = match self.ty(s) {
@@ -524,6 +545,33 @@ impl FnBuilder<'_, '_> {
                         Some(exec) => b.native_map_item(f, *out, *exec, x, *span),
                         None => b.map_item(f, *out, x, *span),
                     }
+                })?;
+                self.terminate(Term::Goto(latch));
+                Ok(())
+            }
+            Looped::Collect { out, first, span } => {
+                self.pooled_stmt(|b| {
+                    let value = next(b)?;
+                    let list = Operand::Local(*out);
+                    let span = *span;
+                    b.emit(Inst::Append { list, value, span });
+                    Ok(())
+                })?;
+                self.terminate(Term::Goto(if *first { end } else { latch }));
+                Ok(())
+            }
+            Looped::Fold {
+                op,
+                best,
+                seen,
+                span,
+            } => {
+                self.pooled_stmt(|b| {
+                    let x = next(b)?;
+                    if let Some(op) = op {
+                        b.keep_best(*op, *best, *seen, x, *span);
+                    }
+                    Ok(())
                 })?;
                 self.terminate(Term::Goto(latch));
                 Ok(())

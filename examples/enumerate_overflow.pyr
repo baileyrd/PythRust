@@ -1,0 +1,5 @@
+# deviation: ints are i64, so an `enumerate` index past `i64::MAX` overflows when its item is produced (D58); CPython has bigints.
+# expect-exit: 1
+for i, x in enumerate(["a", "b"], 9223372036854775807):
+    print(i, x)
+print("unreachable")

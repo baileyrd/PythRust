@@ -179,6 +179,9 @@ struct Checker {
     /// Rust binding functions that raise a class the program redefines,
     /// with that class's name.
     stub_redefined: HashMap<String, String>,
+    /// The `enumerate(...)` or `zip(...)` call being checked where it is
+    /// consumed directly (D51): anywhere else it is not a value yet.
+    consumed: Option<Span>,
 }
 
 impl Checker {

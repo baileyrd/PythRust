@@ -1,0 +1,80 @@
+# `enumerate` and `zip` (D51, D58), consumed directly: as a `for`'s
+# iterable, as the argument of the builtins that read every item, and
+# nested in each other. They step lazily in CPython's order, so a body
+# that appends to a list extends the loop, and `zip` takes a task's
+# result before it finds a shorter argument exhausted.
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    if x == 3:
+        raise ValueError("three")
+    return x * x
+
+
+def main() -> None:
+    word = "héllo, 世界"
+    for i, c in enumerate(word):
+        print(i, c)
+    for i, c in enumerate("ab", 10):
+        print(i, c)
+    for i, c in enumerate("ab", start=True):
+        print(i, c)
+    for i, n in enumerate(["a"], 9223372036854775807):
+        print(i, n)
+    print(list(enumerate({"k": 1, "é": 2})), list(enumerate({7})), list(enumerate(range(3, 0, -1))))
+    print(list(enumerate((1.5, 2.5))), list(enumerate({"x": 1}.items())), list(enumerate("")))
+    print(list(zip([1, 2, 3], "ab")), list(zip()), list(zip(range(2))), list(zip("ab", "cd", "ef")))
+    print(list(zip({1: "a"}.values(), {True})), sorted(zip([3, 1, 2], "xyz")), set(zip("aa", "bb")))
+    print(min(zip([2, 1], "ab")), max(enumerate("ba")), any(zip()), any(enumerate("a")), all(zip([0], [0])))
+    print(sum(range(3)), list(enumerate(zip("ab", [1, 2]))), list(zip(enumerate("xy"), zip("é"))))
+    for i, (a, b) in enumerate(zip("ab", [True, False]), 1):
+        print(i, a, b)
+    xs = [1, 2]
+    for i, x in enumerate(xs):
+        if i < 3:
+            xs.append(x * 10)
+    print(xs)
+    ys = [1]
+    for p, q in zip(ys, range(4)):
+        ys.append(p + q)
+    print(ys)
+    for p, q in zip([1, 2, 3], [4, 5, 6]):
+        if p == 2:
+            break
+        print(p, q)
+    else:
+        print("no break")
+    for p, q in zip([1], [0]):
+        print(p, q)
+    for p, q in zip([1], []):
+        print(p, q)
+    else:
+        print("empty else")
+    for w, m in zip(["x", "y"], [1.5]):
+        print(w, m)
+    print(list(zip(["x", "y"], [1])), list(zip([1], ["x", "y"])))
+    for p, q in zip([1], []):
+        print(p, q)
+    else:
+        print("empty else")
+    total = 0
+    for i, w in enumerate(["x", "yy", "zzz"]):
+        total += i * len(w)
+    print(total)
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        for i, r in enumerate(ex.map(square, [1, 2])):
+            print(i, r)
+        print(list(zip(ex.map(square, [1, 2]), "a")))
+        try:
+            print(list(zip(ex.map(square, [1, 3]), "a")))
+        except ValueError as e:
+            print("zip:", e)
+        print(any(enumerate(ex.map(square, [1, 3]))))
+        try:
+            print(all(enumerate(ex.map(square, [1, 3]))))
+        except ValueError as e:
+            print("all:", e)
+
+
+main()

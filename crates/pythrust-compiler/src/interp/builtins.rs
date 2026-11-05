@@ -1,5 +1,5 @@
 //! The closed set of builtins: `print len list set sorted range str int
-//! float bool abs ord chr sum min max any all`,
+//! float bool abs ord chr sum min max any all enumerate zip`,
 //! and the builtin exceptions, which build an exception value when called.
 
 use std::io::Write;
@@ -35,6 +35,9 @@ pub(super) enum Builtin {
     Max,
     Any,
     All,
+    /// `enumerate` and `zip`: the interpreter steps them (`Interp::lazy`).
+    Enumerate,
+    Zip,
     Exception(ExcKind),
     /// A module function; the interpreter calls it (`Interp::std`).
     Std(StdFn),
@@ -68,6 +71,8 @@ impl Builtin {
             "max" => Builtin::Max,
             "any" => Builtin::Any,
             "all" => Builtin::All,
+            "enumerate" => Builtin::Enumerate,
+            "zip" => Builtin::Zip,
             _ => {
                 if let Some(f) = StdFn::from_name(name) {
                     return Some(Builtin::Std(f));
@@ -97,6 +102,8 @@ impl Builtin {
             Builtin::Max => "max",
             Builtin::Any => "any",
             Builtin::All => "all",
+            Builtin::Enumerate => "enumerate",
+            Builtin::Zip => "zip",
             Builtin::Exception(kind) => kind.name(),
             Builtin::Std(f) => f.name(),
         }
@@ -163,8 +170,8 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
             let arg = ExcArg::of(opt(b, pos, span)?.cloned());
             Value::Exc(Rc::new(Exc { kind, arg }))
         }
-        Builtin::Std(f) => {
-            let msg = format!("internal: `{}` needs the interpreter", f.name());
+        Builtin::Std(_) | Builtin::Enumerate | Builtin::Zip => {
+            let msg = format!("internal: `{}` needs the interpreter", b.name());
             return Err(rt_err(span, msg).into());
         }
     })
@@ -238,16 +245,25 @@ fn extreme<'m>(b: Builtin, args: &[Value<'m>], span: Span) -> Exec<'m, Value<'m>
         [xs] => Box::new(xs.iter(span)?),
         _ => Box::new(args.iter().cloned()),
     };
+    extreme_of(b, || Ok(items.next()), span)
+}
+
+/// `min` or `max` (`b`) of the items `next` gives one at a time.
+pub(super) fn extreme_of<'m>(
+    b: Builtin,
+    mut next: impl FnMut() -> Exec<'m, Option<Value<'m>>>,
+    span: Span,
+) -> Exec<'m, Value<'m>> {
     let op = if b == Builtin::Min {
         CmpOp::Lt
     } else {
         CmpOp::Gt
     };
-    let Some(mut best) = items.next() else {
+    let Some(mut best) = next()? else {
         let msg = format!("{}() iterable argument is empty", b.name());
         return Err(raised(ExcKind::Value, msg, span));
     };
-    for x in items {
+    while let Some(x) = next()? {
         if compare(op, &x, &best, span)? {
             best = x;
         }

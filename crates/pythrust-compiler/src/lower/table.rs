@@ -24,7 +24,7 @@ pub(super) enum Part {
 }
 
 /// The `RuntimeError` a `for` over a table whose size changed ends with.
-fn changed_size(ty: Ty) -> &'static str {
+pub(super) fn changed_size(ty: Ty) -> &'static str {
     match ty {
         Ty::Set(_) => "RuntimeError: Set changed size during iteration",
         _ => "RuntimeError: dictionary changed size during iteration",
@@ -319,7 +319,13 @@ impl FnBuilder<'_, '_> {
     }
 
     /// `part` of entry `i` of dict or set `t`, a new temporary.
-    fn entry(&mut self, t: Operand, i: Operand, part: Part, span: Span) -> Result<Operand> {
+    pub(super) fn entry(
+        &mut self,
+        t: Operand,
+        i: Operand,
+        part: Part,
+        span: Span,
+    ) -> Result<Operand> {
         let ty = self.ty(t);
         let (key, value) = match ty {
             Ty::Dict(_) => self.key_value(ty, span)?,

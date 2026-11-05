@@ -1,0 +1,7 @@
+# deviation: `enumerate(...)` is accepted only where it is consumed directly (D51, D58); CPython makes it an iterator value.
+# expect-exit: 1
+# expect-error: `enumerate(...)` is not a value yet; use `list(enumerate(...))`
+
+pairs = enumerate(["a", "b"])
+for i, x in pairs:
+    print(i, x)

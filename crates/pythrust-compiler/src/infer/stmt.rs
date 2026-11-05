@@ -82,7 +82,7 @@ impl Checker {
                 body,
                 orelse,
             } => {
-                let iterable = self.expr(iter)?;
+                let iterable = self.consumed(iter)?;
                 let elem = self.subst.fresh();
                 let need = Need::Iter {
                     iterable,

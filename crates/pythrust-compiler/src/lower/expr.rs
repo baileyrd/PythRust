@@ -538,6 +538,11 @@ impl<'a> FnBuilder<'_, 'a> {
             let ty = self.ty_at(span)?;
             return Ok(Operand::Local(self.new_local(ty)));
         }
+        if def.is_none() {
+            if let Some(op) = self.zip_builtin(name, args, span)? {
+                return Ok(op);
+            }
+        }
         // Python evaluates arguments as written, then binds them.
         let mut ops = Vec::new();
         for a in args {

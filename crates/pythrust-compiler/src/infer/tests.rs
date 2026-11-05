@@ -2487,3 +2487,89 @@ fn reducing_builtins_refuse_what_cannot_be_typed() {
         assert!(got.contains(want), "{src:?}: {got}");
     }
 }
+
+#[test]
+fn enumerate_and_zip_type_where_consumed() {
+    let ret = |body: &str| ret_of(&format!("def f():\n    return {body}\n"));
+    assert_eq!(ret("list(enumerate([\"a\"]))"), "list[tuple[int, str]]");
+    assert_eq!(ret("list(enumerate(\"ab\", 1))"), "list[tuple[int, str]]");
+    assert_eq!(
+        ret("list(enumerate([1.5], start=True))"),
+        "list[tuple[int, float]]"
+    );
+    assert_eq!(
+        ret("list(zip([1], \"a\", (True,)))"),
+        "list[tuple[int, str, bool]]"
+    );
+    assert_eq!(ret("list(zip())"), "list[tuple[()]]");
+    assert_eq!(
+        ret("sorted(zip({1: 2}, range(3)))"),
+        "list[tuple[int, int]]"
+    );
+    assert_eq!(ret("set(enumerate([1]))"), "set[tuple[int, int]]");
+    assert_eq!(ret("max(enumerate([1.5]))"), "tuple[int, float]");
+    assert_eq!(ret("any(zip([1], [2]))"), "bool");
+    assert_eq!(
+        ret("list(enumerate(zip(\"a\", [1])))"),
+        "list[tuple[int, tuple[str, int]]]"
+    );
+    assert_eq!(
+        ret("list(zip(enumerate([1.5]), zip()))"),
+        "list[tuple[tuple[int, float], tuple[()]]]"
+    );
+    let src = "def f(xs: list[str]) -> int:\n    n = 0\n    for i, x in enumerate(xs):\n        n += i\n    for a, b in zip(xs, range(3)):\n        n += b\n    return n\n";
+    assert_eq!(ret_of(src), "int");
+}
+
+#[test]
+fn enumerate_and_zip_refuse_other_places() {
+    let not_value = "`enumerate(...)` is not a value yet; use `list(enumerate(...))`";
+    let cases = [
+        ("x = enumerate([1])\n", not_value),
+        ("print(len(enumerate([1])))\n", not_value),
+        ("print(min(enumerate([1]), enumerate([2])))\n", not_value),
+        ("e = enumerate(zip([1]))\n", not_value),
+        (
+            "print(len(zip([1])))\n",
+            "`zip(...)` is not a value yet; use `list(zip(...))`",
+        ),
+        (
+            "print(list(enumerate(\"a\", enumerate(\"b\"))))\n",
+            not_value,
+        ),
+        (
+            "print(list(zip([1], strict=True)))\n",
+            "`strict=` of `zip` is not supported yet",
+        ),
+        (
+            "print(list(zip([1], x=1)))\n",
+            "`zip` got an unexpected keyword argument `x`",
+        ),
+        (
+            "print(list(enumerate([1], step=1)))\n",
+            "`enumerate` got an unexpected keyword argument `step`",
+        ),
+        (
+            "print(list(enumerate()))\n",
+            "`enumerate` takes 1 to 2 arguments but 0 were given",
+        ),
+        (
+            "print(list(enumerate([1], 1.5)))\n",
+            "`start` of `enumerate`",
+        ),
+        ("print(list(enumerate(1)))\n", "int is not iterable"),
+        ("print(list(zip([1], 2)))\n", "int is not iterable"),
+        (
+            "print(sum(enumerate([1])))\n",
+            "`sum` of tuple[int, int] is not supported yet",
+        ),
+        (
+            "print(\",\".join(zip([\"a\"])))\n",
+            "`str.join` needs a list of str",
+        ),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src:?}: {got}");
+    }
+}
