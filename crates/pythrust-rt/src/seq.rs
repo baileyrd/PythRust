@@ -802,17 +802,26 @@ pub unsafe extern "C" fn pt_list_scale(s: *const PtSeq, n: i64) -> u8 {
         old.into_iter().for_each(|v| dec(desc, v));
         return 0;
     }
-    let items = s.items.borrow().clone();
-    if items.is_empty() {
+    // Repeated within the list itself: no snapshot to allocate, so only
+    // the checked reservation can fail.
+    let desc = slot(s.desc, 0);
+    let mut items = s.items.borrow_mut();
+    let len = items.len();
+    if len == 0 || n == 1 {
         return 0;
     }
-    let Some(more) = items.len().checked_mul(n - 1) else {
+    let Some(more) = len.checked_mul(n - 1) else {
         return 1;
     };
-    if s.items.borrow_mut().try_reserve_exact(more).is_err() {
+    if items.try_reserve_exact(more).is_err() {
         return 1;
     }
-    (1..n).for_each(|_| push_all(s, &items));
+    let marked = items.is_marked();
+    for k in (0..len).cycle().take(more) {
+        let v = items[k];
+        store(desc, v, marked);
+        items.push(v);
+    }
     0
 }
 
@@ -1273,6 +1282,8 @@ mod tests {
         let xs = make(b"lli", &[inner as u64]);
         // SAFETY: all live until dropped below, each once.
         unsafe {
+            assert_eq!(pt_list_scale(xs, 1), 0);
+            assert_eq!(shown(xs), "[[1]]");
             assert_eq!(pt_list_scale(xs, 3), 0);
             assert_eq!(shown(xs), "[[1], [1], [1]]");
             assert_eq!(seq(inner as u64).rc.get(), 4);
