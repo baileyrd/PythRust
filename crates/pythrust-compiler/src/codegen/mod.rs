@@ -521,10 +521,7 @@ impl<'r> Codegen<'r> {
             reads: HashMap::new(),
         };
         for rt in Rt::ALL {
-            let mut sig = cg.module.make_signature();
-            let (params, ret) = rt.sig(ptr);
-            sig.params.extend(params.into_iter().map(AbiParam::new));
-            sig.returns.extend(ret.map(AbiParam::new));
+            let sig = runtime_sig(cg.module.make_signature(), rt, ptr);
             let id = cg
                 .module
                 .declare_function(rt.symbol(), Linkage::Import, &sig)
@@ -1533,6 +1530,25 @@ fn module_err(e: cranelift_module::ModuleError) -> Diagnostic {
     backend(e.to_string())
 }
 
+/// `sig` given the parameters and result of the runtime function `rt`.
+fn runtime_sig(mut sig: Signature, rt: Rt, ptr: types::Type) -> Signature {
+    let (params, ret) = rt.sig(ptr);
+    sig.params.extend(params.into_iter().map(foreign_param));
+    sig.returns.extend(ret.map(foreign_param));
+    sig
+}
+
+/// A parameter or result of a function compiled by rustc (the runtime, a
+/// binding shim): an integer narrower than 32 bits is zero-extended, since
+/// an optimized callee may read a `u8` or `bool` from the whole register,
+/// whose upper bits Cranelift otherwise leaves undefined.
+pub(super) fn foreign_param(t: types::Type) -> AbiParam {
+    match t.is_int() && t.bits() < 32 {
+        true => AbiParam::new(t).uext(),
+        false => AbiParam::new(t),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -1711,5 +1727,25 @@ mod tests {
             (stored(b"needle"), stored(b"string index out of range")),
             (1, 1)
         );
+    }
+    #[test]
+    fn narrow_runtime_arguments_and_results_are_zero_extended() {
+        use cranelift_codegen::ir::ArgumentExtension;
+        use cranelift_codegen::isa::CallConv;
+        // An optimized runtime reads a `u8` or `bool` from the whole
+        // register, whose upper bits Cranelift leaves undefined.
+        let mut narrow = 0;
+        for rt in Rt::ALL {
+            let sig = runtime_sig(Signature::new(CallConv::SystemV), rt, types::I64);
+            for p in sig.params.iter().chain(&sig.returns) {
+                let want = match p.value_type == types::I8 {
+                    true => ArgumentExtension::Uext,
+                    false => ArgumentExtension::None,
+                };
+                assert_eq!(p.extension, want, "{}", rt.symbol());
+                narrow += usize::from(p.value_type == types::I8);
+            }
+        }
+        assert!(narrow > 0);
     }
 }
