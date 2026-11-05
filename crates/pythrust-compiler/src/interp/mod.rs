@@ -706,9 +706,10 @@ impl<'m> Interp<'m, '_> {
         }
     }
 
-    /// `any`, `all`, `min` or `max` of an `enumerate(...)` or `zip(...)`,
-    /// stepped without collecting its items; `None` for any other call.
-    /// Its items are tuples, all true: `any` stops at the first.
+    /// `any`, `all`, `min`, `max` or `set` of an `enumerate(...)` or
+    /// `zip(...)`, stepped without collecting its items (a set keeps only
+    /// distinct ones); `None` for any other call. Its items are tuples,
+    /// all true: `any` stops at the first.
     fn reduce_lazy(
         &mut self,
         callee: &Value<'m>,
@@ -719,7 +720,10 @@ impl<'m> Interp<'m, '_> {
             return Ok(None);
         };
         if arg.name.is_some()
-            || !matches!(b, Builtin::Any | Builtin::All | Builtin::Min | Builtin::Max)
+            || !matches!(
+                b,
+                Builtin::Any | Builtin::All | Builtin::Min | Builtin::Max | Builtin::Set
+            )
         {
             return Ok(None);
         }
@@ -731,6 +735,13 @@ impl<'m> Interp<'m, '_> {
             Builtin::All => {
                 while z.step()?.is_some() {}
                 Value::Bool(true)
+            }
+            Builtin::Set => {
+                let mut set = Table::default();
+                while let Some(v) = z.step()? {
+                    set.insert(Key::of(&v, span)?, v, Value::None);
+                }
+                Value::set(set)
             }
             _ => builtins::extreme_of(*b, || z.step(), span)?,
         }))

@@ -13,3 +13,4 @@ True
 (99999, 99999) (0, 0) True True
 ('b', 'x') (1, 'c') (1, 2.5)
 min() iterable argument is empty
+{('a',)} [('a', 'c'), ('b', 'd')] 2

@@ -205,13 +205,19 @@ impl FnBuilder<'_, '_> {
         let [arg] = args else {
             return Ok(None);
         };
-        let reads = matches!(name, "any" | "all" | "min" | "max");
+        let reads = matches!(name, "any" | "all" | "min" | "max" | "set");
         if !reads || arg.name.is_some() {
             return Ok(None);
         }
         let Some(z) = self.zip_of(&arg.value)? else {
             return Ok(None);
         };
+        if name == "set" {
+            // Each item goes straight into the set, which keeps only
+            // distinct ones.
+            let ty = self.ty_at(span)?;
+            return self.collect_zip_into(&z, ty, false).map(Some);
+        }
         if name != "any" {
             return self.fold_zip(name, &z, span).map(Some);
         }
@@ -246,6 +252,11 @@ impl FnBuilder<'_, '_> {
     /// reads them all; only the first where `first`, for `any`.
     pub(super) fn collect_zip(&mut self, z: &Zip, first: bool) -> Result<Operand> {
         let ty = self.cx.seqs.list(z.item);
+        self.collect_zip_into(z, ty, first)
+    }
+
+    /// As [`FnBuilder::collect_zip`], into a new list or set of type `ty`.
+    fn collect_zip_into(&mut self, z: &Zip, ty: Ty, first: bool) -> Result<Operand> {
         let out = self.pooled(ty);
         self.assign(out, Rvalue::NewSeq(Vec::new()), z.span);
         let collect = Looped::Collect {

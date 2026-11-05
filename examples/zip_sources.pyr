@@ -46,3 +46,6 @@ try:
     print(min(zip("", "a")))
 except ValueError as err:
     print(err)
+
+# `set` keeps only the distinct items it is given.
+print(set(zip("a" * 100000)), sorted(set(zip("abab", "cdcd"))), len(set(enumerate("aa"))))
