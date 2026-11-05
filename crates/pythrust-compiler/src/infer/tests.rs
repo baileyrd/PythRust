@@ -2564,8 +2564,12 @@ fn enumerate_and_zip_refuse_other_places() {
             "`sum` of tuple[int, int] is not supported yet",
         ),
         (
-            "print(\",\".join(zip([\"a\"])))\n",
-            "`str.join` needs a list of str",
+            "print(\",\".join(zip(\"ab\")))\n",
+            "`str.join` needs a list of str: expected list[str], found list[tuple[str]]",
+        ),
+        (
+            "print(\",\".join(enumerate([\"a\"])))\n",
+            "`str.join` needs a list of str: expected list[str], found list[tuple[int, str]]",
         ),
     ];
     for (src, want) in cases {

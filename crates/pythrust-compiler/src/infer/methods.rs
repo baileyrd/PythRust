@@ -186,6 +186,8 @@ impl Checker {
     /// the ordinary type error.
     fn join_arg(&mut self, arg: &Arg) -> Result<()> {
         let t = self.consumed(&arg.value)?;
+        // Solved first, so an `enumerate` or `zip` shows its item type.
+        self.settle()?;
         let at = arg.value.span;
         let what = "the items `str.join` joins";
         let resolved = self.subst.resolve(&t);

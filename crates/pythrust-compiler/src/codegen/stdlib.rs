@@ -4,7 +4,7 @@
 //! flag next. Also calls to Rust bindings' shims ([`crate::interop`]).
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{types, AbiParam, InstBuilder, Value};
+use cranelift_codegen::ir::{types, AbiParam, InstBuilder, Signature, Value};
 use cranelift_module::{Linkage, Module};
 
 use super::{backend, foreign_param, module_err, FnGen, Rt};
@@ -132,14 +132,12 @@ impl FnGen<'_, '_, '_> {
         dest: LocalId,
         span: Span,
     ) -> Result<Value> {
-        let mut sig = self.cg.module.make_signature();
-        for a in args {
-            sig.params
-                .push(foreign_param(self.cg.clif_ty(self.func.ty(*a))));
-        }
-        sig.params.extend([AbiParam::new(self.cg.ptr); 4]);
-        sig.returns
-            .push(foreign_param(self.cg.clif_ty(self.func.locals[dest.0])));
+        let params: Vec<types::Type> = args
+            .iter()
+            .map(|a| self.cg.clif_ty(self.func.ty(*a)))
+            .collect();
+        let ret = self.cg.clif_ty(self.func.locals[dest.0]);
+        let sig = shim_sig(self.cg.module.make_signature(), &params, ret, self.cg.ptr);
         let id = self
             .cg
             .module
@@ -185,5 +183,42 @@ impl FnGen<'_, '_, '_> {
     fn path_is(&mut self, p: Value, which: i64) -> Result<Value> {
         let which = self.b.ins().iconst(types::I8, which);
         self.call_rt_value(Rt::OsPathIs, &[p, which])
+    }
+}
+
+/// `sig` given a binding shim's `params` and result `ret`, then the four
+/// pointers of the call's site.
+fn shim_sig(
+    mut sig: Signature,
+    params: &[types::Type],
+    ret: types::Type,
+    ptr: types::Type,
+) -> Signature {
+    sig.params.extend(params.iter().copied().map(foreign_param));
+    sig.params.extend([AbiParam::new(ptr); 4]);
+    sig.returns.push(foreign_param(ret));
+    sig
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_codegen::ir::ArgumentExtension;
+    use cranelift_codegen::isa::CallConv;
+
+    use super::*;
+
+    #[test]
+    fn narrow_shim_arguments_and_results_are_zero_extended() {
+        // A shim compiled by rustc reads a `bool` from the whole register.
+        let (i8, i64) = (types::I8, types::I64);
+        let sig = shim_sig(Signature::new(CallConv::SystemV), &[i8, i64], i8, i64);
+        let ext: Vec<ArgumentExtension> = sig
+            .params
+            .iter()
+            .chain(&sig.returns)
+            .map(|p| p.extension)
+            .collect();
+        let (u, n) = (ArgumentExtension::Uext, ArgumentExtension::None);
+        assert_eq!(ext, [u, n, n, n, n, n, u]);
     }
 }
