@@ -1315,6 +1315,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_marked_list_marks_what_it_gains() {
+        let inner = make(b"li", &[1]);
+        let outer = make(b"lli", &[inner as u64]);
+        let fresh = make(b"li", &[2]);
+        let ys = make(b"lli", &[fresh as u64]);
+        // SAFETY: all live until dropped below, each once.
+        unsafe {
+            mark(b"lli", outer as u64);
+            assert!(!seq(fresh as u64).rc.is_marked());
+            pt_list_extend(outer, ys);
+            assert!(seq(fresh as u64).rc.is_marked(), "extend marks");
+            assert_eq!(pt_list_scale(outer, 2), 0);
+            assert_eq!(shown(outer), "[[1], [2], [1], [2]]");
+            assert_eq!(seq(inner as u64).rc.get(), 3);
+            assert_eq!(seq(fresh as u64).rc.get(), 4);
+            pt_seq_dec(outer);
+            pt_seq_dec(ys);
+            assert_eq!(seq(inner as u64).rc.get(), 1);
+            assert_eq!(seq(fresh as u64).rc.get(), 1);
+            pt_seq_dec(inner);
+            pt_seq_dec(fresh);
+        }
+    }
+
     /// Four threads read one marked list of lists at once, as tasks
     /// reading a shared argument do: element reads take and drop
     /// references, and comparing the list with itself takes two read
