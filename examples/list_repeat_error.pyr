@@ -1,0 +1,6 @@
+# expect-exit: 1
+ys = [1, 2]
+ys *= 2
+print(len(ys))
+ys *= 4611686018427387904
+print("unreachable")

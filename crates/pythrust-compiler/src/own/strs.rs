@@ -130,6 +130,12 @@ impl<'a> Held<'a> {
                 let lists = self.flow.points_to(*list);
                 self.store(&lists, &value)
             }
+            // The list gains the other's elements, and their strings.
+            Inst::Extend { list, other, .. } => {
+                let held = self.holdings(*other);
+                let lists = self.flow.points_to(*list);
+                self.store(&lists, &held)
+            }
             Inst::SetGlobal { value, .. } | Inst::Raise { exc: value, .. } => {
                 let value = self.holdings(*value);
                 grow(&mut self.escaped, &value)

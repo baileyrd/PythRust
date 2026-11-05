@@ -9,7 +9,7 @@ use crate::span::Span;
 use crate::stdlib::StdFn;
 
 use super::vars::runtime;
-use super::{unsupported, FnBuilder};
+use super::{internal, unsupported, FnBuilder};
 
 impl<'a> FnBuilder<'_, 'a> {
     pub(super) fn expr(&mut self, e: &Expr) -> Result<Operand> {
@@ -86,6 +86,9 @@ impl<'a> FnBuilder<'_, 'a> {
         span: Span,
     ) -> Result<Operand> {
         let (l, r) = (self.as_int(l, span), self.as_int(r, span));
+        if let Some(v) = self.seq_arith(op, l, r, span)? {
+            return Ok(v);
+        }
         let (ty, value) = match (op, self.ty(l), self.ty(r)) {
             (BinOp::Add, Ty::Str, Ty::Str) => (Ty::Str, Rvalue::Concat(l, r)),
             (BinOp::Mul, Ty::Str, Ty::Int) => (Ty::Str, Rvalue::Repeat(l, r)),
@@ -104,6 +107,76 @@ impl<'a> FnBuilder<'_, 'a> {
             self.check_raised(span)?;
         }
         Ok(v)
+    }
+
+    /// `l + r` and `l * n` (or `n * l`) on lists, into a new list, and
+    /// `l + r` on tuples; `None` for anything else.
+    fn seq_arith(
+        &mut self,
+        op: BinOp,
+        l: Operand,
+        r: Operand,
+        span: Span,
+    ) -> Result<Option<Operand>> {
+        let (base, other) = match (op, self.ty(l), self.ty(r)) {
+            (BinOp::Add, Ty::List(a), Ty::List(b)) if a == b => (l, r),
+            (BinOp::Mul, Ty::List(_), Ty::Int) => (l, r),
+            (BinOp::Mul, Ty::Int, Ty::List(_)) => (r, l),
+            (BinOp::Add, Ty::Tuple(_), Ty::Tuple(_)) => {
+                return self.join_tuples(l, r, span).map(Some)
+            }
+            _ => return Ok(None),
+        };
+        let out = self.temp(self.ty(base), Rvalue::CopyList(base), span);
+        self.in_place(op, out, other, span)?;
+        Ok(Some(out))
+    }
+
+    /// `list += other` or `list *= n`, changing the list in place.
+    pub(super) fn in_place(
+        &mut self,
+        op: BinOp,
+        list: Operand,
+        r: Operand,
+        span: Span,
+    ) -> Result<()> {
+        let inst = match op {
+            BinOp::Add => Inst::Extend {
+                list,
+                other: r,
+                span,
+            },
+            BinOp::Mul => Inst::Scale {
+                list,
+                count: self.as_int(r, span),
+                span,
+            },
+            _ => {
+                return Err(internal(
+                    span,
+                    "an in-place list operation other than + or *",
+                ))
+            }
+        };
+        self.emit(inst);
+        Ok(())
+    }
+
+    /// `l + r` on tuples: a new tuple of `l`'s fields, then `r`'s.
+    fn join_tuples(&mut self, l: Operand, r: Operand, span: Span) -> Result<Operand> {
+        let (lt, rt) = (self.ty(l), self.ty(r));
+        let fields = |this: &Self, t: Ty| this.cx.seqs.fields(t).map(<[Ty]>::to_vec);
+        let (Some(lf), Some(rf)) = (fields(self, lt), fields(self, rt)) else {
+            return Err(internal(span, "a tuple of no fields"));
+        };
+        let mut items = Vec::new();
+        for (t, fs) in [(l, &lf), (r, &rf)] {
+            for (k, f) in fs.iter().enumerate() {
+                items.push(self.temp(*f, Rvalue::Field(t, k), span));
+            }
+        }
+        let ty = self.cx.seqs.tuple([lf, rf].concat());
+        Ok(self.temp(ty, Rvalue::NewSeq(items), span))
     }
 
     /// `l op r` in floats, each side an int or a float.

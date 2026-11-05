@@ -75,6 +75,8 @@ impl FnBuilder<'_, '_> {
     fn may_change(&self, inst: &Inst, list: Ty) -> bool {
         match inst {
             Inst::Append { list: l, .. }
+            | Inst::Extend { list: l, .. }
+            | Inst::Scale { list: l, .. }
             | Inst::SetItem { list: l, .. }
             | Inst::Sort(l)
             | Inst::Reverse(l) => self.ty(*l) == list,

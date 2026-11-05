@@ -121,6 +121,8 @@ enum Rt {
     SeqCmp,
     ListContains,
     ListCopy,
+    ListExtend,
+    ListScale,
     WriteSeq,
     StrFromSeq,
     RangeLen,
@@ -180,7 +182,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 101] = [
+    const ALL: [Rt; 103] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -226,6 +228,8 @@ impl Rt {
         Rt::SeqCmp,
         Rt::ListContains,
         Rt::ListCopy,
+        Rt::ListExtend,
+        Rt::ListScale,
         Rt::WriteSeq,
         Rt::StrFromSeq,
         Rt::RangeLen,
@@ -331,6 +335,8 @@ impl Rt {
             Rt::SeqCmp => "pt_seq_cmp",
             Rt::ListContains => "pt_list_contains",
             Rt::ListCopy => "pt_list_copy",
+            Rt::ListExtend => "pt_list_extend",
+            Rt::ListScale => "pt_list_scale",
             Rt::WriteSeq => "pt_write_seq",
             Rt::StrFromSeq => "pt_str_from_seq",
             Rt::RangeLen => "pt_range_len",
@@ -426,7 +432,8 @@ impl Rt {
             Rt::SeqInc | Rt::SeqDec | Rt::SeqReleaseHeld | Rt::WriteSeq => (vec![ptr], None),
             Rt::SeqEq => (vec![ptr, ptr], Some(I8)),
             Rt::SeqCmp => (vec![ptr, ptr], Some(I64)),
-            Rt::ListContains => (vec![ptr, I64], Some(I8)),
+            Rt::ListContains | Rt::ListScale => (vec![ptr, I64], Some(I8)),
+            Rt::ListExtend => (vec![ptr, ptr], None),
             Rt::StrFromSeq | Rt::ListCopy => (vec![ptr], Some(ptr)),
             Rt::RangeLen => (vec![ptr], Some(I64)),
             Rt::RangeGet => (vec![ptr, I64, ptr], Some(I64)),
@@ -809,6 +816,15 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Inst::Sort(list) => {
                 let s = self.operand(*list);
                 self.call_rt(Rt::ListSort, &[s]);
+            }
+            Inst::Extend { list, other, .. } => {
+                let (s, t) = (self.operand(*list), self.operand(*other));
+                self.call_rt(Rt::ListExtend, &[s, t]);
+            }
+            Inst::Scale { list, count, span } => {
+                let (s, n) = (self.operand(*list), self.operand(*count));
+                let failed = self.call_rt_value(Rt::ListScale, &[s, n])?;
+                self.fail_if(failed, *span, TOO_LARGE)?;
             }
             Inst::Reverse(list) => {
                 let s = self.operand(*list);

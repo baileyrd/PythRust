@@ -507,6 +507,8 @@ const NATIVE: &[&str] = &[
     "modes",
     "list_ownership",
     "list_semantics",
+    "list_arith",
+    "list_repeat_error",
     "list_set_error",
     "lists",
     "loop_target_ownership",

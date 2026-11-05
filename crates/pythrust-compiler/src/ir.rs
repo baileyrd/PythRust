@@ -282,6 +282,21 @@ pub enum Inst {
         value: Operand,
         span: Span,
     },
+    /// `list += other` on lists, at `span`: appends `other`'s elements
+    /// in order, each gaining a reference. `other` may be `list`.
+    Extend {
+        list: Operand,
+        other: Operand,
+        span: Span,
+    },
+    /// `list *= count`: the list's elements `count` times over, in
+    /// place, each copy gaining a reference; empty for `count <= 0`.
+    /// Fails at `span`, changing nothing, when too large to allocate.
+    Scale {
+        list: Operand,
+        count: Operand,
+        span: Span,
+    },
     /// Sorts a list in place by `<`, stably.
     Sort(Operand),
     /// Reverses a list, here only `map`'s results ([`Ty::Results`]), in
@@ -599,6 +614,8 @@ impl Inst {
             Inst::Print { args, sep, end } => args.iter().chain(sep).chain(end).any(local),
             Inst::Retain(x) | Inst::Release(x) | Inst::Forget(x) => *x == l,
             Inst::Append { list, value, .. } => local(list) || local(value),
+            Inst::Extend { list, other, .. } => local(list) || local(other),
+            Inst::Scale { list, count, .. } => local(list) || local(count),
             Inst::SetGlobal { value, .. } => local(value),
             Inst::DropGlobal(_) => false,
             Inst::SetItem {

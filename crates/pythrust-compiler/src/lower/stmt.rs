@@ -158,6 +158,10 @@ impl FnBuilder<'_, '_> {
             TargetKind::Name(name) => {
                 let l = self.read(name, target.span)?;
                 let r = self.expr(value)?;
+                if self.in_place_list(op, l, r) {
+                    // The name keeps the list it already holds.
+                    return self.in_place(op, l, r, span);
+                }
                 let v = self.arith(op, l, r, span)?;
                 self.write(name, v, target.span)
             }
@@ -167,7 +171,7 @@ impl FnBuilder<'_, '_> {
                 if let Ty::Dict(_) = self.ty(list) {
                     let l = self.dict_read(list, index, target.span)?;
                     let r = self.expr(value)?;
-                    let v = self.arith(op, l, r, span)?;
+                    let v = self.aug_item(op, l, r, span)?;
                     return self.store_item(list, index, v, target.span);
                 }
                 let index = self.as_int(index, target.span);
@@ -182,11 +186,35 @@ impl FnBuilder<'_, '_> {
                 let l = self.temp(elem, Rvalue::Index(list, index), target.span);
                 self.check_raised(target.span)?;
                 let r = self.expr(value)?;
-                let v = self.arith(op, l, r, span)?;
+                let v = self.aug_item(op, l, r, span)?;
                 self.store_item(list, index, v, target.span)
             }
             TargetKind::Tuple(_) => Err(unsupported(target.span, "augmented unpacking")),
         }
+    }
+
+    /// Whether `l op= r` changes list `l` in place, as Python's `+=` and
+    /// `*=` on a list do, so its aliases see the change.
+    fn in_place_list(&self, op: BinOp, l: Operand, r: Operand) -> bool {
+        let Ty::List(_) = self.ty(l) else {
+            return false;
+        };
+        match op {
+            BinOp::Add => self.ty(r) == self.ty(l),
+            BinOp::Mul => matches!(self.ty(r), Ty::Int | Ty::Bool),
+            _ => false,
+        }
+    }
+
+    /// The value `item op= r` stores back: the item itself, changed in
+    /// place when it is a list (Python stores it back too), else
+    /// `item op r`.
+    fn aug_item(&mut self, op: BinOp, item: Operand, r: Operand, span: Span) -> Result<Operand> {
+        if !self.in_place_list(op, item, r) {
+            return self.arith(op, item, r, span);
+        }
+        self.in_place(op, item, r, span)?;
+        Ok(item)
     }
 
     /// Leaves the value in the return slot and goes to the exit block,

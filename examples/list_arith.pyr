@@ -1,0 +1,44 @@
+# `+` and `*` on lists and `+` on tuples build new values; `+=` and `*=`
+# change a list in place, so an alias sees the change, as in Python.
+
+print([0.5] * 3, 3 * [0.5])
+print([1, 2] + [3], ["a"] * 2, [True] * 2)
+print([1] * 0, [1] * -2, [] + [1.5])
+print(([1] + [2]) * 2)
+
+m = [[0]] * 2
+m[0].append(5)
+print(m)
+
+pairs = [(1, "x")] + [(2, "y")]
+print(pairs)
+
+t = (1, "a") + (2.5,)
+print(t, () + (1,))
+
+xs = [1]
+ys = xs
+xs += [2]
+print(xs, ys)
+xs *= 2
+print(xs, ys)
+xs += xs
+print(ys)
+xs *= 0
+print(xs, ys)
+
+zs = [1]
+zs = zs + [2]
+print(zs)
+
+def grow(xs: list[int]) -> None:
+    xs += [9]
+
+g = [8]
+grow(g)
+print(g)
+
+def twice(xs):
+    return xs * 2
+
+print(twice([1.5]), twice(["b"]))

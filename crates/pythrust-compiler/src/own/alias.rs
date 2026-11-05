@@ -591,7 +591,10 @@ impl<'a> Body<'a> {
     /// What `inst` changes in place, and how.
     fn changes(&self, inst: &Inst) -> Vec<(Operand, Change)> {
         match inst {
-            Inst::Append { list, .. } | Inst::SetItem { list, .. } => vec![(*list, Change::List)],
+            Inst::Append { list, .. }
+            | Inst::SetItem { list, .. }
+            | Inst::Extend { list, .. }
+            | Inst::Scale { list, .. } => vec![(*list, Change::List)],
             Inst::Assign {
                 value: Rvalue::Call(f, args),
                 ..
@@ -947,7 +950,13 @@ pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
     match inst {
         Inst::Assign { value, .. } => value.operands(),
         Inst::Print { args, sep, end } => args.iter().chain(sep).chain(end).copied().collect(),
-        Inst::Append { list, value, .. } => vec![*list, *value],
+        Inst::Append { list, value, .. }
+        | Inst::Extend {
+            list, other: value, ..
+        } => {
+            vec![*list, *value]
+        }
+        Inst::Scale { list, count, .. } => vec![*list, *count],
         Inst::SetGlobal { value, .. } => vec![*value],
         Inst::SetItem {
             list, index, value, ..
@@ -968,9 +977,11 @@ fn error(span: Span, message: String) -> Diagnostic {
 /// Where a change `inst` makes is reported.
 pub(super) fn inst_span(inst: &Inst) -> Option<Span> {
     match inst {
-        Inst::Append { span, .. } | Inst::SetItem { span, .. } | Inst::Assign { span, .. } => {
-            Some(*span)
-        }
+        Inst::Append { span, .. }
+        | Inst::SetItem { span, .. }
+        | Inst::Extend { span, .. }
+        | Inst::Scale { span, .. }
+        | Inst::Assign { span, .. } => Some(*span),
         _ => None,
     }
 }
