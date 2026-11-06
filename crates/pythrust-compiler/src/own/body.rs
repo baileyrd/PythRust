@@ -288,6 +288,19 @@ impl<'a> Flow<'a> {
                 let lists = self.of(*list);
                 self.store_all(&lists, &value)
             }
+            // The list gains the other's elements, which hold lists only
+            // when its elements do: as a copy of `other` would.
+            Inst::Extend { list, other, .. } => {
+                let Operand::Local(l) = list else {
+                    return false;
+                };
+                if !self.elements_hold_list(*l) {
+                    return false;
+                }
+                let elements = self.contents(&self.of(*other));
+                let lists = self.of(*list);
+                self.store_all(&lists, &elements)
+            }
             Inst::SetGlobal { value, .. } => {
                 let value = self.of(*value);
                 self.store(Obj::World, &value)
@@ -508,7 +521,10 @@ impl<'a> Flow<'a> {
                 mutated.extend(self.passed(args, params, Mode::Mut));
                 kept.extend(self.passed(args, params, Mode::Owned));
             }
-            Inst::Append { list, .. } | Inst::SetItem { list, .. } => {
+            Inst::Append { list, .. }
+            | Inst::SetItem { list, .. }
+            | Inst::Extend { list, .. }
+            | Inst::Scale { list, .. } => {
                 mutated.extend(self.of(*list));
             }
             _ => {}

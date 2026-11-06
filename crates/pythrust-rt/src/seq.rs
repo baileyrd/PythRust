@@ -768,6 +768,71 @@ pub unsafe extern "C" fn pt_list_copy(s: *const PtSeq) -> *mut PtSeq {
     new_seq(s.desc, items.clone())
 }
 
+/// `s += t` on lists: appends `t`'s elements in order, each gaining a
+/// reference. `t` may be `s`.
+///
+/// # Safety
+///
+/// `s` and `t` are live lists of one type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_extend(s: *const PtSeq, t: *const PtSeq) {
+    // SAFETY: guaranteed by the caller.
+    let (s, t) = unsafe { (seq(s as u64), seq(t as u64)) };
+    // A copy first, so `xs += xs` adds each element once.
+    let items = t.items.borrow().clone();
+    push_all(s, &items);
+}
+
+/// `s *= n` on a list: `n` copies of its elements in place, each copy
+/// gaining a reference; none for `n <= 0`. 1, changing nothing, when too
+/// large to allocate; else 0.
+///
+/// # Safety
+///
+/// `s` is a live list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_scale(s: *const PtSeq, n: i64) -> u8 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let n = usize::try_from(n).unwrap_or(0);
+    if n == 0 {
+        let old = std::mem::take(&mut *s.items.borrow_mut());
+        // Dropped after the borrow ends: freeing may reach other sequences.
+        let desc = slot(s.desc, 0);
+        old.into_iter().for_each(|v| dec(desc, v));
+        return 0;
+    }
+    // Repeated within the list itself: no snapshot to allocate, so only
+    // the checked reservation can fail.
+    let desc = slot(s.desc, 0);
+    let mut items = s.items.borrow_mut();
+    let len = items.len();
+    if len == 0 || n == 1 {
+        return 0;
+    }
+    let Some(more) = len.checked_mul(n - 1) else {
+        return 1;
+    };
+    if items.try_reserve_exact(more).is_err() {
+        return 1;
+    }
+    let marked = items.is_marked();
+    for k in (0..len).cycle().take(more) {
+        let v = items[k];
+        store(desc, v, marked);
+        items.push(v);
+    }
+    0
+}
+
+/// Appends `items` to list `s`, each gaining a reference.
+fn push_all(s: &PtSeq, items: &[u64]) {
+    let desc = slot(s.desc, 0);
+    items.iter().for_each(|&v| {
+        s.items.push(v, |_, marked| store(desc, v, marked));
+    });
+}
+
 /// `sum(s, start)` of a list, tuple or view of floats: CPython's
 /// compensated sum ([`crate::fsum`], D57).
 ///
@@ -1193,6 +1258,48 @@ mod tests {
     }
 
     #[test]
+    fn extend_appends_a_copy_even_of_itself() {
+        let inner = make(b"li", &[1]);
+        let xs = make(b"lli", &[inner as u64]);
+        let ys = make(b"lli", &[inner as u64]);
+        // SAFETY: all live until dropped below, each once.
+        unsafe {
+            pt_list_extend(xs, ys);
+            assert_eq!(shown(xs), "[[1], [1]]");
+            pt_list_extend(xs, xs);
+            assert_eq!(shown(xs), "[[1], [1], [1], [1]]");
+            assert_eq!(seq(inner as u64).rc.get(), 6);
+            pt_seq_dec(ys);
+            pt_seq_dec(xs);
+            assert_eq!(seq(inner as u64).rc.get(), 1);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn scale_repeats_in_place_or_empties() {
+        let inner = make(b"li", &[1]);
+        let xs = make(b"lli", &[inner as u64]);
+        // SAFETY: all live until dropped below, each once.
+        unsafe {
+            assert_eq!(pt_list_scale(xs, 1), 0);
+            assert_eq!(shown(xs), "[[1]]");
+            assert_eq!(pt_list_scale(xs, 3), 0);
+            assert_eq!(shown(xs), "[[1], [1], [1]]");
+            assert_eq!(seq(inner as u64).rc.get(), 4);
+            assert_eq!(pt_list_scale(xs, i64::MAX), 1, "too large");
+            assert_eq!(shown(xs), "[[1], [1], [1]]", "unchanged");
+            assert_eq!(pt_list_scale(xs, -1), 0);
+            assert_eq!(shown(xs), "[]");
+            assert_eq!(seq(inner as u64).rc.get(), 1);
+            assert_eq!(pt_list_scale(xs, 5), 0);
+            assert_eq!(shown(xs), "[]");
+            pt_seq_dec(xs);
+            pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
     fn marking_reaches_nested_values_once() {
         let inner = make(b"li", &[1, 2]);
         let outer = make(b"lli", &[inner as u64, inner as u64]);
@@ -1205,6 +1312,31 @@ mod tests {
             assert_eq!(seq(inner as u64).rc.get(), 3);
             pt_seq_dec(outer);
             pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn a_marked_list_marks_what_it_gains() {
+        let inner = make(b"li", &[1]);
+        let outer = make(b"lli", &[inner as u64]);
+        let fresh = make(b"li", &[2]);
+        let ys = make(b"lli", &[fresh as u64]);
+        // SAFETY: all live until dropped below, each once.
+        unsafe {
+            mark(b"lli", outer as u64);
+            assert!(!seq(fresh as u64).rc.is_marked());
+            pt_list_extend(outer, ys);
+            assert!(seq(fresh as u64).rc.is_marked(), "extend marks");
+            assert_eq!(pt_list_scale(outer, 2), 0);
+            assert_eq!(shown(outer), "[[1], [2], [1], [2]]");
+            assert_eq!(seq(inner as u64).rc.get(), 3);
+            assert_eq!(seq(fresh as u64).rc.get(), 4);
+            pt_seq_dec(outer);
+            pt_seq_dec(ys);
+            assert_eq!(seq(inner as u64).rc.get(), 1);
+            assert_eq!(seq(fresh as u64).rc.get(), 1);
+            pt_seq_dec(inner);
+            pt_seq_dec(fresh);
         }
     }
 

@@ -115,6 +115,8 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
         Inst::Retain(_)
         | Inst::Print { .. }
         | Inst::Append { .. }
+        | Inst::Extend { .. }
+        | Inst::Scale { .. }
         | Inst::SetGlobal { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
@@ -594,6 +596,8 @@ fn ends(inst: &Inst, l: LocalId) -> bool {
         Inst::Retain(_)
         | Inst::Print { .. }
         | Inst::Append { .. }
+        | Inst::Extend { .. }
+        | Inst::Scale { .. }
         | Inst::SetGlobal { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
