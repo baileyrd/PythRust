@@ -19,7 +19,7 @@ Answered from repo docs and remind-me; each answer cites its source. Backfilled 
 - **Q:** Which backend? **A:** Cranelift AOT via `pythrust build`, linking `pythrust-rt` with system `cc` (MSVC `link.exe` on Windows). [stated] — D9
 - **Q:** Must native match `run`? **A:** Yes: stdout, exit status and stderr byte-for-byte for corpus programs (`corpus_matches_native`). [stated] — native.md
 - **Q:** What is a backend gap? **A:** A named compile error "native backend does not support X yet"; never guess. A gap is not a language restriction. [stated]
-- **Q:** CI targets? **A:** x86-64 Linux, AArch64 Linux, AArch64 macOS, x86-64 Windows. [stated]
+- **Q:** CI targets? **A:** x86-64 and AArch64 Linux, macOS and Windows (MSVC) are configured. Prior validation covers x86-64/AArch64 Linux, AArch64 macOS and x86-64 Windows; the two added lanes require hosted CI evidence. MinGW remains unsupported/unvalidated. See native.md § Targets for the checks and roadmap.md for status.
 
 ## Dependencies and unsafe
 - **Q:** May I add a crate? **A:** Only with PR justification; `cranelift-*` accepted. [stated] — CLAUDE.md
