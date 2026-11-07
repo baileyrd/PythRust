@@ -41,6 +41,23 @@ class Host(unittest.TestCase):
                 with self.subTest(tool=tool, output=output):
                     self.assertTrue(check_host.problems(**(observed() | {tool: output})))
 
+    def test_arm64_windows_hardware_with_x64_python_fails_acquisition(self) -> None:
+        # CPython 3.13's platform.machine() can report ARM64 for an x64
+        # Python process. Exercise main's acquisition, not just problems().
+        host = "aarch64-pc-windows-msvc"
+        for build, expected in [("win-arm64", 0), ("win-amd64", 1), ("win32", 1), ("unknown", 1)]:
+            with self.subTest(build=build), contextlib.ExitStack() as stack:
+                stack.enter_context(patch("check_host.platform.system", return_value="Windows"))
+                stack.enter_context(patch("check_host.platform.machine", return_value="ARM64"))
+                stack.enter_context(patch("check_host.sysconfig.get_platform", return_value=build))
+                stack.enter_context(patch("check_host.struct.calcsize", return_value=8))
+                stack.enter_context(patch("check_host.platform.python_implementation", return_value="CPython"))
+                stack.enter_context(patch("check_host.sys.version_info", (3, 13, 0)))
+                stack.enter_context(patch.dict("check_host.os.environ", {"RUNNER_ARCH": "ARM64"}))
+                stack.enter_context(patch("check_host.subprocess.check_output", return_value=f"host: {host}\n"))
+                stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                self.assertEqual(check_host.main(host, "arm64"), expected)
+
     def test_missing_or_failed_tool_fails(self) -> None:
         for error in [FileNotFoundError("rustc"), subprocess.CalledProcessError(1, "rustc")]:
             with patch("check_host.subprocess.check_output", side_effect=error), contextlib.redirect_stdout(io.StringIO()):

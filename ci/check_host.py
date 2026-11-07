@@ -10,6 +10,7 @@ import platform
 import struct
 import subprocess
 import sys
+import sysconfig
 
 
 MACHINES = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}
@@ -43,6 +44,18 @@ def problems(target: str, arch: str, runner: str, system: str, machine: str,
     return found
 
 
+def process_machine(system: str) -> str:
+    """Windows platform.machine() describes the hardware, even under x64
+    emulation on ARM64. sysconfig names the running CPython build instead.
+    Unix machine() describes this process (including Rosetta on macOS).
+    """
+    if system == "Windows":
+        return {"win-amd64": "AMD64", "win-arm64": "ARM64"}.get(
+            sysconfig.get_platform().lower(), "unknown Windows Python build"
+        )
+    return platform.machine()
+
+
 def main(target: str, arch: str) -> int:
     try:
         outputs = [subprocess.check_output([tool, "-vV"], text=True) for tool in ("rustc", "cargo")]
@@ -50,7 +63,8 @@ def main(target: str, arch: str) -> int:
         print(f"cannot inspect Rust host: {e}")
         return 1
     runner = os.environ.get("RUNNER_ARCH", "")
-    system, machine = platform.system(), platform.machine()
+    system = platform.system()
+    machine = process_machine(system)
     bits = struct.calcsize("P") * 8
     implementation, version = platform.python_implementation(), sys.version_info[:2]
     print(f"runner: {system} {runner}; Python: {implementation} {version} {machine}/{bits}-bit", flush=True)

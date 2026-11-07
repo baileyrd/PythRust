@@ -1330,6 +1330,41 @@ fn corpus_matches_native() -> Res<()> {
     Ok(())
 }
 
+/// Absolute AArch64 COFF addresses must remain relocatable under the PE
+/// loader. Runs with the debug suite and the release corpus filter alike,
+/// on x64 too to hold both Windows targets to the same security baseline.
+/// Header offsets: Microsoft's PE Format, Optional Header (PE32+).
+#[cfg(windows)]
+#[test]
+fn corpus_matches_native_preserves_pe_security() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("pe_security")?;
+    let src = "import concurrent.futures\ngreeting = 'hello'\ndef work(n):\n    return greeting + str(n)\ndef start():\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(work, 42)\n        print(f.result())\nstart()\n";
+    let exe = native_case(&dir, "relocations", src)?;
+    let bytes = fs::read(&exe).map_err(|e| e.to_string())?;
+    let word = |i| u16::from_le_bytes(bytes[i..i + 2].try_into().unwrap());
+    let dword = |i| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+    assert_eq!(&bytes[..2], b"MZ");
+    let pe = dword(0x3c) as usize;
+    assert_eq!(&bytes[pe..pe + 4], b"PE\0\0");
+    assert_eq!(word(pe + 22) & 1, 0, "base relocations were stripped");
+    let optional = pe + 24;
+    assert_eq!(word(optional), 0x20b, "expected PE32+");
+    // HIGH_ENTROPY_VA, DYNAMIC_BASE and NX_COMPAT; no /FIXED or /DYNAMICBASE:NO.
+    assert_eq!(word(optional + 70) & 0x160, 0x160);
+    assert!(
+        dword(optional + 108) > 5,
+        "missing base relocation directory"
+    );
+    assert_ne!(dword(optional + 152), 0, "missing base relocation RVA");
+    assert!(dword(optional + 156) >= 8, "empty base relocation table");
+    let got = run(&mut Command::new(&exe), TIMEOUT)?;
+    assert_eq!(got.status, 0, "{:?}", got);
+    assert_eq!(got.stdout, "hello42\n");
+    dir.pass();
+    Ok(())
+}
+
 /// The case native code must match: `case` itself, or for a native
 /// deviation the same with `<name>.native.out` as its golden. That
 /// golden must still differ from CPython's, else the deviation is
