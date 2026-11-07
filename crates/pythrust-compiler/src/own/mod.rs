@@ -179,9 +179,10 @@ pub fn analyze(module: &Module, types: &Types) -> Analysis {
     match lower::lower_every(module, types) {
         Ok(program) => {
             let summaries = infer(&program);
+            let stores = body::stores(&program, &summaries);
             let calls = program.funcs.iter().enumerate();
             let calls: Vec<CallSite> = calls
-                .flat_map(|(i, f)| body::calls(&program, i, f, &summaries))
+                .flat_map(|(i, f)| body::calls(&program, i, f, &summaries, &stores))
                 .collect();
             Analysis {
                 funcs: by_name(&program, &summaries),

@@ -1,0 +1,31 @@
+temper def add(mut rows: list[list[int]], owned row: list[int]) -> None:
+    rows.append(row)
+
+rows: list[list[int]] = []
+row = [1]
+other = [2]
+def stash(x):
+    rows.append(x)
+stash(other)
+add(rows, row)
+print(rows)
+row = [3]
+stash(row)
+row = [4]
+add(rows, row)
+print(rows)
+
+# Retaining an argument somewhere else does not put it in rows.
+elsewhere: list[list[int]] = []
+def save(x):
+    elsewhere.append(x)
+row = [5]
+save(row)
+add(rows, row)
+print(rows)
+
+# Loose callees continue accepting the shared arguments.
+def loose_add(target, value):
+    target.append(value)
+loose_add(rows, row)
+print(rows)

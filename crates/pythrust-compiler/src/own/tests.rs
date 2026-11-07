@@ -1967,3 +1967,66 @@ fn a_task_fault_reaches_the_callers_handler() {
         assert!(mode_err(&src).0.contains("list(...)"), "{src}");
     }
 }
+
+#[test]
+fn loose_callee_global_stores_follow_aliases_and_calls() {
+    let prefix = "rows: list[list[int]] = []\nrow = [1]\n";
+    for store in [
+        "def stash():\n    rows.append(row)\nstash()\n",
+        "def stash(x):\n    rows.append(x)\nstash(row)\n",
+        "def stash(x):\n    target = rows\n    value = x\n    target.append(value)\nstash(row)\n",
+        "def put(a, b):\n    a.append(b)\ndef stash(x):\n    put(rows, x)\nstash(row)\n",
+        "def stash(x, flag):\n    if flag:\n        rows.append(x)\nstash(row, True)\n",
+        "def stash(x, n):\n    if n > 0:\n        stash(x, n - 1)\n    else:\n        rows.append(x)\nstash(row, 2)\n",
+        "def left(x, n):\n    if n > 0:\n        right(x, n - 1)\n    else:\n        rows.append(x)\ndef right(x, n):\n    left(x, n)\nright(row, 1)\n",
+        "def target():\n    return rows\ndef stash(x):\n    target().append(x)\nstash(row)\n",
+        "alias = rows\ndef stash():\n    alias.append(row)\nstash()\n",
+        "def stash():\n    rows.append(row)\nif True:\n    stash()\n",
+        "def stash():\n    rows.append(row)\nfor i in range(2):\n    stash()\n",
+        "def stash(x):\n    rows.append(x)\n    return x\nsaved = stash(row)\n",
+        "def stash():\n    fresh = [2]\n    rows.append(fresh)\n    return fresh\nrow = stash()\n",
+        "def stash(x):\n    rows.append(x)\n    raise ValueError(1)\ntry:\n    stash(row)\nexcept ValueError:\n    pass\n",
+        "def stash(x = row):\n    rows.append(x)\nstash()\n",
+        "def stash(x):\n    rows.append(x)\nstash(x=row)\n",
+    ] {
+        let src = format!("{prefix}{store}add(rows, row)\n");
+        assert_eq!(shared_call(&src), "add(rows, row)", "{src}");
+    }
+}
+
+#[test]
+fn loose_callee_stores_preserve_disjoint_lists_and_order() {
+    let prefix = "rows: list[list[int]] = []\nrow = [1]\nother = [2]\n";
+    for (store, call) in [
+        ("def stash(x):\n    rows.append(x)\nstash(other)\n", "add(rows, row)\n"),
+        ("elsewhere: list[list[int]] = []\ndef stash(x):\n    elsewhere.append(x)\nstash(row)\n", "add(rows, row)\n"),
+        ("def stash():\n    rows.append(other)\nstash()\n", "add(rows, row)\n"),
+        ("def stash():\n    rows.append(row)\n", "add(rows, row)\nstash()\n"),
+        ("def stash():\n    rows.append(row)\nstash()\nrow = [3]\n", "add(rows, row)\n"),
+        ("def stash():\n    rows.append(row)\nstash()\nrows = []\n", "add(rows, row)\n"),
+        ("def stash(x):\n    rows.append(list(x))\nstash(row)\n", "add(rows, row)\n"),
+        ("def stash(x):\n    local: list[list[int]] = []\n    local.append(x)\nstash(row)\n", "add(rows, row)\n"),
+        ("def stash(x):\n    rows.append(x)\n", "for i in range(3):\n    row = [i]\n    stash(row)\n    row = [9]\n    add(rows, row)\n"),
+    ] {
+        let src = format!("{ADD}{prefix}{store}{call}");
+        assert_eq!(checked(&src), Ok(()), "{src}");
+    }
+    // Loose-to-loose calls retain Python aliasing.
+    let src = format!("{prefix}def stash():\n    rows.append(row)\nstash()\ndef add(a, b):\n    a.append(b)\nadd(rows, row)\n");
+    assert_eq!(checked(&src), Ok(()));
+}
+
+#[test]
+fn loose_callee_stores_keep_nested_and_fresh_aliases() {
+    for src in [
+        "rows: list[list[int]] = [[0]]\nrow = [1]\ndef stash(x):\n    rows[0] = x\nstash(row)\nadd(rows, row)\n",
+        "rows: list[list[int]] = []\nrow = [1]\ndef stash(target, x):\n    target += [x]\nstash(rows, row)\nadd(rows, row)\n",
+        "rows: list[list[int]] = []\nrow = [1]\ndef stash(x):\n    rows.append(x[0])\nstash((row, 2))\nadd(rows, row)\n",
+        "rows: list[list[int]] = []\nrow = [1]\ndef stash(x: list[int] | None):\n    if x is not None:\n        rows.append(x)\nstash(row)\nadd(rows, row)\n",
+        "rows: list[list[int]] = []\nrow = [1]\ndef stash(x):\n    rows.append(x)\nbox = [row]\nstash(list(box)[0])\nadd(rows, row)\n",
+    ] {
+        assert_eq!(shared_call(src), "add(rows, row)", "{src}");
+    }
+    let src = "a: list[list[int]] = []\nb: list[list[int]] = []\ndef stash():\n    x = [1]\n    a.append(x)\n    b.append(x)\nstash()\npush(a[0], b[0])\n";
+    assert_eq!(mode_err(&format!("{PUSH}{src}")).1, "push(a[0], b[0])");
+}
