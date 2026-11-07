@@ -2030,3 +2030,95 @@ fn loose_callee_stores_keep_nested_and_fresh_aliases() {
     let src = "a: list[list[int]] = []\nb: list[list[int]] = []\ndef stash():\n    x = [1]\n    a.append(x)\n    b.append(x)\nstash()\npush(a[0], b[0])\n";
     assert_eq!(mode_err(&format!("{PUSH}{src}")).1, "push(a[0], b[0])");
 }
+
+#[test]
+fn joined_receivers_check_each_possible_source() {
+    for receiver in [
+        "(a if c else b)",
+        "(b or a)",
+        "(a and b)",
+        "((a if c else b) or a)",
+    ] {
+        let src = format!("temper def f(c: bool) -> int:\n    a = [1]\n    b = a\n    {receiver}.append(2)\n    return len(a) + len(b)\nprint(f(True))\n");
+        let error = alias_err(&src);
+        assert!(
+            error
+                .as_ref()
+                .is_some_and(|e| e.0.contains("may be the same list") && e.1.contains("append(2)")),
+            "{receiver}: {error:?}"
+        );
+        assert_eq!(
+            checked(&src.replace("b = a", "b = [2]")),
+            Ok(()),
+            "{receiver}"
+        );
+        assert_eq!(
+            checked(&src.replace("return len(a) + len(b)", "return 0")),
+            Ok(()),
+            "{receiver}"
+        );
+        assert_eq!(
+            checked(
+                &src.replace(receiver, "(a if c else a)")
+                    .replace("return len(a) + len(b)", "return len(a)")
+            ),
+            Ok(())
+        );
+        assert!(
+            alias_err(&src.replace("return len(a) + len(b)", "return len(a)")).is_some(),
+            "one live alias: {receiver}"
+        );
+    }
+}
+
+#[test]
+fn joined_receivers_keep_projected_sources_and_mutation_forms() {
+    let prefix = "temper def grow(mut xs: list[int]) -> None:\n    xs.append(3)\n";
+    for change in [
+        "(a if c else b)[0] = 3",
+        "grow(a if c else b)",
+        "(a or b)[0] += 1",
+    ] {
+        let src = format!("{prefix}temper def f(c: bool) -> int:\n    a = [1]\n    b = a\n    {change}\n    return len(a) + len(b)\nprint(f(True))\n");
+        assert!(alias_err(&src).is_some(), "{change}");
+        assert_eq!(
+            checked(&src.replace("b = a", "b = [2]")),
+            Ok(()),
+            "{change}"
+        );
+    }
+    for receiver in ["(a if c else b)[0]", "(a or b)[0]", "(a if c else b)[0][0]"] {
+        let nested = receiver.ends_with("[0][0]");
+        let value = if nested { "([[1]],)" } else { "([1],)" };
+        let item = if nested { "a[0][0]" } else { "a[0]" };
+        let src = format!("temper def f(c: bool) -> int:\n    a = {value}\n    b = a\n    seen = {item}\n    {receiver}.append(2)\n    return len(seen)\nprint(f(True))\n");
+        assert!(alias_err(&src).is_some(), "{receiver}");
+        assert_eq!(
+            checked(&src.replace("return len(seen)", "return 0")),
+            Ok(()),
+            "{receiver}"
+        );
+    }
+    // Known tuple fields stay separate even after a receiver join.
+    let src = "temper def f(c: bool) -> int:\n    a = ([1], [2])\n    b = ([3], [4])\n    seen = a[1]\n    (a if c else b)[0].append(5)\n    return len(seen)\nprint(f(True))\n";
+    assert_eq!(checked(src), Ok(()));
+}
+
+#[test]
+fn joined_receivers_keep_unattributed_call_alternatives() {
+    let src = "g = [1]\ntemper def get() -> list[int]:\n    return g\ntemper def f(c: bool) -> int:\n    (g if c else get()).append(2)\n    return len(g)\nprint(f(True))\n";
+    let err = alias_err(src).unwrap();
+    assert!(
+        err.0.contains("module variable `g` may be the same list"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn joined_receivers_keep_origins_through_loops() {
+    let src = "temper def f(c: bool) -> int:\n    a = [1]\n    b = a\n    for i in range(2):\n        (a if c else b).append(i)\n    return len(a)\nprint(f(True))\n";
+    assert!(alias_err(src).is_some());
+    assert_eq!(checked(&src.replace("b = a", "b = [2]")), Ok(()));
+    let iterated = "temper def f(c: bool) -> int:\n    a = [1]\n    b = [2]\n    for i in a:\n        (a if c else b).append(i)\n    return 0\nprint(f(True))\n";
+    assert!(alias_err(iterated).unwrap().0.contains("a `for` loop"));
+}

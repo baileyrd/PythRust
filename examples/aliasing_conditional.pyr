@@ -1,0 +1,9 @@
+# deviation: D4 rejects changing a computed receiver while another source alias is used later.
+# expect-error: may be the same list and is used later
+# expect-exit: 1
+temper def f(c: bool) -> int:
+    a = [1]
+    b = a
+    (a if c else b).append(2)
+    return len(a) + len(b)
+print(f(True))

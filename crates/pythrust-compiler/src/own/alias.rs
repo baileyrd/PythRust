@@ -56,7 +56,13 @@ struct Val {
 }
 
 /// Per local, what it may be.
-type State = Vec<Val>;
+#[derive(Debug, Clone, PartialEq)]
+struct State {
+    values: Vec<Val>,
+    /// A temporary's possible source names, each with its own value.
+    /// None preserves alternatives made by calls or fresh expressions.
+    origins: Vec<BTreeMap<Option<Key>, Val>>,
+}
 
 /// Something the body may use later: a local, or a module variable
 /// it, or a function it calls, reads.
@@ -71,8 +77,8 @@ type Live = BTreeSet<Key>;
 /// Who changes a list.
 #[derive(Debug, Clone, Copy)]
 enum Writer {
-    /// The body, through a local.
-    Local(LocalId),
+    /// The body, through a local and one possible source identity.
+    Local(LocalId, Option<Key>),
     /// A callee, in a module variable's list: through that variable,
     /// if one.
     Callee(FuncId, Option<GlobalId>),
@@ -221,9 +227,8 @@ struct Body<'a> {
     summaries: &'a [Summary],
     flow: Flow<'a>,
     effects: &'a Effects,
-    /// Per local, the variables it was read from: itself for a variable,
-    /// for a temporary the variables or module variables its value
-    /// comes from.
+    /// Flow-insensitive source names, only for module write summaries.
+    /// Mutation checks use the per-alternative origins in State.
     roots: Vec<Live>,
     /// The locals `return` assigns.
     results: BTreeSet<LocalId>,
@@ -303,11 +308,15 @@ impl<'a> Body<'a> {
 
     /// Each block's entry state, `None` if unreachable.
     fn entries(&self) -> Vec<Option<State>> {
-        let mut start: State = vec![Val::default(); self.func.locals.len()];
+        let mut start = State {
+            values: vec![Val::default(); self.func.locals.len()],
+            origins: vec![BTreeMap::new(); self.func.locals.len()],
+        };
         for (i, p) in self.func.params.iter().enumerate() {
             if self.lists(*p) {
                 let ty = self.ty(*p);
-                start[p.0].locs.insert(root(Obj::Param(i), ty));
+                start.values[p.0].locs.insert(root(Obj::Param(i), ty));
+                start.origins[p.0].insert(Some(Key::Local(*p)), start.values[p.0].clone());
             }
         }
         let mut entries: Vec<Option<State>> = vec![None; self.func.blocks.len()];
@@ -345,11 +354,51 @@ impl<'a> Body<'a> {
                 ) {
                     age(state, *dest);
                 }
-                state[dest.0] = self.value(*dest, value, state);
+                let val = self.value(*dest, value, state);
+                let origins = self.origins(*dest, value, &val, state);
+                state.values[dest.0] = val;
+                state.origins[dest.0] = origins;
             }
-            Inst::Release(l) | Inst::Forget(l) => state[l.0] = Val::default(),
+            Inst::Release(l) | Inst::Forget(l) => {
+                state.values[l.0] = Val::default();
+                state.origins[l.0].clear();
+            }
             _ => {}
         }
+    }
+
+    /// Keep each alternative's source through copies, projections and CFG
+    /// joins. A named assignment starts a new identity, even for an alias.
+    fn origins(
+        &self,
+        dest: LocalId,
+        rv: &Rvalue,
+        value: &Val,
+        state: &State,
+    ) -> BTreeMap<Option<Key>, Val> {
+        if self.named(dest) {
+            return BTreeMap::from([(Some(Key::Local(dest)), value.clone())]);
+        }
+        if let Rvalue::Global(g) = rv {
+            return BTreeMap::from([(Some(Key::Global(*g)), value.clone())]);
+        }
+        let Some(Operand::Local(src)) = projected(rv) else {
+            return BTreeMap::from([(None, value.clone())]);
+        };
+        state.origins[src.0]
+            .iter()
+            .map(|(key, v)| {
+                let projected = match rv {
+                    Rvalue::Field(_, k) => self.field(v, *k, self.ty(dest)),
+                    Rvalue::Index(..) | Rvalue::Entry(..) => Val {
+                        locs: self.step(&v.locs, self.ty(dest)),
+                        fields: None,
+                    },
+                    _ => v.clone(),
+                };
+                (*key, projected)
+            })
+            .collect()
     }
 
     /// What `rv` may give `dest`.
@@ -528,7 +577,7 @@ impl<'a> Body<'a> {
     /// The lists `key` may be.
     fn locs(&self, key: Key, state: &State) -> Locs {
         match key {
-            Key::Local(l) => state[l.0].locs.clone(),
+            Key::Local(l) => state.values[l.0].locs.clone(),
             Key::Global(g) => {
                 let ty = self.program.globals[g.0];
                 let ty = match self.program.compound(ty) {
@@ -571,7 +620,16 @@ impl<'a> Body<'a> {
             let Operand::Local(w) = op else {
                 continue;
             };
-            self.change(Writer::Local(w), &state[w.0].locs, how, state, live, span)?;
+            for (origin, value) in &state.origins[w.0] {
+                self.change(
+                    Writer::Local(w, *origin),
+                    &value.locs,
+                    how,
+                    state,
+                    live,
+                    span,
+                )?;
+            }
         }
         let Inst::Assign {
             value: Rvalue::Call(f, _),
@@ -644,9 +702,9 @@ impl<'a> Body<'a> {
         live: &Live,
         span: Span,
     ) -> Result<()> {
-        let (itself, roots) = match writer {
-            Writer::Local(w) => (Some(Key::Local(w)), self.roots[w.0].clone()),
-            Writer::Callee(_, g) => (None, g.map(Key::Global).into_iter().collect()),
+        let (itself, origin) = match writer {
+            Writer::Local(w, origin) => (Some(Key::Local(w)), origin),
+            Writer::Callee(_, g) => (None, g.map(Key::Global)),
         };
         let clash =
             |k: &&Key| Some(**k) != itself && self.overlaps(&self.locs(**k, state), changed, how);
@@ -655,7 +713,7 @@ impl<'a> Body<'a> {
                 Key::Local(l) => self.named(*l),
                 Key::Global(_) => true,
             });
-        let other = named.into_iter().find(|k| !roots.contains(k));
+        let other = named.into_iter().find(|k| Some(**k) != origin);
         let message = match (other, loops.first()) {
             (Some(a), _) => self.aliased(writer, *a),
             (None, Some(_)) => format!(
@@ -672,7 +730,7 @@ impl<'a> Body<'a> {
     /// What `writer` changes, for a message: `` `b` ``, or a list.
     fn subject(&self, writer: Writer) -> String {
         match writer {
-            Writer::Local(_) => self
+            Writer::Local(..) => self
                 .writer_name(writer)
                 .map_or("a list".into(), |b| format!("`{b}`")),
             Writer::Callee(f, _) => format!("a list through `{}`", self.program.funcs[f.0].name),
@@ -682,7 +740,7 @@ impl<'a> Body<'a> {
     /// The variable `writer` changes through, if it is one.
     fn writer_name(&self, writer: Writer) -> Option<&str> {
         match writer {
-            Writer::Local(w) => self.func.names.get(&w).map(String::as_str),
+            Writer::Local(w, _) => self.func.names.get(&w).map(String::as_str),
             Writer::Callee(..) => None,
         }
     }
@@ -705,7 +763,7 @@ impl<'a> Body<'a> {
         };
         // A parameter is the caller's list: copy the other name instead.
         let copied = match writer {
-            Writer::Local(w) if !self.func.params.contains(&w) => self.func.names.get(&w),
+            Writer::Local(w, _) if !self.func.params.contains(&w) => self.func.names.get(&w),
             _ => None,
         };
         match copied {
@@ -868,7 +926,11 @@ fn age(state: &mut State, dest: LocalId) {
         });
         *locs = aged.collect();
     };
-    for v in state.iter_mut() {
+    for v in state
+        .values
+        .iter_mut()
+        .chain(state.origins.iter_mut().flat_map(|o| o.values_mut()))
+    {
         age_all(&mut v.locs);
         v.fields.iter_mut().flatten().for_each(age_all);
     }
@@ -881,10 +943,18 @@ fn join(into: &mut Option<State>, state: &State) -> bool {
         return true;
     };
     let mut grew = false;
-    for (a, b) in into.iter_mut().zip(state) {
+    for (a, b) in into.values.iter_mut().zip(&state.values) {
         let joined = join_val(a, b);
         grew |= joined != *a;
         *a = joined;
+    }
+    for (a, b) in into.origins.iter_mut().zip(&state.origins) {
+        for (key, value) in b {
+            let old = a.entry(*key).or_default();
+            let joined = join_val(old, value);
+            grew |= joined != *old;
+            *old = joined;
+        }
     }
     grew
 }
@@ -911,7 +981,7 @@ fn join_val(a: &Val, b: &Val) -> Val {
 
 fn val(state: &State, op: Operand) -> Val {
     match op {
-        Operand::Local(l) => state[l.0].clone(),
+        Operand::Local(l) => state.values[l.0].clone(),
         _ => Val::default(),
     }
 }
