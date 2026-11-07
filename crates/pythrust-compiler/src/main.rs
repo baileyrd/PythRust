@@ -460,7 +460,8 @@ fn same_file(a: &Path, b: &Path) -> Result<bool, String> {
     Ok(canonical(a)? == canonical(b)?)
 }
 
-/// Writes `object` into `dir` and links it with `runtime` into `out`.
+/// Links inside `dir`, then publishes into `out` on the same filesystem.
+/// A failed link or rename must leave the previous executable untouched.
 fn link_in(dir: &Path, object: &[u8], runtime: &Runtime, out: &Path) -> Result<(), String> {
     let obj = dir.join(OBJECT);
     std::fs::OpenOptions::new()
@@ -469,17 +470,25 @@ fn link_in(dir: &Path, object: &[u8], runtime: &Runtime, out: &Path) -> Result<(
         .open(&obj)
         .and_then(|mut f| f.write_all(object))
         .map_err(|e| format!("pythrust: cannot write {}: {e}\n", obj.display()))?;
+    // A fixed name distinct from OBJECT also handles `program.o.pyr`.
+    // Keep the host extension for MSVC; all side products stay in `dir`.
+    let staged = dir
+        .join("executable")
+        .with_extension(std::env::consts::EXE_EXTENSION);
     let mut linker = linker()?;
     let output = linker
         .arg(&obj)
         .arg(&runtime.lib)
         .args(&runtime.native)
         .args(LINK_FLAGS)
-        .args(output_args(out))
+        .args(output_args(&staged))
         .output()
         .map_err(|e| format!("pythrust: cannot run {}: {e}\n", linker_name(&linker)))?;
     if output.status.success() {
-        return Ok(());
+        // std replaces an existing file on Unix and Windows. Never delete
+        // `out` first: replacement can fail (e.g. a running Windows exe).
+        return std::fs::rename(&staged, out)
+            .map_err(|e| format!("pythrust: cannot publish {}: {e}\n", out.display()));
     }
     // `link.exe` reports errors on stdout, `cc` on stderr; show both.
     Err(format!(

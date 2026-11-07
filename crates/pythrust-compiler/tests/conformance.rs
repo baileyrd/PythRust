@@ -68,6 +68,8 @@ use pythrust_compiler::own::{self, Precision};
 use pythrust_compiler::{infer, lexer, lower, parser, rc, TokenKind};
 
 mod common;
+#[path = "conformance/link.rs"]
+mod link;
 use common::Scratch;
 
 type Res<T> = std::result::Result<T, String>;
