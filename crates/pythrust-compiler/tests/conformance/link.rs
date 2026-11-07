@@ -66,6 +66,25 @@ fn failed_native_link_preserves_executable_and_success_replaces_it() {
     build_runtime().unwrap();
     let tmp = common::scratch("link", "preserve");
     let archive = missing_runtime(&tmp);
+    check_replacement(&tmp, &archive);
+}
+
+/// Exercise the same failure and success checks through a symlinked cwd,
+/// as macOS's `/var` temporary roots are aliases of `/private/var`.
+#[cfg(unix)]
+#[test]
+fn native_link_preserves_executable_through_a_symlinked_working_directory() {
+    build_runtime().unwrap();
+    let tmp = common::scratch("link", "symlinked_cwd");
+    let archive = missing_runtime(&tmp);
+    let actual = tmp.join("actual");
+    let alias = tmp.join("alias");
+    fs::create_dir(&actual).unwrap();
+    std::os::unix::fs::symlink(&actual, &alias).unwrap();
+    check_replacement(&alias, &archive);
+}
+
+fn check_replacement(root: &Path, archive: &Path) {
     // Object-like names must never collide with the private object file.
     for name in [
         "app",
@@ -75,7 +94,7 @@ fn failed_native_link_preserves_executable_and_success_replaces_it() {
         "-option",
         "@response",
     ] {
-        let dir = tmp.join(format!("nested {name}"));
+        let dir = root.join(format!("nested {name}"));
         fs::create_dir(&dir).unwrap();
         let source = dir.join(format!("{name}.pyr"));
         let executable = source.with_extension(std::env::consts::EXE_EXTENSION);
@@ -87,11 +106,20 @@ fn failed_native_link_preserves_executable_and_success_replaces_it() {
         let previous = fs::read(&executable).unwrap();
         let permissions = fs::metadata(&executable).unwrap().permissions();
         fs::write(&source, "print(43)\n").unwrap();
-        let output = build(&dir, &relative, Some(&archive));
+        let output = build(&dir, &relative, Some(archive));
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         let error = String::from_utf8_lossy(&output.stderr);
+        // Unix getcwd resolves directory aliases (including macOS /var).
+        // Match the child's cwd identity, keeping the exact destination.
+        let diagnostic = if cfg!(unix) {
+            fs::canonicalize(&dir)
+                .unwrap()
+                .join(executable.file_name().unwrap())
+        } else {
+            executable.clone()
+        };
         assert!(
-            error.contains(&format!("linking {} failed:", executable.display())),
+            error.contains(&format!("linking {} failed:", diagnostic.display())),
             "{error}"
         );
         let lower = error.to_lowercase();
@@ -111,7 +139,7 @@ fn failed_native_link_preserves_executable_and_success_replaces_it() {
         runs(&executable, b"43\n");
         no_staging(&dir);
         fs::remove_file(&executable).unwrap();
-        let output = build(&dir, &source, Some(&archive));
+        let output = build(&dir, &source, Some(archive));
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("linking "),
