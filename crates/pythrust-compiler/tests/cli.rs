@@ -499,3 +499,31 @@ fn the_rust_flag_names_the_manifest() {
         .unwrap();
     assert!(text(&out.stderr).contains("pythrust.toml"), "{out:?}");
 }
+
+#[test]
+fn loose_callee_stores_reach_tempered_call_checks() {
+    let tmp = scratch("loose_callee_stores_reach_tempered_call_checks");
+    let prefix = "temper def add(mut rows: list[list[int]], owned row: list[int]) -> None:\n    rows.append(row)\nrows: list[list[int]] = []\nrow = [1]\n";
+    for (name, store) in [
+        ("direct", "rows.append(row)\n"),
+        ("captured", "def stash():\n    rows.append(row)\nstash()\n"),
+        (
+            "parameter",
+            "def stash(x):\n    rows.append(x)\nstash(row)\n",
+        ),
+    ] {
+        let src = format!("{prefix}{store}add(rows, row)\nprint(rows)\n");
+        for command in ["check", "run", "build"] {
+            let out = pythrust(command, &tmp, name, &src);
+            let err = text(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{command} {name}: {err}");
+            assert!(
+                err.contains("tempered `add` keeps `row` after it returns"),
+                "{err}"
+            );
+            assert!(err.contains("may also pass that list as `rows`"), "{err}");
+            assert!(err.contains("pass a copy (`list(...)`)"), "{err}");
+            assert!(out.stdout.is_empty(), "{command} {name}: {out:?}");
+        }
+    }
+}

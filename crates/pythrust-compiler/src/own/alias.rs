@@ -812,7 +812,7 @@ impl<'a> Body<'a> {
         let params = (0..self.func.params.len()).map(Obj::Param);
         match obj {
             Obj::Param(_) => Objs::from([obj, Obj::World]),
-            Obj::World => params.chain([Obj::World]).collect(),
+            Obj::World | Obj::Global(_) => params.chain([Obj::World]).collect(),
             Obj::Fresh(..) => Objs::from([obj]),
         }
     }
