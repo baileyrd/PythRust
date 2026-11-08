@@ -410,7 +410,7 @@ fn a_second_name_changed_while_the_first_is_used_is_an_error() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes `b` while `a` may be the same list and is used later; copy instead of sharing it: `b = list(a)`".into(),
+            "tempered `f` changes `b` while `a` may be the same list and is used later; copy the current value before this change: `b = list(b)`".into(),
             "b.append(2)".into()
         ))
     );
@@ -443,7 +443,7 @@ fn a_list_inside_another_is_its_own_list() {
     assert_eq!(
         alias_err(through),
         Some((
-            "tempered `f` changes a list while `r` may be the same list and is used later; copy instead of sharing it: `r = list(...)`".into(),
+            "tempered `f` changes a list while `r` may be the same list and is used later; make independent values before sharing them; a shallow copy may still share nested lists, dicts or sets".into(),
             "rows[0].append(1)".into()
         ))
     );
@@ -467,7 +467,7 @@ fn changing_a_list_a_loop_runs_over_is_an_error() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes `xs` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(xs)`".into(),
+            "tempered `f` changes `xs` while a `for` loop over it is running; loop over a copy, which costs one: replace the iterated `xs` with `list(xs)`".into(),
             "xs.append(x)".into()
         ))
     );
@@ -480,7 +480,7 @@ fn changing_a_dict_or_set_a_loop_runs_over_is_an_error() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes `d` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(d)`".into(),
+            "tempered `f` changes `d` while a `for` loop over it is running; loop over a copy, which costs one: replace the iterated `d` with `list(d)`".into(),
             "d[k + \"x\"]".into()
         ))
     );
@@ -732,7 +732,7 @@ fn a_parameter_may_be_a_global() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes `xs` while `other` may be the same list and is used later; copy instead of sharing it: `other = list(...)`".into(),
+            "tempered `f` changes `xs` while `other` may be the same list and is used later; make independent values before sharing them; a shallow copy may still share nested lists, dicts or sets".into(),
             "xs.append(2)".into()
         ))
     );
@@ -777,7 +777,7 @@ fn a_module_variable_read_after_a_change_is_used_later() {
     assert_eq!(
         alias_err(src),
         Some((
-            "tempered `f` changes `xs` while module variable `saved` may be the same list and is used later; pass a copy instead, such as `list(saved)`".into(),
+            "tempered `f` changes `xs` while module variable `saved` may be the same list and is used later; make independent values before sharing them; a shallow copy may still share nested lists, dicts or sets".into(),
             "xs.append(2)".into()
         ))
     );
@@ -805,7 +805,7 @@ fn a_callee_changing_a_module_list_is_a_change() {
     assert_eq!(
         alias_err(looped),
         Some((
-            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(...)`".into(),
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy, which costs one: replace the iterated `saved` with `list(saved)`".into(),
             "touch()".into()
         ))
     );
@@ -832,7 +832,7 @@ fn a_callee_may_change_a_list_the_body_stored_in_a_module_list() {
     assert_eq!(
         alias_err(&looped),
         Some((
-            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list(...)`".into(),
+            "tempered `f` changes a list through `touch` while a `for` loop over it is running; loop over a copy, which costs one: replace the iterated `a` with `list(a)`".into(),
             "touch()".into()
         ))
     );
@@ -853,7 +853,7 @@ fn a_module_list_a_callee_returns_may_be_one_the_body_stored() {
     assert_eq!(
         alias_err(&format!("{get}{body}")),
         Some((
-            "tempered `f` changes `b` while `a` may be the same list and is used later; copy instead of sharing it: `b = list(a)`".into(),
+            "tempered `f` changes `b` while `a` may be the same list and is used later; copy the current value before this change: `b = list(b)`".into(),
             "b.append(2)".into()
         ))
     );
@@ -902,7 +902,7 @@ fn calls_from_any_caller_are_checked() {
     assert_eq!(
         mode_err(&format!("{ADD}{twice}")),
         (
-            "tempered `twice` changes a list while `row` may be the same list and is used later; copy instead of sharing it: `row = list(...)`".into(),
+            "tempered `twice` changes a list while `row` may be the same list and is used later; make independent values before sharing them; a shallow copy may still share nested lists, dicts or sets".into(),
             "add(rows, row)".into()
         )
     );
@@ -1517,7 +1517,7 @@ fn tasks_leave_the_other_functions_checked() {
         "{TASKS}temper def f(mut a: list[int]) -> int:\n    b = a\n    b.append(1)\n    return len(a)\nprint(f([1]))\n"
     );
     assert!(
-        mode_err(&both).0.contains("copy instead of sharing it"),
+        mode_err(&both).0.contains("copy the current value"),
         "{both}"
     );
     assert_eq!(analyzed(TASKS).precision, Precision::Precise);
@@ -2187,4 +2187,195 @@ fn joined_receivers_keep_origins_through_loops() {
     assert_eq!(checked(&src.replace("b = a", "b = [2]")), Ok(()));
     let iterated = "temper def f(c: bool) -> int:\n    a = [1]\n    b = [2]\n    for i in a:\n        (a if c else b).append(i)\n    return 0\nprint(f(True))\n";
     assert!(alias_err(iterated).unwrap().0.contains("a `for` loop"));
+}
+
+/// Card #812: D4 needs evidence for its container, loop and copy advice.
+#[test]
+fn d4_reports_the_actual_context() {
+    let mut failures = Vec::new();
+    for (ty, item, change, noun) in [
+        ("list[int]", "[1]", "append(x + 1)", "list"),
+        ("set[int]", "{1}", "add(x + 1)", "set"),
+        ("dict[int, int]", "{1: 2}", "", "dict"),
+    ] {
+        let change = if change.is_empty() {
+            "rows[0][x + 1] = 3".to_string()
+        } else {
+            format!("rows[0].{change}")
+        };
+        let src = format!("temper def f(mut rows: list[{ty}]) -> int:\n    for x in rows[0]:\n        {change}\n    return 0\nprint(f([{item}]))\n");
+        let message = alias_err(&src).unwrap().0;
+        if !message.contains(&format!("changes a {noun}"))
+            || !message.contains("`for` loop")
+            || message.contains("...")
+        {
+            failures.push(format!("{noun}: {message}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn d4_live_argument_temporary_is_not_a_loop() {
+    let src = "temper def grow(mut rows: list[list[int]]) -> int:\n    rows[0].append(2)\n    return 0\ntemper def h(xs: list[int], n: int) -> int:\n    return len(xs) + n\ntemper def f(mut rows: list[list[int]]) -> int:\n    return h(rows[0], grow(rows))\nprint(f([[1]]))\n";
+    let message = alias_err(src).unwrap().0;
+    assert!(message.contains("temporary"), "{message}");
+    assert!(!message.contains("loop"), "{message}");
+    assert!(!message.contains("..."), "{message}");
+}
+
+#[test]
+fn d4_optional_sources_do_not_offer_invalid_copies() {
+    let src = include_str!("../../../../examples/aliasing_optional_named.pyr");
+    let message = alias_err(src).unwrap().0;
+    assert!(message.contains("a = list(a)"), "{message}");
+    assert!(!message.contains("a = list(b)"), "{message}");
+    assert!(!message.contains("..."), "{message}");
+    assert!(!message.contains("loop"), "{message}");
+    let fixed = src.replace("    a.append(2)", "    a = list(a)\n    a.append(2)");
+    assert_eq!(checked(&fixed), Ok(()));
+}
+
+#[test]
+fn d4_optional_temporary_does_not_name_a_fabricated_source() {
+    let src = "temper def f() -> int:\n    a = [1]\n    b: list[int] | None = a\n    if b is None:\n        return 0\n    b.append(2)\n    return len(a)\nprint(f())\n";
+    let message = alias_err(src).unwrap().0;
+    assert!(!message.contains("list("), "{message}");
+    assert!(!message.contains("..."), "{message}");
+    assert!(!message.contains("loop"), "{message}");
+    // Copying the original literal cannot break this later sharing.
+    assert!(alias_err(&src.replace("a = [1]", "a = list([1])")).is_some());
+}
+
+#[test]
+fn d4_loop_context_survives_multiple_and_nested_loops() {
+    for (target, iterable) in [
+        ("x", "xs"),
+        ("i, x", "enumerate(xs)"),
+        ("x, y", "zip(xs, [1, 2])"),
+        ("i, pair", "enumerate(zip(xs, [1, 2]))"),
+    ] {
+        let src = format!("temper def f() -> None:\n    xs = [1, 2]\n    for before in [0]:\n        pass\n    for outer in [0]:\n        if True:\n            for {target} in {iterable}:\n                xs.append(3)\nf()\n");
+        let message = alias_err(&src).unwrap().0;
+        assert!(
+            message.contains("a `for` loop over it is running"),
+            "{iterable}: {message}"
+        );
+        assert!(message.contains("`list(xs)`"), "{message}");
+        assert_eq!(
+            checked(&src.replace(
+                &format!("in {iterable}:"),
+                &format!("in {}:", iterable.replace("xs", "list(xs)"))
+            )),
+            Ok(())
+        );
+    }
+    // A loop elsewhere is not evidence that this call's live argument is
+    // a loop reference, even when both are inside another loop's body.
+    let src = include_str!("../../../../examples/aliasing_argument_temporary.pyr");
+    let nested = src.replace(
+        "    return h(rows[0], grow(rows))",
+        "    for x in [0]:\n        return h(rows[0], grow(rows))\n    return 0",
+    );
+    let message = alias_err(&nested).unwrap().0;
+    assert!(message.contains("temporary value"), "{message}");
+    assert!(!message.contains("`for` loop"), "{message}");
+}
+
+#[test]
+fn d4_named_containers_and_uncertain_sources_keep_honest_advice() {
+    for (ty, value, change, noun) in [
+        ("set[int]", "{1}", "b.add(2)", "set"),
+        ("dict[int, int]", "{1: 2}", "b[2] = 3", "dict"),
+        ("list[list[int]]", "[[1]]", "b[0].append(2)", "list"),
+    ] {
+        let src = format!("temper def f() -> int:\n    a: {ty} = {value}\n    b = a\n    {change}\n    return len(a)\nprint(f())\n");
+        // The nested-list case uses the outer list later, which is not
+        // itself a second name for the mutated inner list. Keep a live
+        // inner alias so rejection still applies.
+        let src = if noun == "list" {
+            src.replace("    b[0].append(2)", "    c = a[0]\n    b[0].append(2)")
+                .replace("return len(a)", "return len(c)")
+        } else {
+            src
+        };
+        let message = alias_err(&src).unwrap().0;
+        assert!(message.contains(&format!("same {noun}")), "{message}");
+        assert!(!message.contains("list("), "{message}");
+        assert!(!message.contains("loop"), "{message}");
+    }
+    let src = "temper def f(flag: bool) -> int:\n    a = [1]\n    b = a if flag else [2]\n    b.append(3)\n    return len(a)\nprint(f(True))\n";
+    let message = alias_err(src).unwrap().0;
+    assert!(!message.contains("b = list(a)"), "{message}");
+    assert!(message.contains("b = list(b)"), "{message}");
+    let fixed = src.replace("    b.append(3)", "    b = list(b)\n    b.append(3)");
+    assert_eq!(checked(&fixed), Ok(()));
+}
+
+#[test]
+fn d4_does_not_insert_copies_inside_larger_or_effectful_expressions() {
+    let nested = "temper def h(xs: list[int], n: None) -> int:\n    return len(xs)\ntemper def f() -> int:\n    a = [1]\n    b = a\n    return h(b, b.append(2)) + len(a)\nprint(f())\n";
+    let effectful = "shelf: list[list[int]] = []\ntemper def remember(owned xs: list[int]) -> int:\n    shelf.append(xs)\n    return 2\ntemper def f() -> int:\n    a = [1]\n    b = a\n    b.append(remember(b))\n    return len(a) + len(shelf[0])\nprint(f())\n";
+    for src in [nested, effectful] {
+        let message = alias_err(src).unwrap().0;
+        assert!(message.contains("make independent values"), "{message}");
+        assert!(!message.contains("list("), "{message}");
+    }
+}
+
+/// PR131 review: retaining an input while evaluating a later iterable is
+/// not evidence that the loop is already running.
+#[test]
+fn d4_pending_iterables_are_not_running_loops() {
+    let base = include_str!("../../../../examples/aliasing_pending_iterable.pyr");
+    let mut failures = Vec::new();
+    for (target, iterable) in [
+        ("pair, y", "zip(enumerate(xs), grow(xs))"),
+        ("pair, y", "zip(zip(xs, [0]), grow(xs))"),
+        ("i, pair", "enumerate(zip(enumerate(xs), grow(xs)))"),
+        ("pair, y", "zip(enumerate(zip(xs, [0])), grow(xs))"),
+    ] {
+        let src = base.replace(
+            "pair, y in zip(enumerate(xs), grow(xs))",
+            &format!("{target} in {iterable}"),
+        );
+        let (message, at) = alias_err(&src).unwrap();
+        if !message.contains("temporary value")
+            || message.contains("`for` loop")
+            || message.contains("list(")
+            || at != "grow(xs)"
+        {
+            failures.push(format!("{iterable}: {at}: {message}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn d4_active_outer_loops_survive_pending_or_ordinary_temporaries() {
+    let base = include_str!("../../../../examples/aliasing_pending_iterable.pyr");
+    let original = "    for pair, y in zip(enumerate(xs), grow(xs)):\n        print(pair)";
+    for (body, running) in [
+        ("    for outer in xs:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", true),
+        ("    for outer in xs:\n        print((xs,)[0], grow(xs))", true),
+        ("    for outer in [0]:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", false),
+        ("    for outer in xs:\n        pass\n    else:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", false),
+    ] {
+        let (message, at) = alias_err(&base.replace(original, body)).unwrap();
+        assert_eq!(at, "grow(xs)");
+        assert_eq!(message.contains("a `for` loop over it is running"), running, "{body}: {message}");
+        if !running { assert!(message.contains("temporary value"), "{message}"); }
+        assert!(!message.contains("list("), "a single snapshot cannot fix all live references: {message}");
+    }
+}
+
+#[test]
+fn d4_loop_target_binding_is_already_iteration() {
+    let src =
+        "temper def f(mut xs: list[int]) -> None:\n    for xs[0] in xs:\n        pass\nf([1])\n";
+    let message = alias_err(src).unwrap().0;
+    assert!(
+        message.contains("a `for` loop over it is running"),
+        "{message}"
+    );
 }

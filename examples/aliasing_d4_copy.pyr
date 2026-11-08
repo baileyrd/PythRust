@@ -1,0 +1,36 @@
+# Applied D4 hints: binding copies and snapshots separate flat containers.
+temper def aliases() -> tuple[list[int], list[int]]:
+    a = [1]
+    b = a
+    c = b
+    b = list(b)
+    b.append(2)
+    print(c)
+    return a, b
+
+
+temper def walk_list(mut xs: list[int]) -> None:
+    for x in list(xs):
+        xs.append(x + 10)
+
+
+temper def walk_set(mut s: set[int]) -> None:
+    for x in list(s):
+        s.add(x + 10)
+
+
+temper def walk_dict(mut d: dict[int, int]) -> None:
+    for k in list(d):
+        d[k + 10] = d[k] + 1
+
+
+print(aliases())
+xs = [1, 2]
+walk_list(xs)
+print(xs)
+s = {1, 2}
+walk_set(s)
+print(sorted(s))
+d = {1: 4, 2: 5}
+walk_dict(d)
+print(d)

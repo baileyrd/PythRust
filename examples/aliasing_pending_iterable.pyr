@@ -1,0 +1,15 @@
+# deviation: D4 rejects shared mutation before iteration; CPython retains aliases.
+# expect-error: while a temporary value may still refer to the changed container
+# expect-exit: 1
+temper def grow(mut xs: list[int]) -> list[int]:
+    xs.append(2)
+    return [0]
+
+
+temper def f(mut xs: list[int]) -> None:
+    for pair, y in zip(enumerate(xs), grow(xs)):
+        print(pair)
+
+
+print("start")
+f([1])
