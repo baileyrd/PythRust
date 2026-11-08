@@ -20,8 +20,8 @@ use crate::span::Span;
 use crate::stdlib::ModuleDef;
 use crate::token::{Token, TokenKind};
 
-/// Nesting limit for blocks, parentheses and unary chains. Hostile input
-/// gets a diagnostic instead of a stack overflow.
+/// Limit both recursive grammar calls and constructed expression height.
+/// Iterative folds must not bypass the bound protecting later passes and drop.
 const MAX_DEPTH: usize = 100;
 
 /// Parses a token stream that ends in exactly one `EndMarker`.
@@ -39,6 +39,9 @@ pub fn parse_with(tokens: &[Token], bindings: &[Binding]) -> Result<Module> {
 pub fn parse_stub(tokens: &[Token], name: &str) -> Result<Binding> {
     Parser::new(tokens, &[])?.stub(name)
 }
+
+mod depth;
+use depth::bounded;
 
 type Rule<'a, T> = fn(&mut Parser<'a>) -> Result<T>;
 
@@ -628,7 +631,7 @@ impl<'a> Parser<'a> {
     fn for_target(&mut self) -> Result<Target> {
         let start = self.tok(0).span;
         let (items, comma) = self.comma_list(Self::postfix)?;
-        to_target(self.tuple_or_single(items, comma, start))
+        to_target(self.tuple_or_single(items, comma, start)?)
     }
 
     /// `('if' | 'elif' | 'while') expr ':' block`. The caller has seen the
@@ -709,19 +712,19 @@ impl<'a> Parser<'a> {
     fn expr_list(&mut self) -> Result<Expr> {
         let start = self.tok(0).span;
         let (items, comma) = self.comma_list(Self::expr)?;
-        Ok(self.tuple_or_single(items, comma, start))
+        self.tuple_or_single(items, comma, start)
     }
 
-    fn tuple_or_single(&self, items: Vec<Expr>, comma: bool, start: Span) -> Expr {
+    fn tuple_or_single(&self, items: Vec<Expr>, comma: bool, start: Span) -> Result<Expr> {
         let items = match <[Expr; 1]>::try_from(items) {
-            Ok([single]) if !comma => return single,
+            Ok([single]) if !comma => return Ok(single),
             Ok(one) => Vec::from(one),
             Err(many) => many,
         };
-        Expr {
+        bounded(Expr {
             kind: ExprKind::Tuple(items),
             span: self.span_from(start),
-        }
+        })
     }
 
     fn expr(&mut self) -> Result<Expr> {
@@ -758,7 +761,7 @@ impl<'a> Parser<'a> {
             body: Box::new(body),
             orelse: Box::new(orelse),
         };
-        Ok(Expr { kind, span })
+        bounded(Expr { kind, span })
     }
 
     fn or_expr(&mut self) -> Result<Expr> {
@@ -775,7 +778,7 @@ impl<'a> Parser<'a> {
         }
         let start = self.bump().span;
         let operand = self.nested(Self::not_expr)?;
-        Ok(unary(UnaryOp::Not, start, operand))
+        unary(UnaryOp::Not, start, operand)
     }
 
     fn comparison(&mut self) -> Result<Expr> {
@@ -792,7 +795,7 @@ impl<'a> Parser<'a> {
             left: Box::new(left),
             rest,
         };
-        Ok(Expr { kind, span })
+        bounded(Expr { kind, span })
     }
 
     /// Consumes a `comp_op`, including the two-token `not in` and `is not`.
@@ -824,13 +827,13 @@ impl<'a> Parser<'a> {
         &mut self,
         operand: Rule<'a, Expr>,
         op_of: fn(&TokenKind) -> Option<Op>,
-        build: fn(Op, Expr, Expr) -> Expr,
+        build: fn(Op, Expr, Expr) -> Result<Expr>,
     ) -> Result<Expr> {
         let mut left = operand(self)?;
         while let Some(op) = op_of(self.peek()) {
             self.bump();
             let right = operand(self)?;
-            left = build(op, left, right);
+            left = build(op, left, right)?;
         }
         Ok(left)
     }
@@ -848,7 +851,7 @@ impl<'a> Parser<'a> {
         }
         let start = self.bump().span;
         let operand = self.nested(Self::factor)?;
-        Ok(unary(op, start, operand))
+        unary(op, start, operand)
     }
 
     /// `'-' INT` with nothing binding tighter after it, folded to one
@@ -879,7 +882,7 @@ impl<'a> Parser<'a> {
             return Ok(base);
         }
         let exponent = self.nested(Self::factor)?;
-        Ok(binary(BinOp::Pow, base, exponent))
+        binary(BinOp::Pow, base, exponent)
     }
 
     fn postfix(&mut self) -> Result<Expr> {
@@ -903,7 +906,7 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::RParen)?;
         check_args(&args)?;
-        Ok(Expr {
+        bounded(Expr {
             span: self.span_from(func.span),
             kind: ExprKind::Call {
                 func: Box::new(func),
@@ -936,7 +939,7 @@ impl<'a> Parser<'a> {
         self.bump();
         let index = self.expr()?;
         self.expect(&TokenKind::RBracket)?;
-        Ok(Expr {
+        bounded(Expr {
             span: self.span_from(value.span),
             kind: ExprKind::Subscript {
                 value: Box::new(value),
@@ -948,7 +951,7 @@ impl<'a> Parser<'a> {
     fn attr(&mut self, value: Expr) -> Result<Expr> {
         self.bump();
         let attr = self.expect_name("an attribute name")?;
-        Ok(Expr {
+        bounded(Expr {
             span: value.span.merge(attr.span),
             kind: ExprKind::Attr {
                 value: Box::new(value),
@@ -990,7 +993,7 @@ impl<'a> Parser<'a> {
             _ => return Err(self.unexpected("an expression")),
         };
         self.bump();
-        Ok(Expr {
+        bounded(Expr {
             kind,
             span: tok.span,
         })
@@ -1001,7 +1004,7 @@ impl<'a> Parser<'a> {
     fn paren(&mut self) -> Result<Expr> {
         let start = self.bump().span;
         if self.eat(&TokenKind::RParen) {
-            return Ok(Expr {
+            return bounded(Expr {
                 kind: ExprKind::Tuple(Vec::new()),
                 span: self.span_from(start),
             });
@@ -1010,7 +1013,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RParen)?;
         let span = self.span_from(start);
         self.widen_pauses(inner.span, span);
-        Ok(Expr {
+        bounded(Expr {
             kind: inner.kind,
             span,
         })
@@ -1031,7 +1034,7 @@ impl<'a> Parser<'a> {
             self.comma_list(Self::expr)?.0
         };
         self.expect(&TokenKind::RBracket)?;
-        Ok(Expr {
+        bounded(Expr {
             kind: ExprKind::List(items),
             span: self.span_from(start),
         })
@@ -1051,7 +1054,7 @@ impl<'a> Parser<'a> {
             }
         };
         self.expect(&TokenKind::RBrace)?;
-        Ok(Expr {
+        bounded(Expr {
             kind,
             span: self.span_from(start),
         })
@@ -1157,36 +1160,36 @@ fn int_literal(value: u64, span: Span) -> Result<i64> {
 
 // Node builders.
 
-fn unary(op: UnaryOp, start: Span, operand: Expr) -> Expr {
-    Expr {
+fn unary(op: UnaryOp, start: Span, operand: Expr) -> Result<Expr> {
+    bounded(Expr {
         span: start.merge(operand.span),
         kind: ExprKind::Unary {
             op,
             operand: Box::new(operand),
         },
-    }
+    })
 }
 
-fn binary(op: BinOp, left: Expr, right: Expr) -> Expr {
-    Expr {
+fn binary(op: BinOp, left: Expr, right: Expr) -> Result<Expr> {
+    bounded(Expr {
         span: left.span.merge(right.span),
         kind: ExprKind::Binary {
             op,
             left: Box::new(left),
             right: Box::new(right),
         },
-    }
+    })
 }
 
-fn logical(op: LogicalOp, left: Expr, right: Expr) -> Expr {
-    Expr {
+fn logical(op: LogicalOp, left: Expr, right: Expr) -> Result<Expr> {
+    bounded(Expr {
         span: left.span.merge(right.span),
         kind: ExprKind::Logical {
             op,
             left: Box::new(left),
             right: Box::new(right),
         },
-    }
+    })
 }
 
 fn error(span: Span, message: impl Into<String>) -> Diagnostic {
