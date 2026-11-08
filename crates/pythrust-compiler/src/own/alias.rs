@@ -610,7 +610,7 @@ impl<'a> Body<'a> {
         } = inst
         {
             if self.results.contains(dest) {
-                self.returned(&self.value(*dest, value, state).locs, *span)?;
+                self.returned(&self.value(*dest, value, state).locs, *dest, value, *span)?;
             }
         }
         let Some(span) = inst_span(inst) else {
@@ -777,7 +777,7 @@ impl<'a> Body<'a> {
     }
 
     /// D3: a result sharing a list with a parameter.
-    fn returned(&self, value: &Locs, span: Span) -> Result<()> {
+    fn returned(&self, value: &Locs, dest: LocalId, expression: &Rvalue, span: Span) -> Result<()> {
         let objs: Objs = value.iter().map(|l| l.obj).collect();
         let reached = self.flow.reachable(&objs);
         let f = &self.func.name;
@@ -785,21 +785,52 @@ impl<'a> Body<'a> {
             let region = self.flow.region(Obj::Param(i));
             let xs = self.name(*p);
             let message = if value.contains(&root(Obj::Param(i), self.ty(*p))) {
-                format!("tempered `{f}` returns its parameter `{xs}`; return a copy: `return list({xs})`")
+                format!("tempered `{f}` returns its parameter `{xs}`")
             } else if reached.iter().any(|o| region.contains(o)) {
-                format!(
-                    "tempered `{f}` returns a value sharing a list with its parameter `{xs}`; return a copy made with `list(...)`"
-                )
+                format!("tempered `{f}` returns a value sharing a list with its parameter `{xs}`")
             } else if self.lists(*p) && self.global_in(value, self.ty(*p)) {
                 format!(
-                    "tempered `{f}` returns a list a global holds, which its parameter `{xs}` may hold too; return a copy made with `list(...)`"
+                    "tempered `{f}` returns a list a global holds, which its parameter `{xs}` may hold too"
                 )
             } else {
                 continue;
             };
-            return Err(error(span, message));
+            return Err(error(
+                span,
+                format!("{message}; {}", self.return_hint(dest, expression)),
+            ));
         }
         Ok(())
+    }
+
+    /// A shallow copy fixes D3 only for a list with no mutable containers
+    /// in its elements. Name the returned local, never a possible alias source.
+    fn return_hint(&self, dest: LocalId, expression: &Rvalue) -> String {
+        let Some(Compound::List(element)) = self.program.compound(self.func.locals[dest.0]) else {
+            return "return an independent value that shares no lists, dicts or sets with the parameter".into();
+        };
+        if !self.copy_separates(*element) {
+            return "return an independent value; a shallow copy still shares nested lists, dicts or sets".into();
+        }
+        if let Rvalue::Use(Operand::Local(local)) = expression {
+            if let Some(name) = self.func.names.get(local) {
+                return format!("return a copy: `return list({name})`");
+            }
+        }
+        "return a copy made with `list(...)`".into()
+    }
+
+    /// Only immutable element shapes prove that copying the outer list
+    /// separates it. An exception, for example, may carry a mutable value.
+    fn copy_separates(&self, ty: Ty) -> bool {
+        match self.program.compound(ty) {
+            Some(Compound::Tuple(fields)) => fields.iter().all(|t| self.copy_separates(*t)),
+            Some(Compound::Opt(t)) => self.copy_separates(*t),
+            _ => matches!(
+                ty,
+                Ty::Int | Ty::Float | Ty::Bool | Ty::None | Ty::Str | Ty::Bytes | Ty::Range
+            ),
+        }
     }
 
     /// Whether `value` may hold a global's list, or one the body stored

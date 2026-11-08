@@ -179,3 +179,14 @@ Nano's post-M6 order (2026-11-03), step 1: where a string method lacks full Unic
 - [x] *str B:* `startswith endswith find rfind index rindex count upper lower`; `index`/`rindex` raise a tracked `ValueError` (D50), `upper`/`lower` map in full (D49); `start`, `end` and affix tuples are named errors (D55). Native calls `pt_str_affix`, `pt_str_find`, `pt_str_count` and `pt_str_case`. Corpus `str_methods_b` (non-ASCII, checked against CPython), `str_index_uncaught`, `str_search_arg_unsupported`, `str_case_unicode_version`.
 - [x] *Builtins 4a (D56, D57):* `abs ord chr sum min max any all`, over what `for` iterates; `chr` and an empty `min`/`max` raise a tracked `ValueError`, a float `sum` is CPython's compensated sum (`pythrust-rt/src/fsum.rs`, shared with the interpreter), and `any`/`all` of `map`'s results stop at the deciding one. Native lowering in `lower/reduce.rs`; runtime calls `pt_str_ord`, `pt_str_chr`, `pt_seq_fsum`. Corpus `builtins_reduce` (non-ASCII, checked against CPython), `builtin_ord_length`, `builtin_chr_surrogate`, `builtin_minmax_mixed`, `builtin_sum_start`, `builtin_abs_overflow`.
 - [x] *Builtins 4b:* `enumerate zip` (D51, D58), consumed directly and nested in each other, stepped lazily in CPython's order under `run` (`interp/zip.rs`) and `build` (`lower/zip.rs`, no runtime call). Corpus `enumerate_zip` (non-ASCII and `map` results, checked against CPython), `zip_changed_size`, `enumerate_overflow`, `enumerate_not_value`, `zip_not_value`.
+
+### Diagnostic follow-up #804
+
+D3 still rejects returned parameter aliases, including nested containers and
+already shallow-copied nested lists. Its copy hint is now restricted to returned
+lists whose elements contain no mutable containers; named hints copy the actual
+returned local. Ownership regressions cover nested list/tuple/dict/set/Optional
+shapes and applied flat-list fixes. The CLI regression checks identical rejection
+through `check`/`run`/`build` and executes the fixed conditional flat-list return
+in the interpreter and native code. Related to issue #73 item 2; its other
+findings are not declared resolved by this card.
