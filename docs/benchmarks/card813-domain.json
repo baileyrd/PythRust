@@ -1,0 +1,17 @@
+{
+  "kind": "untimed independent oracle; no performance data",
+  "collatz": {
+    "total": 131434272,
+    "longest": 524,
+    "maximum_value": 56991483520,
+    "cache_entries": 2168611
+  },
+  "sorting": {
+    "count": 300000,
+    "maximum_lcg_product": 2369763582350864175,
+    "input_sha256": "f28a8ef6d5ecacf7f2e8a2c1c3342f3ba746864deb197d766962af885b7e19e2",
+    "sorted_sha256": "239cd51d274e9c08c3b40609d846b9676f7cf19acbd4459ead3e38ff734e8e5b",
+    "encoding": "ASCII decimal integer plus LF per element"
+  },
+  "integer_domain": "All timed positive arithmetic within signed i64; checked Rust full runs additionally validate executed arithmetic"
+}
