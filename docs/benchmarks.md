@@ -315,3 +315,14 @@ variant: unchanged sorting improves about 41% and isolated integer access about
 56%, but matched float fallback slows 8.2% and 4.9% in repeated trials. The final
 change retains raw samples/counts, a reproducible patch and safety regressions;
 production access stays unchanged under the card's no-material-regressions gate.
+
+
+## Integer decimal formatting pilot (#811)
+
+A private safe stack decimal formatter preserves exact-sized owned storage and
+uses its proven ASCII length directly. [Fresh evidence](benchmarks/card811.md)
+shows repeatable same-host gains on the required serial/task/string/conversion
+matrix, with no material regression observed on an unchanged numeric control.
+Separate allocation/fault probes preserve two decimal allocations, zero decimal
+reallocations and fatal allocation failures. Independent review and required CI
+remain pending; this does not reopen #807 scope or held #396/PR119.

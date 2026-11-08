@@ -41,6 +41,7 @@ jobs:
           python -m unittest discover -s bench -p test_profile_workloads.py -v
           python -m unittest discover -s bench -p test_sha256_pilot.py -v
           python -m unittest discover -s bench -p test_int_list_access.py -v
+          python -m unittest discover -s bench -p test_int_format.py -v
       # The shipped toolchain: a release `pythrust` links the release
       # runtime, whose optimized code reads narrow arguments differently
       # from the debug runtime the tests above link.
