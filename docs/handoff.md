@@ -6,14 +6,19 @@ Read first, in order: `README.md`, `docs/design.md`, `docs/grammar.md`, `docs/ro
 
 ## State
 
-- Done: design sketch, roadmap, loose-syntax grammar (functions, ints, floats, strings, lists, tuples, control flow, optional annotations).
-- Exists in code: an empty `crates/pythrust-compiler` lib crate (`forbid(unsafe_code)`). Nothing else.
-- Decided: ints are `i64` with checked overflow; tempering is `temper def f(...)`; tuples are fixed-length, immutable, positionally typed.
-- Open: pause marker (`pause f(x)`?), shared-lock keyword (`shared`?), LLVM vs Cranelift. Do not decide these silently; propose and ask.
+Current implementation checkpoint: main `a6d8ca9485d01302b2130df82ba12b3ea8454c20` (PR #125 / Mill Board #804). The [roadmap](roadmap.md) remains the implementation inventory; [grammar.md](grammar.md) owns the language contract and CPython differences.
+
+- M0–M3 (contract, interpreter/checker and syntax), M4 (native backend) and M5 (tempering/ownership) are implemented. M6a–M6d deliver stdlib, Rust bindings, tasks/`pause`, manifest/lockfile, embedded binding-runtime source and the external-copy fclone-lite driver. This does not complete the full phase-5 vision: M6e waits for a second app; `shared[T]`, channels and other explicitly parked items retain their roadmap triggers.
+- Post-M6 step 1's string methods and builtins are implemented. Later language work and #806–#808 performance work remain planned. #767's phase/milestone mapping is unchanged.
+- #799 preserves an existing executable on link failure; #800 propagates loose-callee stores into ownership checks; #801 checks every possible computed alias source; #802 fixes tuple ordering across lengths and numeric fields; #803 bounds expression trees; #804 limits copy suggestions to safe flat-list fixes. Issue #73 remains open for its other findings.
+- Native corpus validation covers x86-64/AArch64 Linux, AArch64 macOS and x86-64 Windows (MSVC). #396 / PR #119 is held; x86-64 macOS and AArch64 Windows validation has not landed. See [native coverage and gaps](native.md#known-gaps) and [runtime resolution](native.md#runtime-resolution).
+- Cranelift, `pause <expr>`, `shared[T]` syntax and `.pyr` are decided. `shared[T]` is not implemented. [DECISIONS](handoff/DECISIONS.md), [QA](handoff/QA.md), [SPEC](handoff/SPEC.md) and [open questions](handoff/OPEN_QUESTIONS.md) preserve the rationale and deferrals.
+
+The Step-0 plan, parallel-thread notes, milestone definitions and first actions below are historical bootstrap instructions, not a current queue. Keep them for context; resume from the roadmap and current board state.
 
 ## Engineering rules
 
-- Small, terse, modular, pragmatic. Modular monolith: one crate, clear modules. No abstraction before two real call sites.
+- Small, terse, modular, pragmatic. Modular monolith: compiler and runtime crates, clear stage modules. No abstraction before two real call sites.
 - Explicit over implicit. Types everywhere. Flat control flow: guard clauses, early returns, at most 3 levels of nesting. Short single-purpose functions.
 - `Result` and `?`, never `unwrap()`/`expect()` outside tests. Never swallow errors; propagate with context.
 - Domain logic free of I/O. Immutable data; make illegal states unrepresentable.
@@ -80,7 +85,7 @@ Each milestone ends in something runnable.
 
 **M4. Native code (phase 3).** Backend chosen per G.1 and G.4. Compile the subset to a native binary. Exit: benchmark against CPython on 4 programs (a numeric loop, string building, list sorting, and multiple return plus tuple unpacking, which Nano added to measure boxed tuples); report the real speedup honestly, including where it is small. **Done 2026-10-26**; see [roadmap.md](roadmap.md#phase-3-native-status-m4-done) for the evidence and follow-ups.
 
-**M5. Tempering and ownership (phase 4).** `temper def` enforced: required annotations, explicit error types, borrow by default with inferred ownership, exception-to-Result lowering. Exit: a tempered function rejects what a loose one accepts, with diagnostics a Python programmer can act on, and no leaked Rust borrow-checker vocabulary. **Done 2026-10-30**; see [roadmap.md](roadmap.md#phase-4-m5-plan) for the evidence and the open D7 revisit.
+**M5. Tempering and ownership (phase 4).** `temper def` enforced: required annotations, explicit error types, borrow by default with inferred ownership, exception-to-Result lowering. Exit: a tempered function rejects what a loose one accepts, with diagnostics a Python programmer can act on, and no leaked Rust borrow-checker vocabulary. **Done 2026-10-30**; see [roadmap.md](roadmap.md#phase-4-m5-plan) for the evidence and the completed catchable-fault follow-up.
 
 **M6. Interop and ecosystem (phase 5).** Python typed bridge (dynamic import, stubs, runtime check at the crossing), Rust binary-level interop, one tool with one manifest and one lockfile for all three dependency kinds, uncolored concurrency with channels and the shared-lock wrapper. Exit: a real script that imports a Python package, calls a Rust crate, and runs tasks concurrently. Driven first by fclone-lite, a duplicate-file finder; order and stdlib direction in [roadmap.md](roadmap.md#phase-5-m6-plan) (Nano, 2026-10-31).
 
