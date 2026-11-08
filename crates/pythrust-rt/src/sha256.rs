@@ -21,34 +21,65 @@ const H0: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
 
-/// Mixes one 64-byte block into `h`.
+/// Mixes one 64-byte block into `h`, with a 16-word circular schedule.
 fn compress(h: &mut [u32; 8], block: &[u8; 64]) {
-    let mut w = [0u32; 64];
-    for (t, word) in block.as_chunks::<4>().0.iter().enumerate() {
-        w[t] = u32::from_be_bytes(*word);
-    }
-    for t in 16..64 {
-        let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3);
-        let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10);
-        w[t] = w[t - 16]
-            .wrapping_add(s0)
-            .wrapping_add(w[t - 7])
-            .wrapping_add(s1);
+    let mut w = [0u32; 16];
+    for (slot, word) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+        *slot = u32::from_be_bytes(*word);
     }
     let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = *h;
-    for t in 0..64 {
-        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-        let ch = (e & f) ^ (!e & g);
-        let t1 = hh
-            .wrapping_add(s1)
-            .wrapping_add(ch)
-            .wrapping_add(K[t])
-            .wrapping_add(w[t]);
-        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-        let maj = (a & b) ^ (a & c) ^ (b & c);
-        let t2 = s0.wrapping_add(maj);
-        (hh, g, f, e, d, c, b, a) = (g, f, e, d.wrapping_add(t1), c, b, a, t1.wrapping_add(t2));
+    // Each invocation has a constant round number: schedule indexes and K
+    // are static. Before round t >= 16, slot t % 16 still holds W[t-16];
+    // the other three reads hold W[t-15], W[t-7], W[t-2]. Replace it only
+    // after those reads. All additions are modulo 2^32 (FIPS 180-4).
+    macro_rules! round {
+        ($t:expr, $a:ident, $b:ident, $c:ident, $d:ident,
+         $e:ident, $f:ident, $g:ident, $h:ident) => {{
+            if $t >= 16 {
+                let x = w[($t + 1) % 16];
+                let y = w[($t + 14) % 16];
+                let s0 = x.rotate_right(7) ^ x.rotate_right(18) ^ (x >> 3);
+                let s1 = y.rotate_right(17) ^ y.rotate_right(19) ^ (y >> 10);
+                w[$t % 16] = w[$t % 16]
+                    .wrapping_add(s0)
+                    .wrapping_add(w[($t + 9) % 16])
+                    .wrapping_add(s1);
+            }
+            let s1 = $e.rotate_right(6) ^ $e.rotate_right(11) ^ $e.rotate_right(25);
+            let ch = ($e & $f) ^ (!$e & $g);
+            let t1 = $h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[$t])
+                .wrapping_add(w[$t % 16]);
+            let s0 = $a.rotate_right(2) ^ $a.rotate_right(13) ^ $a.rotate_right(22);
+            let maj = ($a & $b) ^ ($a & $c) ^ ($b & $c);
+            $d = $d.wrapping_add(t1);
+            $h = t1.wrapping_add(s0.wrapping_add(maj));
+        }};
     }
+    // Rotate the *names* instead of copying eight state words per round.
+    // Eight rounds restore the original name order.
+    macro_rules! eight_rounds {
+        ($t:expr) => {
+            round!($t, a, b, c, d, e, f, g, hh);
+            round!($t + 1, hh, a, b, c, d, e, f, g);
+            round!($t + 2, g, hh, a, b, c, d, e, f);
+            round!($t + 3, f, g, hh, a, b, c, d, e);
+            round!($t + 4, e, f, g, hh, a, b, c, d);
+            round!($t + 5, d, e, f, g, hh, a, b, c);
+            round!($t + 6, c, d, e, f, g, hh, a, b);
+            round!($t + 7, b, c, d, e, f, g, hh, a);
+        };
+    }
+    eight_rounds!(0);
+    eight_rounds!(8);
+    eight_rounds!(16);
+    eight_rounds!(24);
+    eight_rounds!(32);
+    eight_rounds!(40);
+    eight_rounds!(48);
+    eight_rounds!(56);
     for (x, y) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
         *x = x.wrapping_add(y);
     }
@@ -64,7 +95,7 @@ pub(crate) fn digest(data: &[u8]) -> [u8; 32] {
     last[..tail.len()].copy_from_slice(tail);
     last[tail.len()] = 0x80;
     let len = if tail.len() < 56 { 64 } else { 128 };
-    let bits = (data.len() as u64).wrapping_mul(8);
+    let bits = bit_length(data.len() as u64);
     last[len - 8..len].copy_from_slice(&bits.to_be_bytes());
     let padded = last[..len].as_chunks::<64>().0;
     padded.iter().for_each(|b| compress(&mut h, b));
@@ -73,6 +104,12 @@ pub(crate) fn digest(data: &[u8]) -> [u8; 32] {
         *chunk = word.to_be_bytes();
     }
     out
+}
+
+/// SHA's low 64 length bits; separate so overflow is testable without
+/// constructing a slice exceeding the address space. Preserves prior wrapping.
+fn bit_length(bytes: u64) -> u64 {
+    bytes.wrapping_mul(8)
 }
 
 /// `hexdigest()`: lowercase hex of `digest`.
@@ -133,5 +170,114 @@ mod tests {
         for (n, hex) in want {
             assert_eq!(hexdigest(&vec![b'a'; n]), hex, "{n} bytes");
         }
+    }
+    #[test]
+    fn deterministic_patterns_match_cpython() {
+        // CPython 3.13 hashlib, byte i = (i * 37 + 11) % 256.
+        let cases = [
+            (
+                0,
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                1,
+                "e7cf46a078fed4fafd0b5e3aff144802b853f8ae459a4f0c14add3314b7cc3a6",
+            ),
+            (
+                55,
+                "2900465fcb533e05a158fd2b3be0e5e3b03740d83060aa3580e0d98a96bf2384",
+            ),
+            (
+                56,
+                "31454ff48ef36af2f08fd511bdc37d9d5855ac23e992e5ff5445cb6b7674a674",
+            ),
+            (
+                63,
+                "5f6401b96532c36de4e65beec0409b69b1d181864c8009b7a04f43e5d56350d1",
+            ),
+            (
+                64,
+                "94eb5de4943613fd048dc93393ab06877405faa39c11f53e9386083339833e7e",
+            ),
+            (
+                65,
+                "fc518669b6eb4b4dd91827ecacef86689c725bd5bab888fd3b26dbb196eec954",
+            ),
+            (
+                119,
+                "b0dc41b1a384e2f1203f0351b38fbeaafceef577ce1191d5bfc25da39f721eae",
+            ),
+            (
+                120,
+                "5df24dd802ac26132ce608dcb5f09841eef039ee0f152acf98d26d17fe4e88e6",
+            ),
+            (
+                127,
+                "0fe729ff19257bd6fec853acc2ea355f6b34b58e6c0f684c3e188fcdfcd9baae",
+            ),
+            (
+                128,
+                "0aedd4856f8eba0963627336ad5144a9a7dbe12498e6066f0165fc97d8ddee4c",
+            ),
+            (
+                129,
+                "4f1757ae4bffbae86d775b831765b75af154d52f7deaa46dd378051a2d3ad57f",
+            ),
+            (
+                1024,
+                "ffbad8f947474cfdd5b2bb22d7e0bf5ee8ba2b7af859d0c2bb28622db6a4be47",
+            ),
+            (
+                65537,
+                "3123afca912e156e19bcd2055eb92e944cf6e6fdb0eef16d65464342ad1f5a1a",
+            ),
+        ];
+        for (n, want) in cases {
+            let data: Vec<u8> = (0..n).map(|i| ((i * 37 + 11) % 256) as u8).collect();
+            assert_eq!(hexdigest(&data), want, "{n} bytes");
+        }
+    }
+
+    #[test]
+    fn bit_length_preserves_wrapping_without_huge_slices() {
+        assert_eq!(bit_length(0), 0);
+        assert_eq!(bit_length(1), 8);
+        assert_eq!(bit_length((1 << 61) - 1), u64::MAX - 7);
+        assert_eq!(bit_length(1 << 61), 0);
+        assert_eq!(bit_length((1 << 61) + 1), 8);
+        assert_eq!(bit_length(u64::MAX), u64::MAX - 7);
+    }
+}
+
+/// Opt-in ordinary release microbenchmarks, separate from correctness tests.
+/// The #809 harness compiles this same module against both source revisions.
+#[cfg(test)]
+mod microbench {
+    use super::*;
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    #[test]
+    #[ignore = "manual release timing; use bench/sha256_pilot.py"]
+    fn compression() {
+        let block = black_box([0x5au8; 64]);
+        let mut state = H0;
+        let start = Instant::now();
+        for _ in 0..2_097_152 {
+            compress(black_box(&mut state), black_box(&block));
+        }
+        println!("sha256_micro_seconds={:.9}", start.elapsed().as_secs_f64());
+        black_box(state);
+    }
+
+    #[test]
+    #[ignore = "manual release timing; use bench/sha256_pilot.py"]
+    fn loaded_digest() {
+        let data = black_box(vec![0x5au8; 32 * 1024 * 1024]);
+        let start = Instant::now();
+        for _ in 0..4 {
+            black_box(digest(black_box(&data)));
+        }
+        println!("sha256_micro_seconds={:.9}", start.elapsed().as_secs_f64());
     }
 }

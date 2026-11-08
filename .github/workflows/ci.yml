@@ -37,7 +37,9 @@ jobs:
       - run: cargo test --locked
       - name: Benchmark harness logic (no performance gate)
         if: runner.os == 'Linux'
-        run: python -m unittest discover -s bench -p test_profile_workloads.py -v
+        run: |
+          python -m unittest discover -s bench -p test_profile_workloads.py -v
+          python -m unittest discover -s bench -p test_sha256_pilot.py -v
       # The shipped toolchain: a release `pythrust` links the release
       # runtime, whose optimized code reads narrow arguments differently
       # from the debug runtime the tests above link.

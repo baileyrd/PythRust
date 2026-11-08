@@ -43,6 +43,17 @@ Semantics kept from `run`: a read of a variable no assignment has reached fails 
 
 String methods and reduction/iterator builtins from [post-M6 step 1](roadmap.md#post-m6-step-1-strings-and-builtins) also build: Unicode-aware split/strip/case/search methods, `abs ord chr sum min max any all`, and lazily consumed `enumerate`/`zip`. List methods currently include `append`; planned methods such as list `index`/`count` have not landed. Tuple concatenation and cross-length ordering build; tuple multiplication is currently rejected by inference, even with a literal count. `list(xs)` is not a general iterable constructor; the [canonical differences](grammar.md#deviations-from-python) also record numeric conversion and list `+=` limitations. Coverage is corpus parity, not a claim that every checked program builds.
 
+### Portable SHA-256 pilot (#809)
+
+The native `pt_sha256_hex` ABI and whole-file bytes path are unchanged. Its shared
+safe Rust compressor now uses a 16-word circular schedule and statically expanded
+rounds; the interpreter compiles the same file, and bindings embed it. Padding,
+wrapping bit length and output retain FIPS/CPython parity. [Fresh measurements](benchmarks/card809.md)
+show 25–28% lower loaded-SHA and 20–30% lower full large-file fclone medians on
+one Linux x86-64 host, with warm synthetic tmpfs data. This is awaiting independent
+review/required CI; other targets have no performance claim. D22 and the locked
+dependency graph remain unchanged; it does not reopen rejected sha2/PR69.
+
 ### Exceptions
 
 An exception is a runtime sequence object whose descriptor is `x`, its kind's code (`ir::ExcKind`) as a digit, and its argument's type; its one slot holds the argument. Raising one makes it the current thread's *pending* exception (`pythrust-rt/src/exc.rs`), together with the diagnostic of the place it was raised, rendered at compile time around a marker the runtime fills with `ValueError: msg` if nothing catches it. The IR spells out every step, so codegen only translates:

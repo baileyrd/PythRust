@@ -1574,6 +1574,34 @@ fn os_matches_cpython_on_a_tree() -> Res<()> {
     Ok(())
 }
 
+/// Both backends compile the same SHA source; exercise its padding and
+/// repeated calls through the actual bytes/hash ABI against CPython 3.13.
+#[test]
+fn sha256_patterns_match_cpython() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("sha256-patterns")?;
+    let mut source = String::from("import hashlib\n");
+    for n in [
+        0, 1, 55, 56, 63, 64, 65, 119, 120, 127, 128, 129, 1024, 65_537,
+    ] {
+        let data: Vec<u8> = (0..n).map(|i| ((i * 37 + 11) % 256) as u8).collect();
+        let path = dir.join(format!("pattern-{n}.bin"));
+        fs::write(&path, data).map_err(|e| e.to_string())?;
+        source.push_str(&format!(
+            "f = open({:?}, 'rb')\ndata = f.read()\nf.close()\nprint(len(data), hashlib.sha256(data).hexdigest())\nprint(hashlib.sha256(data).hexdigest())\n",
+            path.to_string_lossy()
+        ));
+    }
+    let exe = native_case(&dir, "sha256-patterns", &source)?;
+    let src = exe.with_extension("pyr");
+    let want = run_cpython(&src)?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert_eq!(run_pythrust(&src)?, want);
+    assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
+    dir.pass();
+    Ok(())
+}
+
 /// `open`, `read` and `close` on real files, with bytes that need every
 /// `repr` escape, agree with CPython in both backends. Not a corpus
 /// program: the files are made here.
