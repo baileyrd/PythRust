@@ -870,7 +870,14 @@ pub unsafe extern "C" fn pt_seq_len(s: *const PtSeq) -> i64 {
 pub unsafe extern "C" fn pt_seq_get(s: *const PtSeq, i: i64, status: *mut u8) -> u64 {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
-    let Some((_, v)) = s.items.get(i, |k, v| inc(slot(s.desc, k), v)) else {
+    // The compiler's exact descriptor proves integer slots own no references.
+    // Keep Slot's ordinary bounds and borrow checks, including marked/held lists.
+    let found = if s.desc == b"li" {
+        s.items.get(i, |_, _| {})
+    } else {
+        s.items.get(i, |k, v| inc(slot(s.desc, k), v))
+    };
+    let Some((_, v)) = found else {
         // SAFETY: guaranteed by the caller.
         unsafe { report(status, 1) };
         return 0;
@@ -981,6 +988,11 @@ pub unsafe extern "C" fn pt_seq_item_held(s: *const PtSeq, i: i64, status: *mut 
 pub unsafe extern "C" fn pt_list_set(s: *const PtSeq, i: i64, v: u64) -> u8 {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
+    // Integers need no retain, transitive marking or release. This dispatch
+    // changes only that work: replace still checks borrowing and both bounds.
+    if s.desc == b"li" {
+        return u8::from(s.items.replace(i, v, |_| {}).is_none());
+    }
     let desc = slot(s.desc, 0);
     let Some(old) = s.items.replace(i, v, |marked| store(desc, v, marked)) else {
         return 1;
