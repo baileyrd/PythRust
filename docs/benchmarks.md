@@ -306,3 +306,12 @@ warm synthetic tmpfs workloads; CPython/OpenSSL still leads and no cold-disk,
 general I/O or cross-architecture speedup is claimed. The prototype awaits
 independent review and required CI. D22, dependencies, ABIs and whole-file reads
 remain unchanged; #810/#811 are not completed by this pilot.
+
+
+## Integer-list access dispatch experiment (#810)
+
+[Fresh same-host evidence](benchmarks/card810.md) rejects one exact-`li` dispatch
+variant: unchanged sorting improves about 41% and isolated integer access about
+56%, but matched float fallback slows 8.2% and 4.9% in repeated trials. The final
+change retains raw samples/counts, a reproducible patch and safety regressions;
+production access stays unchanged under the card's no-material-regressions gate.

@@ -1,0 +1,60 @@
+{
+  "before": {
+    "sorting": {
+      "stdout": "True 6 499909 999999\n",
+      "counts": {
+        "reads": 10852716,
+        "writes": 2714780,
+        "holds": 0,
+        "held_items": 0
+      }
+    },
+    "int_access": {
+      "stdout": "28000000\n",
+      "counts": {
+        "reads": 4000000,
+        "writes": 4000000,
+        "holds": 0,
+        "held_items": 0
+      }
+    },
+    "float_access": {
+      "stdout": "28000000.0\n",
+      "counts": {
+        "reads": 4000000,
+        "writes": 4000000,
+        "holds": 0,
+        "held_items": 0
+      }
+    }
+  },
+  "after": {
+    "sorting": {
+      "stdout": "True 6 499909 999999\n",
+      "counts": {
+        "reads": 10852716,
+        "writes": 2714780,
+        "holds": 0,
+        "held_items": 0
+      }
+    },
+    "int_access": {
+      "stdout": "28000000\n",
+      "counts": {
+        "reads": 4000000,
+        "writes": 4000000,
+        "holds": 0,
+        "held_items": 0
+      }
+    },
+    "float_access": {
+      "stdout": "28000000.0\n",
+      "counts": {
+        "reads": 4000000,
+        "writes": 4000000,
+        "holds": 0,
+        "held_items": 0
+      }
+    }
+  }
+}

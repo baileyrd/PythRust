@@ -11,7 +11,7 @@ Current implementation checkpoint: main `a6d8ca9485d01302b2130df82ba12b3ea8454c2
 - M0–M3 (contract, interpreter/checker and syntax), M4 (native backend) and M5 (tempering/ownership) are implemented. M6a–M6d deliver stdlib, Rust bindings, tasks/`pause`, manifest/lockfile, embedded binding-runtime source and the external-copy fclone-lite driver. This does not complete the full phase-5 vision: M6e waits for a second app; `shared[T]`, channels and other explicitly parked items retain their roadmap triggers.
 - #812 corrects the remaining issue #73 D4 container/context wording and Optional/temporary copy advice. Named flat-list receivers copy their current value before mutation; unproved rewrites use prose. Source-span loop facts only select wording: target binding/body establish active iteration; pending iterable evaluation and completed-loop else do not. Active outer loops retain their context while an inner iterable is evaluated. Alias analysis and rejection are unchanged. Regression coverage includes all original issue73 cases and applied D3/D4 fixes; independent review and hosted CI remain required.
 - Post-M6 step 1's string methods and builtins are implemented. #806 prototypes a bounded internal two-int return/unpack fast path, with allocation and release timing evidence in [benchmarks.md](benchmarks.md#internal-two-int-returnunpack-806); independent review and hosted CI remain required. #807 prototypes strict adjacent string-chain fusion (D64), with measured allocation/copy reduction on the isolated case and no gain on the existing string workload; independent review and hosted CI remain required. Later language work remains planned. #808 supplies a measurement-only [current baseline and ranked experiments](benchmarks/card808.md), pending independent review and hosted CI; it implements no recommendations. #767's phase/milestone mapping is unchanged.
-- #809's bounded safe scalar SHA-256 prototype retains shared-source interpreter/native behavior, D22, dependencies and ABIs. [Fresh same-host evidence](benchmarks/card809.md) shows loaded-SHA and full large-file fclone gains; independent review and hosted CI are pending. #810/#811 remain queued, and this does not reopen #566/PR69 or held #396.
+- #809's bounded safe scalar SHA-256 prototype retains shared-source interpreter/native behavior, D22, dependencies and ABIs. [Fresh same-host evidence](benchmarks/card809.md) shows loaded-SHA and full large-file fclone gains; independent review and hosted CI are pending. #811 remains queued, and this does not reopen #566/PR69 or held #396.
 - #799 preserves an existing executable on link failure; #800 propagates loose-callee stores into ownership checks; #801 checks every possible computed alias source; #802 fixes tuple ordering across lengths and numeric fields; #803 bounds expression trees; #804 limits copy suggestions to safe flat-list fixes. Issue #73 remains open pending review and merge of #812 plus independent confirmation of all four original findings.
 - Native corpus validation covers x86-64/AArch64 Linux, AArch64 macOS and x86-64 Windows (MSVC). #396 / PR #119 is held; x86-64 macOS and AArch64 Windows validation has not landed. See [native coverage and gaps](native.md#known-gaps) and [runtime resolution](native.md#runtime-resolution).
 - Cranelift, `pause <expr>`, `shared[T]` syntax and `.pyr` are decided. `shared[T]` is not implemented. [DECISIONS](handoff/DECISIONS.md), [QA](handoff/QA.md), [SPEC](handoff/SPEC.md) and [open questions](handoff/OPEN_QUESTIONS.md) preserve the rationale and deferrals.
@@ -28,6 +28,16 @@ The Step-0 plan, parallel-thread notes, milestone definitions and first actions 
 - Tests for all non-trivial logic: happy path plus failure and boundary cases.
 - Ask before large or hard-to-reverse changes (public API, dependency bumps, deletions). Keep diffs focused. State the why for non-obvious choices.
 - One branch and one PR per thread. Commit small.
+
+## Integer-list experiment #810
+
+The [exact-descriptor dispatch pilot](benchmarks/card810.md) is rejected under
+its no-material-regressions gate: sorting improves about 41%, but a matched
+float-list access fallback slows 8.2% then 4.9% in repeated same-host trials.
+The evidence PR retains the reproducible candidate patch, raw timing/counts and
+CPython/runtime safety regressions; production access is unchanged from main
+`4da6b73`. Independent review and required CI remain pending. #811 stays queued;
+#396/PR119 and D29 C stay held; issue73 is not closed by this card.
 
 ## Step 0 (serial, do first): the contract
 
