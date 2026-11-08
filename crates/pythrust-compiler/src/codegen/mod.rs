@@ -34,6 +34,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 mod exc;
 mod num;
 mod opt;
+mod pair;
 mod seq;
 mod stdlib;
 mod task;
@@ -62,9 +63,14 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
     cg.declare_globals(&program.globals)?;
     let ids = cg.declare(program)?;
     cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+    let plans = pair::plans(program);
+    cg.declare_pairs(program, &plans)?;
     cg.declare_thunks(program)?;
-    for (func, id) in program.funcs.iter().zip(&ids) {
-        cg.define(func, *id, &ids, &program.types)?;
+    for (i, (func, id)) in program.funcs.iter().zip(&ids).enumerate() {
+        cg.define(func, *id, &ids, &program.types, &plans[i], false)?;
+        if let Some(clone) = cg.pairs.get(&ir::FuncId(i)).copied() {
+            cg.define(func, clone, &ids, &program.types, &plans[i], true)?;
+        }
     }
     cg.define_thunks(program, &ids)?;
     cg.module
@@ -494,6 +500,8 @@ struct Codegen<'r> {
     globals: Vec<(DataId, Ty)>,
     /// Each function's result type, by `ir::FuncId`.
     rets: Vec<Ty>,
+    /// Private scalar-return variants; ordinary ids and all ABIs stay boxed.
+    pairs: HashMap<ir::FuncId, ClifFunc>,
     /// The thunk of each function a task runs ([`task`]).
     thunks: HashMap<ir::FuncId, ClifFunc>,
     /// The module values each such function's tasks may reach.
@@ -524,6 +532,7 @@ impl<'r> Codegen<'r> {
             ptr,
             globals: Vec::new(),
             rets: Vec::new(),
+            pairs: HashMap::new(),
             thunks: HashMap::new(),
             reads: HashMap::new(),
         };
@@ -627,12 +636,24 @@ impl<'r> Codegen<'r> {
         id: ClifFunc,
         ids: &[ClifFunc],
         types: &[Compound],
+        plan: &pair::Plan,
+        scalar_return: bool,
     ) -> Result<()> {
         let mut ctx = Context::new();
-        ctx.func.signature = self.signature(func);
+        ctx.func.signature = if scalar_return {
+            self.pair_signature(func)
+        } else {
+            self.signature(func)
+        };
         FnGen::build(
             self,
-            Ctx { func, ids, types },
+            Ctx {
+                func,
+                ids,
+                types,
+                plan,
+                scalar_return,
+            },
             &mut ctx,
             &mut FunctionBuilderContext::new(),
         )?;
@@ -647,6 +668,8 @@ struct Ctx<'c> {
     func: &'c Func,
     ids: &'c [ClifFunc],
     types: &'c [Compound],
+    plan: &'c pair::Plan,
+    scalar_return: bool,
 }
 
 /// Translates one function.
@@ -657,6 +680,9 @@ struct FnGen<'b, 'c, 'r> {
     ids: &'c [ClifFunc],
     types: &'c [Compound],
     vars: Vec<Variable>,
+    /// Proven pair temporaries (and, in a clone, its return chain).
+    pair_vars: HashMap<LocalId, [Variable; 2]>,
+    scalar_return: bool,
     blocks: Vec<cranelift_codegen::ir::Block>,
     /// The running thread's `PtCtx`, the hidden first parameter.
     ctx: Value,
@@ -668,7 +694,13 @@ struct FnGen<'b, 'c, 'r> {
 impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     fn build(
         cg: &'c mut Codegen<'r>,
-        Ctx { func, ids, types }: Ctx<'c>,
+        Ctx {
+            func,
+            ids,
+            types,
+            plan,
+            scalar_return,
+        }: Ctx<'c>,
         ctx: &'b mut Context,
         fctx: &'b mut FunctionBuilderContext,
     ) -> Result<()> {
@@ -696,6 +728,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             };
             b.def_var(*var, v);
         }
+        let mut pair_locals = plan.calls.clone();
+        if scalar_return {
+            pair_locals.extend(&plan.returns);
+        }
+        let pair_vars = pair::variables(&mut b, pair_locals);
         let mut g = FnGen {
             cg,
             b,
@@ -703,6 +740,8 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             ids,
             types,
             vars,
+            pair_vars,
+            scalar_return,
             blocks,
             ctx: ctx_param,
             raise_to: None,
@@ -773,6 +812,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     }
 
     fn inst(&mut self, inst: &Inst) -> Result<()> {
+        if self.pair_inst(inst)? {
+            return Ok(());
+        }
         match inst {
             Inst::Assign { dest, value, span } => {
                 let v = self.rvalue(value, *dest, *span)?;
@@ -1202,10 +1244,14 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         dest: LocalId,
         span: Span,
     ) -> Result<Value> {
-        let id = *self
-            .ids
-            .get(callee.0)
-            .ok_or_else(|| backend("call to an unknown function".to_string()))?;
+        let scalar = self.pair_vars.contains_key(&dest);
+        let id = if scalar {
+            self.cg.pairs.get(&callee)
+        } else {
+            self.ids.get(callee.0)
+        }
+        .copied()
+        .ok_or_else(|| backend("call to an unknown function".to_string()))?;
         let fref = self.cg.module.declare_func_in_func(id, self.b.func);
         let args: Vec<Value> = std::iter::once(self.ctx)
             .chain(args.iter().map(|op| self.operand(*op)))
@@ -1221,6 +1267,15 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         self.b.ins().store(flags, deeper, addr, CTX_DEPTH);
         let call = self.b.ins().call(fref, &args);
         self.b.ins().store(flags, depth, addr, CTX_DEPTH);
+        if scalar {
+            let vals = self.b.inst_results(call);
+            let vals = match vals {
+                [a, b] => [*a, *b],
+                _ => return Err(backend("scalar call without two results".into())),
+            };
+            self.set_pair(dest, vals)?;
+            return Ok(self.b.ins().iconst(self.cg.ptr, 0));
+        }
         match self.b.inst_results(call).first() {
             Some(v) => Ok(*v),
             None => Ok(self
@@ -1315,6 +1370,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let c = self.operand(*cond);
                 let (t, e) = (self.block(*then), self.block(*orelse));
                 self.b.ins().brif(c, t, &[], e, &[]);
+            }
+            Term::Return(Operand::Local(l)) if self.scalar_return => {
+                let vals = self.pair_values(*l)?;
+                self.b.ins().return_(&vals);
             }
             Term::Return(op) => {
                 let vals = match self.func.ret {

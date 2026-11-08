@@ -152,3 +152,62 @@ Each fix alone leaves the task run 3x to 4x slower than serial; it takes both (7
 | both | 0.038 (0.034 to 0.049) | 0.133 (0.106 to 0.158) |
 
 Other runtime functions that build a string through a `String` and may shrink it still `realloc`: `str` of a float (`num::repr`), `repr` of a string (`pt_str_repr`) and the negative-exponent hint (`pow_hint`). They are not on these benchmarks' path. Single-threaded, writing an int into an exact-capacity `String` is 10 to 15% slower than `to_string` in a microbenchmark (std has a fast path); the serial row still improved, as it also lost the counter.
+
+
+## Internal two-int return/unpack (#806)
+
+Same-host comparison against freshly built main
+`e69297ed9406eaf445bf198f9e3a1b995e49a20d` (PR #126), 2026-11-08.
+Release compiler and runtime, x86-64 Linux 6.18.57, glibc 2.41,
+AMD EPYC 9V74, Rust 1.99.1/LLVM 23.1.1, GCC 14.2, CPython 3.13.5.
+Pinned to CPU 0, nine process samples per version after a warm-up, warm files;
+the shared host still varies. Sources and call shapes are identical between
+versions. CPython output is checked for every case. Raw samples, source hashes,
+binary hashes and environment: [card806.json](benchmarks/card806.json).
+
+| Workload | Before median seconds (min–max) | Scalar clone median seconds (min–max) | Pair tuples before → after | Heap allocation calls before → after |
+| --- | --- | --- | --- | --- |
+| `tuple_unpack` (4M direct calls/unpacks) | 0.307225 (0.289608–0.390100) | 0.028025 (0.025715–0.065565) | 4,000,000 → 0 | 8,000,004 → 4 |
+| existing `tuples` | 0.510902 (0.492569–0.668932) | 0.050138 (0.047321–0.052298) | 6,888,889 → 0 | 13,777,783 → 5 |
+| empty process startup control | 0.000897 (0.000716–0.001107) | 0.000849 (0.000718–0.001230) | 0 → 0 | 1 → 1 |
+
+Checksums (stdout): `tuple_unpack`: `800016000000`; existing `tuples`:
+`5888889 27000000`. Execution medians improve about 11.0x and 10.2x on this
+host. These are process wall times (startup included), not compile times or
+portable speed guarantees. Startup was measured separately and was not
+subtracted; the tiny 100-call cases are dominated by startup and support no
+speed claim. Compile/link medians are essentially neutral on this sample:
+`tuple_unpack` 0.074418 → 0.067935 s, existing `tuples` 0.069554 → 0.060780 s;
+complete ranges are in the raw file. Retaining an original function plus a
+private clone can increase compiler work/object code; this prototype does not
+claim a general compilation or size improvement.
+
+The separate GNU-linker probe wraps `pt_seq_new`, `malloc`, `calloc` and
+`realloc`; it is never linked into the timed executables. It counts two-int
+tuple objects and successful linked heap allocation calls, not all allocations
+inside libc/shared libraries. Each eliminated tuple removes its object and slot
+vector allocations. Reallocation counts stay 1/1 (`tuple_unpack`) and 2/2
+(`tuples`). A 100-call fast-path regression has tuple counts 100 → 0 and heap
+calls 204 → 4; its boxed fallback stays 100 tuples/204 heap calls; mixed direct
+unpack plus named boxed sites go from 200 → 100 tuples, 404 → 204 heap calls.
+A multi-return/caught-exception/boundary case also goes from 100 → 0 pair tuples, with non-tuple heap calls retained (537 → 337). The Linux `scalar_pair` test asserts elimination and fallback using this probe.
+Instrumentation is absent from production code and has zero disabled-path cost.
+
+Reproduce (absolute paths; preserve base compiler with its runtime alongside):
+
+```sh
+# In an isolated worktree at e69297e, and again in the changed worktree:
+cargo build --locked --release -p pythrust-compiler -p pythrust-rt
+# Copy the base target/release/{pythrust,libpythrust_rt.a} to /abs/before/.
+# Avoid sharing a target directory across source worktrees, or force a rebuild.
+taskset -c 0 /usr/bin/python3.13 bench/tuple_returns.py \
+  --before /abs/before/pythrust --after /abs/after/target/release/pythrust \
+  --runs 9 --output /abs/results.json
+# Small allocation/fallback assertions only:
+PYTHON=/usr/bin/python3.13 cargo test --locked --test scalar_pair
+```
+
+The published `tuples_baseline` is motivation only: it changes the call shape
+and packs a result into an integer. It is not used to attribute these gains.
+No string fusion, general escape analysis, interpreter/runtime representation
+change, external ABI change or #807/#808 completion is claimed.

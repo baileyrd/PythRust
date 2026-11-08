@@ -1,0 +1,8 @@
+# expect-exit: 1
+# #806: a pending exception leaves the scalar-return clone unchanged.
+def pair(n: int) -> tuple[int, int]:
+    text = str(n)
+    return len(text), 10 // n
+print("before")
+a, b = pair(0)
+print(a, b)
