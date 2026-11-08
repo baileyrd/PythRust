@@ -1605,6 +1605,113 @@ mod tests {
         }
     }
 
+    /// Ordinary accesses keep Python bounds and overwrite stale status on
+    /// success/failure. Invalid stores leave the list untouched, even marked.
+    #[test]
+    fn integer_access_preserves_bounds_status_and_marked_stores() {
+        for marked in [false, true] {
+            for values in [&[][..], &[10, 20, 30][..]] {
+                let list = make(b"li", values);
+                if marked {
+                    mark(b"li", list as u64);
+                }
+                let mut status = 9;
+                // SAFETY: list and status stay live; integer slots own no refs.
+                unsafe {
+                    for i in [i64::MIN, -4, 3, i64::MAX] {
+                        assert_eq!(pt_seq_get(list, i, &mut status), 0);
+                        assert_eq!(status, 1);
+                        assert_eq!(pt_list_set(list, i, 99), 1);
+                    }
+                    assert_eq!(&*seq(list as u64).items.borrow(), values);
+                    if values.is_empty() {
+                        for i in [-1, 0, 1] {
+                            assert_eq!(pt_seq_get(list, i, &mut status), 0);
+                            assert_eq!(status, 1);
+                            assert_eq!(pt_list_set(list, i, 99), 1);
+                        }
+                    } else {
+                        assert_eq!(pt_list_set(list, -3, u64::MAX), 0);
+                        assert_eq!(pt_list_set(list, -1, 7), 0);
+                        assert_eq!(pt_seq_get(list, 0, &mut status), u64::MAX);
+                        assert_eq!(status, 0);
+                        seq(list as u64).rc.inc();
+                        let held = pt_seq_hold(list) as *mut PtSeq;
+                        // Ordinary reads still borrow under an existing hold.
+                        assert_eq!(pt_seq_get(list, -1, &mut status), 7);
+                        assert_eq!(status, 0);
+                        assert_eq!(pt_seq_get_held(held, -1, &mut status), 7);
+                        assert_eq!(pt_seq_item_held(held, -1, &mut status), 7);
+                        pt_seq_release_held(held);
+                    }
+                    assert!(seq(list as u64).items.is_free());
+                    pt_seq_dec(list);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn integer_access_leaves_owned_element_fallbacks_counted() {
+        for marked in [false, true] {
+            let a = make(b"li", &[1]);
+            let b = make(b"li", &[2]);
+            let outer = make(b"lli", &[a as u64]);
+            if marked {
+                mark(b"lli", outer as u64);
+            }
+            let mut status = 9;
+            // SAFETY: all sequences live; each read gives its own reference.
+            unsafe {
+                assert_eq!(pt_seq_get(outer, -1, &mut status), a as u64);
+                assert_eq!(status, 0);
+                assert_eq!(seq(a as u64).rc.get(), 3);
+                assert_eq!(pt_list_set(outer, 1, b as u64), 1);
+                assert_eq!(seq(b as u64).rc.get(), 1);
+                assert_eq!(pt_list_set(outer, 0, b as u64), 0);
+                assert_eq!(seq(a as u64).rc.get(), 2);
+                assert_eq!(seq(b as u64).rc.get(), 2);
+                assert_eq!(seq(b as u64).rc.is_marked(), marked);
+                pt_seq_dec(a); // read result
+                pt_seq_dec(outer);
+                assert_eq!(seq(b as u64).rc.get(), 1);
+                pt_seq_dec(a);
+                pt_seq_dec(b);
+            }
+        }
+    }
+
+    #[test]
+    fn integer_access_keeps_shared_reads_synchronized() {
+        let list = make(b"li", &[1, 2, 3]);
+        mark(b"li", list as u64);
+        let address = list as usize;
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let list = address as *const PtSeq;
+                    let mut status = 9;
+                    for i in 0..if cfg!(miri) { 8 } else { 10_000 } {
+                        // SAFETY: owner keeps list live until every reader joins.
+                        unsafe {
+                            assert_eq!(pt_seq_get(list, i % 3, &mut status), (i % 3 + 1) as u64);
+                            assert_eq!(status, 0);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            assert!(thread.join().is_ok());
+        }
+        // SAFETY: all readers joined; owner now gives up its sole reference.
+        unsafe {
+            assert!(seq(list as u64).items.is_free());
+            assert_eq!(seq(list as u64).rc.get(), 1);
+            pt_seq_dec(list);
+        }
+    }
+
     #[test]
     fn indexing_wraps_negatives_and_reports_range() {
         let s = make(b"li", &[10, 20, 30]);

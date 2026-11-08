@@ -1,0 +1,29 @@
+# #810: marked integer lists use existing shared borrow checks outside holds.
+import concurrent.futures
+
+
+def read(xs: list[int]) -> int:
+    total = 0
+    for i in range(500):
+        total += xs[i % len(xs)]
+    for n in xs:
+        total += n
+    try:
+        total += xs[len(xs)]
+    except IndexError:
+        total += xs[-1]
+    return total
+
+
+def main() -> None:
+    xs = [1, 2, 3, 4]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(read, xs)
+        b = ex.submit(read, xs)
+        print(a.result(), b.result())
+    # Mark persists after join, so stores exercise the marked write borrow path.
+    xs[-1] = 8
+    print(xs, read(xs))
+
+
+main()

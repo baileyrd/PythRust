@@ -1,0 +1,98 @@
+# #810: integer dispatch, fallback ownership, bounds and evaluation/fault order.
+def at(xs, i):
+    return xs[i]
+
+
+def put(xs, i, value):
+    xs[i] = value
+
+
+def index(i: int) -> int:
+    print("index", i)
+    return i
+
+
+def value(v: int) -> int:
+    print("value", v)
+    return v
+
+
+def receiver(xs: list[int]) -> list[int]:
+    print("receiver")
+    return xs
+
+
+def bad_index() -> int:
+    print("bad index")
+    raise ValueError("index failed")
+
+
+def bad_value() -> int:
+    print("bad value")
+    raise ValueError("value failed")
+
+
+xs = [10, 20, 30]
+ys = xs
+print(at(xs, -1), at(xs, -3))
+put(ys, -1, -7)
+print(xs, ys)
+for i in [-4, 3, -9223372036854775808, 9223372036854775807]:
+    try:
+        print(at(xs, i))
+    except IndexError as e:
+        print("read", str(e))
+    try:
+        put(xs, i, 99)
+    except IndexError as e:
+        print("write", str(e))
+print(xs)
+empty: list[int] = []
+for i in [-1, 0, 1]:
+    try:
+        print(at(empty, i))
+    except IndexError:
+        print("empty read")
+    try:
+        put(empty, i, 99)
+    except IndexError:
+        print("empty write")
+receiver(xs)[index(-1)] = value(40)
+try:
+    receiver(xs)[index(3)] = value(50)
+except IndexError:
+    print("store caught")
+try:
+    print(receiver(xs)[bad_index()])
+except ValueError:
+    print("index caught")
+try:
+    receiver(xs)[bad_index()] = value(60)
+except ValueError:
+    print("store index caught")
+try:
+    receiver(xs)[index(0)] = bad_value()
+except ValueError:
+    print("value caught")
+# A successful access after catch must not see stale pending state.
+print(at(xs, 0), xs)
+# Same generic functions instantiate other element types; ownership remains live.
+words = ["α", "β"]
+alias = words
+put(words, -1, "界")
+print(at(words, 0), alias)
+floats = [1.5, 2.5]
+put(floats, 0, -0.5)
+print(at(floats, -1), floats)
+maybe: list[int | None] = [None, 5]
+put(maybe, 0, 6)
+print(at(maybe, -1), maybe)
+rows = [[1], [2]]
+old = at(rows, 0)
+put(rows, 0, [3])
+print(old, rows)
+pair = (7, "tuple")
+print(pair[-1])
+# Read-only body retains held-loop lowering; ordinary indexing nests in the hold.
+for n in xs:
+    print(n, xs[-1])

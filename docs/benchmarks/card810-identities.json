@@ -1,0 +1,8 @@
+{
+  "base": "4da6b73d115d4182582731287f6d9da7737573a7",
+  "base_tree": "0e0fed75b64672cbb20599f661fecc8674eccbf6",
+  "measured_candidate": "49e603cd8b4c6fd5567aed55a02fcfa276e3b2d1",
+  "measured_candidate_tree": "a0649ee16e1ceef155cfe3dbe6cbdf4741de9107",
+  "cargo_lock_sha256": "9966afc5992741f591f7a30c6d000fa890b7f7cca1e3dc707f70360ef45a07d3",
+  "remote_measured_candidate": "e53cb22e61816980238fcb2adc0afd1c8f56640b"
+}

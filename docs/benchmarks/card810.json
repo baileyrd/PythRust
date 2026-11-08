@@ -1,0 +1,1077 @@
+{
+  "schema": 1,
+  "runs": 15,
+  "warmups": 2,
+  "seed": 810,
+  "utc": "2026-11-08T05:56:33.169932+00:00",
+  "environment": {
+    "host": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+    "python": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+    "cpu": 0,
+    "affinity_original": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "cpuinfo": "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.086\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 0\ncpu cores\t: 9\napicid\t\t: 0\ninitial apicid\t: 0\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.17\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:",
+    "before": {
+      "loadavg": [
+        0.423828125,
+        0.7431640625,
+        0.6552734375
+      ],
+      "processes": "codex\npython3.13\nps\n"
+    },
+    "after": {
+      "loadavg": [
+        0.99169921875,
+        0.890625,
+        0.7421875
+      ],
+      "processes": "codex\npython3.13\nps\n"
+    }
+  },
+  "cases": {
+    "sorting": {
+      "source": "# List sorting: in-place quicksort of pseudo-random ints.\ndef quicksort(xs: list[int], lo: int, hi: int) -> None:\n    while lo < hi:\n        pivot = xs[(lo + hi) // 2]\n        i = lo\n        j = hi\n        while i <= j:\n            while xs[i] < pivot:\n                i += 1\n            while xs[j] > pivot:\n                j -= 1\n            if i <= j:\n                t = xs[i]\n                xs[i] = xs[j]\n                xs[j] = t\n                i += 1\n                j -= 1\n        if j - lo < hi - i:\n            quicksort(xs, lo, j)\n            lo = i\n        else:\n            quicksort(xs, i, hi)\n            hi = j\n\n\nxs = []\nseed = 12345\nfor _ in range(300000):\n    seed = (seed * 1103515245 + 12345) % 2147483648\n    xs.append(seed % 1000000)\nquicksort(xs, 0, len(xs) - 1)\nok = True\nfor k in range(1, len(xs)):\n    if xs[k - 1] > xs[k]:\n        ok = False\nprint(ok, xs[0], xs[len(xs) // 2], xs[len(xs) - 1])\n",
+      "source_sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969",
+      "stdout": "True 6 499909 999999\n",
+      "order": [
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ]
+      ],
+      "before": {
+        "samples": [
+          0.12369471300007717,
+          0.115671248999206,
+          0.11991380600011325,
+          0.11592024200035667,
+          0.11313589699966542,
+          0.14758712900038518,
+          0.17155897399970854,
+          0.11364782099917647,
+          0.12106923499959521,
+          0.11740195799939102,
+          0.12562717599939788,
+          0.11933304900048824,
+          0.11950446499940881,
+          0.11600038100004895,
+          0.1169363560002239
+        ],
+        "median": 0.11933304900048824,
+        "minimum": 0.11313589699966542,
+        "maximum": 0.17155897399970854,
+        "mad": 0.003412807000131579
+      },
+      "after": {
+        "samples": [
+          0.07341208400066535,
+          0.07627625500026625,
+          0.06861507000030542,
+          0.06742791900069278,
+          0.06794405700020434,
+          0.07043137199980265,
+          0.07380086699959065,
+          0.07030726000084542,
+          0.06942351700126892,
+          0.07382265299929713,
+          0.07289307599967287,
+          0.07083287299974472,
+          0.0741721479989792,
+          0.06655211100041925,
+          0.06708047400024952
+        ],
+        "median": 0.07043137199980265,
+        "minimum": 0.06655211100041925,
+        "maximum": 0.07627625500026625,
+        "mad": 0.0029807120008626953
+      },
+      "cpython": {
+        "samples": [
+          0.7552513549999276,
+          0.6316248240000277,
+          0.639188639999702,
+          0.7316376729995682,
+          0.607457786998566,
+          0.6333699099996011,
+          0.6007065400008287,
+          0.6429451790008898,
+          0.7099281589999009,
+          0.6393563769997854,
+          0.6159460660001059,
+          0.7911412449993804,
+          0.6443008899987035,
+          0.6582514539986732,
+          0.6341127840005356
+        ],
+        "median": 0.6393563769997854,
+        "minimum": 0.6007065400008287,
+        "maximum": 0.7911412449993804,
+        "mad": 0.018895076998887816
+      }
+    },
+    "numeric": {
+      "source": "# Numeric loop: Collatz step counts, int arithmetic and branches only.\ndef steps(n: int) -> int:\n    count = 0\n    while n != 1:\n        if n % 2 == 0:\n            n = n // 2\n        else:\n            n = 3 * n + 1\n        count += 1\n    return count\n\n\ntotal = 0\nlongest = 0\nfor i in range(1, 1000000):\n    s = steps(i)\n    total += s\n    if s > longest:\n        longest = s\nprint(total, longest)\n",
+      "source_sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97",
+      "stdout": "131434272 524\n",
+      "order": [
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ]
+      ],
+      "before": {
+        "samples": [
+          0.45557083300082013,
+          0.45792334899851994,
+          0.4545452970014594,
+          0.4458452990002115,
+          0.447495918999266,
+          0.4369346140010748,
+          0.4798929480002698,
+          0.4438159480014292,
+          0.46045734499966784,
+          0.49786066399974516,
+          0.4734635810000327,
+          0.5141896090008231,
+          0.49699786699966353,
+          0.5324479370010522,
+          0.4628423969988944
+        ],
+        "median": 0.46045734499966784,
+        "minimum": 0.4369346140010748,
+        "maximum": 0.5324479370010522,
+        "mad": 0.014612045999456313
+      },
+      "after": {
+        "samples": [
+          0.45363759499923617,
+          0.47491558200090367,
+          0.44047890000001644,
+          0.5129022399996757,
+          0.47050942900023074,
+          0.4414612609998585,
+          0.46573424199959845,
+          0.4505531249997148,
+          0.45540276800056745,
+          0.47119318099976226,
+          0.4732330450005975,
+          0.45538489800128445,
+          0.4504682349997893,
+          0.4795802789994923,
+          0.46390984900062904
+        ],
+        "median": 0.46390984900062904,
+        "minimum": 0.44047890000001644,
+        "maximum": 0.5129022399996757,
+        "mad": 0.010272254001392866
+      },
+      "cpython": {
+        "samples": [
+          9.06222764300037,
+          8.417961245000697,
+          8.32040792999942,
+          8.744339970999135,
+          8.468358623000313,
+          8.148103920999347,
+          8.476026788001036,
+          8.429033174999859,
+          8.653676739999355,
+          8.448539445000279,
+          9.292652198999349,
+          9.165707107000344,
+          9.28233815799831,
+          8.953005067998674,
+          8.679917661000218
+        ],
+        "median": 8.653676739999355,
+        "minimum": 8.148103920999347,
+        "maximum": 9.292652198999349,
+        "mad": 0.23571549499865796
+      }
+    },
+    "strings": {
+      "source": "# String building: a small string per iteration, and one growing line.\ntotal = 0\nline = \"\"\nfor i in range(1000000):\n    key = \"k\" + str(i) + \":\" + str(i % 97)\n    total += len(key)\n    if i % 50 == 0:\n        line += key[0]\nprint(total, len(line))\n",
+      "source_sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381",
+      "stdout": "9785790 20000\n",
+      "order": [
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ]
+      ],
+      "before": {
+        "samples": [
+          0.22021677299926523,
+          0.22446813999886217,
+          0.2233786950000649,
+          0.27982562499892083,
+          0.24677994100056821,
+          0.24779979400045704,
+          0.23841628999980458,
+          0.22111016400049266,
+          0.22896824599956744,
+          0.24461917100052233,
+          0.2220636199999717,
+          0.22457742100050382,
+          0.22415307400115125,
+          0.25473157800115587,
+          0.2208081349999702
+        ],
+        "median": 0.22457742100050382,
+        "minimum": 0.22021677299926523,
+        "maximum": 0.27982562499892083,
+        "mad": 0.004360648001238587
+      },
+      "after": {
+        "samples": [
+          0.22116947199901915,
+          0.22224674799872446,
+          0.2180832920003013,
+          0.24179312700107403,
+          0.2231621629998699,
+          0.22936038399893732,
+          0.26673962299901177,
+          0.2278982839998207,
+          0.21875445499972557,
+          0.23827420899942808,
+          0.24827495899990026,
+          0.22821623799973167,
+          0.22617116100082058,
+          0.2224044109989336,
+          0.22019155099951604
+        ],
+        "median": 0.22617116100082058,
+        "minimum": 0.2180832920003013,
+        "maximum": 0.26673962299901177,
+        "mad": 0.005001689001801424
+      },
+      "cpython": {
+        "samples": [
+          0.34858090699890454,
+          0.3515316419998271,
+          0.34694778799894266,
+          0.38037702099973103,
+          0.5430337830002827,
+          0.3461538270003075,
+          0.3559222610001598,
+          0.3439534099998127,
+          0.33695456799978274,
+          0.3371412699998473,
+          0.4167131009999139,
+          0.348042704999898,
+          0.338267002000066,
+          0.34533641999951215,
+          0.35146090399939567
+        ],
+        "median": 0.348042704999898,
+        "minimum": 0.33695456799978274,
+        "maximum": 0.5430337830002827,
+        "mad": 0.004089295000085258
+      }
+    },
+    "tuples": {
+      "source": "# Multiple return plus unpacking: exercises the internal scalar pair fast path.\ndef div_mod(a: int, b: int) -> tuple[int, int]:\n    return (a // b, a % b)\n\n\ndef digits(n: int) -> tuple[int, int]:\n    count = 0\n    total = 0\n    while n > 0:\n        n, d = div_mod(n, 10)\n        count += 1\n        total += d\n    return (count, total)\n\n\nall_count = 0\nall_total = 0\nfor i in range(1000000):\n    c, t = digits(i)\n    all_count += c\n    all_total += t\nprint(all_count, all_total)\n",
+      "source_sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1",
+      "stdout": "5888889 27000000\n",
+      "order": [
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ]
+      ],
+      "before": {
+        "samples": [
+          0.04677925499890989,
+          0.046275579999928595,
+          0.04601263600125094,
+          0.04894178699942131,
+          0.04895435599974007,
+          0.05645655400076066,
+          0.04580358099883597,
+          0.051157764999516075,
+          0.05278323799939244,
+          0.04686941699947056,
+          0.05367562200081011,
+          0.0511890140005562,
+          0.04861923000134993,
+          0.049303997000606614,
+          0.04907921100129897
+        ],
+        "median": 0.04895435599974007,
+        "minimum": 0.04580358099883597,
+        "maximum": 0.05645655400076066,
+        "mad": 0.002203408999776002
+      },
+      "after": {
+        "samples": [
+          0.048654685999281355,
+          0.04545183600021119,
+          0.04554115899918543,
+          0.04567553000015323,
+          0.057028318999073235,
+          0.05562187400028051,
+          0.05155727700002899,
+          0.048745641001005424,
+          0.05270086600103241,
+          0.04964845300128218,
+          0.05511773299986089,
+          0.05316912199850776,
+          0.05170405599892547,
+          0.049600070999076706,
+          0.045433494000462815
+        ],
+        "median": 0.04964845300128218,
+        "minimum": 0.045433494000462815,
+        "maximum": 0.057028318999073235,
+        "mad": 0.0035206689972255845
+      },
+      "cpython": {
+        "samples": [
+          0.7272819129993877,
+          0.6916081360013777,
+          0.6940019040011975,
+          0.7301226620002126,
+          0.7242667230002553,
+          0.8657655900005921,
+          0.8427624819996709,
+          0.7700176250000368,
+          0.7886832599997433,
+          0.8240685249984381,
+          0.8418677499994374,
+          0.9434928070004389,
+          0.7645471140003792,
+          0.7718221209997864,
+          0.8524661650008056
+        ],
+        "median": 0.7718221209997864,
+        "minimum": 0.6916081360013777,
+        "maximum": 0.9434928070004389,
+        "mad": 0.05224640399865166
+      }
+    },
+    "int_access": {
+      "source": "# Isolated matched load/store control, #810.\ndef access(xs: list[int]) -> int:\n    n = 0\n    for i in range(4000000):\n        k = i % 16\n        n += xs[k]\n        xs[k] = 7\n    return n\n\nprint(access([7] * 16))\n",
+      "source_sha256": "c585ffeccc70856a20d6d2c690e1c88f9927000b2166717022f8e767b245c8c4",
+      "stdout": "28000000\n",
+      "order": [
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ]
+      ],
+      "before": {
+        "samples": [
+          0.07685425299860071,
+          0.08405255499928899,
+          0.07832314299957943,
+          0.06647945499935304,
+          0.06766939199951594,
+          0.07114691799870343,
+          0.07314190499891993,
+          0.06655833800141409,
+          0.06692989499970281,
+          0.06706370000028983,
+          0.06416793999960646,
+          0.06183519800106296,
+          0.06010708000030718,
+          0.06220855600076902,
+          0.061564342000565375
+        ],
+        "median": 0.06692989499970281,
+        "minimum": 0.06010708000030718,
+        "maximum": 0.08405255499928899,
+        "mad": 0.004721338998933788
+      },
+      "after": {
+        "samples": [
+          0.029327057000045897,
+          0.048121666000952246,
+          0.041078865999224945,
+          0.03319634999934351,
+          0.02960057700147445,
+          0.027983505999145564,
+          0.03055133000088972,
+          0.029219717000160017,
+          0.02781122800115554,
+          0.030356037999808905,
+          0.03099191999899631,
+          0.029310853000424686,
+          0.02712126500045997,
+          0.02706210600081249,
+          0.028247760999875027
+        ],
+        "median": 0.029327057000045897,
+        "minimum": 0.02706210600081249,
+        "maximum": 0.048121666000952246,
+        "mad": 0.0013435510009003337
+      },
+      "cpython": {
+        "samples": [
+          0.31837609899957897,
+          0.24909194999963802,
+          0.2536865990005026,
+          0.241392904001259,
+          0.21575493000091228,
+          0.21700785600114614,
+          0.2097413259998575,
+          0.22828090300026815,
+          0.20861426800001936,
+          0.2165852480011381,
+          0.2223856769996928,
+          0.21171061499990174,
+          0.19635333199948946,
+          0.19818127899998217,
+          0.20293961300012597
+        ],
+        "median": 0.2165852480011381,
+        "minimum": 0.19635333199948946,
+        "maximum": 0.31837609899957897,
+        "mad": 0.011695654999130056
+      }
+    },
+    "float_access": {
+      "source": "# Isolated matched load/store control, #810.\ndef access(xs: list[float]) -> float:\n    n = 0.0\n    for i in range(4000000):\n        k = i % 16\n        n += xs[k]\n        xs[k] = 7.0\n    return n\n\nprint(access([7.0] * 16))\n",
+      "source_sha256": "06c7be80a8b58b7f914be6a921052d9bbaac0333414a4909cdd09c4bfafaca35",
+      "stdout": "28000000.0\n",
+      "order": [
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "cpython",
+          "before"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "after",
+          "before",
+          "cpython"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "cpython",
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after",
+          "cpython"
+        ],
+        [
+          "before",
+          "cpython",
+          "after"
+        ]
+      ],
+      "before": {
+        "samples": [
+          0.06066624400045839,
+          0.06518729500021436,
+          0.07424160299888172,
+          0.07003683599941724,
+          0.08162565200109384,
+          0.08649555400006648,
+          0.08585887300068862,
+          0.06540873199992348,
+          0.06448343200099771,
+          0.0646288909993018,
+          0.06377688099928491,
+          0.06677275199945143,
+          0.06660030300008657,
+          0.06280086500009929,
+          0.06397746299990104
+        ],
+        "median": 0.06540873199992348,
+        "minimum": 0.06066624400045839,
+        "maximum": 0.08649555400006648,
+        "mad": 0.0016318510006385623
+      },
+      "after": {
+        "samples": [
+          0.07096160000037344,
+          0.06712368099942978,
+          0.07078105000073265,
+          0.07398326499969698,
+          0.07437384799959545,
+          0.084044872000959,
+          0.06521508199875825,
+          0.068688450000991,
+          0.07389117800084932,
+          0.068918406001103,
+          0.07202363999931549,
+          0.0681986939998751,
+          0.06639252999957534,
+          0.06911700400087284,
+          0.07197784199888702
+        ],
+        "median": 0.07078105000073265,
+        "minimum": 0.06521508199875825,
+        "maximum": 0.084044872000959,
+        "mad": 0.002582356000857544
+      },
+      "cpython": {
+        "samples": [
+          0.2596406609991391,
+          0.2110825300005672,
+          0.25647182399916346,
+          0.25163615299970843,
+          0.22794108699963544,
+          0.23817287599922565,
+          0.21625892500014743,
+          0.21225533500000893,
+          0.19887907399970572,
+          0.19819340400135843,
+          0.24238377799883892,
+          0.1976439019999816,
+          0.2094916740006738,
+          0.20355618000030518,
+          0.2023907299990242
+        ],
+        "median": 0.21225533500000893,
+        "minimum": 0.1976439019999816,
+        "maximum": 0.2596406609991391,
+        "mad": 0.014061930998650496
+      }
+    }
+  },
+  "identities": {
+    "before": {
+      "base": "4da6b73d115d4182582731287f6d9da7737573a7",
+      "tree": "0e0fed75b64672cbb20599f661fecc8674eccbf6",
+      "source_diff": "",
+      "compiler": {
+        "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/before/pythrust",
+        "sha256": "d3a97d70598a7c4657019a81069fecab895aafd863502a9033fc08f012e877da"
+      },
+      "archive": {
+        "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/before/libpythrust_rt.a",
+        "sha256": "60a493025782b55355e95584d6a95810e9b1b130fcacd7aa2420a36c3f77639c"
+      },
+      "cases": {
+        "sorting": {
+          "source": "# List sorting: in-place quicksort of pseudo-random ints.\ndef quicksort(xs: list[int], lo: int, hi: int) -> None:\n    while lo < hi:\n        pivot = xs[(lo + hi) // 2]\n        i = lo\n        j = hi\n        while i <= j:\n            while xs[i] < pivot:\n                i += 1\n            while xs[j] > pivot:\n                j -= 1\n            if i <= j:\n                t = xs[i]\n                xs[i] = xs[j]\n                xs[j] = t\n                i += 1\n                j -= 1\n        if j - lo < hi - i:\n            quicksort(xs, lo, j)\n            lo = i\n        else:\n            quicksort(xs, i, hi)\n            hi = j\n\n\nxs = []\nseed = 12345\nfor _ in range(300000):\n    seed = (seed * 1103515245 + 12345) % 2147483648\n    xs.append(seed % 1000000)\nquicksort(xs, 0, len(xs) - 1)\nok = True\nfor k in range(1, len(xs)):\n    if xs[k - 1] > xs[k]:\n        ok = False\nprint(ok, xs[0], xs[len(xs) // 2], xs[len(xs) - 1])\n",
+          "source_sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/before/sorting",
+            "sha256": "c787668530400e64cd09275875dada3275d136aa8c2bfeac01b50a7e03ffabf1"
+          }
+        },
+        "numeric": {
+          "source": "# Numeric loop: Collatz step counts, int arithmetic and branches only.\ndef steps(n: int) -> int:\n    count = 0\n    while n != 1:\n        if n % 2 == 0:\n            n = n // 2\n        else:\n            n = 3 * n + 1\n        count += 1\n    return count\n\n\ntotal = 0\nlongest = 0\nfor i in range(1, 1000000):\n    s = steps(i)\n    total += s\n    if s > longest:\n        longest = s\nprint(total, longest)\n",
+          "source_sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/before/numeric",
+            "sha256": "c20dd3e02a0b557bc6187fc442a17f3cbfd26b7fe9a0313c78da03b89e9d08a9"
+          }
+        },
+        "strings": {
+          "source": "# String building: a small string per iteration, and one growing line.\ntotal = 0\nline = \"\"\nfor i in range(1000000):\n    key = \"k\" + str(i) + \":\" + str(i % 97)\n    total += len(key)\n    if i % 50 == 0:\n        line += key[0]\nprint(total, len(line))\n",
+          "source_sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/before/strings",
+            "sha256": "4687bb8c97a54e094cd6867d2f10e06707449f046bd3e0be58df00876e08c1b3"
+          }
+        },
+        "tuples": {
+          "source": "# Multiple return plus unpacking: exercises the internal scalar pair fast path.\ndef div_mod(a: int, b: int) -> tuple[int, int]:\n    return (a // b, a % b)\n\n\ndef digits(n: int) -> tuple[int, int]:\n    count = 0\n    total = 0\n    while n > 0:\n        n, d = div_mod(n, 10)\n        count += 1\n        total += d\n    return (count, total)\n\n\nall_count = 0\nall_total = 0\nfor i in range(1000000):\n    c, t = digits(i)\n    all_count += c\n    all_total += t\nprint(all_count, all_total)\n",
+          "source_sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/before/tuples",
+            "sha256": "52c1b6fb5f9f30eb3eb841145a7adaedb9e4553fd9727dd1555ae4a99660b69e"
+          }
+        },
+        "int_access": {
+          "source": "# Isolated matched load/store control, #810.\ndef access(xs: list[int]) -> int:\n    n = 0\n    for i in range(4000000):\n        k = i % 16\n        n += xs[k]\n        xs[k] = 7\n    return n\n\nprint(access([7] * 16))\n",
+          "source_sha256": "c585ffeccc70856a20d6d2c690e1c88f9927000b2166717022f8e767b245c8c4",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/before/int_access",
+            "sha256": "a75b2b4107843cbda7b2808067898f6c1d1b36f39557ed4177b3ec2625737c5c"
+          }
+        },
+        "float_access": {
+          "source": "# Isolated matched load/store control, #810.\ndef access(xs: list[float]) -> float:\n    n = 0.0\n    for i in range(4000000):\n        k = i % 16\n        n += xs[k]\n        xs[k] = 7.0\n    return n\n\nprint(access([7.0] * 16))\n",
+          "source_sha256": "06c7be80a8b58b7f914be6a921052d9bbaac0333414a4909cdd09c4bfafaca35",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/before/float_access",
+            "sha256": "7b96ab17d9555be01a1a4c05ba6cab6e7a6d27096435680fbb91120706ffeeec"
+          }
+        }
+      }
+    },
+    "after": {
+      "base": "4da6b73d115d4182582731287f6d9da7737573a7",
+      "tree": "0e0fed75b64672cbb20599f661fecc8674eccbf6",
+      "source_diff": "diff --git a/crates/pythrust-compiler/tests/conformance.rs b/crates/pythrust-compiler/tests/conformance.rs\nindex 38ee6f3..e5b53bc 100644\n--- a/crates/pythrust-compiler/tests/conformance.rs\n+++ b/crates/pythrust-compiler/tests/conformance.rs\n@@ -505,6 +505,7 @@ const NATIVE: &[&str] = &[\n     \"index_error\",\n     \"index_error_negative\",\n     \"int_control\",\n+    \"int_list_access\",\n     \"int_parse_overflow\",\n     \"int_pow_negative\",\n     \"key_error\",\n@@ -571,6 +572,7 @@ const NATIVE: &[&str] = &[\n     \"tasks_generic\",\n     \"tasks_generic_discarded\",\n     \"tasks_globals\",\n+    \"tasks_int_list_access\",\n     \"tasks_leave_block\",\n     \"tasks_map\",\n     \"tasks_map_break\",\ndiff --git a/crates/pythrust-rt/src/seq.rs b/crates/pythrust-rt/src/seq.rs\nindex d998b34..9f82d46 100644\n--- a/crates/pythrust-rt/src/seq.rs\n+++ b/crates/pythrust-rt/src/seq.rs\n@@ -870,7 +870,14 @@ pub unsafe extern \"C\" fn pt_seq_len(s: *const PtSeq) -> i64 {\n pub unsafe extern \"C\" fn pt_seq_get(s: *const PtSeq, i: i64, status: *mut u8) -> u64 {\n     // SAFETY: guaranteed by the caller.\n     let s = unsafe { seq(s as u64) };\n-    let Some((_, v)) = s.items.get(i, |k, v| inc(slot(s.desc, k), v)) else {\n+    // The compiler's exact descriptor proves integer slots own no references.\n+    // Keep Slot's ordinary bounds and borrow checks, including marked/held lists.\n+    let found = if s.desc == b\"li\" {\n+        s.items.get(i, |_, _| {})\n+    } else {\n+        s.items.get(i, |k, v| inc(slot(s.desc, k), v))\n+    };\n+    let Some((_, v)) = found else {\n         // SAFETY: guaranteed by the caller.\n         unsafe { report(status, 1) };\n         return 0;\n@@ -981,6 +988,11 @@ pub unsafe extern \"C\" fn pt_seq_item_held(s: *const PtSeq, i: i64, status: *mut\n pub unsafe extern \"C\" fn pt_list_set(s: *const PtSeq, i: i64, v: u64) -> u8 {\n     // SAFETY: guaranteed by the caller.\n     let s = unsafe { seq(s as u64) };\n+    // Integers need no retain, transitive marking or release. This dispatch\n+    // changes only that work: replace still checks borrowing and both bounds.\n+    if s.desc == b\"li\" {\n+        return u8::from(s.items.replace(i, v, |_| {}).is_none());\n+    }\n     let desc = slot(s.desc, 0);\n     let Some(old) = s.items.replace(i, v, |marked| store(desc, v, marked)) else {\n         return 1;\n",
+      "compiler": {
+        "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/after/pythrust",
+        "sha256": "e9353680c9ab3e6f3fa959f463f0af2a50d0f942f6b97935567d94d248ae6bfa"
+      },
+      "archive": {
+        "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/after/libpythrust_rt.a",
+        "sha256": "c384054a01b8fb3c2a8625aa1d275789aa6ea00d1b000345518b816f6b774f16"
+      },
+      "cases": {
+        "sorting": {
+          "source": "# List sorting: in-place quicksort of pseudo-random ints.\ndef quicksort(xs: list[int], lo: int, hi: int) -> None:\n    while lo < hi:\n        pivot = xs[(lo + hi) // 2]\n        i = lo\n        j = hi\n        while i <= j:\n            while xs[i] < pivot:\n                i += 1\n            while xs[j] > pivot:\n                j -= 1\n            if i <= j:\n                t = xs[i]\n                xs[i] = xs[j]\n                xs[j] = t\n                i += 1\n                j -= 1\n        if j - lo < hi - i:\n            quicksort(xs, lo, j)\n            lo = i\n        else:\n            quicksort(xs, i, hi)\n            hi = j\n\n\nxs = []\nseed = 12345\nfor _ in range(300000):\n    seed = (seed * 1103515245 + 12345) % 2147483648\n    xs.append(seed % 1000000)\nquicksort(xs, 0, len(xs) - 1)\nok = True\nfor k in range(1, len(xs)):\n    if xs[k - 1] > xs[k]:\n        ok = False\nprint(ok, xs[0], xs[len(xs) // 2], xs[len(xs) - 1])\n",
+          "source_sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/after/sorting",
+            "sha256": "91a6b5278a81160bd836a9de26dc259fb8161071125c94ec3bf211760c9c0ad7"
+          }
+        },
+        "numeric": {
+          "source": "# Numeric loop: Collatz step counts, int arithmetic and branches only.\ndef steps(n: int) -> int:\n    count = 0\n    while n != 1:\n        if n % 2 == 0:\n            n = n // 2\n        else:\n            n = 3 * n + 1\n        count += 1\n    return count\n\n\ntotal = 0\nlongest = 0\nfor i in range(1, 1000000):\n    s = steps(i)\n    total += s\n    if s > longest:\n        longest = s\nprint(total, longest)\n",
+          "source_sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/after/numeric",
+            "sha256": "8757ae8b5b8f9373f78d16c5a7cb8ab4897da3ab6ac19997a085d72ff46247e7"
+          }
+        },
+        "strings": {
+          "source": "# String building: a small string per iteration, and one growing line.\ntotal = 0\nline = \"\"\nfor i in range(1000000):\n    key = \"k\" + str(i) + \":\" + str(i % 97)\n    total += len(key)\n    if i % 50 == 0:\n        line += key[0]\nprint(total, len(line))\n",
+          "source_sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/after/strings",
+            "sha256": "c80fe2d9aa8f5d9551d48d2e1b8ffe468284c746b762862df4dda9ef1e9b1cbe"
+          }
+        },
+        "tuples": {
+          "source": "# Multiple return plus unpacking: exercises the internal scalar pair fast path.\ndef div_mod(a: int, b: int) -> tuple[int, int]:\n    return (a // b, a % b)\n\n\ndef digits(n: int) -> tuple[int, int]:\n    count = 0\n    total = 0\n    while n > 0:\n        n, d = div_mod(n, 10)\n        count += 1\n        total += d\n    return (count, total)\n\n\nall_count = 0\nall_total = 0\nfor i in range(1000000):\n    c, t = digits(i)\n    all_count += c\n    all_total += t\nprint(all_count, all_total)\n",
+          "source_sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/after/tuples",
+            "sha256": "b43239307e61172a0c6b8f224c3938920f4eb37c77bedb7487801bb25813ff39"
+          }
+        },
+        "int_access": {
+          "source": "# Isolated matched load/store control, #810.\ndef access(xs: list[int]) -> int:\n    n = 0\n    for i in range(4000000):\n        k = i % 16\n        n += xs[k]\n        xs[k] = 7\n    return n\n\nprint(access([7] * 16))\n",
+          "source_sha256": "c585ffeccc70856a20d6d2c690e1c88f9927000b2166717022f8e767b245c8c4",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/after/int_access",
+            "sha256": "87dbe1bb4dc1c6b7fa37ca333beb423f22b6d9b1dfd5e8fc5f03e349b20958bc"
+          }
+        },
+        "float_access": {
+          "source": "# Isolated matched load/store control, #810.\ndef access(xs: list[float]) -> float:\n    n = 0.0\n    for i in range(4000000):\n        k = i % 16\n        n += xs[k]\n        xs[k] = 7.0\n    return n\n\nprint(access([7.0] * 16))\n",
+          "source_sha256": "06c7be80a8b58b7f914be6a921052d9bbaac0333414a4909cdd09c4bfafaca35",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/pythrust-card810/target/card810-evidence/after/float_access",
+            "sha256": "889308fca89be40072ef35c3c1f96c4dad5d2824de5de4e18b9d9ec2f40fc830"
+          }
+        }
+      }
+    }
+  }
+}
