@@ -283,3 +283,12 @@ Runtime pointer/UTF-8/alias/size tests pass under Miri. Shared-string worker
 inputs pass ThreadSanitizer with five pinned and five unpinned schedules.
 Hosted required CI and independent review of the unchanged published head
 remain mandatory; this document does not assert either has completed.
+
+
+## Current workload profile (#808)
+
+The [current baseline, raw evidence and ranked experiments](benchmarks/card808.md)
+measure main `f542d98`, including merged #806/PR127 and #807/PR128.
+This measurement-only report separates build/startup controls and fclone
+discovery/read/repeated-SHA controls, documents tmpfs and profiling limits,
+and proposes at most three new experiments. It does not implement them.
