@@ -12,7 +12,6 @@
 #![allow(unsafe_code)] // The C ABI below; the logic above it is safe.
 
 use std::cmp::Ordering;
-use std::fmt::Write;
 
 use crate::text;
 
@@ -522,7 +521,14 @@ pub unsafe extern "C" fn pt_str_join(
 /// `str(n)` for an int.
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_str_from_int(n: i64) -> *mut PtStr {
-    into_ptr(PtStr::new(decimal(n).into_boxed_str()))
+    let text = decimal(n);
+    // Only decimal() supplies this length: its bytes are digits and a sign.
+    let chars = text.len();
+    into_ptr(PtStr {
+        rc: crate::sync::Count::new(),
+        chars,
+        text: text.into_boxed_str(),
+    })
 }
 
 /// `n` in decimal, allocated once at its exact length, so boxing it does
@@ -530,15 +536,28 @@ pub extern "C" fn pt_str_from_int(n: i64) -> *mut PtStr {
 /// lock where `malloc` and `free` mostly do not; tasks building strings
 /// at once wait on it (M6c step 4c, `docs/benchmarks.md`).
 fn decimal(n: i64) -> String {
-    let digits = n
-        .unsigned_abs()
-        .checked_ilog10()
-        .map_or(1, |d| d as usize + 1);
-    let mut text = String::with_capacity(digits + usize::from(n < 0));
-    // `String`'s `fmt::Write` never errors, and `i64`'s `Display` fails
-    // only if the writer does.
-    let _ = write!(text, "{n}");
-    text
+    // Twenty bytes cover the sign and all nineteen digits of i64::MIN.
+    let mut buffer = [b'0'; 20];
+    let mut start = buffer.len();
+    let mut magnitude = n.unsigned_abs();
+    loop {
+        start -= 1;
+        buffer[start] = b'0' + (magnitude % 10) as u8;
+        magnitude /= 10;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        start -= 1;
+        buffer[start] = b'-';
+    }
+    // All written bytes are ASCII. Keep the proof local, without unchecked UTF-8.
+    let text = match std::str::from_utf8(&buffer[start..]) {
+        Ok(text) => text,
+        Err(_) => unreachable!("decimal digits and sign are ASCII"),
+    };
+    text.to_owned()
 }
 
 /// `str(b)` for a bool: any nonzero byte is true.
@@ -716,6 +735,39 @@ mod tests {
             let text = decimal(n);
             assert_eq!(text, n.to_string(), "{n}");
             assert_eq!(text.capacity(), text.len(), "{n}");
+        }
+    }
+
+    #[test]
+    fn decimal_every_digit_boundary_and_utf8_stays_separate() {
+        let mut values = vec![0, i64::MIN, i64::MIN + 1, i64::MAX];
+        for exponent in 0..=18 {
+            let boundary = 10_i64.pow(exponent);
+            for n in [boundary - 1, boundary, boundary + 1] {
+                values.extend([n, -n]);
+            }
+        }
+        for n in values {
+            let want = n.to_string();
+            let text = decimal(n);
+            assert_eq!(text.as_bytes(), want.as_bytes());
+            assert_eq!(text.capacity(), text.len());
+            let out = pt_str_from_int(n);
+            // SAFETY: out is our new owned string; all helpers borrow it.
+            unsafe {
+                assert_eq!(borrow(out).text().as_bytes(), want.as_bytes());
+                assert_eq!(pt_str_len(out), want.len() as i64);
+                assert!(borrow(out).is_ascii());
+                let wide = s("é🙂中");
+                let joined = concat(borrow(out), &wide);
+                assert_eq!(joined.chars, want.len() + 3);
+                assert_eq!(index(&joined, -1).unwrap().text(), "中");
+                assert!(!joined.is_ascii());
+                pt_str_inc(out);
+                pt_str_dec(out);
+                assert_eq!(borrow(out).text(), want);
+                pt_str_dec(out);
+            }
         }
     }
 

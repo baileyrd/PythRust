@@ -562,6 +562,7 @@ const NATIVE: &[&str] = &[
     "str_index_uncaught",
     "str_case_unicode_version",
     "strings",
+    "int_format",
     "string_chain",
     "string_chain_unbound",
     "string_chain_uncaught_early",
