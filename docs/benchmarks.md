@@ -211,3 +211,75 @@ The published `tuples_baseline` is motivation only: it changes the call shape
 and packs a result into an integer. It is not used to attribute these gains.
 No string fusion, general escape analysis, interpreter/runtime representation
 change, external ABI change or #807/#808 completion is claimed.
+
+
+## Adjacent native string chains (#807)
+
+Compared freshly built main `c633a4fcc9c7dfc41ed66e9346a0797f1793502a`
+(PR #127/#806) with implementation `8614f13b58ea69685b6f9a15a2ea18e6edf921f7`,
+2026-11-08. Same host: x86-64 Linux 6.18.57, AMD EPYC 9V74,
+glibc 2.41, Rust 1.99.1/LLVM 23.1.1, GCC 14.2, CPython 3.13.5
+(`/usr/bin/python3.13`). Pinned to CPU 0; nine samples after one warm-up per
+executable; identical source and call shape before/after. These are process wall
+times including startup, excluding compilation and instrumentation. Shared-host
+noise remains. All stdout matches CPython. Raw sources, checksums, binary and
+runtime hashes, every sample, compile/link times, bounded regressions and
+injected allocation-failure results: [card807.json](benchmarks/card807.json).
+
+| Workload | Before median s (min–max) | After median s (min–max) | Concat result objects before → after | Concat buffer allocations before → after | Text bytes copied before → after |
+| --- | --- | --- | --- | --- | --- |
+| `string_chain` (2M identical direct triple calls) | 0.130884 (0.127143–0.138675) | 0.065087 (0.062926–0.080676) | 4,000,000 → 2,000,000 | 4,000,000 → 2,000,000 | 120,000,000 → 70,000,000 |
+| existing `strings` | 0.229039 (0.218971–0.261097) | 0.234212 (0.218773–0.254133) | 3,020,000 → 3,020,000 | 3,020,000 → 3,020,000 | 224,573,570 → 224,573,570 |
+| empty-process startup control | 0.000742 (0.000696–0.000890) | 0.000750 (0.000707–0.000938) | 0 → 0 | 0 → 0 | 0 → 0 |
+
+The isolated case is about 2.0x faster on this host. The existing workload is
+2.3% slower by median with overlapping ranges and identical counts: it has no
+eligible site, so no improvement is claimed. This is a bounded prototype,
+not broad string acceleration. Output checksums: isolated `58000000`; existing
+`9785790 20000`. Compile/link medians are 0.051268 → 0.053904 s (isolated)
+and 0.053221 → 0.053494 s (existing); no compilation speedup is claimed.
+Startup is measured separately and is not subtracted.
+
+Allocation instrumentation is linked only into separate probe executables.
+GNU `--wrap` counts successful linked `malloc`/`calloc` and `realloc` calls,
+including non-string overhead. Isolated total heap allocations are
+8,000,010 → 4,000,010, plus 1 realloc each; existing `strings` stays
+14,080,006 allocations plus 1 realloc. These are **linked allocator calls**,
+not all allocator activity hidden inside shared libc. Concat helper returns
+count result objects; scoped allocator calls count their object and text-buffer
+allocations without inspecting `PtStr` layout. Buffer counts exclude the returned
+object; an all-empty triple has no buffer allocation. Scoped wrapped
+`memcpy`/`memmove` counts actual bytes written into allocated text buffers,
+excluding object-construction and stack traffic. Probe capacity overflow is an
+explicit failure; concat realloc counts are zero in every reported case, so no
+unobserved allocator-internal resize copies are attributed as savings.
+No counters or fault injection exist in ordinary production/runtime code.
+
+Bounded assertions include empty/mixed-empty, Unicode triples, later-call and
+right-associated fallbacks. For 100 Unicode triples, result objects 200 → 100,
+text buffers 200 → 100, and actual text bytes copied 1,400 → 900. The later-call
+fallback keeps 200 objects/200 buffers/1,400 bytes; right-associated keeps
+200/200/1,600. Forced first concat allocation refusal remains fatal (not caught
+by `except Exception`) and a later operand's instrumented construction marker
+never occurs. Synthetic length tests cover prefix and final overflow without
+large allocations. Low-memory success thresholds and allocator request-size
+stderr necessarily differ when allocations are removed; no new exception/OOM
+policy is introduced.
+
+Reproduce with independent compiler/runtime artifacts (absolute paths):
+
+```sh
+# In clean worktrees at c633a4f and the implementation revision:
+cargo build --locked --release -p pythrust-compiler -p pythrust-rt
+# Preserve the base target/release/{pythrust,libpythrust_rt.a} together.
+taskset -c 0 /usr/bin/python3.13 bench/string_chains.py \
+  --before /abs/base/bin/pythrust --after /abs/current/target/release/pythrust \
+  --runs 9 --output /abs/card807.json
+PYTHON=/usr/bin/python3.13 PYTHRUST_BIN=/abs/current/target/release/pythrust \
+  cargo test --locked --test string_chain --test scalar_pair
+```
+
+Runtime pointer/UTF-8/alias/size tests pass under Miri. Shared-string worker
+inputs pass ThreadSanitizer with five pinned and five unpinned schedules.
+Hosted required CI and independent review of the unchanged published head
+remain mandatory; this document does not assert either has completed.

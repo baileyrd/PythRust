@@ -31,6 +31,7 @@ use cranelift_module::{
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+mod concat;
 mod exc;
 mod num;
 mod opt;
@@ -92,6 +93,7 @@ enum Rt {
     StrInc,
     StrDec,
     StrConcat,
+    StrConcat3,
     StrRepeat,
     StrIndex,
     StrLen,
@@ -188,7 +190,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 103] = [
+    const ALL: [Rt; 104] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -199,6 +201,7 @@ impl Rt {
         Rt::StrInc,
         Rt::StrDec,
         Rt::StrConcat,
+        Rt::StrConcat3,
         Rt::StrRepeat,
         Rt::StrIndex,
         Rt::StrLen,
@@ -306,6 +309,7 @@ impl Rt {
             Rt::StrInc => "pt_str_inc",
             Rt::StrDec => "pt_str_dec",
             Rt::StrConcat => "pt_str_concat",
+            Rt::StrConcat3 => "pt_str_concat3",
             Rt::StrRepeat => "pt_str_repeat",
             Rt::StrIndex => "pt_str_index",
             Rt::StrLen => "pt_str_len",
@@ -412,6 +416,7 @@ impl Rt {
             Rt::WriteStr | Rt::StrInc | Rt::StrDec => (vec![ptr], None),
             Rt::Fail => (vec![ptr, ptr], None),
             Rt::StrNew | Rt::StrConcat => (vec![ptr, ptr], Some(ptr)),
+            Rt::StrConcat3 => (vec![ptr, ptr, ptr], Some(ptr)),
             Rt::StrRepeat | Rt::StrIndex => (vec![ptr, I64], Some(ptr)),
             Rt::StrLen => (vec![ptr], Some(I64)),
             Rt::StrCmp => (vec![ptr, ptr], Some(I64)),
@@ -764,11 +769,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     /// the path that does not raise neither reads the flag nor rejoins.
     fn body(&mut self, block: &ir::Block) -> Result<()> {
         let Some(f) = fused(block) else {
-            block.insts.iter().try_for_each(|i| self.inst(i))?;
+            self.concat_insts(&block.insts)?;
             return self.term(&block.term);
         };
         let (before, site) = block.insts.split_at(f.site);
-        before.iter().try_for_each(|i| self.inst(i))?;
+        self.concat_insts(before)?;
         self.raise_to = Some((f.raised, f.dest));
         let done = self.inst(&site[0]);
         self.raise_to = None;

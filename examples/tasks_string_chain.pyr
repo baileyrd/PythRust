@@ -1,0 +1,25 @@
+# #807: shared marked input strings, independent fused results in workers.
+import concurrent.futures
+
+
+def chain(a: str, b: str, c: str) -> str:
+    return a + b + c
+
+
+def tripled(s: str) -> str:
+    return s + s + s
+
+
+def main() -> None:
+    text = "é中🙂"
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        a = ex.submit(chain, text, "", text)
+        b = ex.submit(chain, text, text, text)
+        c = ex.map(tripled, [text, "", "α"])
+        print(a.result(), b.result())
+        for s in c:
+            print([s])
+    print(text)
+
+
+main()

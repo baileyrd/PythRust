@@ -1,0 +1,31 @@
+[''] 0
+['α'] 1
+['中'] 1
+['中α'] 2
+['é'] 1
+['éα'] 2
+['é中'] 2
+['é中α'] 3
+['🙂'] 1
+['🙂α'] 2
+['🙂中'] 2
+['🙂中α'] 3
+ééé
+α🙂中
+α🙂中
+take 1
+take 2
+old1尾 ['2']
+take 4
+22尾 ['4']
+take 3
+ab4 ['3']
+fail 1
+1 unchanged
+fail 2
+2 unchanged
+fail 3
+3 unchanged
+index unchanged ['3']
+abc
+abelse

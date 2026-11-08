@@ -1,0 +1,814 @@
+{
+  "generated_at": "2026-11-08T03:20:01.581557+00:00",
+  "command": [
+    "bench/string_chains.py",
+    "--before",
+    "../pythrust-card807-baseline/bin/pythrust",
+    "--after",
+    "target/release/pythrust",
+    "--runs",
+    "9",
+    "--output",
+    "docs/benchmarks/card807.json"
+  ],
+  "compilers": {
+    "before": {
+      "path": "/workspace/scratch/2ce9dd46a989/pythrust-card807-baseline/bin/pythrust",
+      "compiler_sha256": "b2c8c64298cae2e37872251576632a0324c2fc85783dabe70440e0ad8accbba7",
+      "runtime_sha256": "d89d3be98aad25b3fafdc607fdecccf66cd1f0d4dabcd7324c046e697d7d8cfe"
+    },
+    "after": {
+      "path": "/workspace/scratch/2ce9dd46a989/pythrust-card807/target/release/pythrust",
+      "compiler_sha256": "05508a4f510943ea10148d93cc17425c941d6901f0bf0e77109c2d95e2ebf450",
+      "runtime_sha256": "33b530451f466edd377b788dbf061d4eeb47a95c57453a6a05475734ae8963a5"
+    }
+  },
+  "environment": {
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "python": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+    "cpu": "\t: AMD EPYC 9V74 80-Core Processor",
+    "affinity": [
+      0
+    ],
+    "runs": 9,
+    "cc": "cc (Debian 14.2.0-19) 14.2.0"
+  },
+  "cases": {
+    "eligible": {
+      "source": "def chain(a: str, b: str, c: str) -> str:\n    return a + b + c\ntotal = 0\nfor i in range(100):\n    total += len(chain(\"\u00e9\", \"\u4e2d\", \"\ud83d\ude42\"))\nprint(total)\n",
+      "sha256": "952fd6237508ae8874e3b9486b36c388ba263a90217b9a67e45e40aa0f9030dc",
+      "stdout": "300\n",
+      "versions": {
+        "before": {
+          "compile_link": {
+            "median": 0.049216931000046316,
+            "minimum": 0.04733752199990704,
+            "maximum": 0.08645976199932193,
+            "samples": [
+              0.08645976199932193,
+              0.049216931000046316,
+              0.04960237900013453,
+              0.05035219399997004,
+              0.04733752199990704,
+              0.047699115000796155,
+              0.048094938999383885,
+              0.048115709000740026,
+              0.050982282000404666
+            ]
+          },
+          "process_execution": {
+            "median": 0.0018080009995173896,
+            "minimum": 0.001493318999564508,
+            "maximum": 0.0020754720007971628,
+            "samples": [
+              0.0018080009995173896,
+              0.0017365940002491698,
+              0.0018709250007304945,
+              0.0020754720007971628,
+              0.0016580560004513245,
+              0.001839718000155699,
+              0.0016559519999646,
+              0.002039887999671919,
+              0.001493318999564508
+            ]
+          },
+          "binary_sha256": "03bf0bb52e2e3c371d9f254ac4a8e59bbcf798e51866c2116ad39c9c6d7f8659",
+          "concat_objects": 200,
+          "fused_calls": 0,
+          "heap_allocations": 1004,
+          "heap_reallocations": 0,
+          "concat_allocations": 400,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 1400,
+          "probe_overflow": 0
+        },
+        "after": {
+          "compile_link": {
+            "median": 0.04795226400074171,
+            "minimum": 0.04750528500062501,
+            "maximum": 0.055254633000004105,
+            "samples": [
+              0.055254633000004105,
+              0.04808375199991133,
+              0.04806670600009966,
+              0.05410060299982433,
+              0.04759585000010702,
+              0.04795226400074171,
+              0.047888559000057285,
+              0.04750528500062501,
+              0.047655659999691125
+            ]
+          },
+          "process_execution": {
+            "median": 0.0009212109998770757,
+            "minimum": 0.0007395689999611932,
+            "maximum": 0.001054430999829492,
+            "samples": [
+              0.000808122000307776,
+              0.0007787679996908992,
+              0.0007562130003861967,
+              0.0007395689999611932,
+              0.0009549820006213849,
+              0.001054430999829492,
+              0.0009271909993913141,
+              0.0009214610008712043,
+              0.0009212109998770757
+            ]
+          },
+          "binary_sha256": "11057950b995b5bd89e3f20b6fbb14047c99873a312c65ea8a56292864e92042",
+          "concat_objects": 100,
+          "fused_calls": 100,
+          "heap_allocations": 804,
+          "heap_reallocations": 0,
+          "concat_allocations": 200,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 900,
+          "probe_overflow": 0
+        }
+      }
+    },
+    "fallback_call": {
+      "source": "def identity(s: str) -> str:\n    print(\"\", end=\"\")\n    return s\ndef chain(a: str, b: str, c: str) -> str:\n    return a + b + identity(c)\ntotal = 0\nfor i in range(100):\n    total += len(chain(\"\u00e9\", \"\u4e2d\", \"\ud83d\ude42\"))\nprint(total)\n",
+      "sha256": "4c110f79c122816ad70fdded0228792d498249b538204b406b1e3721f4e604f5",
+      "stdout": "300\n",
+      "versions": {
+        "before": {
+          "compile_link": {
+            "median": 0.04769452799973806,
+            "minimum": 0.04738141899997572,
+            "maximum": 0.048227317000055336,
+            "samples": [
+              0.047788730000320356,
+              0.04808251000031305,
+              0.04773519900027168,
+              0.04769452799973806,
+              0.047604422999938834,
+              0.047606525999981386,
+              0.04738141899997572,
+              0.048227317000055336,
+              0.04743454900017241
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007542710000052466,
+            "minimum": 0.0007331389997489168,
+            "maximum": 0.0007717070002399851,
+            "samples": [
+              0.0007717070002399851,
+              0.0007624830004715477,
+              0.0007542710000052466,
+              0.0007562439996036119,
+              0.0007574760002171388,
+              0.0007524480006395606,
+              0.000747381000110181,
+              0.0007502849994125427,
+              0.0007331389997489168
+            ]
+          },
+          "binary_sha256": "993b3b1756a914f657216f95eab679286fea28a8698be20d37da0432a01888ee",
+          "concat_objects": 200,
+          "fused_calls": 0,
+          "heap_allocations": 1204,
+          "heap_reallocations": 0,
+          "concat_allocations": 400,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 1400,
+          "probe_overflow": 0
+        },
+        "after": {
+          "compile_link": {
+            "median": 0.04833444799987774,
+            "minimum": 0.04763203400034399,
+            "maximum": 0.05071994399986579,
+            "samples": [
+              0.04834203900009015,
+              0.04778443299983337,
+              0.04833444799987774,
+              0.05071994399986579,
+              0.04795786300019245,
+              0.04858742699980212,
+              0.04855954499998916,
+              0.047880025999802456,
+              0.04763203400034399
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007530389993917197,
+            "minimum": 0.0007416619992000051,
+            "maximum": 0.0008085019999271026,
+            "samples": [
+              0.0008085019999271026,
+              0.0007416619992000051,
+              0.0007576460002383101,
+              0.0007635749998371466,
+              0.0007526280005549779,
+              0.0007649070003026281,
+              0.0007524579996243119,
+              0.0007505949997721473,
+              0.0007530389993917197
+            ]
+          },
+          "binary_sha256": "e8b288d72935793a21562ba652bad311e26ae3fcd97dfb763e9211b85f1b9228",
+          "concat_objects": 200,
+          "fused_calls": 0,
+          "heap_allocations": 1204,
+          "heap_reallocations": 0,
+          "concat_allocations": 400,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 1400,
+          "probe_overflow": 0
+        }
+      }
+    },
+    "fallback_right": {
+      "source": "def chain(a: str, b: str, c: str) -> str:\n    return a + (b + c)\ntotal = 0\nfor i in range(100):\n    total += len(chain(\"\u00e9\", \"\u4e2d\", \"\ud83d\ude42\"))\nprint(total)\n",
+      "sha256": "d35299383fde59035e48bbe67c3d4973f7632540bd85200f6d137914a4abdb3a",
+      "stdout": "300\n",
+      "versions": {
+        "before": {
+          "compile_link": {
+            "median": 0.04887566900015372,
+            "minimum": 0.04705589999957738,
+            "maximum": 0.1520233070004906,
+            "samples": [
+              0.04705589999957738,
+              0.05229711799984216,
+              0.04868965100013156,
+              0.04839635000007547,
+              0.047405854999851726,
+              0.04887566900015372,
+              0.04942001499966864,
+              0.049254968000241206,
+              0.1520233070004906
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007713960003457032,
+            "minimum": 0.0007405300002574222,
+            "maximum": 0.0007978359999469831,
+            "samples": [
+              0.0007978359999469831,
+              0.0007972549992700806,
+              0.0007713960003457032,
+              0.0007755730002827477,
+              0.0007405300002574222,
+              0.0007894339996710187,
+              0.0007557330000054208,
+              0.0007575660001748474,
+              0.0007579860002806527
+            ]
+          },
+          "binary_sha256": "62ae3a730f5eff4506e56303d81a163a9215212136582f1d239810d60bbe08b7",
+          "concat_objects": 200,
+          "fused_calls": 0,
+          "heap_allocations": 1004,
+          "heap_reallocations": 0,
+          "concat_allocations": 400,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 1600,
+          "probe_overflow": 0
+        },
+        "after": {
+          "compile_link": {
+            "median": 0.050543229000140855,
+            "minimum": 0.04888422199928755,
+            "maximum": 0.0607278289999158,
+            "samples": [
+              0.05692489800003386,
+              0.05022980899957474,
+              0.050543229000140855,
+              0.05181806099972164,
+              0.04986554300012358,
+              0.05209093900066364,
+              0.0607278289999158,
+              0.04888422199928755,
+              0.04934956899978715
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007609109998156782,
+            "minimum": 0.0007252069999594823,
+            "maximum": 0.0008377060003113002,
+            "samples": [
+              0.0008377060003113002,
+              0.0007844370002203505,
+              0.0007520870003645541,
+              0.0007352129996434087,
+              0.0007556030004707281,
+              0.0007942209995235316,
+              0.0007713059994784999,
+              0.0007252069999594823,
+              0.0007609109998156782
+            ]
+          },
+          "binary_sha256": "644b0298930c2b8102d800b43f63c46c1222f83b117e20bd97fc75a006dc0497",
+          "concat_objects": 200,
+          "fused_calls": 0,
+          "heap_allocations": 1004,
+          "heap_reallocations": 0,
+          "concat_allocations": 400,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 1600,
+          "probe_overflow": 0
+        }
+      }
+    },
+    "empty": {
+      "source": "def chain(a: str, b: str, c: str) -> str:\n    return a + b + c\ntotal = 0\nfor i in range(100):\n    total += len(chain(\"\", \"\", \"\"))\nprint(total)\n",
+      "sha256": "8726883dcc96c59e3d7096732ec3f8d2e6bf1fa860cbfdee45c86ea5d7959661",
+      "stdout": "0\n",
+      "versions": {
+        "before": {
+          "compile_link": {
+            "median": 0.04967223299991019,
+            "minimum": 0.04827057100010279,
+            "maximum": 0.05315327200059983,
+            "samples": [
+              0.050501656999585975,
+              0.04920027600019239,
+              0.05315327200059983,
+              0.04906585400021868,
+              0.04994675400030246,
+              0.04827057100010279,
+              0.04967223299991019,
+              0.04939960399951815,
+              0.05106543199963198
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007638349998160265,
+            "minimum": 0.0007234439999592723,
+            "maximum": 0.0008384570000998792,
+            "samples": [
+              0.0007958830001371098,
+              0.0007638349998160265,
+              0.0007462290004696115,
+              0.0007367049993263208,
+              0.0007234439999592723,
+              0.0008068600000115111,
+              0.0007601100005558692,
+              0.0008384570000998792,
+              0.0007670599998164107
+            ]
+          },
+          "binary_sha256": "e3a195f9063474401842ad14ae2f141c204ff8bf4169fec9208da5616cef9d2b",
+          "concat_objects": 200,
+          "fused_calls": 0,
+          "heap_allocations": 504,
+          "heap_reallocations": 0,
+          "concat_allocations": 200,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 0,
+          "probe_overflow": 0
+        },
+        "after": {
+          "compile_link": {
+            "median": 0.05720526300046913,
+            "minimum": 0.050121106000005966,
+            "maximum": 0.07745212800000445,
+            "samples": [
+              0.05048842699943634,
+              0.050121106000005966,
+              0.06605068399949232,
+              0.06703897100032918,
+              0.055209606000062195,
+              0.06570216699947196,
+              0.05720526300046913,
+              0.07745212800000445,
+              0.05338000200026727
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007924279998405837,
+            "minimum": 0.0007516269997722702,
+            "maximum": 0.0009167140005956753,
+            "samples": [
+              0.0009071499998754007,
+              0.0007516269997722702,
+              0.0007657780006411485,
+              0.0007781559997965815,
+              0.0008255570000983425,
+              0.0009105549997912021,
+              0.0009167140005956753,
+              0.0007646969997949782,
+              0.0007924279998405837
+            ]
+          },
+          "binary_sha256": "5abc4d8814ceeb25d51cf278ddf5cd83d99218cd6363ffb14abab6e60eabc6a9",
+          "concat_objects": 100,
+          "fused_calls": 100,
+          "heap_allocations": 404,
+          "heap_reallocations": 0,
+          "concat_allocations": 100,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 0,
+          "probe_overflow": 0
+        }
+      }
+    },
+    "mixed_empty": {
+      "source": "def chain(a: str, b: str, c: str) -> str:\n    return a + b + c\ntotal = 0\nfor i in range(100):\n    total += len(chain(\"\", \"\u4e2d\", \"\"))\nprint(total)\n",
+      "sha256": "d9891ace501d6723ad4bd4c62fd5c15235fdc92d0808b20ab2f48380b8517412",
+      "stdout": "100\n",
+      "versions": {
+        "before": {
+          "compile_link": {
+            "median": 0.05105936100062536,
+            "minimum": 0.049360465000063414,
+            "maximum": 0.12377066399949399,
+            "samples": [
+              0.049521086000822834,
+              0.049360465000063414,
+              0.049952674000451225,
+              0.08827610200023628,
+              0.12377066399949399,
+              0.05290800400052831,
+              0.0511325620000207,
+              0.05105936100062536,
+              0.0496084050000718
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007938500002637738,
+            "minimum": 0.0007497750002585235,
+            "maximum": 0.0010510060001251986,
+            "samples": [
+              0.0007786680007484392,
+              0.0007762240002193721,
+              0.00076324499968905,
+              0.0010510060001251986,
+              0.0008035450000534183,
+              0.0007497750002585235,
+              0.0008245969993367908,
+              0.0008869209996191785,
+              0.0007938500002637738
+            ]
+          },
+          "binary_sha256": "913aef918fe7b1f789560331c46f5943eb2ad32c50f64237fa3d4afe05298118",
+          "concat_objects": 200,
+          "fused_calls": 0,
+          "heap_allocations": 804,
+          "heap_reallocations": 0,
+          "concat_allocations": 400,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 600,
+          "probe_overflow": 0
+        },
+        "after": {
+          "compile_link": {
+            "median": 0.0497234380000009,
+            "minimum": 0.04880345799938368,
+            "maximum": 0.05610076300035871,
+            "samples": [
+              0.053958359999342065,
+              0.04880345799938368,
+              0.050062396999237535,
+              0.049202397000044584,
+              0.049353021999195335,
+              0.04944243699992512,
+              0.05610076300035871,
+              0.0497234380000009,
+              0.0510993009993399
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007752319997962331,
+            "minimum": 0.0007359539995377418,
+            "maximum": 0.0008826530001897481,
+            "samples": [
+              0.0007818930007488234,
+              0.0007371450001301127,
+              0.0007752319997962331,
+              0.000755904000470764,
+              0.0007846870003049844,
+              0.0007490340003641904,
+              0.0007359539995377418,
+              0.0008826530001897481,
+              0.000790574999882665
+            ]
+          },
+          "binary_sha256": "8135f683c53912a23d0b4690a2356465d448eb8b0a4fbc9eb947091e0c27340d",
+          "concat_objects": 100,
+          "fused_calls": 100,
+          "heap_allocations": 604,
+          "heap_reallocations": 0,
+          "concat_allocations": 200,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 300,
+          "probe_overflow": 0
+        }
+      }
+    },
+    "startup": {
+      "source": "pass\n",
+      "sha256": "9f56e761d79bfdb34304a012586cb04d16b435ef6130091a97702e559260a2f2",
+      "stdout": "",
+      "versions": {
+        "before": {
+          "compile_link": {
+            "median": 0.049064130000260775,
+            "minimum": 0.047050739000042086,
+            "maximum": 0.04990174599970487,
+            "samples": [
+              0.04990174599970487,
+              0.04989694799951394,
+              0.049064130000260775,
+              0.047050739000042086,
+              0.04928876600024523,
+              0.04881509500046377,
+              0.04938581199985492,
+              0.04830141500042373,
+              0.04708082400065905
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007417329998133937,
+            "minimum": 0.0006962839997868286,
+            "maximum": 0.0008901049995984067,
+            "samples": [
+              0.0008901049995984067,
+              0.0007467400000678026,
+              0.0007417329998133937,
+              0.0007450969997080392,
+              0.0007341009995798231,
+              0.0006962839997868286,
+              0.0007238260004669428,
+              0.000709273999746074,
+              0.0008198800005629892
+            ]
+          },
+          "binary_sha256": "1923e5f96c2d8b1cc9a37c7882ec601f018b3c4822cf5201b6e2538b0a8b6acc",
+          "concat_objects": 0,
+          "fused_calls": 0,
+          "heap_allocations": 1,
+          "heap_reallocations": 0,
+          "concat_allocations": 0,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 0,
+          "probe_overflow": 0
+        },
+        "after": {
+          "compile_link": {
+            "median": 0.04823686799954885,
+            "minimum": 0.046857909000209474,
+            "maximum": 0.050837157999922056,
+            "samples": [
+              0.04819504599981883,
+              0.048455566000484396,
+              0.04905164999945555,
+              0.04797802099983528,
+              0.048371910999776446,
+              0.047984739999265,
+              0.04823686799954885,
+              0.050837157999922056,
+              0.046857909000209474
+            ]
+          },
+          "process_execution": {
+            "median": 0.0007497449996662908,
+            "minimum": 0.0007070810006553074,
+            "maximum": 0.0009380769997733296,
+            "samples": [
+              0.0007310660002985969,
+              0.0007808420004948857,
+              0.0009380769997733296,
+              0.0007497449996662908,
+              0.0007070810006553074,
+              0.0009157030008282163,
+              0.0007726489993729047,
+              0.0007349319994318648,
+              0.0007189279995145625
+            ]
+          },
+          "binary_sha256": "7de120d0642c468f0231ed41e27b1a07dedac0a3b2efea1de5d0b41be3dc1b01",
+          "concat_objects": 0,
+          "fused_calls": 0,
+          "heap_allocations": 1,
+          "heap_reallocations": 0,
+          "concat_allocations": 0,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 0,
+          "probe_overflow": 0
+        }
+      }
+    },
+    "chain": {
+      "source": "# Same direct call shape before and after; three live, immutable strings.\ndef chain(a: str, b: str, c: str) -> str:\n    return a + b + c\n\na = \"abcdefghijklmnop\"\nb = \"\u00e9\u4e2d\ud83d\ude42\"\nc = \"qrstuvwxyz\"\ntotal = 0\nfor i in range(2000000):\n    total += len(chain(a, b, c))\nprint(total)\n",
+      "sha256": "27b8079da423d39d1554f70140b02ae97fe26c0acc803f5630610c12c20359c0",
+      "stdout": "58000000\n",
+      "versions": {
+        "before": {
+          "compile_link": {
+            "median": 0.051267973999529204,
+            "minimum": 0.04943855999954394,
+            "maximum": 0.08032870100032596,
+            "samples": [
+              0.08032870100032596,
+              0.05238001199995779,
+              0.05150986799981183,
+              0.04943855999954394,
+              0.05124376799994934,
+              0.051267973999529204,
+              0.05172953700002836,
+              0.051267162999465654,
+              0.05122441900039121
+            ]
+          },
+          "process_execution": {
+            "median": 0.13088425399928383,
+            "minimum": 0.12714345899985346,
+            "maximum": 0.1386750330002542,
+            "samples": [
+              0.1332446770002207,
+              0.13082003100043949,
+              0.13235886900019977,
+              0.137660319999668,
+              0.1386750330002542,
+              0.13088425399928383,
+              0.12714345899985346,
+              0.12960303299951192,
+              0.12885660600022675
+            ]
+          },
+          "binary_sha256": "32bf0dccb0ba6c7881de3d67a00f8df11032a4a00a855c01dd85c48cae500bd0",
+          "concat_objects": 4000000,
+          "fused_calls": 0,
+          "heap_allocations": 8000010,
+          "heap_reallocations": 1,
+          "concat_allocations": 8000000,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 120000000,
+          "probe_overflow": 0
+        },
+        "after": {
+          "compile_link": {
+            "median": 0.053904301000329724,
+            "minimum": 0.051324965999810956,
+            "maximum": 0.05825290600023436,
+            "samples": [
+              0.05825290600023436,
+              0.055633880999266694,
+              0.053904301000329724,
+              0.054525249999642256,
+              0.05369231300028332,
+              0.0575214300006337,
+              0.051324965999810956,
+              0.052396291000150086,
+              0.052630100999522256
+            ]
+          },
+          "process_execution": {
+            "median": 0.06508681400009664,
+            "minimum": 0.06292566699994495,
+            "maximum": 0.08067649099939445,
+            "samples": [
+              0.06292566699994495,
+              0.06358903999989707,
+              0.07377788499979943,
+              0.06735464200028218,
+              0.06544972799929383,
+              0.06508681400009664,
+              0.08067649099939445,
+              0.06321447899972554,
+              0.06356423399938649
+            ]
+          },
+          "binary_sha256": "42f5b1af7ad5c3092b6eb568951f7867f1c331edf38a7f0111e2781126b3a9c5",
+          "concat_objects": 2000000,
+          "fused_calls": 2000000,
+          "heap_allocations": 4000010,
+          "heap_reallocations": 1,
+          "concat_allocations": 4000000,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 70000000,
+          "probe_overflow": 0
+        }
+      }
+    },
+    "strings": {
+      "source": "# String building: a small string per iteration, and one growing line.\ntotal = 0\nline = \"\"\nfor i in range(1000000):\n    key = \"k\" + str(i) + \":\" + str(i % 97)\n    total += len(key)\n    if i % 50 == 0:\n        line += key[0]\nprint(total, len(line))\n",
+      "sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381",
+      "stdout": "9785790 20000\n",
+      "versions": {
+        "before": {
+          "compile_link": {
+            "median": 0.053220605999740656,
+            "minimum": 0.051037825999628694,
+            "maximum": 0.07074500199996692,
+            "samples": [
+              0.053220605999740656,
+              0.053122238000469224,
+              0.07074500199996692,
+              0.05428644299990992,
+              0.051113470000018424,
+              0.051931876000708144,
+              0.051037825999628694,
+              0.06442281999989063,
+              0.05380678399978933
+            ]
+          },
+          "process_execution": {
+            "median": 0.2290389370000412,
+            "minimum": 0.21897075600008975,
+            "maximum": 0.2610965359999682,
+            "samples": [
+              0.22429746700072428,
+              0.2536438729994188,
+              0.2610965359999682,
+              0.21897075600008975,
+              0.2235273700007383,
+              0.22844405399973766,
+              0.2290389370000412,
+              0.2431030550005744,
+              0.23525221399995644
+            ]
+          },
+          "binary_sha256": "010283ab7c750d499d4b2d5412d77712090960a08430e6eb663f45d5b6d248c9",
+          "concat_objects": 3020000,
+          "fused_calls": 0,
+          "heap_allocations": 14080006,
+          "heap_reallocations": 1,
+          "concat_allocations": 6040000,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 224573570,
+          "probe_overflow": 0
+        },
+        "after": {
+          "compile_link": {
+            "median": 0.0534940990000905,
+            "minimum": 0.051181320999603486,
+            "maximum": 0.06049841300045955,
+            "samples": [
+              0.06049841300045955,
+              0.0526567229999273,
+              0.055530593000185036,
+              0.051181320999603486,
+              0.0534940990000905,
+              0.05209140599981765,
+              0.054898114999559766,
+              0.052770373999919684,
+              0.0541566830006559
+            ]
+          },
+          "process_execution": {
+            "median": 0.2342120299999806,
+            "minimum": 0.21877319000032003,
+            "maximum": 0.25413324300006934,
+            "samples": [
+              0.25413324300006934,
+              0.23773259399968083,
+              0.21955065599922818,
+              0.21877319000032003,
+              0.22114289399996778,
+              0.22893723899960605,
+              0.23754070100039826,
+              0.2342120299999806,
+              0.2397687490001772
+            ]
+          },
+          "binary_sha256": "f418c2d2cd00355fd32c8fecd8369fe78838a29b41610a8f0d6598e3c6c96c15",
+          "concat_objects": 3020000,
+          "fused_calls": 0,
+          "heap_allocations": 14080006,
+          "heap_reallocations": 1,
+          "concat_allocations": 6040000,
+          "concat_reallocations": 0,
+          "concat_copied_bytes": 224573570,
+          "probe_overflow": 0
+        }
+      }
+    }
+  },
+  "allocation_failure": {
+    "before": {
+      "fallback_prefix": {
+        "returncode": -6,
+        "stdout": "",
+        "stderr": "memory allocation of 2 bytes failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+      },
+      "fused": {
+        "returncode": -6,
+        "stdout": "",
+        "stderr": "memory allocation of 2 bytes failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+      }
+    },
+    "after": {
+      "fallback_prefix": {
+        "returncode": -6,
+        "stdout": "",
+        "stderr": "memory allocation of 2 bytes failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+      },
+      "fused": {
+        "returncode": -6,
+        "stdout": "",
+        "stderr": "memory allocation of 3 bytes failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+      }
+    }
+  },
+  "comparison": {
+    "base_commit": "c633a4fcc9c7dfc41ed66e9346a0797f1793502a",
+    "implementation_commit": "8614f13b58ea69685b6f9a15a2ea18e6edf921f7",
+    "notes": "Final documentation-only commits do not change measured compiler/runtime behavior. Release binaries and source hashes above identify the actual artifacts."
+  }
+}

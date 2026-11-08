@@ -190,3 +190,17 @@ shapes and applied flat-list fixes. The CLI regression checks identical rejectio
 through `check`/`run`/`build` and executes the fixed conditional flat-list return
 in the interpreter and native code. Related to issue #73 item 2; its other
 findings are not declared resolved by this card.
+
+
+### Native string-chain experiment #807
+
+A bounded native prototype fuses an adjacent, single-use unnamed concat prefix
+only when its tail is an unchanged borrowed string parameter (D64). It preserves
+operand work/check order and ordinary ownership/exception cleanup; all uncertain
+shapes retain binary concat. Empty/Unicode/alias, side-effect/exception and shared
+worker regressions accompany deterministic overflow and allocation-failure probes.
+[Same-host evidence](benchmarks.md#adjacent-native-string-chains-807) shows one
+result object/buffer for a nonempty triple and fewer copied bytes; the existing
+string workload remains unaffected. This is an experiment awaiting independent
+review and required CI, not #808 work or a broader language milestone. #767's
+mapping, #806, held #396/PR #119 and open issue #73 are unchanged.
