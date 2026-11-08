@@ -204,3 +204,15 @@ result object/buffer for a nonempty triple and fewer copied bytes; the existing
 string workload remains unaffected. This is an experiment awaiting independent
 review and required CI, not #808 work or a broader language milestone. #767's
 mapping, #806, held #396/PR #119 and open issue #73 are unchanged.
+
+
+### Portable SHA-256 pilot #809
+
+One safe scalar 16-word circular schedule with expanded rounds preserves D22,
+SHA-256 digests, padding/wrapping length behavior, whole-file reads, dependencies
+and public/runtime/binding ABIs. The interpreter and native runtime share its
+source. [Fresh measurements and correctness evidence](benchmarks/card809.md)
+support retaining this bounded variant for independent review and required CI:
+loaded-SHA medians fall 25–28% and full large-file fclone medians 20–30% on warm
+synthetic tmpfs fixtures on one host. This is not an OpenSSL parity or general I/O
+claim, nor completion of #810/#811, a language milestone or #396/PR119.

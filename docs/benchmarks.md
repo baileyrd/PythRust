@@ -292,3 +292,17 @@ measure main `f542d98`, including merged #806/PR127 and #807/PR128.
 This measurement-only report separates build/startup controls and fclone
 discovery/read/repeated-SHA controls, documents tmpfs and profiling limits,
 and proposes at most three new experiments. It does not implement them.
+
+
+## Portable SHA-256 compression (#809)
+
+A bounded safe scalar 16-word circular schedule with expanded rounds improves
+fresh same-host loaded-SHA medians by 25–28% and full large duplicate/unique
+fclone serial/task medians by 20–30%, with exact interpreter/native/CPython
+output parity. See [method, spread, identities and controls](benchmarks/card809.md),
+[15-sample raw evidence](benchmarks/card809.json) and
+[51-sample short-control repeats](benchmarks/card809-controls.json). These are
+warm synthetic tmpfs workloads; CPython/OpenSSL still leads and no cold-disk,
+general I/O or cross-architecture speedup is claimed. The prototype awaits
+independent review and required CI. D22, dependencies, ABIs and whole-file reads
+remain unchanged; #810/#811 are not completed by this pilot.

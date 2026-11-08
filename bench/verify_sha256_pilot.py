@@ -43,8 +43,27 @@ def verify(r, identities=False):
         expected={ds+'@'+cpu for ds in datasets for cpu in r['affinities']}
         if row['executions'].keys()!=expected or set(row['binary_sha256'])!={'baseline','candidate'}:
             raise ValueError('missing execution/binary')
-        for timing in row['executions'].values():
+        for key,timing in row['executions'].items():
             verify_timing(timing,r['runs'],{'baseline','candidate','cpython'})
+            dataset=key.split('@',1)[0]
+            if name.startswith('fclone_'):
+                want=p.expected_groups(Path('<DATA>')/dataset,r['inputs'][dataset]['manifest']).decode()
+            elif name=='startup':
+                want=''
+            else:
+                manifest=r['inputs']['large_dup']['manifest']
+                total=sum(x['bytes'] for x in manifest)
+                if name=='phase_discover':
+                    want=f'{len(manifest)} {total}\n'
+                elif name=='phase_read':
+                    want=f'{total}\n'
+                else:
+                    last=sorted(manifest,key=lambda x:(x['bytes'],x['path']))[-1]['sha256']
+                    want=f'{8*len(manifest)*64} {last}\n'
+            if timing['stdout']!=want:
+                raise ValueError('incorrect digest/group/control oracle')
+            if not name.startswith('fclone_') and timing['stdout_sha256']!=p.sha(want.encode()):
+                raise ValueError('stdout identity mismatch')
     for row in r['micro'].values():
         verify_timing(row,r['runs'],{'baseline','candidate'})
         if set(row['internal_seconds'])!={'baseline','candidate'}:
@@ -73,9 +92,34 @@ def verify_timing(row,runs,kinds):
         stats(sample,runs)
 
 
+def verify_controls(r, primary, primary_bytes):
+    if r['primary_sha256']!=p.sha(primary_bytes) or r['runs']!=51 or r['warmups']!=1 or r['seed']!=8091:
+        raise ValueError('controls identity/configuration mismatch')
+    expected_names={'startup','phase_discover','phase_read','fclone_tasks'}
+    if set(r['cases'])!=expected_names:
+        raise ValueError('missing control cases')
+    for name,row in r['cases'].items():
+        if row['source_sha256']!=primary['cases'][name]['source_sha256'] or set(row['binary_sha256'])!={'baseline','candidate'}:
+            raise ValueError('control source/binary mismatch')
+        datasets=['small_dup','small_unique'] if name=='fclone_tasks' else ['default'] if name=='startup' else ['small_dup']
+        expected={ds+'@'+cpus for ds in datasets for cpus in primary['affinities']}
+        if row['executions'].keys()!=expected:
+            raise ValueError('missing control executions')
+        for timing in row['executions'].values():
+            verify_timing(timing,51,{'baseline','candidate','cpython'})
+    if r['harness_sha256']!=p.sha((p.ROOT/'bench/repeat_sha256_controls.py').read_bytes()):
+        raise ValueError('repeat harness changed')
+    return sum(len(x['executions']) for x in r['cases'].values())
+
+
 if __name__=='__main__':
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('results',type=Path)
     ap.add_argument('--identities',action='store_true')
+    ap.add_argument('--controls',type=Path)
     args=ap.parse_args()
-    print('verified',verify(json.loads(args.results.read_text()),args.identities),'workload/affinity cases and two microbenchmarks')
+    primary=args.results.read_bytes()
+    result=json.loads(primary)
+    print('verified',verify(result,args.identities),'workload/affinity cases and two microbenchmarks')
+    if args.controls:
+        print('verified',verify_controls(json.loads(args.controls.read_bytes()),result,primary),'longer control cases')

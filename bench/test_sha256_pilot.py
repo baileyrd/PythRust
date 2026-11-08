@@ -1,5 +1,6 @@
 """Fail-closed tests for the bounded interleaved SHA pilot."""
 import copy
+import json
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -39,6 +40,21 @@ class PilotTests(unittest.TestCase):
             with patch.object(s,'checked',return_value=out):
                 with self.assertRaises(ValueError):
                     s.interleaved({'baseline':['x']},None,'0',7,809,micro=True)
+
+    def test_saved_evidence_and_corruption_detection(self):
+        path=s.ROOT/'docs/benchmarks/card809.json'
+        primary_bytes=path.read_bytes()
+        primary=json.loads(primary_bytes)
+        self.assertEqual(v.verify(primary),24)
+        bad=copy.deepcopy(primary)
+        bad['cases']['fclone_lite']['executions'][next(iter(bad['cases']['fclone_lite']['executions']))]['stdout']='wrong'
+        with self.assertRaises(ValueError):
+            v.verify(bad)
+        controls=json.loads((s.ROOT/'docs/benchmarks/card809-controls.json').read_bytes())
+        self.assertEqual(v.verify_controls(controls,primary,primary_bytes),10)
+        controls['cases'].pop('startup')
+        with self.assertRaises(ValueError):
+            v.verify_controls(controls,primary,primary_bytes)
 
     def test_independent_statistics_and_invalid_samples(self):
         v.stats(dict(samples=[1,2,3,9],median=2.5,mad=1,minimum=1,maximum=9),4)
