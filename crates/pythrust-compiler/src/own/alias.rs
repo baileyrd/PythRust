@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::body::{self, Age, Flow, Obj, Objs};
 use super::{holds_list, Mode, Summary};
-use crate::ast::{Mode as Temper, Module, StmtKind};
+use crate::ast::{Block, Expr, ExprKind, Mode as Temper, Module, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::ir::{
     BlockId, Compound, Func, FuncId, GlobalId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty,
@@ -81,7 +81,7 @@ enum Writer {
     Local(LocalId, Option<Key>),
     /// A callee, in a module variable's list: through that variable,
     /// if one.
-    Callee(FuncId, Option<GlobalId>),
+    Callee(FuncId, Option<GlobalId>, Ty),
 }
 
 /// A change a function makes, itself or through a callee, to a list of
@@ -115,21 +115,26 @@ pub(super) fn tempered(
     program: &Program,
     summaries: &[Summary],
 ) -> BTreeMap<String, Diagnostic> {
-    let names: BTreeSet<&str> = module
+    let bodies: BTreeMap<&str, &Block> = module
         .body
         .iter()
         .filter_map(|s| match &s.kind {
-            StmtKind::FuncDef(f) if f.mode == Temper::Tempered => Some(f.name.name.as_str()),
+            StmtKind::FuncDef(f) if f.mode == Temper::Tempered => {
+                Some((f.name.name.as_str(), &f.body))
+            }
             _ => None,
         })
         .collect();
     let effects = effects(program, summaries);
     let mut out = BTreeMap::new();
     for func in &program.funcs {
-        if !names.contains(func.name.as_str()) || out.contains_key(&func.name) {
+        let Some(source) = bodies.get(func.name.as_str()) else {
+            continue;
+        };
+        if out.contains_key(&func.name) {
             continue;
         }
-        if let Err(d) = check(program, func, summaries, &effects) {
+        if let Err(d) = check(program, func, summaries, &effects, source) {
             out.insert(func.name.clone(), d);
         }
     }
@@ -210,8 +215,15 @@ fn reads(program: &Program) -> Vec<BTreeSet<GlobalId>> {
 }
 
 /// Checks tempered `func`'s body.
-fn check(program: &Program, func: &Func, summaries: &[Summary], effects: &Effects) -> Result<()> {
-    let body = Body::new(program, func, summaries, effects);
+fn check(
+    program: &Program,
+    func: &Func,
+    summaries: &[Summary],
+    effects: &Effects,
+    source: &Block,
+) -> Result<()> {
+    let mut body = Body::new(program, func, summaries, effects);
+    (body.loops, body.copy_sites) = source_facts(program, func, source);
     let entries = body.entries();
     let live = body.live_out();
     for (b, entry) in entries.iter().enumerate() {
@@ -232,6 +244,11 @@ struct Body<'a> {
     roots: Vec<Live>,
     /// The locals `return` assigns.
     results: BTreeSet<LocalId>,
+    /// Only locals read by the lowering of a source `for` iterable.
+    /// Ordinary call-argument temporaries are not loop references.
+    loops: BTreeMap<LocalId, Option<String>>,
+    /// Standalone mutations whose arguments cannot create new aliases.
+    copy_sites: Vec<Span>,
     /// The lists this body allocates that it may store in the module's
     /// values, so that [`Obj::World`] may be them.
     held: Objs,
@@ -256,6 +273,8 @@ impl<'a> Body<'a> {
             effects,
             roots: Vec::new(),
             results: results.collect(),
+            loops: BTreeMap::new(),
+            copy_sites: Vec::new(),
             held: Objs::new(),
         };
         body.roots = body.roots();
@@ -640,7 +659,7 @@ impl<'a> Body<'a> {
         };
         for w in &self.effects.writes[f.0] {
             let changed = Locs::from([root(Obj::World, w.ty)]);
-            let writer = Writer::Callee(*f, w.global);
+            let writer = Writer::Callee(*f, w.global, w.ty);
             self.change(writer, &changed, w.how, state, live, span)?;
         }
         Ok(())
@@ -704,76 +723,125 @@ impl<'a> Body<'a> {
     ) -> Result<()> {
         let (itself, origin) = match writer {
             Writer::Local(w, origin) => (Some(Key::Local(w)), origin),
-            Writer::Callee(_, g) => (None, g.map(Key::Global)),
+            Writer::Callee(_, g, _) => (None, g.map(Key::Global)),
         };
         let clash =
             |k: &&Key| Some(**k) != itself && self.overlaps(&self.locs(**k, state), changed, how);
-        let (named, loops): (Vec<&Key>, Vec<&Key>) =
+        let (named, temporaries): (Vec<&Key>, Vec<&Key>) =
             live.iter().filter(clash).partition(|k| match k {
                 Key::Local(l) => self.named(*l),
                 Key::Global(_) => true,
             });
         let other = named.into_iter().find(|k| Some(**k) != origin);
-        let message = match (other, loops.first()) {
-            (Some(a), _) => self.aliased(writer, *a),
-            (None, Some(_)) => format!(
-                "tempered `{}` changes {} while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list({})`",
-                self.func.name,
-                self.subject(writer),
-                self.writer_name(writer).unwrap_or("...")
-            ),
+        let message = match (other, temporaries.first()) {
+            (Some(a), _) => self.aliased(writer, *a, span),
+            (None, Some(_)) => {
+                let looped = temporaries.iter().find_map(|k| match k {
+                    Key::Local(l) => self.loops.get(l).map(|name| (*l, name)),
+                    Key::Global(_) => None,
+                });
+                let (context, hint) = match looped {
+                    Some((l, name)) => ("a `for` loop over it is running", self.loop_hint(l, name.as_deref())),
+                    None => ("a temporary value may still refer to the changed container and is used later", "finish using that value before changing the container, or make an independent value before sharing it".into()),
+                };
+                format!(
+                    "tempered `{}` changes {} while {context}; {hint}",
+                    self.func.name,
+                    self.subject(writer)
+                )
+            }
             (None, None) => return Ok(()),
         };
         Err(error(span, message))
     }
 
-    /// What `writer` changes, for a message: `` `b` ``, or a list.
+    /// Name the receiver's actual container type, without mistaking the
+    /// outer source of a projection for the projected container.
+    fn container(&self, ty: Ty) -> &'static str {
+        match self.program.compound(ty) {
+            Some(Compound::List(_)) => "list",
+            Some(Compound::Set(_)) => "set",
+            Some(Compound::Dict(..)) => "dict",
+            Some(Compound::Opt(t)) => self.container(*t),
+            _ => "mutable container",
+        }
+    }
+
     fn subject(&self, writer: Writer) -> String {
         match writer {
-            Writer::Local(..) => self
-                .writer_name(writer)
-                .map_or("a list".into(), |b| format!("`{b}`")),
-            Writer::Callee(f, _) => format!("a list through `{}`", self.program.funcs[f.0].name),
+            Writer::Local(w, _) => self.func.names.get(&w).map_or_else(
+                || format!("a {}", self.container(self.ty(w))),
+                |name| format!("`{name}`"),
+            ),
+            Writer::Callee(f, _, ty) => format!(
+                "a {} through `{}`",
+                self.container(ty),
+                self.program.funcs[f.0].name
+            ),
         }
     }
 
-    /// The variable `writer` changes through, if it is one.
-    fn writer_name(&self, writer: Writer) -> Option<&str> {
-        match writer {
-            Writer::Local(w, _) => self.func.names.get(&w).map(String::as_str),
-            Writer::Callee(..) => None,
+    /// Copying a loop's outer container separates its iteration only when
+    /// none of the elements can still carry the changed mutable value.
+    fn loop_hint(&self, local: LocalId, name: Option<&str>) -> String {
+        if let Some(name) = name.filter(|_| self.flat_container(self.func.locals[local.0])) {
+            return format!(
+                "loop over a copy, which costs one: replace the iterated `{name}` with `list({name})`"
+            );
+        }
+        "iterate over an independent snapshot of the container before changing it; a shallow copy may still share nested lists, dicts or sets".into()
+    }
+
+    fn flat_container(&self, ty: Ty) -> bool {
+        match self.program.compound(ty) {
+            Some(Compound::List(t) | Compound::Set(t)) => self.copy_separates(*t),
+            Some(Compound::Dict(k, v)) => self.copy_separates(*k) && self.copy_separates(*v),
+            _ => false,
         }
     }
 
-    fn aliased(&self, writer: Writer, other: Key) -> String {
-        let f = &self.func.name;
-        let what = self.subject(writer);
-        let a = match other {
-            Key::Local(l) => self.name(l),
-            Key::Global(g) => {
-                let g = self
-                    .program
-                    .global_names
-                    .get(&g)
-                    .map_or("?", String::as_str);
+    /// Copy the current receiver immediately before mutation, not an
+    /// earlier alias source: later aliases can invalidate a binding rewrite.
+    /// A parameter must still communicate its mutation to the caller.
+    fn alias_hint(&self, writer: Writer, span: Span) -> String {
+        if let Writer::Local(w, _) = writer {
+            let ty = self.func.locals[w.0];
+            if self.copy_sites.contains(&span)
+                && self.named(w)
+                && !self.func.params.contains(&w)
+                && matches!(ty, Ty::List(_))
+                && self.flat_container(ty)
+            {
+                let name = self.name(w);
                 return format!(
-                    "tempered `{f}` changes {what} while module variable `{g}` may be the same list and is used later; pass a copy instead, such as `list({g})`"
+                    "copy the current value before this change: `{name} = list({name})`"
                 );
             }
-        };
-        // A parameter is the caller's list: copy the other name instead.
-        let copied = match writer {
-            Writer::Local(w, _) if !self.func.params.contains(&w) => self.func.names.get(&w),
-            _ => None,
-        };
-        match copied {
-            Some(b) => format!(
-                "tempered `{f}` changes {what} while `{a}` may be the same list and is used later; copy instead of sharing it: `{b} = list({a})`"
-            ),
-            None => format!(
-                "tempered `{f}` changes {what} while `{a}` may be the same list and is used later; copy instead of sharing it: `{a} = list(...)`"
-            ),
         }
+        "make independent values before sharing them; a shallow copy may still share nested lists, dicts or sets".into()
+    }
+
+    fn aliased(&self, writer: Writer, other: Key, span: Span) -> String {
+        let (name, ty) = match other {
+            Key::Local(l) => (format!("`{}`", self.name(l)), self.func.locals[l.0]),
+            Key::Global(g) => (
+                format!(
+                    "module variable `{}`",
+                    self.program
+                        .global_names
+                        .get(&g)
+                        .map_or("?", String::as_str)
+                ),
+                self.program.globals[g.0],
+            ),
+        };
+        format!(
+            "tempered `{}` changes {} while {name} may be the same {} and is used later; {}",
+            self.func.name,
+            self.subject(writer),
+            self.container(ty),
+            self.alias_hint(writer, span)
+        )
     }
 
     /// D3: a result sharing a list with a parameter.
@@ -916,6 +984,134 @@ impl<'a> Body<'a> {
 
     fn name(&self, l: LocalId) -> &str {
         self.func.names.get(&l).map_or("?", String::as_str)
+    }
+}
+
+/// Recover the loop reference from the existing source-span contract:
+/// lowering emits `Len(iterable)` at the source iterable's span. Names
+/// are advice only; membership never changes the alias rejection.
+fn source_facts(
+    program: &Program,
+    func: &Func,
+    source: &Block,
+) -> (BTreeMap<LocalId, Option<String>>, Vec<Span>) {
+    let mut expressions = Vec::new();
+    let mut copies = Vec::new();
+    for_iterables(program, source, &mut expressions, &mut copies);
+    let loops = func
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter_map(|i| {
+            let Inst::Assign {
+                value: Rvalue::Len(Operand::Local(l)),
+                span,
+                ..
+            } = i
+            else {
+                return None;
+            };
+            let expression = expressions.iter().find(|e| e.span == *span)?;
+            let name = match &expression.kind {
+                ExprKind::Name(name) => Some(name.clone()),
+                _ => None,
+            };
+            Some((*l, name))
+        })
+        .collect();
+    (loops, copies)
+}
+
+/// `zip` and `enumerate` keep references to their input iterables.
+/// Other calls evaluate their arguments before the loop starts.
+fn iterable_sources<'a>(program: &Program, expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    out.push(expr);
+    let ExprKind::Call { func, args } = &expr.kind else {
+        return;
+    };
+    let ExprKind::Name(name) = &func.kind else {
+        return;
+    };
+    if !matches!(name.as_str(), "zip" | "enumerate")
+        || program.funcs.iter().any(|f| f.name == *name)
+    {
+        return;
+    }
+    let count = if name == "enumerate" { 1 } else { args.len() };
+    for arg in args.iter().take(count) {
+        iterable_sources(program, &arg.value, out);
+    }
+}
+
+/// A copy before an enclosing call can still alias an earlier argument;
+/// an effectful argument can also share the new copy again. Only offer a
+/// statement insertion for standalone append with an already simple value.
+fn plain_append(stmt: &crate::ast::Stmt) -> Option<Span> {
+    let StmtKind::Expr(expr) = &stmt.kind else {
+        return None;
+    };
+    let ExprKind::Call { func, args } = &expr.kind else {
+        return None;
+    };
+    let ExprKind::Attr { value, attr } = &func.kind else {
+        return None;
+    };
+    let [arg] = args.as_slice() else { return None };
+    let simple = matches!(
+        arg.value.kind,
+        ExprKind::Name(_)
+            | ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Str(_)
+            | ExprKind::Bool(_)
+            | ExprKind::None
+    );
+    (attr.name == "append" && matches!(value.kind, ExprKind::Name(_)) && simple)
+        .then_some(expr.span)
+}
+
+fn for_iterables<'a>(
+    program: &Program,
+    block: &'a Block,
+    out: &mut Vec<&'a Expr>,
+    copies: &mut Vec<Span>,
+) {
+    for stmt in block {
+        if let Some(span) = plain_append(stmt) {
+            copies.push(span);
+        }
+        match &stmt.kind {
+            StmtKind::For {
+                iter, body, orelse, ..
+            } => {
+                iterable_sources(program, iter, out);
+                for_iterables(program, body, out, copies);
+                for_iterables(program, orelse, out, copies);
+            }
+            StmtKind::If {
+                branch,
+                elifs,
+                orelse,
+            } => {
+                for_iterables(program, &branch.body, out, copies);
+                for branch in elifs {
+                    for_iterables(program, &branch.body, out, copies);
+                }
+                for_iterables(program, orelse, out, copies);
+            }
+            StmtKind::While { branch, orelse } => {
+                for_iterables(program, &branch.body, out, copies);
+                for_iterables(program, orelse, out, copies);
+            }
+            StmtKind::Try { body, handlers } => {
+                for_iterables(program, body, out, copies);
+                for handler in handlers {
+                    for_iterables(program, &handler.body, out, copies);
+                }
+            }
+            StmtKind::With { body, .. } => for_iterables(program, body, out, copies),
+            _ => {}
+        }
     }
 }
 

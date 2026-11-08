@@ -430,6 +430,7 @@ const NATIVE: &[&str] = &[
     "flat_expression_overflow",
     "aliasing_join_disjoint",
     "aliasing_flat_copy",
+    "aliasing_d4_copy",
     "modes_callee_disjoint",
     "annotations",
     "arithmetic",

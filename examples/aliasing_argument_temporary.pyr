@@ -1,0 +1,11 @@
+# deviation: D4 rejects aliased mutation in tempered code; CPython keeps aliasing.
+# expect-error: changes a list while a temporary value
+# expect-exit: 1
+temper def grow(mut rows: list[list[int]]) -> int:
+    rows[0].append(2)
+    return 0
+temper def h(xs: list[int], n: int) -> int:
+    return len(xs) + n
+temper def f(mut rows: list[list[int]]) -> int:
+    return h(rows[0], grow(rows))
+print(f([[1]]))

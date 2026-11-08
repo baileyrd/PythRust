@@ -1,0 +1,11 @@
+# deviation: D4 rejects aliased mutation in tempered code; CPython keeps aliasing.
+# expect-error: changes `a` while `b` may be the same list
+# expect-exit: 1
+temper def f() -> int:
+    a = [1]
+    b: list[int] | None = a
+    a.append(2)
+    if b is None:
+        return 0
+    return len(b)
+print(f())
