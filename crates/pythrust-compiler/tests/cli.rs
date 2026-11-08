@@ -527,3 +527,39 @@ fn loose_callee_stores_reach_tempered_call_checks() {
         }
     }
 }
+
+#[test]
+fn joined_receiver_aliases_reject_before_any_execution() {
+    let tmp = scratch("joined_receiver_aliases");
+    for (name, receiver) in [
+        ("conditional", "(a if c else b)"),
+        ("or", "(b or a)"),
+        ("and", "(a and b)"),
+    ] {
+        let src = format!("temper def f(c: bool) -> int:\n    a = [1]\n    b = a\n    {receiver}.append(2)\n    return len(a) + len(b)\nprint(f(True))\n");
+        for command in ["check", "run", "build"] {
+            let out = pythrust(command, &tmp, name, &src);
+            assert_eq!(out.status.code(), Some(1), "{command} {name}: {out:?}");
+            assert!(out.stdout.is_empty());
+            let err = text(&out.stderr);
+            assert!(
+                err.contains("may be the same list and is used later")
+                    && err.contains("copy instead of sharing"),
+                "{command}: {err}"
+            );
+            assert!(!tmp
+                .join(name)
+                .with_extension(std::env::consts::EXE_EXTENSION)
+                .exists());
+        }
+        let legal = src.replace("b = a", "b = [2]");
+        assert!(pythrust("check", &tmp, name, &legal).status.success());
+        let out = pythrust("run", &tmp, name, &legal);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(text(&out.stdout), "3\n");
+        let loose = src.replace("temper ", "");
+        let out = pythrust("run", &tmp, name, &loose);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(text(&out.stdout), "4\n");
+    }
+}
