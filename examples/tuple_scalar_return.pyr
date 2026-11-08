@@ -1,0 +1,89 @@
+# #806: direct unpack plus boxed/mixed/ineligible uses and cleanup.
+import concurrent.futures
+
+def mark(log: list[int], n: int) -> int:
+    log.append(n)
+    return n
+
+def pair(a: int, b: int = 7) -> tuple[int, int]:
+    return a, b
+
+def checked(log: list[int], n: int) -> tuple[int, int]:
+    text = str(n)
+    if n < 0:
+        return -9223372036854775808, 9223372036854775807
+    try:
+        return mark(log, 10) // n, mark(log, 20) % n
+    except ZeroDivisionError as e:
+        print("inside", str(e), text)
+        return 100, 200
+
+def fail(log: list[int]) -> tuple[int, int]:
+    text = "alive"
+    return mark(log, 30), int(text)
+
+def identity(t: tuple[int, int]) -> tuple[int, int]:
+    return t
+
+def recursive(n: int) -> tuple[int, int]:
+    if n == 0:
+        return 0, 1
+    a, b = recursive(n - 1)
+    return a + 1, b + 1
+
+def mixed() -> tuple[int, bool]:
+    return 1, True
+
+def nested() -> tuple[tuple[int, int], int]:
+    return (2, 3), 4
+
+def optional(n: int) -> tuple[int, int] | None:
+    if n:
+        return n, n
+    return None
+
+def tasks():
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        fut = ex.submit(pair, 11, 12)
+        a, b = fut.result()
+        print(a, b)
+
+log: list[int] = []
+
+def with_default(a: int, b: int = mark(log, 70)) -> tuple[int, int]:
+    return a, b
+
+a, b = with_default(1)
+print(a, b)
+a, b = with_default(2)
+print(a, b)
+a, b = pair(b=mark(log, 2), a=mark(log, 1))
+print(a, b, log)
+a, b = pair(3)
+print(a, b)
+t = pair(4, 5)
+print(t, pair(6, 7), [pair(8, 9)])
+a, b = identity(t)
+print(a, b)
+for n in [-1, 0, 2]:
+    a, b = checked(log, n)
+    print(a, b)
+a, b = 40, 50
+try:
+    a, b = fail(log)
+except ValueError as e:
+    print("outside", str(e), a, b)
+try:
+    a, b = pair(mark(log, 40), int("bad argument"))
+except ValueError as e:
+    print("argument", str(e), a, b)
+xs = [0, 0]
+xs[mark(log, 0)], xs[mark(log, 1)] = pair(mark(log, 50), mark(log, 60))
+print(xs, log)
+a, b = recursive(20)
+print(a, b)
+m, flag = mixed()
+print(m, flag)
+inner, last = nested()
+print(inner, last, optional(0), optional(3))
+tasks()

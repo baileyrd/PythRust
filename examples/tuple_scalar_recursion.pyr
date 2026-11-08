@@ -1,0 +1,10 @@
+# expect-exit: 1
+# #806: private scalar calls retain the active-call limit.
+def pair(n: int) -> tuple[int, int]:
+    if n == 0:
+        return 0, 0
+    a, b = pair(n - 1)
+    return a, b
+print("before")
+a, b = pair(1001)
+print(a, b)
