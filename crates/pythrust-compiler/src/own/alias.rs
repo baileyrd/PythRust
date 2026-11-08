@@ -233,6 +233,24 @@ fn check(
     Ok(())
 }
 
+/// A source loop input, with the source regions where its iteration is
+/// active. Evaluating the iterable (including nested zip/enumerate inputs)
+/// precedes both target binding and the body; its `else` follows iteration.
+#[derive(Clone)]
+struct LoopInput {
+    source: Span,
+    name: Option<String>,
+    active: Vec<Span>,
+}
+
+impl LoopInput {
+    fn running_at(&self, span: Span) -> bool {
+        self.active
+            .iter()
+            .any(|s| s.start <= span.start && span.end <= s.end)
+    }
+}
+
 struct Body<'a> {
     program: &'a Program,
     func: &'a Func,
@@ -246,7 +264,7 @@ struct Body<'a> {
     results: BTreeSet<LocalId>,
     /// Only locals read by the lowering of a source `for` iterable.
     /// Ordinary call-argument temporaries are not loop references.
-    loops: BTreeMap<LocalId, Option<String>>,
+    loops: BTreeMap<LocalId, LoopInput>,
     /// Standalone mutations whose arguments cannot create new aliases.
     copy_sites: Vec<Span>,
     /// The lists this body allocates that it may store in the module's
@@ -737,11 +755,22 @@ impl<'a> Body<'a> {
             (Some(a), _) => self.aliased(writer, *a, span),
             (None, Some(_)) => {
                 let looped = temporaries.iter().find_map(|k| match k {
-                    Key::Local(l) => self.loops.get(l).map(|name| (*l, name)),
+                    Key::Local(l) => self
+                        .loops
+                        .get(l)
+                        .filter(|input| input.running_at(span))
+                        .map(|input| (*l, input)),
                     Key::Global(_) => None,
                 });
                 let (context, hint) = match looped {
-                    Some((l, name)) => ("a `for` loop over it is running", self.loop_hint(l, name.as_deref())),
+                    Some((l, input)) => {
+                        let hint = if temporaries.len() == 1 {
+                            self.loop_hint(l, input.name.as_deref())
+                        } else {
+                            "make independent values for the loop and any other live references before changing the container".into()
+                        };
+                        ("a `for` loop over it is running", hint)
+                    },
                     None => ("a temporary value may still refer to the changed container and is used later", "finish using that value before changing the container, or make an independent value before sharing it".into()),
                 };
                 format!(
@@ -994,7 +1023,7 @@ fn source_facts(
     program: &Program,
     func: &Func,
     source: &Block,
-) -> (BTreeMap<LocalId, Option<String>>, Vec<Span>) {
+) -> (BTreeMap<LocalId, LoopInput>, Vec<Span>) {
     let mut expressions = Vec::new();
     let mut copies = Vec::new();
     for_iterables(program, source, &mut expressions, &mut copies);
@@ -1011,12 +1040,8 @@ fn source_facts(
             else {
                 return None;
             };
-            let expression = expressions.iter().find(|e| e.span == *span)?;
-            let name = match &expression.kind {
-                ExprKind::Name(name) => Some(name.clone()),
-                _ => None,
-            };
-            Some((*l, name))
+            let input = expressions.iter().find(|input| input.source == *span)?;
+            Some((*l, input.clone()))
         })
         .collect();
     (loops, copies)
@@ -1024,8 +1049,16 @@ fn source_facts(
 
 /// `zip` and `enumerate` keep references to their input iterables.
 /// Other calls evaluate their arguments before the loop starts.
-fn iterable_sources<'a>(program: &Program, expr: &'a Expr, out: &mut Vec<&'a Expr>) {
-    out.push(expr);
+fn iterable_sources(program: &Program, expr: &Expr, active: &[Span], out: &mut Vec<LoopInput>) {
+    let name = match &expr.kind {
+        ExprKind::Name(name) => Some(name.clone()),
+        _ => None,
+    };
+    out.push(LoopInput {
+        source: expr.span,
+        name,
+        active: active.to_vec(),
+    });
     let ExprKind::Call { func, args } = &expr.kind else {
         return;
     };
@@ -1039,7 +1072,7 @@ fn iterable_sources<'a>(program: &Program, expr: &'a Expr, out: &mut Vec<&'a Exp
     }
     let count = if name == "enumerate" { 1 } else { args.len() };
     for arg in args.iter().take(count) {
-        iterable_sources(program, &arg.value, out);
+        iterable_sources(program, &arg.value, active, out);
     }
 }
 
@@ -1070,10 +1103,10 @@ fn plain_append(stmt: &crate::ast::Stmt) -> Option<Span> {
         .then_some(expr.span)
 }
 
-fn for_iterables<'a>(
+fn for_iterables(
     program: &Program,
-    block: &'a Block,
-    out: &mut Vec<&'a Expr>,
+    block: &Block,
+    out: &mut Vec<LoopInput>,
     copies: &mut Vec<Span>,
 ) {
     for stmt in block {
@@ -1082,9 +1115,15 @@ fn for_iterables<'a>(
         }
         match &stmt.kind {
             StmtKind::For {
-                iter, body, orelse, ..
+                target,
+                iter,
+                body,
+                orelse,
             } => {
-                iterable_sources(program, iter, out);
+                let active: Vec<Span> = std::iter::once(target.span)
+                    .chain(body.iter().map(|s| s.span))
+                    .collect();
+                iterable_sources(program, iter, &active, out);
                 for_iterables(program, body, out, copies);
                 for_iterables(program, orelse, out, copies);
             }

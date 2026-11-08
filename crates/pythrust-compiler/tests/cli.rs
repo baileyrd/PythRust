@@ -717,3 +717,78 @@ fn d4_concrete_fixes_compile_and_preserve_values() {
         assert_eq!(text(&out.stdout), expected);
     }
 }
+
+#[test]
+fn d4_cli_pending_iterables_are_not_running_loops() {
+    let tmp = scratch("d4_pending_iterables");
+    let base = include_str!("../../../examples/aliasing_pending_iterable.pyr");
+    let mut failures = Vec::new();
+    for (name, target, iterable) in [
+        ("enumerate", "pair, y", "zip(enumerate(xs), grow(xs))"),
+        ("zip", "pair, y", "zip(zip(xs, [0]), grow(xs))"),
+        (
+            "outer_enumerate",
+            "i, pair",
+            "enumerate(zip(enumerate(xs), grow(xs)))",
+        ),
+        (
+            "inner_zip",
+            "pair, y",
+            "zip(enumerate(zip(xs, [0])), grow(xs))",
+        ),
+    ] {
+        let src = base.replace(
+            "pair, y in zip(enumerate(xs), grow(xs))",
+            &format!("{target} in {iterable}"),
+        );
+        let path = source(&tmp, name, &src);
+        for command in ["check", "run", "build"] {
+            let out = Command::new(diagnostic_compiler())
+                .arg(command)
+                .arg(&path)
+                .output()
+                .unwrap();
+            let err = text(&out.stderr);
+            if out.status.code() != Some(1)
+                || !out.stdout.is_empty()
+                || !err.contains("temporary value")
+                || err.contains("`for` loop")
+                || err.contains("list(")
+            {
+                failures.push(format!("{name} {command}: {out:?}"));
+            }
+        }
+        assert!(!path
+            .with_extension(std::env::consts::EXE_EXTENSION)
+            .exists());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn d4_cli_running_outer_loops_are_not_hidden_by_other_temporaries() {
+    let tmp = scratch("d4_active_outer_loop");
+    let base = include_str!("../../../examples/aliasing_pending_iterable.pyr");
+    let original = "    for pair, y in zip(enumerate(xs), grow(xs)):\n        print(pair)";
+    for (name, body, running) in [
+        ("pending_inner", "    for outer in xs:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", true),
+        ("ordinary_argument", "    for outer in xs:\n        print((xs,)[0], grow(xs))", true),
+        ("unrelated_outer", "    for outer in [0]:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", false),
+        ("completed_outer", "    for outer in xs:\n        pass\n    else:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", false),
+    ] {
+        let path = source(&tmp, name, &base.replace(original, body));
+        let mut diagnostics = Vec::new();
+        for command in ["check", "run", "build"] {
+            let out = Command::new(diagnostic_compiler()).arg(command).arg(&path).output().unwrap();
+            let err = text(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{name} {command}: {err}");
+            assert!(out.stdout.is_empty());
+            assert_eq!(err.contains("a `for` loop over it is running"), running, "{name} {command}: {err}");
+            if !running { assert!(err.contains("temporary value"), "{err}"); }
+            assert!(!err.contains("list("), "{err}");
+            diagnostics.push(err);
+        }
+        assert!(diagnostics.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(!path.with_extension(std::env::consts::EXE_EXTENSION).exists());
+    }
+}

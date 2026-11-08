@@ -2322,3 +2322,60 @@ fn d4_does_not_insert_copies_inside_larger_or_effectful_expressions() {
         assert!(!message.contains("list("), "{message}");
     }
 }
+
+/// PR131 review: retaining an input while evaluating a later iterable is
+/// not evidence that the loop is already running.
+#[test]
+fn d4_pending_iterables_are_not_running_loops() {
+    let base = include_str!("../../../../examples/aliasing_pending_iterable.pyr");
+    let mut failures = Vec::new();
+    for (target, iterable) in [
+        ("pair, y", "zip(enumerate(xs), grow(xs))"),
+        ("pair, y", "zip(zip(xs, [0]), grow(xs))"),
+        ("i, pair", "enumerate(zip(enumerate(xs), grow(xs)))"),
+        ("pair, y", "zip(enumerate(zip(xs, [0])), grow(xs))"),
+    ] {
+        let src = base.replace(
+            "pair, y in zip(enumerate(xs), grow(xs))",
+            &format!("{target} in {iterable}"),
+        );
+        let (message, at) = alias_err(&src).unwrap();
+        if !message.contains("temporary value")
+            || message.contains("`for` loop")
+            || message.contains("list(")
+            || at != "grow(xs)"
+        {
+            failures.push(format!("{iterable}: {at}: {message}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn d4_active_outer_loops_survive_pending_or_ordinary_temporaries() {
+    let base = include_str!("../../../../examples/aliasing_pending_iterable.pyr");
+    let original = "    for pair, y in zip(enumerate(xs), grow(xs)):\n        print(pair)";
+    for (body, running) in [
+        ("    for outer in xs:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", true),
+        ("    for outer in xs:\n        print((xs,)[0], grow(xs))", true),
+        ("    for outer in [0]:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", false),
+        ("    for outer in xs:\n        pass\n    else:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", false),
+    ] {
+        let (message, at) = alias_err(&base.replace(original, body)).unwrap();
+        assert_eq!(at, "grow(xs)");
+        assert_eq!(message.contains("a `for` loop over it is running"), running, "{body}: {message}");
+        if !running { assert!(message.contains("temporary value"), "{message}"); }
+        assert!(!message.contains("list("), "a single snapshot cannot fix all live references: {message}");
+    }
+}
+
+#[test]
+fn d4_loop_target_binding_is_already_iteration() {
+    let src =
+        "temper def f(mut xs: list[int]) -> None:\n    for xs[0] in xs:\n        pass\nf([1])\n";
+    let message = alias_err(src).unwrap().0;
+    assert!(
+        message.contains("a `for` loop over it is running"),
+        "{message}"
+    );
+}
