@@ -1,0 +1,16 @@
+# Near the expression-height limit; accepted arithmetic keeps its left fold.
+def mark(n):
+    print(n)
+    return n
+x = mark(10) - mark(3) - mark(2) + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0
+print(x)
+y = 10000000000000000.0 + -10000000000000000.0 + 1.0
+print(y)
+def zero():
+    print("zero")
+    return 0
+try:
+    x = mark(4) + (1 // zero()) + mark(99)
+except ZeroDivisionError:
+    print("caught")
+print(False and bool(mark(98)), True or bool(mark(97)))

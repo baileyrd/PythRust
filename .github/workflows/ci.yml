@@ -40,7 +40,9 @@ jobs:
       # from the debug runtime the tests above link.
       - run: cargo build --locked --release -p pythrust-compiler
       - shell: bash
-        run: cargo test --locked --test conformance corpus_matches_native
+        run: |
+          cargo test --locked --test conformance corpus_matches_native
+          cargo test --locked --test expression_limits
         env:
           PYTHRUST_BIN: ${{ github.workspace }}/target/release/pythrust${{ runner.os == 'Windows' && '.exe' || '' }}
 
