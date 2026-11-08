@@ -578,6 +578,7 @@ const NATIVE: &[&str] = &[
     "tasks_values",
     "tempered",
     "tuple_loops",
+    "tuple_ordering",
     "tuples",
     "unbound_augassign",
     "unbound_local",

@@ -362,6 +362,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 op,
                 CmpOp::Eq | CmpOp::Le | CmpOp::Ge
             ))),
+            (Ty::Tuple(_), Ty::Tuple(_)) if lt != rt => self.tuple_cmp(op, l, r, span),
             _ if lt != rt => Err(unsupported(span, "comparing values of different types")),
             _ => Ok(self.temp(Ty::Bool, Rvalue::Cmp(op, l, r), span)),
         }

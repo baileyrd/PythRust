@@ -18,6 +18,7 @@ mod seq;
 mod stmt;
 mod table;
 mod tasks;
+mod tuple;
 mod types;
 mod vars;
 mod zip;
