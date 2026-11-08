@@ -1,0 +1,148 @@
+{
+  "measured_candidate": "2ce557923665d868a4c791f745f0591fc6377f8c",
+  "measured_tree": "833fa528d67253c4c8ca4abad79272b588006474",
+  "final_production_tests_workflow_diff_from_measured": "",
+  "checks": [
+    {
+      "name": "baseline-release-build",
+      "command": "cargo build --locked --release -p pythrust-compiler -p pythrust-rt --target-dir target/card811-before",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-before-build.log",
+      "log_sha256": "452a065d213031d6b1000107b4d5eef47b143f8053bdef757ef0a761ae1d2b88",
+      "summaries": [
+        "    Finished `release` profile [optimized] target(s) in 1m 10s"
+      ]
+    },
+    {
+      "name": "candidate-release-build",
+      "command": "cargo build --locked --release -p pythrust-compiler -p pythrust-rt --target-dir target/card811-after",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-after-build.log",
+      "log_sha256": "ed9fdf1a4e6675d469c94ad0be047ec0e29535a4e4cac2e9d5e3eedbd2878334",
+      "summaries": [
+        "    Finished `release` profile [optimized] target(s) in 1m 04s"
+      ]
+    },
+    {
+      "name": "focused-runtime",
+      "command": "cargo test --locked -p pythrust-rt str:: --target-dir target/card811-after",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-focused.log",
+      "log_sha256": "757c822f8e5c376bb631c565365d63ad910eed8cb8c3ba099a0e34066aadc89c",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.34s",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 110 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "clippy",
+      "command": "CARGO_TARGET_DIR=target/card811-after cargo clippy --locked --all-targets -- -D warnings",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-clippy.log",
+      "log_sha256": "7734c80d9e28bdd334716adc185af2b3e2b8445776964d84ac78e4dc4bf0d86d",
+      "summaries": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 27.45s"
+      ]
+    },
+    {
+      "name": "full-tests",
+      "command": "PYTHON=/usr/bin/python3.13 CARGO_TARGET_DIR=target/card811-after cargo test --locked",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-tests.log",
+      "log_sha256": "92269d9f7b8b6d26901e189b38ec264b4497107da7a641262780414c36f55bbc",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 46.89s",
+        "test interp::stdlib::sha256::microbench::compression ... ignored, manual release timing; use bench/sha256_pilot.py",
+        "test interp::stdlib::sha256::microbench::loaded_digest ... ignored, manual release timing; use bench/sha256_pilot.py",
+        "test result: ok. 758 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.92s",
+        "test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s",
+        "test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 41.66s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s",
+        "test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 64.68s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.64s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.06s",
+        "test sha256::microbench::compression ... ignored, manual release timing; use bench/sha256_pilot.py",
+        "test sha256::microbench::loaded_digest ... ignored, manual release timing; use bench/sha256_pilot.py",
+        "test sync::tests::atomics_cost ... ignored, a measurement, not a check",
+        "test result: ok. 118 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.91s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "optimized-native",
+      "command": "PYTHON=/usr/bin/python3.13 CARGO_TARGET_DIR=target/card811-after PYTHRUST_BIN=/workspace/scratch/2ce9dd46a989/pythrust-card811/target/card811-after/release/pythrust cargo test --locked --test conformance corpus_matches_native",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-release-native.log",
+      "log_sha256": "79cc9a6497f4b649024c3c3b76b7b3dd3f202c5e1ce704c7165923d40beb6e31",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 50 filtered out; finished in 20.20s"
+      ]
+    },
+    {
+      "name": "optimized-regressions",
+      "command": "PYTHON=/usr/bin/python3.13 CARGO_TARGET_DIR=target/card811-after PYTHRUST_BIN=/workspace/scratch/2ce9dd46a989/pythrust-card811/target/card811-after/release/pythrust cargo test --locked --test expression_limits --test string_chain",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-release-regressions.log",
+      "log_sha256": "629a5e552117f5cb8d47df4a0b57a168b4df58c958b7f33f58feb3c18636a572",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s"
+      ]
+    },
+    {
+      "name": "benchmark-harness-tests",
+      "command": "python3.13 -m unittest discover -s bench -p 'test_*.py' -v",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-harness-final.log",
+      "log_sha256": "4b3d1e0b2a2caaf4dd3f718d8b267806c859c8aa27d7e2d85d61cbc2a531daed",
+      "summaries": [
+        "Ran 28 tests in 1.557s",
+        "OK"
+      ]
+    },
+    {
+      "name": "ci-tests",
+      "command": "python3.13 -m unittest discover -s ci -p 'test_*.py' -v",
+      "exit_code": 0,
+      "log": "/workspace/scratch/2ce9dd46a989/card811-ci-final.log",
+      "log_sha256": "f49fa94b776491d34b628eca76c87e6f89cb2264177632239bf0d4509150fcf6",
+      "summaries": [
+        "Ran 20 tests in 0.031s",
+        "OK"
+      ]
+    },
+    {
+      "command": "cargo fmt --all --check",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    },
+    {
+      "command": "python3.13 ci/check_jobs.py",
+      "exit_code": 0
+    },
+    {
+      "command": "python3.13 bench/int_format.py --verify-bundle docs/benchmarks",
+      "exit_code": 0
+    }
+  ],
+  "not_run": [
+    "Local Miri/TSan: changed logic is safe private formatting; no new unsafe or synchronization surface. Hosted required jobs remain pending.",
+    "Local valgrind: unavailable.",
+    "Hosted required CI and independent exact-head review: coordinator-owned, not claimed complete."
+  ],
+  "publication": {
+    "method": "GitHub Git Data API; shell git push failed without credentials and created no branch",
+    "local_measured_commit": "2ce557923665d868a4c791f745f0591fc6377f8c",
+    "equivalent_published_commit": "ea211bb4bd0999677e0111ef66342e2845a0499e",
+    "exact_shared_tree": "833fa528d67253c4c8ca4abad79272b588006474"
+  }
+}

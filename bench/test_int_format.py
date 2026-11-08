@@ -3,6 +3,8 @@ import copy
 import json
 from pathlib import Path
 import unittest
+import tempfile
+import shutil
 
 import int_format as pilot
 import profile_workloads as p
@@ -93,11 +95,53 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn('-9223372036854775808', focused)
         self.assertIn('9223372036854775807', focused)
 
-    def test_committed_evidence_when_present(self):
+    def test_counts_require_all_fields_and_exact_allocation_mechanism(self):
+        identities = self.valid()['identities']
+        conversions = dict(tasks_alloc_serial=3200000, tasks_alloc=3200000, strings=2000000, int_format=3400000)
+        cases = {name: dict(stdout='ok\n', binary=dict(path='/example/probe', sha256='d'*64),
+                 source_sha256=p.sha(pilot.sources()[name].encode()), affinity=[0, 1, 2, 3], counts=dict(heap_allocations=2*n, heap_frees=2*n,
+                 heap_reallocations=0, copy_bytes=0, conversions=n, decimal_allocations=2*n,
+                 decimal_reallocations=0, decimal_copy_bytes=0)) for name, n in conversions.items()}
+        cases['failures'] = {str(i): dict(returncode=-6, stdout='', stderr='memory allocation failed') for i in (1, 2)}
+        result = {label: copy.deepcopy(cases) for label in pilot.LABELS}
+        self.assertEqual(pilot.verify_counts(result, identities), 4)
+        for key in cases['strings']['counts']:
+            bad = copy.deepcopy(result)
+            del bad['after']['strings']['counts'][key]
+            with self.assertRaises(ValueError):
+                pilot.verify_counts(bad, identities)
+        for value in (1, -1, True, 0.0):
+            bad = copy.deepcopy(result)
+            bad['after']['strings']['counts']['decimal_reallocations'] = value
+            with self.assertRaises(ValueError):
+                pilot.verify_counts(bad, identities)
+
+    def test_committed_bundle(self):
+        self.assertEqual(pilot.verify_bundle(pilot.ROOT / 'docs/benchmarks'), 18)
+
+    def test_bundle_rejects_omitted_and_different_snapshot(self):
         folder = pilot.ROOT / 'docs/benchmarks'
-        for name in ('card811.json', 'card811-repeat.json'):
-            if (folder / name).exists():
-                self.assertEqual(pilot.verify(json.loads((folder / name).read_text())), 8)
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp)
+            for name in ('card811.json', 'card811-repeat.json', 'card811-numeric.json', 'card811-counts.json'):
+                shutil.copyfile(folder / name, target / name)
+            path = target / 'card811.json'
+            valid = json.loads(path.read_text())
+            for mutation in ('missing', 'different'):
+                bad = copy.deepcopy(valid)
+                if mutation == 'missing':
+                    bad['identities'] = {}
+                else:
+                    bad['identities']['before']['commit'] = '0' * 40
+                path.write_text(json.dumps(bad))
+                with self.assertRaises(ValueError):
+                    pilot.verify_bundle(target)
+
+    def test_unexpected_control_matrix_rejected(self):
+        bad = self.valid()
+        bad['workloads'] = ['strings']
+        self.reject(bad)
+
 
 
 if __name__ == '__main__':

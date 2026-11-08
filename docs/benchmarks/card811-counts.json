@@ -1,0 +1,262 @@
+{
+  "before": {
+    "tasks_alloc_serial": {
+      "counts": {
+        "heap_allocations": 6400004,
+        "heap_frees": 6400002,
+        "heap_reallocations": 1,
+        "copy_bytes": 21888907,
+        "conversions": 3200000,
+        "decimal_allocations": 6400000,
+        "decimal_reallocations": 0,
+        "decimal_copy_bytes": 21888890
+      },
+      "stdout": "21888890\n",
+      "binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/tasks_alloc_serial_count",
+        "sha256": "d4fb0fe0784c32d9d2d07079226f78d7eef021ee4a250b066cd2f230754a58dc"
+      },
+      "source_sha256": "f60eabc2c3a534425154db2894241b2970a12896864c6d13a9e1d3e4d9d312a5",
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "tasks_alloc": {
+      "counts": {
+        "heap_allocations": 6400063,
+        "heap_frees": 6400061,
+        "heap_reallocations": 3,
+        "copy_bytes": 21889180,
+        "conversions": 3200000,
+        "decimal_allocations": 6400000,
+        "decimal_reallocations": 0,
+        "decimal_copy_bytes": 21888890
+      },
+      "stdout": "21888890\n",
+      "binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/tasks_alloc_count",
+        "sha256": "411571ce23dde1eabafc30c36fdf864cf73f23d470cb54aea7b178407cf5b222"
+      },
+      "source_sha256": "68a6f1e7a033bcb67a7554a9ceb944b7e09744366012faf81a89dbe897fb725b",
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "strings": {
+      "counts": {
+        "heap_allocations": 14080006,
+        "heap_frees": 14080004,
+        "heap_reallocations": 1,
+        "copy_bytes": 234379386,
+        "conversions": 2000000,
+        "decimal_allocations": 4000000,
+        "decimal_reallocations": 0,
+        "decimal_copy_bytes": 7785790
+      },
+      "stdout": "9785790 20000\n",
+      "binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/strings_count",
+        "sha256": "cfa1f68d556a7d8ce4ff848b073a11008453988a0a2ab40e5e9c32c8e3ed4fc6"
+      },
+      "source_sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381",
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "int_format": {
+      "counts": {
+        "heap_allocations": 6800006,
+        "heap_frees": 6800004,
+        "heap_reallocations": 1,
+        "copy_bytes": 22600017,
+        "conversions": 3400000,
+        "decimal_allocations": 6800000,
+        "decimal_reallocations": 0,
+        "decimal_copy_bytes": 22600000
+      },
+      "stdout": "24200000\n",
+      "binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/int_format_count",
+        "sha256": "c98b8926770a0c2108b4a5843c2936e09a98a985c7854fd90385c45408ec7e06"
+      },
+      "source_sha256": "4bdd5bdf7ca883c8c0b68a665a58e841d6fabc15e9250abac8c89c4c288a5699",
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "failures": {
+      "1": {
+        "returncode": -6,
+        "stderr": "memory allocation of 20 bytes failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+        "stdout": ""
+      },
+      "2": {
+        "returncode": -6,
+        "stderr": "memory allocation of 32 bytes failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+        "stdout": ""
+      }
+    }
+  },
+  "after": {
+    "tasks_alloc_serial": {
+      "counts": {
+        "heap_allocations": 6400004,
+        "heap_frees": 6400002,
+        "heap_reallocations": 1,
+        "copy_bytes": 21888907,
+        "conversions": 3200000,
+        "decimal_allocations": 6400000,
+        "decimal_reallocations": 0,
+        "decimal_copy_bytes": 21888890
+      },
+      "stdout": "21888890\n",
+      "binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/tasks_alloc_serial_count",
+        "sha256": "11fb538e5e1948c220b48cf21a2aff4b94f29bd2a39546c52197db6f23164d5a"
+      },
+      "source_sha256": "f60eabc2c3a534425154db2894241b2970a12896864c6d13a9e1d3e4d9d312a5",
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "tasks_alloc": {
+      "counts": {
+        "heap_allocations": 6400063,
+        "heap_frees": 6400061,
+        "heap_reallocations": 4,
+        "copy_bytes": 21889180,
+        "conversions": 3200000,
+        "decimal_allocations": 6400000,
+        "decimal_reallocations": 0,
+        "decimal_copy_bytes": 21888890
+      },
+      "stdout": "21888890\n",
+      "binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/tasks_alloc_count",
+        "sha256": "e60c3b5f422a96dbfd7aa892b1d2dbf5ba9006262dfe98ade0f4c33805d25189"
+      },
+      "source_sha256": "68a6f1e7a033bcb67a7554a9ceb944b7e09744366012faf81a89dbe897fb725b",
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "strings": {
+      "counts": {
+        "heap_allocations": 14080006,
+        "heap_frees": 14080004,
+        "heap_reallocations": 1,
+        "copy_bytes": 234379386,
+        "conversions": 2000000,
+        "decimal_allocations": 4000000,
+        "decimal_reallocations": 0,
+        "decimal_copy_bytes": 7785790
+      },
+      "stdout": "9785790 20000\n",
+      "binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/strings_count",
+        "sha256": "6117f8692a7b946b09d10757eee3cfb768041922a18f255c467020aee95668ed"
+      },
+      "source_sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381",
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "int_format": {
+      "counts": {
+        "heap_allocations": 6800006,
+        "heap_frees": 6800004,
+        "heap_reallocations": 1,
+        "copy_bytes": 24200017,
+        "conversions": 3400000,
+        "decimal_allocations": 6800000,
+        "decimal_reallocations": 0,
+        "decimal_copy_bytes": 24200000
+      },
+      "stdout": "24200000\n",
+      "binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/int_format_count",
+        "sha256": "b0d33d42fcbc89161b0052faa71aa82f63b3d08638d20830553288b037b9770b"
+      },
+      "source_sha256": "4bdd5bdf7ca883c8c0b68a665a58e841d6fabc15e9250abac8c89c4c288a5699",
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    "failures": {
+      "1": {
+        "returncode": -6,
+        "stderr": "memory allocation of 20 bytes failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+        "stdout": ""
+      },
+      "2": {
+        "returncode": -6,
+        "stderr": "memory allocation of 32 bytes failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+        "stdout": ""
+      }
+    }
+  }
+}

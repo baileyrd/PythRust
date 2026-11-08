@@ -20,10 +20,8 @@ LABELS = ('before', 'after')
 FIELDS = {'user', 'system', 'voluntary', 'involuntary'}
 
 
-def sources():
-    result = {n: (ROOT / 'bench' / (n + '.pyr')).read_text() for n in NAMES[:3]}
-    result['int_format'] = (ROOT / 'bench/int_format.pyr').read_text()
-    return result
+def sources(names=NAMES):
+    return {n: (ROOT / 'bench' / (n + '.pyr')).read_text() for n in names}
 
 
 def identity(path):
@@ -59,16 +57,16 @@ def digest(value, size):
         raise ValueError('invalid digest')
 
 
-def verify_identities(records, files=False):
+def verify_identities(records, files=False, names=NAMES):
     if set(records) != set(LABELS):
         raise ValueError('exact before/after identities required')
     for record in records.values():
         digest(record['commit'], 40)
         digest(record['tree'], 40)
-        if record['source_diff'] != '' or set(record['cases']) != set(NAMES):
+        if record['source_diff'] != '' or set(record['cases']) != set(names):
             raise ValueError('dirty or incomplete identity')
         for name, case in record['cases'].items():
-            source = sources()[name]
+            source = sources(names)[name]
             if case['source'] != source or case['source_sha256'] != p.sha(source.encode()):
                 raise ValueError('identity source mismatch')
         items = [record['compiler'], record['archive'], *[x['binary'] for x in record['cases'].values()]]
@@ -76,7 +74,7 @@ def verify_identities(records, files=False):
             digest(item['sha256'], 64)
             if not item['path'] or (files and identity(Path(item['path'])) != item):
                 raise ValueError('binary identity mismatch')
-    for name in NAMES:
+    for name in names:
         if records['before']['cases'][name]['stdout'] != records['after']['cases'][name]['stdout']:
             raise ValueError('condition parity mismatch')
 
@@ -84,8 +82,11 @@ def verify_identities(records, files=False):
 def verify(result):
     if result['schema'] != 1 or type(result['runs']) is not int or result['runs'] < 7:
         raise ValueError('invalid schema/sample count')
-    verify_identities(result['identities'])
-    expected = {f'{n}/{cpus}' for n in NAMES for cpus in (1, 4)}
+    names = tuple(result.get('workloads', NAMES))
+    if names not in (NAMES, ('numeric',)):
+        raise ValueError('unexpected workload set')
+    verify_identities(result['identities'], names=names)
+    expected = {f'{n}/{cpus}' for n in names for cpus in (1, 4)}
     if set(result['cases']) != expected:
         raise ValueError('incomplete workload/affinity matrix')
     for key, row in result['cases'].items():
@@ -116,31 +117,110 @@ def verify(result):
     return len(result['cases'])
 
 
+def prepare_control(work):
+    # Reuse the preserved exact compiler/runtime pairs, never relabel a rebuild.
+    records = {label: json.loads((work / label / 'identity.json').read_text()) for label in LABELS}
+    verify_identities(records, files=True)
+    source = sources(('numeric',))['numeric']
+    expected = p.run([sys.executable, '-c', source]).stdout
+    for label, original in records.items():
+        folder = work / 'numeric-control' / label
+        folder.mkdir(parents=True)
+        for name, key in [('pythrust', 'compiler'), ('libpythrust_rt.a', 'archive')]:
+            shutil.copy2(original[key]['path'], folder / name)
+        src = folder / 'numeric.pyr'
+        src.write_text(source)
+        p.run([folder / 'pythrust', 'build', src], env=dict(os.environ, PYTHRUST_RT=str(folder / 'libpythrust_rt.a')))
+        done = p.run([src.with_suffix('')])
+        if done.stdout != expected or done.stderr:
+            raise ValueError('numeric native/CPython parity')
+        record = dict(original, compiler=identity(folder / 'pythrust'), archive=identity(folder / 'libpythrust_rt.a'),
+                      cases=dict(numeric=dict(source=source, source_sha256=p.sha(source.encode()),
+                                              stdout=expected.decode(), binary=identity(src.with_suffix('')))))
+        (folder / 'identity.json').write_text(json.dumps(record, indent=2) + '\n')
+
+
+def verify_counts(result, identities):
+    verify_identities(identities)
+    keys = {'heap_allocations', 'heap_frees', 'heap_reallocations', 'copy_bytes',
+            'conversions', 'decimal_allocations', 'decimal_reallocations', 'decimal_copy_bytes'}
+    if set(result) != set(LABELS):
+        raise ValueError('missing count conditions')
+    conversions = dict(tasks_alloc_serial=3200000, tasks_alloc=3200000, strings=2000000, int_format=3400000)
+    for label, cases in result.items():
+        if set(cases) != {*NAMES, 'failures'}:
+            raise ValueError('missing count workloads')
+        for name in NAMES:
+            row = cases[name]
+            counts = row['counts']
+            if set(counts) != keys or any(type(v) is not int or v < 0 for v in counts.values()):
+                raise ValueError('invalid counters')
+            if counts['conversions'] != conversions[name] or counts['decimal_allocations'] != 2 * conversions[name] or counts['decimal_reallocations'] != 0:
+                raise ValueError('changed exact allocation mechanism')
+            if row['stdout'] != identities[label]['cases'][name]['stdout']:
+                raise ValueError('count output mismatch')
+            digest(row['binary']['sha256'], 64)
+            if row['source_sha256'] != p.sha(sources()[name].encode()) or not row['affinity']:
+                raise ValueError('count source/affinity mismatch')
+        failures = cases['failures']
+        if set(failures) != {'1', '2'}:
+            raise ValueError('missing allocation failure probes')
+        for row in failures.values():
+            if type(row['returncode']) is not int or row['returncode'] == 0 or row['stdout'] or 'memory allocation' not in row['stderr']:
+                raise ValueError('changed failure policy')
+    return len(NAMES)
+
+
+def verify_bundle(folder):
+    primary = json.loads((folder / 'card811.json').read_text())
+    repeat = json.loads((folder / 'card811-repeat.json').read_text())
+    control = json.loads((folder / 'card811-numeric.json').read_text())
+    if (verify(primary), verify(repeat), verify(control)) != (8, 8, 2):
+        raise ValueError('incomplete evidence bundle')
+    snapshots = dict(before=('bfaa9fed9a0899ddcbfd7f68af693c6e449a6be9', 'a7346701613c3c11071092326278ff37d6f76abd'),
+                     after=('2ce557923665d868a4c791f745f0591fc6377f8c', '833fa528d67253c4c8ca4abad79272b588006474'))
+    for label in LABELS:
+        original = primary['identities'][label]
+        if (original['commit'], original['tree']) != snapshots[label]:
+            raise ValueError('different measured source snapshot')
+        if repeat['identities'][label] != original:
+            raise ValueError('repeat identity differs')
+        numeric = control['identities'][label]
+        for key in ('commit', 'tree'):
+            if numeric[key] != original[key]:
+                raise ValueError('control source identity differs')
+        for key in ('compiler', 'archive'):
+            if numeric[key]['sha256'] != original[key]['sha256']:
+                raise ValueError('control binary condition differs')
+    verify_counts(json.loads((folder / 'card811-counts.json').read_text()), primary['identities'])
+    return 18
+
+
 def quiet():
     raw = p.run(['ps', '-eo', 'comm=']).stdout.decode()
-    competing = [x for x in raw.splitlines() if x.strip() in {'cargo', 'rustc', 'cc1', 'ld', 'pythrust', *NAMES}]
+    competing = [x for x in raw.splitlines() if x.strip() in {'cargo', 'rustc', 'cc1', 'ld', 'pythrust', 'numeric', *NAMES}]
     if competing:
         raise RuntimeError('visible competing activity: ' + repr(competing))
     return dict(loadavg=os.getloadavg(), visible_processes=raw,
                 limitation='Process namespaces can hide host activity; no hardware exclusivity claim.')
 
 
-def measure(work, output, runs):
+def measure(work, output, runs, seed=811, names=NAMES):
     if sys.version_info[:2] != (3, 13) or runs < 7:
         raise ValueError('CPython 3.13 and >=7 samples required')
     original = os.sched_getaffinity(0)
     if len(original) < 4:
         raise ValueError('four allowed CPUs required')
     records = {label: json.loads((work / label / 'identity.json').read_text()) for label in LABELS}
-    verify_identities(records, files=True)
-    result = dict(schema=1, runs=runs, warmups=2, seed=811, identities=records,
+    verify_identities(records, files=True, names=names)
+    result = dict(schema=1, runs=runs, warmups=2, seed=seed, workloads=list(names), identities=records,
                   environment=dict(utc=datetime.now(timezone.utc).isoformat(), python=sys.version,
                                    platform=platform.platform(), rustc=p.run(['rustc', '-Vv']).stdout.decode(),
                                    allowed_cpus=sorted(original), cpuinfo=Path('/proc/cpuinfo').read_text().split('\n\n')[0],
                                    before=quiet()), cases={})
-    rng = random.Random(811)
+    rng = random.Random(seed)
     try:
-        matrix = [(name, cpus) for name in NAMES for cpus in (1, 4)]
+        matrix = [(name, cpus) for name in names for cpus in (1, 4)]
         rng.shuffle(matrix)
         for name, cpus in matrix:
             affinity = sorted(original)[:cpus]
@@ -202,7 +282,8 @@ def counts(work, output):
                 raise ValueError('count parity')
             if values['decimal_reallocations'] != 0 or values['decimal_allocations'] != 2 * values['conversions']:
                 raise ValueError('exact allocation invariant')
-            result[label][name] = dict(counts=values, stdout=done.stdout.decode())
+            result[label][name] = dict(counts=values, stdout=done.stdout.decode(), binary=identity(src.with_suffix('')),
+                                       source_sha256=p.sha(source.encode()), affinity=sorted(os.sched_getaffinity(0)))
         src = folder / 'failure.pyr'
         src.write_text('try:\n    print(str(-9223372036854775808))\nexcept Exception:\n    print("caught")\n')
         p.run([folder / 'pythrust', 'build', src], env=env)
@@ -214,6 +295,7 @@ def counts(work, output):
                 raise ValueError('allocation failure policy')
             failures[str(index)] = dict(returncode=done.returncode, stderr=done.stderr.decode(), stdout=done.stdout.decode())
         result[label]['failures'] = failures
+    verify_counts(result, {label: json.loads((work / label / 'identity.json').read_text()) for label in LABELS})
     output.write_text(json.dumps(result, indent=2) + '\n')
 
 
@@ -224,14 +306,23 @@ if __name__ == '__main__':
     ap.add_argument('--target', type=Path)
     ap.add_argument('--output', type=Path)
     ap.add_argument('--runs', type=int, default=21)
+    ap.add_argument('--seed', type=int, default=811)
     ap.add_argument('--verify', type=Path)
+    ap.add_argument('--verify-bundle', type=Path)
     ap.add_argument('--counts', action='store_true')
+    ap.add_argument('--prepare-control', action='store_true')
+    ap.add_argument('--numeric-control', action='store_true')
     args = ap.parse_args()
-    if args.verify:
+    if args.verify_bundle:
+        print('verified', verify_bundle(args.verify_bundle), 'timing rows and complete count/failure evidence')
+    elif args.verify:
         print('verified', verify(json.loads(args.verify.read_text())), 'workload/affinity rows')
+    elif args.prepare_control:
+        prepare_control(args.work.resolve())
     elif args.prepare:
         prepare(args.work.resolve(), args.prepare, args.target.resolve())
     elif args.counts:
         counts(args.work.resolve(), args.output)
     else:
-        measure(args.work.resolve(), args.output, args.runs)
+        measure(args.work.resolve() / 'numeric-control' if args.numeric_control else args.work.resolve(),
+                args.output, args.runs, args.seed, ('numeric',) if args.numeric_control else NAMES)

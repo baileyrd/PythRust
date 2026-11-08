@@ -39,6 +39,20 @@ CPython/runtime safety regressions; production access is unchanged from main
 `4da6b73`. Independent review and required CI remain pending. #811 stays queued;
 #396/PR119 and D29 C stay held; issue73 is not closed by this card.
 
+## Integer formatting experiment #811
+
+The [private decimal formatter](benchmarks/card811.md) retains exact-sized owned
+strings, local ASCII/code-point proof and current failure/cleanup behavior.
+Repeated same-host ordinary measurements improve serial/task conversion controls
+about 18–23%, mixed-width conversion about 14–15%, and the string workload about
+3–7%; the unrelated numeric control stays within observed noise. Raw identities,
+resources, copy/allocation/realloc counts and forced buffer/object failure evidence
+are retained. Full CPython 3.13/native/ownership/string-chain regressions passed;
+independent exact-head review and hosted CI remain required before merge/Done.
+#810 production access remains unchanged; #396/PR119 and D29 C remain held, and
+issue73 stays open. The measured source snapshot is preserved in branch history.
+
+
 ## Step 0 (serial, do first): the contract
 
 Parallel threads need agreed types. One PR, small, merged before anything else:
