@@ -102,7 +102,7 @@ Original permitted affinity is CPUs 0–8; parent and all children are pinned to
 CPU 0. The host is shared, frequency/governor/other tenants uncontrolled, and
 namespace visibility does not establish exclusivity. Cgroup quota files are not
 exposed; raw /proc/self/cgroup and mountinfo are retained, quota is unknown.
-Task-owned artifacts are on tmpfs, warm after preparation/parity/warmups; no
+Task-owned artifacts are on overlayfs, warm after preparation/parity/warmups; no
 filesystem data workload, cache eviction or cold-disk claim is made. There are
 no tasks, hashing or file cases in this three-way suite; the old partial/xxh3
 Rust driver is excluded.
