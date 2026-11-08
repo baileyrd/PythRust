@@ -1,0 +1,11 @@
+# Same direct call shape before and after; three live, immutable strings.
+def chain(a: str, b: str, c: str) -> str:
+    return a + b + c
+
+a = "abcdefghijklmnop"
+b = "é中🙂"
+c = "qrstuvwxyz"
+total = 0
+for i in range(2000000):
+    total += len(chain(a, b, c))
+print(total)

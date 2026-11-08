@@ -1,0 +1,8 @@
+# expect-exit: 1
+# A later boundness check must stay after the prefix allocation.
+def chain(a: str, b: str, c: str, yes: bool) -> str:
+    if yes:
+        tail = c
+    return a + b + tail
+print("before")
+print(chain("a", "b", "c", False))

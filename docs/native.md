@@ -96,6 +96,43 @@ multiple return/exception paths, cleanup and boundary values. Linux's focused
 have no counter. [Measured evidence](benchmarks.md#internal-two-int-returnunpack-806)
 includes both allocation elimination and retained fallbacks.
 
+#807 adds a narrower string fast path (`codegen/concat.rs`, D64). It recognizes
+only two consecutive concat assignments in one lowered instruction sequence:
+`prefix = Concat(a,b); result = Concat(prefix,c)`. The prefix must be unnamed,
+have exactly one definition and one semantic use, and otherwise appear only in
+cleanup. The tail must be a string parameter in `Func::borrowed`: RC has proved
+it is never reassigned, moved or released during the call. All three operands
+are already live. No instruction, operand evaluation, pending-exception test,
+boundness check, retain/release, or control-flow edge is crossed. The helper runs
+at the original prefix position and the eliminated local stays null for existing
+cleanup. Calls and container reads in the first two operands keep their original
+evaluation and cleanup, including a source container overwritten by the second.
+
+`pt_str_concat3` borrows three immutable live strings (aliases allowed), checks
+the prefix byte sum and final byte sum against `usize` overflow and `isize::MAX`,
+then copies each UTF-8 slice once into an exact-capacity buffer and returns an
+ordinary `PtStr`. Nonempty output still needs **two** allocations: one buffer
+and one object, rather than two of each. Empty output needs an object alone.
+A failed size uses std's fatal capacity-overflow path; allocation failure uses
+std's fatal allocator path, as binary concat does. Neither becomes pending or
+catchable. Eliminating allocations changes exhaustion thresholds and requested
+allocation-size text; exact allocator-failure identity is not promised. In
+particular, evaluating a later effectful/fallible operand before a prefix might
+fail would change semantics, so such a shape always retains binary concat.
+
+Right-associated, named/shared prefixes, reassigned or uncertain tails, and
+anything with intervening work use the existing path. Longer left chains may
+fuse a nonoverlapping triple, leaving remaining binary operations in order.
+The existing `strings` benchmark has later literal/conversion allocations and
+has **zero** eligible sites. IR types, RC/ownership, the interpreter, task and
+Rust-binding representations and ABIs are unchanged. Only the audited runtime
+C ABI gains an internal helper. The corpus covers Unicode/empty/aliased strings,
+parentheses/longer chains, side effects, container replacement, boundness,
+caught/uncaught early/late exceptions, old assignment targets and shared worker
+inputs. `string_chain` separately asserts allocation/copy counts and injects a
+prefix allocation failure to verify that a later operand does not execute.
+See [measurements](benchmarks.md#adjacent-native-string-chains-807).
+
 A list or ordinary boxed tuple is a pointer to one runtime object: a count, a descriptor, and a vector of 64-bit slots. A slot holds an int, a float's bits, a bool or `None` as 0 or 1, or a pointer the sequence owns a reference to. The descriptor is a prefix code the compiler emits as read-only data (`i f b n s`, `l` and the element, `t`, a field-count byte and the fields, `o` and an optional's present type), which tells the runtime how to compare, print and drop slots. Runtime functions borrow their arguments and give new references, like the string ones. Static types rule out a sequence containing itself, so counts never form a cycle.
 
 Tuple ordering also accepts different tuple lengths and positional numeric types, as inference does. Lowering compares shared fields with their own types, stopping at the first unequal pair and otherwise comparing lengths; nested tuples follow the same rule. Operands are evaluated once before comparison. Corpus `tuple_ordering` checks prefix lengths in both directions, mixed numeric and nested fields, Unicode strings, lists, NaN, chained evaluation and caught operand faults against CPython 3.13 and `run`.

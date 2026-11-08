@@ -53,6 +53,32 @@ fn concat(a: &PtStr, b: &PtStr) -> PtStr {
     }
 }
 
+/// Check both left-associated byte lengths without allocating. A failed
+/// capacity uses std's same fatal capacity-overflow path as binary concat.
+fn concat3_capacity(a: usize, b: usize, c: usize) -> usize {
+    let size = a
+        .checked_add(b)
+        .filter(|n| *n <= isize::MAX as usize)
+        .and_then(|n| n.checked_add(c))
+        .filter(|n| *n <= isize::MAX as usize);
+    size.unwrap_or(usize::MAX)
+}
+
+fn concat3(a: &PtStr, b: &PtStr, c: &PtStr) -> PtStr {
+    let capacity = concat3_capacity(a.text.len(), b.text.len(), c.text.len());
+    let mut text = String::with_capacity(capacity);
+    text.push_str(a.text());
+    text.push_str(b.text());
+    text.push_str(c.text());
+    PtStr {
+        rc: crate::sync::Count::new(),
+        // Each char occupies at least one byte; checked total bytes bounds
+        // this sum too. Live PtStr values hold valid UTF-8 and char counts.
+        chars: a.chars + b.chars + c.chars,
+        text: text.into_boxed_str(),
+    }
+}
+
 /// `s * n`. A count below 1 gives `""`; `None` when the result could
 /// not be allocated (Python's `MemoryError`).
 fn repeat(s: &PtStr, n: i64) -> Option<PtStr> {
@@ -172,6 +198,24 @@ pub unsafe extern "C" fn pt_str_concat(a: *const PtStr, b: *const PtStr) -> *mut
     // SAFETY: guaranteed by the caller.
     let (a, b) = unsafe { (borrow(a), borrow(b)) };
     into_ptr(concat(a, b))
+}
+
+/// Internal native `(a + b) + c`, with one result object and buffer.
+/// The compiler proves no later operand work crosses the prefix allocation.
+/// Overflow and allocation failure remain fatal through Rust std, as for `+`.
+///
+/// # Safety
+///
+/// `a`, `b` and `c` are live strings throughout this call; arguments may alias.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_concat3(
+    a: *const PtStr,
+    b: *const PtStr,
+    c: *const PtStr,
+) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller; only immutable borrows are taken.
+    let (a, b, c) = unsafe { (borrow(a), borrow(b), borrow(c)) };
+    into_ptr(concat3(a, b, c))
 }
 
 /// `s * n`, or null when too large to allocate.
@@ -544,6 +588,51 @@ mod tests {
 
     fn text(p: Option<PtStr>) -> Option<String> {
         p.map(|p| p.text().to_string())
+    }
+
+    #[test]
+    fn chain_abi_borrows_aliases_and_owns_an_independent_result() {
+        let a = into_ptr(s("é🙂"));
+        // SAFETY: a is live; the helper borrows all three aliasing inputs.
+        let out = unsafe { pt_str_concat3(a, a, a) };
+        // SAFETY: the one input reference is still ours, not consumed.
+        unsafe { pt_str_dec(a) };
+        // SAFETY: out owns its independent result and no longer needs a.
+        assert_eq!(unsafe { borrow(out) }.text(), "é🙂é🙂é🙂");
+        // SAFETY: give up the result's single owned reference.
+        unsafe { pt_str_dec(out) };
+    }
+
+    #[test]
+    fn chain_capacity_checks_prefix_and_final_without_allocating() {
+        let max = isize::MAX as usize;
+        assert_eq!(concat3_capacity(0, 0, 0), 0);
+        assert_eq!(concat3_capacity(1, 2, 3), 6);
+        assert_eq!(concat3_capacity(max - 2, 1, 1), max);
+        assert_eq!(concat3_capacity(max, 1, 0), usize::MAX);
+        assert_eq!(concat3_capacity(max - 1, 1, 1), usize::MAX);
+        assert_eq!(concat3_capacity(usize::MAX, 1, 0), usize::MAX);
+        assert_eq!(concat3_capacity(0, usize::MAX, 1), usize::MAX);
+    }
+
+    #[test]
+    fn chain_preserves_utf8_chars_empty_and_aliases() {
+        for parts in [
+            ["", "", ""],
+            ["", "é", ""],
+            ["α", "🙂", "中"],
+            ["x", "", "y"],
+        ] {
+            let [a, b, c] = parts.map(s);
+            let fused = concat3(&a, &b, &c);
+            let original = concat(&concat(&a, &b), &c);
+            assert_eq!(fused.text(), original.text());
+            assert_eq!(fused.chars, original.chars);
+        }
+        let a = s("é🙂");
+        let fused = concat3(&a, &a, &a);
+        assert_eq!(fused.text(), "é🙂é🙂é🙂");
+        assert_eq!(fused.chars, 6);
     }
 
     #[test]

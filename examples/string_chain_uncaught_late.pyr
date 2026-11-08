@@ -1,0 +1,7 @@
+# expect-exit: 1
+def fail() -> str:
+    print("late")
+    raise ValueError("stop")
+def chain(a: str, b: str) -> str:
+    return a + b + fail()
+print(chain("a", "b"))
