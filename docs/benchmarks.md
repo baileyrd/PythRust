@@ -326,3 +326,12 @@ matrix, with no material regression observed on an unchanged numeric control.
 Separate allocation/fault probes preserve two decimal allocations, zero decimal
 reallocations and fatal allocation failures. Independent review and required CI
 remain pending; this does not reopen #807 scope or held #396/PR119.
+
+
+## Current three-way comparison (#813)
+
+[Fresh matched PythRust/CPython/handwritten Rust results](benchmarks/card813.md)
+measure current main after PR133. The four original algorithms show PythRust
+faster than CPython and optimized handwritten Rust faster than PythRust on this
+host; checked-arithmetic, startup, optimizer and library differences are explicit.
+No universal ranking or production optimization is claimed.

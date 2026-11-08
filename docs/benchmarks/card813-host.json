@@ -1,0 +1,36 @@
+{
+  "bundled_at": "2026-11-08T14:42:55.891824+00:00",
+  "installation_source": "https://sh.rustup.rs; vendor-managed stable channel; user-approved minimal toolchain plus rustfmt/clippy; --no-modify-path",
+  "additional_identities": {
+    "/workspace/scratch/2ce9dd46a989/rustup-init-card813.sh": "d890e2fef6fa991b19cde2e608199bc1dca4e37f41f884edf8849ff693048de6",
+    "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc": "b53b780f77f952062f8ca8a3b70aef2390b1e45ad91939be94afdc9543026853",
+    "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo": "a670e02cfa39ac2e53f77a2d911ca1fc9e2c479b0603ec956625be1daf24e3af",
+    "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-7ed0375ae352bd75.so": "5a2cd52edba7d15f8d898b92a912638f5b73a089c7c1bfde5604ab45665602c7",
+    "docs/benchmarks/card813-assembly/tuples.s": "3b5cd90591f7a83b8b254beba02ce502e2fc80f92a1146ccd29bc2b2aed52c0c",
+    "docs/benchmarks/card813-assembly/strings.s": "3fb58e7942a37e90bbae36e44bf69b45a8df285b6b35a7267203c979c479459a",
+    "docs/benchmarks/card813-assembly/numeric.s": "a3db128e819999e331f39912befd405118dfd9babab538659555f530f89f4f52",
+    "docs/benchmarks/card813-assembly/sorting.s": "0b348ef3d5614bdce294784ddfe45d106bd16dd5b99408e317388a245f117ab8",
+    "bench/check_three_way_domain.py": "b502a4c04498dfa170eee3b53b4e2b20bf7814e49918f59ad6ead529c2574eac",
+    "bench/verify_three_way.py": "7a1659c9769ed7e0afa3838437786f964d83f8273f484c951d59369b48370341",
+    "bench/test_three_way.py": "a7948fd56c52821b0411f7125ae32611ddf5a4673b5908bf5f4e84295c1bb26d"
+  },
+  "bootstrap": {
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "-p",
+      "pythrust-compiler",
+      "-p",
+      "pythrust-rt"
+    ],
+    "wall_seconds": 66.58065935900004,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": "    Updating crates.io index\n Downloading crates ...\n  Downloaded cranelift-bitset v0.137.0\n  Downloaded cranelift-control v0.137.0\n  Downloaded stable_deref_trait v1.2.1\n  Downloaded cfg-if v1.0.5\n  Downloaded equivalent v1.0.3\n  Downloaded cranelift-codegen-shared v0.137.0\n  Downloaded cranelift-srcgen v0.137.0\n  Downloaded rustc-hash v2.1.3\n  Downloaded cranelift-entity v0.137.0\n  Downloaded cranelift-module v0.137.0\n  Downloaded indexmap v2.14.2\n  Downloaded heck v0.5.0\n  Downloaded cranelift-object v0.137.0\n  Downloaded fnv v1.0.7\n  Downloaded cranelift-assembler-x64-meta v0.137.0\n  Downloaded foldhash v0.2.0\n  Downloaded target-lexicon v0.13.5\n  Downloaded cranelift-assembler-x64 v0.137.0\n  Downloaded smallvec v1.16.4\n  Downloaded anyhow v1.0.104\n  Downloaded cranelift-bforest v0.137.0\n  Downloaded arbitrary v1.5.0\n  Downloaded log v0.4.34\n  Downloaded wasmtime-internal-core v50.0.0\n  Downloaded allocator-api2 v0.2.21\n  Downloaded crc32fast v1.5.3\n  Downloaded serde_core v1.0.229\n  Downloaded cranelift-isle v0.137.0\n  Downloaded cranelift-codegen-meta v0.137.0\n  Downloaded cranelift-frontend v0.137.0\n  Downloaded serde v1.0.229\n  Downloaded bumpalo v3.20.3\n  Downloaded memchr v2.8.3\n  Downloaded regalloc2 v0.15.2\n  Downloaded hashbrown v0.17.1\n  Downloaded libm v0.2.16\n  Downloaded hashbrown v0.16.1\n  Downloaded gimli v0.33.0\n  Downloaded object v0.40.0\n  Downloaded cranelift-codegen v0.137.0\n   Compiling foldhash v0.2.0\n   Compiling cranelift-srcgen v0.137.0\n   Compiling libm v0.2.16\n   Compiling wasmtime-internal-core v50.0.0\n   Compiling cranelift-isle v0.137.0\n   Compiling heck v0.5.0\n   Compiling cranelift-codegen-shared v0.137.0\n   Compiling equivalent v1.0.3\n   Compiling target-lexicon v0.13.5\n   Compiling allocator-api2 v0.2.21\n   Compiling hashbrown v0.17.1\n   Compiling cranelift-assembler-x64-meta v0.137.0\n   Compiling hashbrown v0.16.1\n   Compiling log v0.4.34\n   Compiling fnv v1.0.7\n   Compiling smallvec v1.16.4\n   Compiling arbitrary v1.5.0\n   Compiling rustc-hash v2.1.3\n   Compiling bumpalo v3.20.3\n   Compiling anyhow v1.0.104\n   Compiling crc32fast v1.5.3\n   Compiling cfg-if v1.0.5\n   Compiling indexmap v2.14.2\n   Compiling regalloc2 v0.15.2\n   Compiling memchr v2.8.3\n   Compiling pythrust-rt v0.0.0 (/workspace/scratch/2ce9dd46a989/pythrust-card813-work/crates/pythrust-rt)\n   Compiling cranelift-codegen-meta v0.137.0\n   Compiling gimli v0.33.0\n   Compiling cranelift-bitset v0.137.0\n   Compiling cranelift-control v0.137.0\n   Compiling cranelift-entity v0.137.0\n   Compiling object v0.40.0\n   Compiling cranelift-assembler-x64 v0.137.0\n   Compiling cranelift-bforest v0.137.0\n   Compiling cranelift-codegen v0.137.0\n   Compiling cranelift-module v0.137.0\n   Compiling cranelift-frontend v0.137.0\n   Compiling cranelift-object v0.137.0\n   Compiling pythrust-compiler v0.0.0 (/workspace/scratch/2ce9dd46a989/pythrust-card813-work/crates/pythrust-compiler)\n    Finished `release` profile [optimized] target(s) in 1m 06s\n"
+  },
+  "filesystem": "overlayfs",
+  "validation_scope": "No local sanitizer claim; full Cargo 1040 passed, 0 failed, 5 pre-existing ignored; release native corpus and 5 focused tests; 34 benchmark tests; 20 CI tests; CI structure passed separately.",
+  "assembly_observation": "Numeric and tuple inner/outer loops retained; tuple calls inlined, divide/remainder by 10 strength reduced; string main retains two to_string calls, allocating prefix and memcpy/growth paths in 1M loop. Diagnostic black_box row not used as ordinary Rust baseline. No allocation-count parity claimed."
+}

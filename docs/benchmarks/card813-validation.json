@@ -1,0 +1,155 @@
+[
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "returncode": 0,
+    "wall_seconds": 0.4902449210003397,
+    "log": "/workspace/scratch/2ce9dd46a989/card813-validation/0.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_summaries": [],
+    "log_bytes": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "returncode": 0,
+    "wall_seconds": 21.092326865999894,
+    "log": "/workspace/scratch/2ce9dd46a989/card813-validation/1.log",
+    "log_sha256": "011e1ee39e0251a7d046b052181b87b19f0b0c253475297a065d5ba49d97485a",
+    "test_summaries": [],
+    "log_bytes": 1568
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--locked"
+    ],
+    "returncode": 0,
+    "wall_seconds": 168.68842751900047,
+    "log": "/workspace/scratch/2ce9dd46a989/card813-validation/2.log",
+    "log_sha256": "5d5551be310edbb6c5e59a570ad0395468ff5e2f0134abf94bf1bda76a27e3a5",
+    "test_summaries": [
+      "test result: ok. 758 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.53s",
+      "test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+      "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s",
+      "test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.37s",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s",
+      "test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 89.86s",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.67s",
+      "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.05s",
+      "test result: ok. 118 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.71s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    ],
+    "log_bytes": 71727
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--test",
+      "conformance",
+      "corpus_matches_native"
+    ],
+    "returncode": 0,
+    "wall_seconds": 14.467831981999552,
+    "log": "/workspace/scratch/2ce9dd46a989/card813-validation/3.log",
+    "log_sha256": "f49d83c6f299a0c6ebdb5e5a306531f87eefe832cf1931a76327ed6751e23758",
+    "test_summaries": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 50 filtered out; finished in 14.43s"
+    ],
+    "log_bytes": 304
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--test",
+      "expression_limits",
+      "--test",
+      "scalar_pair",
+      "--test",
+      "string_chain"
+    ],
+    "returncode": 0,
+    "wall_seconds": 2.7982145759997366,
+    "log": "/workspace/scratch/2ce9dd46a989/card813-validation/4.log",
+    "log_sha256": "a0f3dd1d956f9af669fce60033de1fefaefc5ec6d178089b8bee63e93c3a56be",
+    "test_summaries": [
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s"
+    ],
+    "log_bytes": 994
+  },
+  {
+    "command": [
+      "/usr/bin/python3.13",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "bench",
+      "-p",
+      "test_*.py",
+      "-v"
+    ],
+    "returncode": 0,
+    "wall_seconds": 1.547409812999831,
+    "log": "/workspace/scratch/2ce9dd46a989/card813-validation/5.log",
+    "log_sha256": "5889ce991d32b1941c957eb2318ef6432bbbef06fc98e33b2e589a183bc2bd77",
+    "test_summaries": [
+      "Ran 34 tests in 1.439s"
+    ],
+    "log_bytes": 4497
+  },
+  {
+    "command": [
+      "rustfmt",
+      "--edition",
+      "2021",
+      "--check",
+      "bench/rust/numeric.rs",
+      "bench/rust/tuples.rs",
+      "bench/rust/startup.rs",
+      "bench/rust/strings.rs",
+      "bench/rust/sorting.rs"
+    ],
+    "returncode": 0,
+    "wall_seconds": 0.013789565000479342,
+    "log": "/workspace/scratch/2ce9dd46a989/card813-validation/6.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_summaries": [],
+    "log_bytes": 0
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "returncode": 0,
+    "wall_seconds": 0.04301153300002625,
+    "log": "/workspace/scratch/2ce9dd46a989/card813-validation/7.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test_summaries": [],
+    "log_bytes": 0
+  }
+]
