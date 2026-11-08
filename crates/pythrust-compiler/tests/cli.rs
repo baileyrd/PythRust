@@ -563,3 +563,43 @@ fn joined_receiver_aliases_reject_before_any_execution() {
         assert_eq!(text(&out.stdout), "4\n");
     }
 }
+
+/// Card #804: every CLI mode rejects the alias without offering another
+/// rejected shallow copy; accepted flat-list fixes preserve both branches.
+#[test]
+fn return_copy_diagnostics_are_actionable_in_every_cli_mode() {
+    let tmp = scratch("return_copy_diagnostics_are_actionable");
+    for (name, expression) in [("nested", "rows"), ("shallow", "list(rows)")] {
+        let src = format!("temper def f(rows: list[list[int]]) -> list[list[int]]:\n    return {expression}\nprint(f([[1]]))\n");
+        let mut diagnostics = Vec::new();
+        for command in ["check", "run", "build"] {
+            let out = pythrust(command, &tmp, name, &src);
+            let err = text(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{command}: {err}");
+            assert!(out.stdout.is_empty());
+            assert!(err.contains("parameter `rows`"), "{err}");
+            assert!(err.contains("return an independent value"), "{err}");
+            assert!(!err.contains("return a copy"), "{err}");
+            diagnostics.push(err);
+        }
+        assert!(diagnostics.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(!tmp.join(name).exists());
+    }
+    let src = "temper def f(xs: list[int], flag: bool) -> list[int]:\n    out = [0]\n    if flag:\n        out = xs\n    return out\nprint(f([1, 2], False), f([1, 2], True))\n";
+    for command in ["check", "run", "build"] {
+        let out = pythrust(command, &tmp, "flat", src);
+        let err = text(&out.stderr);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(err.contains("return list(out)"), "{err}");
+        assert!(!err.contains("return list(xs)"), "{err}");
+    }
+    // Apply the literal fix, then check and execute it. Native execution
+    // is held by the aliasing_flat_copy corpus fixture.
+    let fixed = src.replace("return out", "return list(out)");
+    for command in ["check", "run"] {
+        let out = pythrust(command, &tmp, "fixed", &fixed);
+        assert!(out.status.success(), "{command}: {}", text(&out.stderr));
+        let expected = if command == "run" { "[0] [1, 2]\n" } else { "" };
+        assert_eq!(text(&out.stdout), expected);
+    }
+}

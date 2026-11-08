@@ -536,6 +536,68 @@ fn tempered_code_returns_no_parameter() {
     assert!(alias_err(stored).is_some());
 }
 
+/// A shallow copy removes only the outer container's identity (card #804).
+#[test]
+fn nested_return_aliases_do_not_offer_a_shallow_copy() {
+    for (ty, expression) in [
+        ("list[list[int]]", "rows"),
+        ("list[list[int]]", "list(rows)"),
+        ("list[list[int]]", "list(list(rows))"),
+        ("list[tuple[list[int], int]]", "rows"),
+        ("list[dict[int, int]]", "rows"),
+        ("list[set[int]]", "rows"),
+        ("list[Exception]", "rows"),
+        ("list[tuple[Exception, int]]", "rows"),
+        ("list[list[int] | None]", "rows"),
+        ("dict[int, list[int]]", "rows"),
+        ("tuple[list[int], int]", "rows"),
+        ("list[list[int]] | None", "rows"),
+    ] {
+        let src = format!("temper def f(rows: {ty}) -> {ty}:\n    return {expression}\n");
+        let (message, span) = alias_err(&src).expect("D3 still rejects shared containers");
+        assert!(message.contains("parameter `rows`"), "{message}");
+        assert!(message.contains("return an independent value"), "{message}");
+        assert!(!message.contains("list("), "invalid copy hint: {message}");
+        assert_eq!(span, format!("return {expression}"));
+    }
+    let alias =
+        "temper def f(rows: list[list[int]]) -> list[list[int]]:\n    out = rows\n    return out\n";
+    assert!(alias_err(alias)
+        .unwrap()
+        .0
+        .contains("return an independent value"));
+}
+
+/// Flat-list hints copy the value actually returned, including joined aliases.
+#[test]
+fn flat_return_copy_hints_preserve_the_returned_value() {
+    for ty in ["int", "str", "tuple[int, str]", "int | None"] {
+        let src = format!("temper def f(xs: list[{ty}]) -> list[{ty}]:\n    return xs\n");
+        assert!(alias_err(&src).unwrap().0.contains("return list(xs)"));
+        assert_eq!(
+            checked(&src.replace("return xs", "return list(xs)")),
+            Ok(())
+        );
+    }
+    let src = "temper def f(xs: list[int], flag: bool) -> list[int]:\n    out = [0]\n    if flag:\n        out = xs\n    return out\n";
+    let message = alias_err(src).unwrap().0;
+    assert!(message.contains("return list(out)"), "{message}");
+    assert!(!message.contains("return list(xs)"), "{message}");
+    assert_eq!(
+        checked(&src.replace("return out", "return list(out)")),
+        Ok(())
+    );
+    let inner = "temper def f(rows: list[list[int]]) -> list[int]:\n    return rows[0]\n";
+    assert!(alias_err(inner)
+        .unwrap()
+        .0
+        .contains("return a copy made with `list(...)`"));
+    assert_eq!(
+        checked(&inner.replace("return rows[0]", "return list(rows[0])")),
+        Ok(())
+    );
+}
+
 #[test]
 fn aliasing_comes_before_modes() {
     // Fixing the alias may make the mode unnecessary.
@@ -700,7 +762,11 @@ fn a_list_stored_in_a_global_may_be_inside_a_parameter() {
     let returned = "shelf: list[list[int]] = []\ntemper def f(rows: list[list[int]]) -> list[int]:\n    b = [1]\n    shelf.append(b)\n    return b\nprint(f(shelf))\n";
     assert_eq!(
         alias_err(returned).map(|e| e.0),
-        Some("tempered `f` returns a list a global holds, which its parameter `rows` may hold too; return a copy made with `list(...)`".into())
+        Some("tempered `f` returns a list a global holds, which its parameter `rows` may hold too; return a copy: `return list(b)`".into())
+    );
+    assert_eq!(
+        checked(&returned.replace("return b", "return list(b)")),
+        Ok(())
     );
 }
 

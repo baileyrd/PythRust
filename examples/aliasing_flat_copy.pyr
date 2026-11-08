@@ -1,0 +1,17 @@
+# Applied D3 flat-list hints must copy the actual returned value (card #804).
+temper def same(xs: list[int]) -> list[int]:
+    return list(xs)
+
+
+temper def choose(xs: list[int], flag: bool) -> list[int]:
+    out = [0]
+    if flag:
+        out = xs
+    return list(out)
+
+
+xs = [1, 2]
+ys = same(xs)
+ys.append(3)
+print(xs, ys)
+print(choose(xs, False), choose(xs, True))
