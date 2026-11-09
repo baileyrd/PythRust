@@ -148,3 +148,17 @@ separate profiles/counts and all validation. This candidate awaits independent
 exact-head review and required hosted CI; #815 is unfinished. #810's rejected
 shared-accessor optimization, #396/PR119, D29 C, deferred #563 and later #817/#816
 work are unchanged.
+
+
+## Residual string profiling #817
+
+The [scoped evidence-only study](benchmarks/card817.md) on main `02c7816` after
+#815 reproduces historical allocation/copy totals and newly assigns traffic to
+intermediate key results and repeated growing-line prefixes. Every observed
+binary concat copies its exact-sized result once; repeated results remain a
+possible future analysis subject. No production candidate was attempted or
+retained, and optional binary-dispatch savings remain untested. The report
+retains fresh release self-controls, scoped counts, separate PC sampling,
+immutable source/tool/artifact linkage and full local validation. Independent
+exact-head review and hosted CI remain coordinator gates. D64 scope, #816,
+held #396/PR119, D29 C and deferred #563 remain unchanged.

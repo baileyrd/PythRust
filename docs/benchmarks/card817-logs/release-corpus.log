@@ -1,0 +1,116 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/cli.rs (target/debug/deps/cli-cc3c076f54dd426d)
+
+running 22 tests
+test a_failed_final_flush_is_a_runtime_error ... ok
+test d4_cli_pending_iterables_are_not_running_loops ... ok
+test d4_cli_running_outer_loops_are_not_hidden_by_other_temporaries ... ok
+test d4_cli_reports_context_and_safe_guidance ... ok
+test discovery_does_not_resolve_symlinks ... ok
+test discovery_follows_the_programs_path_and_paths_may_climb ... ok
+test int_power_overflow_is_a_runtime_error ... ok
+test int_accumulator_errors_whatever_the_loop_runs ... ok
+test fclone_lites_manifest_checks_its_fast_driver ... ok
+test negative_int_exponent_says_use_a_float_base ... ok
+test output_precedes_the_runtime_error_on_one_stream ... ok
+test loose_callee_stores_reach_tempered_call_checks ... ok
+test run_passes_the_arguments_after_the_file_to_sys_argv ... ok
+test joined_receiver_aliases_reject_before_any_execution ... ok
+test rust_binding_errors_render_against_their_file ... ok
+test rust_binding_names_are_resolved ... ok
+test return_copy_diagnostics_are_actionable_in_every_cli_mode ... ok
+test rust_binding_without_functions_is_refused ... ok
+test rust_binding_checks_and_run_and_build_name_their_gaps ... ok
+test the_rust_flag_names_the_manifest ... ok
+test the_manifest_is_found_above_and_read_only_when_needed ... ok
+test d4_concrete_fixes_compile_and_preserve_values ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+     Running tests/conformance.rs (target/debug/deps/conformance-786e1618a2e0ec79)
+
+running 51 tests
+test a_required_calibration_without_its_runtime_fails ... ok
+test a_scratch_directory_stays_until_its_test_passes ... ok
+test bless_keeps_golden_on_unexpected_exit ... ok
+test bless_skips_deviations ... ok
+test bless_creates_missing_golden ... ok
+test build_refuses_a_bool_key_stored_in_generic_code ... ok
+test build_refuses_an_exception_that_may_close_a_cycle ... ok
+test check_mismatch_cases ... ok
+test a_built_program_reads_its_arguments ... ok
+test a_refused_thread_ends_the_program ... ok
+test corpus_is_complete ... ok
+test build_takes_option_like_directories_as_paths ... ok
+test corpus_errors_fail_build ... ok
+test corpus_checks ... ok
+test corpus_ownership_coverage ... ok
+test corpus_matches_pythrust ... ok
+test expect_defaults ... ok
+test expect_ignores_directives_after_code ... ok
+test expect_reads_directives ... ok
+test expect_rejects_bad_directives ... ok
+test fclone_lite_matches_cpython ... ok
+test fclone_runs_under_a_private_parent ... ok
+test fclone_tasks_matches_fclone_lite ... ok
+test fclone_tasks_matches_fclone_lite_under_a_descriptor_limit ... ok
+test files_match_cpython ... ok
+test link::failed_native_link_preserves_executable_and_success_replaces_it ... ok
+test link::failed_native_publication_keeps_destination_and_cleans_staging ... ok
+test link::native_link_preserves_executable_through_a_symlinked_working_directory ... ok
+test link::native_publication_replaces_links_without_changing_their_targets ... ok
+test loosen_keeps_modes_inside_strings ... ok
+test loosen_strips_only_the_prefix ... ok
+test loosen_strips_parameter_modes ... ok
+test loosen_strips_pause_tokens_only ... ok
+test loosen_strips_raises_clauses ... ok
+test memcheck_fails_closed ... ok
+test mismatch_reports_status_and_stdout ... ok
+test missing_golden_fails_check ... ok
+test native_matches_run_at_the_repr_limit ... ok
+test oracle_must_be_the_corpus_version ... ok
+test os_matches_cpython_on_a_tree ... ok
+test run_kills_on_timeout ... ok
+test run_reports_missing_binary ... ok
+test runtime_follows_the_profile_and_target_under_test ... ok
+test sha256_patterns_match_cpython ... ok
+test corpus_matches_cpython ... ok
+test tempering_alone_rejects ... ok
+test the_race_detector_reports_injected_races ... ok
+test warnings_print_and_leave_output_and_status_unchanged ... ok
+test tempered_matches_loose ... ok
+test corpus_unkept_parameters_are_borrowed ... ok
+test corpus_matches_native ... ok
+
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.61s
+
+     Running tests/expression_limits.rs (target/debug/deps/expression_limits-b58c24403a6b89e1)
+
+running 3 tests
+test expression_depth_boundary_and_wide_controls ... ok
+test recursive_wrappers_cannot_hide_flat_depth ... ok
+test long_flat_expressions_return_source_diagnostics ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+     Running tests/scalar_pair.rs (target/debug/deps/scalar_pair-905b4796d981001e)
+
+running 1 test
+test unpack_eliminates_allocations_and_mixed_sites_keep_boxed_fallback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+     Running tests/signed_half.rs (target/debug/deps/signed_half-9cb2078d88bf4ddc)
+
+running 1 test
+test half_preserves_checked_overflow_and_fault_order ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/string_chain.rs (target/debug/deps/string_chain-403b8e572b4a0b9d)
+
+running 1 test
+test chains_eliminate_prefix_allocations_and_copies_with_fallback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s
+

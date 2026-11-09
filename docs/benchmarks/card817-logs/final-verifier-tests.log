@@ -1,0 +1,11 @@
+test_mutations (test_string_copy_campaign.Evidence.test_mutations) ... ok
+test_no_future_checkout_dependency (test_string_copy_campaign.Evidence.test_no_future_checkout_dependency) ... ok
+test_parser_rejects_duplicates_missing_negative (test_string_copy_campaign.Evidence.test_parser_rejects_duplicates_missing_negative) ... ok
+test_saved_bundle (test_string_copy_campaign.Evidence.test_saved_bundle) ... ok
+test_semantic_profile_and_command_guards (test_string_copy_campaign.Evidence.test_semantic_profile_and_command_guards) ... ok
+test_opaque_objects_buffers_empty_unicode_and_reuse (test_string_copy_campaign.ProbeCalibration.test_opaque_objects_buffers_empty_unicode_and_reuse) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 1.074s
+
+OK

@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/workspace/PythRust/bench/string_copy_campaign.py", line 316, in <module>
+    elif action=='verify':print('Verified workloads/stages:',verify_saved(),verify_validation())
+                                                                            ~~~~~~~~~~~~~~~~~^^
+  File "/workspace/PythRust/bench/string_copy_campaign.py", line 307, in verify_validation
+    if row['log']['sha256']!=state['logs'][Path(row['published_log']).name]['sha256']:raise ValueError('stage/log linkage')
+                                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: stage/log linkage
