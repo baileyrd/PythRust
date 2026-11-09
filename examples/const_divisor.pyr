@@ -1,0 +1,70 @@
+# Constant-divisor call-site clones (D69): literal divisors, fallbacks, order.
+def div_mod(a: int, b: int) -> tuple[int, int]:
+    return (a // b, a % b)
+
+
+def quot(a: int, b: int) -> int:
+    return a // b
+
+
+def rem(a: int, b: int) -> int:
+    return a % b
+
+
+def digit_sum(n: int, base: int) -> int:
+    if n == 0:
+        return 0
+    return n % base + digit_sum(n // base, base)
+
+
+def shifted(a: int, b: int) -> int:
+    b = b + 1
+    return a // b
+
+
+def guarded(a: int, b: int) -> int:
+    try:
+        return a // b + 7 // (a - a)
+    except ZeroDivisionError:
+        return a % b
+
+
+def touched(n: int) -> int:
+    print("numerator", n)
+    return n
+
+
+numerators = [-9223372036854775808, -9223372036854775807, -1000000007, -100, -11, -10, -9, -1, 0, 1, 9, 10, 11, 100, 1000000007, 9223372036854775806, 9223372036854775807]
+for n in numerators:
+    q, r = div_mod(n, 10)
+    print(n, q, r, quot(n, 10), rem(n, 10))
+    q, r = div_mod(n, -10)
+    print(q, r, quot(n, 3), rem(n, 3), quot(n, -7), rem(n, -7))
+    print(quot(n, 1), rem(n, 1), quot(n, 2), rem(n, 2))
+    print(quot(n, 9223372036854775807), rem(n, 9223372036854775807))
+    print(quot(n, -9223372036854775808), rem(n, -9223372036854775808))
+    t = div_mod(n, 10)
+    print(t, shifted(n, 10), guarded(n, 10))
+for n in [-7, 7]:
+    for d in [-3, -1, 3]:
+        print(n, d, quot(n, d), rem(n, d), div_mod(n, d))
+print(rem(-9223372036854775808, -1))
+for n in [0, 7, 1234567890, 9223372036854775807]:
+    print(digit_sum(n, 10), digit_sum(n, 16))
+print(quot(touched(-17), 10), rem(touched(-17), 10))
+q, r = div_mod(touched(123), 10)
+print(q, r)
+try:
+    print(quot(5, 0))
+except ZeroDivisionError:
+    print("caught zero quotient")
+try:
+    print(div_mod(5, 0))
+except ZeroDivisionError:
+    print("caught zero pair")
+xs = [3]
+try:
+    print(quot(xs[1], 10))
+except IndexError:
+    print("caught index numerator")
+print("complete")

@@ -53,6 +53,7 @@ jobs:
         run: |
           cargo test --locked --test conformance corpus_matches_native
           cargo test --locked --test expression_limits
+          cargo test --locked --test const_divisor
         env:
           PYTHRUST_BIN: ${{ github.workspace }}/target/release/pythrust${{ runner.os == 'Windows' && '.exe' || '' }}
 
