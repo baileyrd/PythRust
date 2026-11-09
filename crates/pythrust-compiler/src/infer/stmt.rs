@@ -63,6 +63,10 @@ impl Checker {
             StmtKind::Return(value) => self.ret(value.as_ref(), stmt.span),
             StmtKind::Break | StmtKind::Continue | StmtKind::Pass => Ok(()),
             StmtKind::Expr(e) => self.expr(e).map(drop),
+            StmtKind::Del { value, index } => {
+                let out = self.subst.fresh();
+                self.subscript(value, index, Access::Delete, out).map(drop)
+            }
             StmtKind::FuncDef(f) => Err(error(
                 f.name.span,
                 "`def` is only allowed at module top level".to_string(),

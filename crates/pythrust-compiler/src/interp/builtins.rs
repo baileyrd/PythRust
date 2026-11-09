@@ -121,7 +121,7 @@ impl Builtin {
 /// Calls a builtin. `print` is the only one that writes to `out`; `int`
 /// and `float` of a malformed string raise a catchable `ValueError`.
 pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<'m, Value<'m>> {
-    if !matches!(b, Builtin::Print | Builtin::Sum) {
+    if !matches!(b, Builtin::Print | Builtin::Sum | Builtin::Sorted) {
         reject_keywords(b.name(), &args)?;
     }
     let (pos, span) = (args.positional.as_slice(), args.span);
@@ -129,7 +129,7 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
         Builtin::Len => len(one(b, pos, span)?, span)?,
         Builtin::List => copy_list(one(b, pos, span)?, span)?,
         Builtin::Set => new_set(opt(b, pos, span)?, span)?,
-        Builtin::Sorted => sorted(one(b, pos, span)?, span)?,
+        Builtin::Sorted => sorted(one(b, pos, span)?, reversed(&args)?, span)?,
         Builtin::Range => range(pos, span)?,
         Builtin::Str => {
             Value::str(&opt(b, pos, span)?.map_or(Ok(String::new()), |v| v.to_str(span))?)
@@ -366,25 +366,49 @@ fn copy_list<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
     }
 }
 
-/// `sorted(xs)`: a new list of what `xs` iterates over, stably merge
-/// sorted with `<` alone, as Python's sort compares.
-fn sorted<'m>(v: &Value<'m>, span: Span) -> Result<Value<'m>> {
-    let items: Vec<Value<'m>> = v.iter(span)?.collect();
-    Ok(Value::list(merge_sort(items, span)?))
+/// `sorted`'s `reverse=`, its one keyword (D70); `key=` and the rest
+/// inference refuses.
+fn reversed(args: &Args) -> Result<bool> {
+    match args.keywords.as_slice() {
+        [] => Ok(false),
+        [(name, v)] if name.name == "reverse" => Ok(v.truthy()),
+        [(name, _), ..] => Err(rt_err(
+            name.span,
+            format!(
+                "TypeError: sorted() got an unexpected keyword argument '{}'",
+                name.name
+            ),
+        )),
+    }
 }
 
-fn merge_sort<'m>(mut items: Vec<Value<'m>>, span: Span) -> Result<Vec<Value<'m>>> {
+/// `sorted(xs)`: a new list of what `xs` iterates over, stably merge
+/// sorted with `<` alone, as Python's sort compares.
+fn sorted<'m>(v: &Value<'m>, reverse: bool, span: Span) -> Result<Value<'m>> {
+    let items: Vec<Value<'m>> = v.iter(span)?.collect();
+    Ok(Value::list(merge_sort(items, reverse, span)?))
+}
+
+/// Sorts stably with `<` alone, as Python's sort compares: descending
+/// when `reverse`, equal items keeping their order either way.
+pub(super) fn merge_sort<'m>(
+    mut items: Vec<Value<'m>>,
+    reverse: bool,
+    span: Span,
+) -> Result<Vec<Value<'m>>> {
     if items.len() < 2 {
         return Ok(items);
     }
     let right = items.split_off(items.len() / 2);
-    let (left, right) = (merge_sort(items, span)?, merge_sort(right, span)?);
+    let left = merge_sort(items, reverse, span)?;
+    let right = merge_sort(right, reverse, span)?;
     let mut out = Vec::with_capacity(left.len() + right.len());
     let (mut left, mut right) = (left.into_iter().peekable(), right.into_iter().peekable());
     while let (Some(l), Some(r)) = (left.peek(), right.peek()) {
-        // Take from the right only when strictly less: equal items keep
-        // their order.
-        let next = match compare(CmpOp::Lt, r, l, span)? {
+        // Take from the right only when it strictly beats the left:
+        // equal items keep their order.
+        let (a, b) = if reverse { (l, r) } else { (r, l) };
+        let next = match compare(CmpOp::Lt, a, b, span)? {
             true => right.next(),
             false => left.next(),
         };

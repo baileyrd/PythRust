@@ -43,6 +43,7 @@ fn kind_of(word: &str) -> TokenKind {
         "try" => T::Try,
         "except" => T::Except,
         "raise" => T::Raise,
+        "del" => T::Del,
         "as" => T::As,
         "+" => T::Plus,
         "-" => T::Minus,
@@ -199,6 +200,7 @@ fn sx_stmt(s: &Stmt) -> String {
             sx_else(orelse)
         ),
         StmtKind::Raise(e) => format!("(raise {})", sx(e)),
+        StmtKind::Del { value, index } => format!("(del {} {})", sx(value), sx(index)),
         StmtKind::Try { body, handlers } => {
             let handlers = handlers.iter().map(sx_handler);
             format!("(try {}{})", sx_block(body), handlers.collect::<String>())
@@ -823,6 +825,23 @@ fn raise_statement() {
     assert_eq!(ok("raise e NL"), "(raise e)");
     assert!(err("raise NL").starts_with("bare `raise` is not supported yet"));
     assert_eq!(err("raise a , b NL"), "expected newline, found `,`");
+}
+
+#[test]
+fn del_statement() {
+    assert_eq!(ok("del xs [ i ] NL"), "(del xs i)");
+    assert_eq!(ok("del d [ k ] [ 0 ] NL"), "(del (sub d k) 0)");
+    assert_eq!(err("del x NL"), "`del` of a name is not supported yet");
+    assert_eq!(
+        err("del a [ 0 ] , b [ 0 ] NL"),
+        "`del` of several targets is not supported yet"
+    );
+    assert_eq!(
+        err("del a . b NL"),
+        "`del` of an attribute is not supported yet"
+    );
+    assert!(err("del f ( ) NL").starts_with("cannot delete this"));
+    assert!(err("del NL").starts_with("expected"));
 }
 
 #[test]

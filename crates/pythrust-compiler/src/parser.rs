@@ -277,6 +277,7 @@ impl<'a> Parser<'a> {
         let kind = match self.peek() {
             TokenKind::Return => self.return_stmt()?,
             TokenKind::Raise => self.raise_stmt()?,
+            TokenKind::Del => self.del_stmt()?,
             TokenKind::Break => self.loop_jump(StmtKind::Break, "break")?,
             TokenKind::Continue => self.loop_jump(StmtKind::Continue, "continue")?,
             TokenKind::Pass => {
@@ -311,6 +312,25 @@ impl<'a> Parser<'a> {
             return Err(error(span, msg));
         }
         Ok(StmtKind::Raise(self.expr()?))
+    }
+
+    /// `'del' target`: only one subscript, `xs[i]` or `d[k]`, for now.
+    fn del_stmt(&mut self) -> Result<StmtKind> {
+        self.bump();
+        let target = self.expr_list()?;
+        let what = match target.kind {
+            ExprKind::Subscript { value, index } => {
+                return Ok(StmtKind::Del {
+                    value: *value,
+                    index: *index,
+                })
+            }
+            ExprKind::Name(_) => "`del` of a name is not supported yet",
+            ExprKind::Tuple(_) => "`del` of several targets is not supported yet",
+            ExprKind::Attr { .. } => "`del` of an attribute is not supported yet",
+            _ => "cannot delete this; `del` takes an item, as in `del xs[i]` or `del d[k]`",
+        };
+        Err(error(target.span, what))
     }
 
     fn loop_jump(&mut self, kind: StmtKind, word: &str) -> Result<StmtKind> {
@@ -1346,6 +1366,7 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Try => "try",
         TokenKind::Except => "except",
         TokenKind::Raise => "raise",
+        TokenKind::Del => "del",
         TokenKind::Import => "import",
         TokenKind::As => "as",
         TokenKind::With => "with",

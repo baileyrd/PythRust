@@ -120,6 +120,11 @@ pub enum StmtKind {
     },
     /// `'raise' expr`
     Raise(Expr),
+    /// `'del' expr '[' expr ']'`: removes a list's item or a dict's key.
+    Del {
+        value: Expr,
+        index: Expr,
+    },
     /// `'try' ':' block handler+`. `handlers` is never empty.
     Try {
         body: Block,

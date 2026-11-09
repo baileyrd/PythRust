@@ -78,7 +78,9 @@ impl FnBuilder<'_, '_> {
             | Inst::Extend { list: l, .. }
             | Inst::Scale { list: l, .. }
             | Inst::SetItem { list: l, .. }
-            | Inst::Sort(l)
+            | Inst::Insert { list: l, .. }
+            | Inst::Remove { list: l, .. }
+            | Inst::Sort { list: l, .. }
             | Inst::Reverse(l) => self.ty(*l) == list,
             Inst::Assign { value, .. } => runs_unseen(value),
             Inst::Print { .. }
@@ -173,7 +175,10 @@ fn std_changes_lists(f: StdFn) -> bool {
         | StdFn::Lower
         | StdFn::Ord
         | StdFn::Chr
-        | StdFn::FloatSum => false,
+        | StdFn::FloatSum
+        | StdFn::ListIndex
+        | StdFn::ListFind
+        | StdFn::ListCount => false,
     }
 }
 

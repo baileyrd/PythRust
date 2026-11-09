@@ -1,7 +1,8 @@
 //! Which functions may return with a catchable fault pending: a division
 //! by zero, an index out of range, a wrong unpacking arity
 //! (docs/research/faults.md), a read of a closed file, a NUL in the
-//! path given to `open`, or an empty separator given to `split` (D53). Such a fault is never in a `raises` set,
+//! path given to `open`, an empty separator given to `split` (D53), or
+//! a `del` of a missing item (D71). Such a fault is never in a `raises` set,
 //! so lowering tests the pending flag after a call to one of these as it
 //! does after a call whose set is not empty.
 //!
@@ -78,6 +79,11 @@ impl<'a> Sites<'a> {
                 self.expr(value);
             }
             StmtKind::Return(value) => value.iter().for_each(|v| self.expr(v)),
+            StmtKind::Del { value, index } => {
+                self.expr(value);
+                self.expr(index);
+                self.faults = true;
+            }
             StmtKind::If {
                 branch,
                 elifs,

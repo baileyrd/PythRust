@@ -1,0 +1,8 @@
+# expect-exit: 1
+# An uncaught `del` out of range ends the program with
+# `IndexError: list assignment index out of range` (D71).
+xs = [1, 2]
+del xs[-2]
+print(xs)
+del xs[1]
+print("unreachable")

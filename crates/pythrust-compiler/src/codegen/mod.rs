@@ -189,10 +189,15 @@ enum Rt {
     StrOrd,
     StrChr,
     SeqFsum,
+    ListInsert,
+    ListRemove,
+    TableRemove,
+    ListIndex,
+    ListCount,
 }
 
 impl Rt {
-    const ALL: [Rt; 106] = [
+    const ALL: [Rt; 111] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -299,6 +304,11 @@ impl Rt {
         Rt::StrOrd,
         Rt::StrChr,
         Rt::SeqFsum,
+        Rt::ListInsert,
+        Rt::ListRemove,
+        Rt::TableRemove,
+        Rt::ListIndex,
+        Rt::ListCount,
     ];
 
     fn symbol(self) -> &'static str {
@@ -409,6 +419,11 @@ impl Rt {
             Rt::FutDec => "pt_fut_dec",
             Rt::ResultsNext => "pt_results_next",
             Rt::ListReverse => "pt_list_reverse",
+            Rt::ListInsert => "pt_list_insert",
+            Rt::ListRemove => "pt_list_remove",
+            Rt::TableRemove => "pt_table_remove",
+            Rt::ListIndex => "pt_list_index",
+            Rt::ListCount => "pt_list_count",
         }
     }
 
@@ -471,7 +486,11 @@ impl Rt {
             Rt::TableContains => (vec![ptr, I64], Some(I8)),
             Rt::TableEntry => (vec![ptr, I64, I64], Some(I64)),
             Rt::ViewNew | Rt::ListOf => (vec![ptr, ptr, ptr], Some(ptr)),
-            Rt::ListSort => (vec![ptr], None),
+            Rt::ListSort => (vec![ptr, I8], None),
+            Rt::ListInsert => (vec![ptr, I64, I64], None),
+            Rt::ListRemove | Rt::TableRemove => (vec![ptr, I64], None),
+            Rt::ListIndex => (vec![ptr, I64, I8, ptr, ptr, ptr, ptr], Some(I64)),
+            Rt::ListCount => (vec![ptr, I64], Some(I64)),
             Rt::Argv => (vec![ptr, ptr], Some(ptr)),
             Rt::OsListdir => (vec![ptr; 7], Some(ptr)),
             Rt::OsPathJoin => (vec![ptr, ptr], Some(ptr)),
@@ -868,9 +887,23 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let (d, k, v) = (self.operand(*list), self.slot(*index), self.slot(*value));
                 self.call_rt(Rt::DictSet, &[d, k, v]);
             }
-            Inst::Sort(list) => {
+            Inst::Sort { list, reverse, .. } => {
+                let (s, r) = (self.operand(*list), self.operand(*reverse));
+                self.call_rt(Rt::ListSort, &[s, r]);
+            }
+            Inst::Insert {
+                list, index, value, ..
+            } => {
+                let (s, i, v) = (self.operand(*list), self.operand(*index), self.slot(*value));
+                self.call_rt(Rt::ListInsert, &[s, i, v]);
+            }
+            Inst::Remove { list, index, .. } => {
+                let (rt, i) = match self.func.ty(*list) {
+                    Ty::Dict(_) => (Rt::TableRemove, self.slot(*index)),
+                    _ => (Rt::ListRemove, self.operand(*index)),
+                };
                 let s = self.operand(*list);
-                self.call_rt(Rt::ListSort, &[s]);
+                self.call_rt(rt, &[s, i]);
             }
             Inst::Extend { list, other, .. } => {
                 let (s, t) = (self.operand(*list), self.operand(*other));

@@ -1,0 +1,5 @@
+# deviation: `list.index`'s `start` and `end` arguments are not supported yet (D70); CPython accepts them.
+# expect-exit: 1
+# expect-error: `start` of `list.index` is not supported yet
+
+print([1, 2, 1].index(1, 1))

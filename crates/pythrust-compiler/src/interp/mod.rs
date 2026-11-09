@@ -241,6 +241,11 @@ impl<'m> Interp<'m, '_> {
             StmtKind::Expr(e) => {
                 self.eval(e)?;
             }
+            StmtKind::Del { value, index } => {
+                let container = self.eval(value)?;
+                let index = self.eval(index)?;
+                del_item(&container, &index, stmt.span)?;
+            }
             StmtKind::FuncDef(def) => self.define(def)?,
             StmtKind::If {
                 branch,
@@ -1101,6 +1106,33 @@ fn set_item<'m>(
         resolve(index, len, "list", span)?.ok_or_else(|| out_of_range("list assignment", span))?;
     list.borrow_mut()[i] = v;
     Ok(())
+}
+
+/// `del xs[i]` or `del d[k]`: removes the item, or raises CPython's
+/// catchable `IndexError` or `KeyError` (D71).
+fn del_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Exec<'m, ()> {
+    match container {
+        Value::Dict(dict) => {
+            let removed = dict.borrow_mut().remove(&Key::of(index, span)?);
+            // Dropped after the borrow ends.
+            removed.map(drop).ok_or_else(|| missing_key(index, span))
+        }
+        Value::List(list) => {
+            let len = list.borrow().len();
+            let i = resolve(index, len, "list", span)?
+                .ok_or_else(|| out_of_range("list assignment", span))?;
+            let removed = list.borrow_mut().remove(i);
+            drop(removed);
+            Ok(())
+        }
+        other => {
+            let msg = format!(
+                "TypeError: '{}' object doesn't support item deletion",
+                other.type_name()
+            );
+            Err(rt_err(span, msg).into())
+        }
+    }
 }
 
 /// Resolves a Python index (negative counts from the end) into `0..len`;

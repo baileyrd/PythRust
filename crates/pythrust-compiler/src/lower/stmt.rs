@@ -91,6 +91,7 @@ impl FnBuilder<'_, '_> {
     fn stmt(&mut self, s: &Stmt) -> Result<()> {
         match &s.kind {
             StmtKind::Expr(e) => self.expr(e).map(drop),
+            StmtKind::Del { value, index } => self.del_stmt(value, index, s.span),
             StmtKind::Assign { target, value } => self.assign_stmt(target, value),
             StmtKind::AnnAssign { target, value, .. } => {
                 let v = self.expr(value)?;

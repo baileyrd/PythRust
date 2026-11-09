@@ -1,0 +1,13 @@
+pop: pop from empty list
+pop 2 pop index out of range
+pop -3 pop index out of range
+2
+remove: list.remove(x): x not in list
+index: 'β' is not in list
+index: (2, 'ü') is not in list
+index: -0.25 is not in list
+index: [] is not in list
+del 1 list assignment index out of range
+del -2 list assignment index out of range
+deleted 0 []
+last: pop from empty list

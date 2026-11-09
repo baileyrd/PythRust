@@ -332,7 +332,9 @@ impl<'a> Flow<'a> {
     fn flow(&mut self, inst: &Inst) -> bool {
         match inst {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
-            Inst::Append { list, value, .. } | Inst::SetItem { list, value, .. } => {
+            Inst::Append { list, value, .. }
+            | Inst::SetItem { list, value, .. }
+            | Inst::Insert { list, value, .. } => {
                 let value = self.of(*value);
                 let lists = self.of(*list);
                 self.store_all(&lists, &value)
@@ -673,7 +675,10 @@ impl<'a> Flow<'a> {
             Inst::Append { list, .. }
             | Inst::SetItem { list, .. }
             | Inst::Extend { list, .. }
-            | Inst::Scale { list, .. } => {
+            | Inst::Scale { list, .. }
+            | Inst::Insert { list, .. }
+            | Inst::Remove { list, .. }
+            | Inst::Sort { list, .. } => {
                 mutated.extend(self.of(*list));
             }
             _ => {}

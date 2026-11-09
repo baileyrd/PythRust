@@ -689,7 +689,10 @@ impl<'a> Body<'a> {
             Inst::Append { list, .. }
             | Inst::SetItem { list, .. }
             | Inst::Extend { list, .. }
-            | Inst::Scale { list, .. } => vec![(*list, Change::List)],
+            | Inst::Scale { list, .. }
+            | Inst::Insert { list, .. }
+            | Inst::Remove { list, .. }
+            | Inst::Sort { list, .. } => vec![(*list, Change::List)],
             Inst::Assign {
                 value: Rvalue::Call(f, args),
                 ..
@@ -1297,7 +1300,12 @@ pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
         Inst::SetItem {
             list, index, value, ..
         } => vec![*list, *index, *value],
-        Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => vec![*exc],
+        Inst::Raise { exc, .. } | Inst::Reverse(exc) => vec![*exc],
+        Inst::Sort { list, reverse, .. } => vec![*list, *reverse],
+        Inst::Insert {
+            list, index, value, ..
+        } => vec![*list, *index, *value],
+        Inst::Remove { list, index, .. } => vec![*list, *index],
         Inst::Retain(_) | Inst::Release(_) | Inst::Forget(_) | Inst::DropGlobal(_) => Vec::new(),
     }
 }
@@ -1317,6 +1325,9 @@ pub(super) fn inst_span(inst: &Inst) -> Option<Span> {
         | Inst::SetItem { span, .. }
         | Inst::Extend { span, .. }
         | Inst::Scale { span, .. }
+        | Inst::Insert { span, .. }
+        | Inst::Remove { span, .. }
+        | Inst::Sort { span, .. }
         | Inst::Assign { span, .. } => Some(*span),
         _ => None,
     }

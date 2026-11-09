@@ -297,8 +297,29 @@ pub enum Inst {
         count: Operand,
         span: Span,
     },
-    /// Sorts a list in place by `<`, stably.
-    Sort(Operand),
+    /// Sorts a list in place by `<`, stably; descending when the `Bool`
+    /// `reverse` is true, equal items keeping their order (D70).
+    Sort {
+        list: Operand,
+        reverse: Operand,
+        span: Span,
+    },
+    /// `list.insert(index, value)` at `span`: an index past either end
+    /// clamps, as in CPython; the list adds its own reference.
+    Insert {
+        list: Operand,
+        index: Operand,
+        value: Operand,
+        span: Span,
+    },
+    /// Removes item `index` of a list, which lowering proved in range,
+    /// or key `index` of a dict, which lowering proved present, dropping
+    /// the references the list or dict held (D70).
+    Remove {
+        list: Operand,
+        index: Operand,
+        span: Span,
+    },
     /// Reverses a list, here only `map`'s results ([`Ty::Results`]), in
     /// place.
     Reverse(Operand),
@@ -621,7 +642,12 @@ impl Inst {
             Inst::SetItem {
                 list, index, value, ..
             } => [list, index, value].into_iter().any(local),
-            Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => local(exc),
+            Inst::Raise { exc, .. } | Inst::Reverse(exc) => local(exc),
+            Inst::Sort { list, reverse, .. } => local(list) || local(reverse),
+            Inst::Insert {
+                list, index, value, ..
+            } => [list, index, value].into_iter().any(local),
+            Inst::Remove { list, index, .. } => local(list) || local(index),
         }
     }
 }

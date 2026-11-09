@@ -1,0 +1,12 @@
+# deviation: sorting a list is a change (D4, D70), so a tempered loop over it may not sort it; CPython sorts while iterating.
+# expect-exit: 1
+# expect-error: tempered `f` changes `xs` while a `for` loop over it is running
+
+
+temper def f(mut xs: list[int]) -> None:
+    for x in xs:
+        if x > 1:
+            xs.sort()
+
+
+f([2, 1])

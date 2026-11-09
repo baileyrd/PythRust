@@ -129,10 +129,18 @@ pub enum StdFn {
     /// The builtin `sum` of floats in a list, tuple or view, from
     /// `start`: CPython's compensated sum (D57).
     FloatSum,
+    /// `xs.index(x)` (D70): the first position of an item `==` to `x`,
+    /// raising a tracked `ValueError` naming `x` when there is none (D71).
+    ListIndex,
+    /// The first position of an item of a list `==` to `x`, or -1: what
+    /// `xs.remove(x)` removes. Only lowering calls it.
+    ListFind,
+    /// `xs.count(x)` (D70): how many items are `==` to `x`.
+    ListCount,
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 30] = [
+    pub const ALL: [StdFn; 33] = [
         StdFn::Argv,
         StdFn::Listdir,
         StdFn::Join,
@@ -163,6 +171,9 @@ impl StdFn {
         StdFn::Ord,
         StdFn::Chr,
         StdFn::FloatSum,
+        StdFn::ListIndex,
+        StdFn::ListFind,
+        StdFn::ListCount,
     ];
 
     /// The builtin name stages call it by: the dotted name a program
@@ -200,6 +211,9 @@ impl StdFn {
             StdFn::Ord => "builtins.ord",
             StdFn::Chr => "builtins.chr",
             StdFn::FloatSum => "builtins.sum",
+            StdFn::ListIndex => "list.index",
+            StdFn::ListFind => "list.__find__",
+            StdFn::ListCount => "list.count",
         }
     }
 
@@ -257,7 +271,7 @@ impl StdFn {
     pub fn raises(self) -> Option<ExcKind> {
         match self {
             StdFn::Listdir | StdFn::Getsize | StdFn::Open | StdFn::Read => Some(ExcKind::Os),
-            StdFn::Index | StdFn::Rindex | StdFn::Chr => Some(ExcKind::Value),
+            StdFn::Index | StdFn::Rindex | StdFn::Chr | StdFn::ListIndex => Some(ExcKind::Value),
             StdFn::Argv
             | StdFn::Join
             | StdFn::Isdir
@@ -280,7 +294,9 @@ impl StdFn {
             | StdFn::Upper
             | StdFn::Lower
             | StdFn::Ord
-            | StdFn::FloatSum => None,
+            | StdFn::FloatSum
+            | StdFn::ListFind
+            | StdFn::ListCount => None,
         }
     }
 
