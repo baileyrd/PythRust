@@ -88,7 +88,8 @@ def verify_controls(record):
     sources['generic_access']=sources['int_access'].replace('xs: list[int]','xs').replace(' -> int','')
     sources['source_inline_diagnostic']=(b.ROOT/'bench/tuples.pyr').read_text().replace(
         '        n, d = div_mod(n, 10)','        quotient = n // 10\n        d = n % 10\n        n = quotient')
-    if set(record['cases'])!=set(sources) or set(p['cases'])!=set(sources): raise ValueError('wrong controls')
+    if set(record['cases'])!=set(sources) or set(p['cases'])!=set(sources) or set(p['identities'])!=set(sources):
+        raise ValueError('wrong controls')
     for ordinal,(name,row) in enumerate(record['cases'].items()):
         case=p['cases'][name]
         if case['source']!=sources[name]: raise ValueError('control source changed')
@@ -99,7 +100,15 @@ def verify_controls(record):
             raise ValueError('missing control sample')
         if [(x['kind'],x['warmup']) for x in row['warmup_samples']]!=[(k,i) for k in ('baseline','candidate') for i in range(2)]:
             raise ValueError('missing control warmup')
+        if set(case['conditions'])!={'baseline','candidate'} or set(p['identities'][name])!={'baseline','candidate'}:
+            raise ValueError('wrong control conditions')
         for label,item in case['conditions'].items():
+            t.hash_record(item['binary'])
+            t.hash_record(item['source'])
+            if item['command']!=[item['binary']['path']]:
+                raise ValueError('control invocation does not match executable/arguments')
+            if item['binary']['path']!=str(Path(item['source']['path']).with_suffix('')):
+                raise ValueError('unmatched control source/output')
             if item['binary']!=p['identities'][name][label]['binary'] or item['source']!=p['identities'][name][label]['source']:
                 raise ValueError('unlinked control identity')
             expected=(b.ROOT/'bench/tuples.pyr').read_text() if name=='source_inline_diagnostic' and label=='baseline' else sources[name]

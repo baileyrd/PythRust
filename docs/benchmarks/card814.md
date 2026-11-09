@@ -286,6 +286,15 @@ inputs, and bind schema-2 ordinary builds to compiler/source/output and the exac
 edition/optimization/codegen/CPU/overflow flags. Mutation tests exercise command
 substitution, input additions/deletions, and build argument corruption.
 
+Control verification also requires exactly baseline/candidate conditions, binds
+each command to its recorded native binary with no arguments, and binds that
+output path to its source. The source-inline diagnostic retains the original
+tuple source for baseline and the modified source for candidate. Focused mutation
+tests reject command substitution, extra arguments, missing/extra conditions,
+and source/output mismatches while the saved controls continue to pass. This
+verifier correction reuses the historical measurements without rewriting them;
+the updated commit requires independent review and green hosted CI before merge.
+
 Historical schema-1 records retain their original, narrower provenance checks.
 Historical schema-2 records did not store checked/materialized control build
 commands: their flags cannot be independently validated from an absent command.

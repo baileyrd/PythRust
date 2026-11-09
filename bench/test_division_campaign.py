@@ -112,5 +112,40 @@ class CampaignTests(unittest.TestCase):
             lambda d:d.update(seed=1),
         ],v.verify_controls)
 
+    def test_control_invocations_match_each_condition(self):
+        original=load('controls')
+        for name in original['prepared']['cases']:
+            for label in ('baseline','candidate'):
+                other='candidate' if label=='baseline' else 'baseline'
+                with self.subTest(name=name,label=label):
+                    self.reject(original,[
+                        lambda d:d['prepared']['cases'][name]['conditions'][label].update(
+                            command=d['prepared']['cases'][name]['conditions'][other]['command']),
+                        lambda d:d['prepared']['cases'][name]['conditions'][label].update(
+                            command=['/unrelated/executable','extra']),
+                        lambda d:d['prepared']['cases'][name]['conditions'][label]['command'].append('extra'),
+                        lambda d:d['prepared']['cases'][name]['conditions'][label].update(command=[]),
+                        lambda d:d['prepared']['cases'][name]['conditions'].pop(label),
+                        lambda d:d['prepared']['cases'][name]['conditions'].update(
+                            extra=d['prepared']['cases'][name]['conditions'][label]),
+                        lambda d:d['prepared']['identities'][name].pop(label),
+                        lambda d:d['prepared']['identities'][name].update(
+                            extra=d['prepared']['identities'][name][label]),
+                    ],v.verify_controls)
+
+    def test_control_source_output_binding_even_with_matching_identity_copies(self):
+        original=load('controls')
+        for name in original['prepared']['cases']:
+            for label in ('baseline','candidate'):
+                for field,value in [('path','/different.pyr'),('sha256','0'*64)]:
+                    with self.subTest(name=name,label=label,field=field):
+                        bad=copy.deepcopy(original)
+                        for item in (bad['prepared']['cases'][name]['conditions'][label],
+                                     bad['prepared']['identities'][name][label],
+                                     bad['identities_after'][name][label]):
+                            item['source'][field]=value
+                        with self.assertRaises(ValueError):
+                            v.verify_controls(bad)
+
 
 if __name__=='__main__': unittest.main()
