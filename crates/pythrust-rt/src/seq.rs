@@ -1058,13 +1058,15 @@ pub unsafe extern "C" fn pt_seq_dec(s: *mut PtSeq) {
 }
 
 /// Sorts list `s` in place by `<`, stably, as `sorted` does in `run`:
-/// a merge sort that takes from the right only when strictly less.
+/// a merge sort that takes from the right only when it strictly beats
+/// the left, so descending when `reverse` is set (D70), equal items
+/// keeping their order either way.
 ///
 /// # Safety
 ///
 /// `s` is a live list.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq) {
+pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq, reverse: u8) {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
     let desc = slot(s.desc, 0);
@@ -1072,7 +1074,7 @@ pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq) {
     // out conflicts rather than seeing the list empty mid-sort.
     let mut items = s.items.borrow_mut();
     let taken = std::mem::take(&mut *items);
-    *items = merge_sort(desc, taken);
+    *items = merge_sort(desc, taken, reverse != 0);
 }
 
 /// Reverses list `s` in place: `map`'s results, made in order and taken
@@ -1098,16 +1100,18 @@ pub(crate) fn take_all(s: &PtSeq) -> Vec<u64> {
     std::mem::take(&mut *s.items.borrow_mut())
 }
 
-fn merge_sort(desc: &[u8], mut items: Vec<u64>) -> Vec<u64> {
+fn merge_sort(desc: &[u8], mut items: Vec<u64>, reverse: bool) -> Vec<u64> {
     if items.len() < 2 {
         return items;
     }
     let right = items.split_off(items.len() / 2);
-    let (left, right) = (merge_sort(desc, items), merge_sort(desc, right));
+    let left = merge_sort(desc, items, reverse);
+    let right = merge_sort(desc, right, reverse);
     let mut out = Vec::with_capacity(left.len() + right.len());
     let (mut left, mut right) = (left.into_iter().peekable(), right.into_iter().peekable());
     while let (Some(l), Some(r)) = (left.peek(), right.peek()) {
-        let next = match cmp(desc, *r, *l) {
+        let (a, b) = if reverse { (*l, *r) } else { (*r, *l) };
+        let next = match cmp(desc, a, b) {
             Some(Ordering::Less) => right.next(),
             _ => left.next(),
         };
@@ -1157,6 +1161,98 @@ pub unsafe extern "C" fn pt_list_contains(s: *const PtSeq, v: u64) -> u8 {
     let s = unsafe { seq(s as u64) };
     let desc = slot(s.desc, 0);
     u8::from(s.items.borrow().iter().any(|x| eq(desc, *x, v)))
+}
+
+/// `s.insert(i, v)` on a list: `i` counts from the end when negative,
+/// and one past either end clamps, as in CPython; `v` gains a reference.
+///
+/// # Safety
+///
+/// `s` is a live list and `v` a live value of its element type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_insert(s: *const PtSeq, i: i64, v: u64) {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let desc = slot(s.desc, 0);
+    mark_stored(s, desc, v);
+    inc(desc, v);
+    let mut items = s.items.borrow_mut();
+    let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
+    let at = if i < 0 { i.saturating_add(len) } else { i };
+    let at = usize::try_from(at.clamp(0, len)).unwrap_or(0);
+    items.insert(at, v);
+}
+
+/// Removes item `i` of list `s`, dropping its reference; lowering keeps
+/// `i` in range (an `i` out of range changes nothing).
+///
+/// # Safety
+///
+/// `s` is a live list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_remove(s: *const PtSeq, i: i64) {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let old = {
+        let mut items = s.items.borrow_mut();
+        position(i, items.len()).map(|k| items.remove(k))
+    };
+    // Dropped after the borrow ends: freeing may reach other sequences.
+    if let Some(old) = old {
+        dec(slot(s.desc, 0), old);
+    }
+}
+
+/// The first position of an item of list `s` `==` to `v`, or -1. With
+/// `raise` set, `s.index(v)`: a missing `v` raises CPython's `ValueError`
+/// naming it at the site instead (D71).
+///
+/// # Safety
+///
+/// `s` is a live list, `v` a live value of its element type, and the
+/// site's words as [`crate::os::site`] takes them.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // The site's four words, as `pt_str_find` takes them.
+pub unsafe extern "C" fn pt_list_index(
+    s: *const PtSeq,
+    v: u64,
+    raise: u8,
+    head: *const u8,
+    head_len: usize,
+    tail: *const u8,
+    tail_len: usize,
+) -> i64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let desc = slot(s.desc, 0);
+    let found = s.items.borrow().iter().position(|x| eq(desc, *x, v));
+    if let Some(at) = found {
+        return i64::try_from(at).unwrap_or(i64::MAX);
+    }
+    if raise != 0 {
+        // SAFETY: guaranteed by the caller.
+        let site = unsafe { crate::os::site(head, head_len, tail, tail_len) };
+        let mut shown = String::new();
+        if repr(desc, v, &mut shown).is_err() {
+            site.fail(crate::exc::TOO_DEEP);
+        }
+        site.raise_text(crate::exc::VALUE_ERROR, format!("{shown} is not in list"));
+    }
+    -1
+}
+
+/// `s.count(v)` on a list: how many items are `==` to `v`.
+///
+/// # Safety
+///
+/// `s` is a live list and `v` a live value of its element type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_count(s: *const PtSeq, v: u64) -> i64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let desc = slot(s.desc, 0);
+    let n = s.items.borrow().iter().filter(|x| eq(desc, **x, v)).count();
+    i64::try_from(n).unwrap_or(i64::MAX)
 }
 
 /// Python's `repr` of sequence (or range) `s`.
@@ -1309,6 +1405,71 @@ mod tests {
             pt_seq_dec(xs);
             assert_eq!(seq(inner as u64).rc.get(), 1);
             pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn insert_clamps_and_remove_drops_the_reference() {
+        let inner = make(b"li", &[1]);
+        let xs = make(b"lli", &[]);
+        // SAFETY: all live until dropped below, each once.
+        unsafe {
+            pt_list_insert(xs, 0, inner as u64);
+            pt_list_insert(xs, -100, inner as u64);
+            pt_list_insert(xs, 100, inner as u64);
+            assert_eq!(shown(xs), "[[1], [1], [1]]");
+            assert_eq!(seq(inner as u64).rc.get(), 4);
+            pt_list_remove(xs, 1);
+            pt_list_remove(xs, 7);
+            assert_eq!(shown(xs), "[[1], [1]]");
+            assert_eq!(seq(inner as u64).rc.get(), 3);
+            pt_seq_dec(xs);
+            assert_eq!(seq(inner as u64).rc.get(), 1);
+            pt_seq_dec(inner);
+        }
+        let ys = make(b"li", &[1, 2]);
+        // SAFETY: live until dropped, once.
+        unsafe {
+            pt_list_insert(ys, -1, 9);
+            assert_eq!(shown(ys), "[1, 9, 2]");
+            pt_seq_dec(ys);
+        }
+    }
+
+    #[test]
+    fn index_and_count_compare_by_value() {
+        let xs = make(
+            b"lf",
+            &[0.0f64.to_bits(), 2.0f64.to_bits(), (-0.0f64).to_bits()],
+        );
+        let nan = make(b"lf", &[f64::NAN.to_bits()]);
+        let none = std::ptr::null();
+        // SAFETY: live until dropped; no site is read without `raise`.
+        unsafe {
+            assert_eq!(
+                pt_list_index(xs, (-0.0f64).to_bits(), 0, none, 0, none, 0),
+                0
+            );
+            assert_eq!(pt_list_index(xs, 2.0f64.to_bits(), 0, none, 0, none, 0), 1);
+            assert_eq!(pt_list_index(xs, 5.0f64.to_bits(), 0, none, 0, none, 0), -1);
+            assert_eq!(pt_list_count(xs, 0.0f64.to_bits()), 2);
+            assert_eq!(pt_list_count(nan, f64::NAN.to_bits()), 0);
+            pt_seq_dec(xs);
+            pt_seq_dec(nan);
+        }
+    }
+
+    #[test]
+    fn sort_reversed_keeps_equal_items_in_order() {
+        let items = [0.0f64, -0.0, 1.0, 0.0].map(f64::to_bits);
+        let xs = make(b"lf", &items);
+        // SAFETY: live until dropped, once.
+        unsafe {
+            pt_list_sort(xs, 1);
+            assert_eq!(shown(xs), "[1.0, 0.0, -0.0, 0.0]");
+            pt_list_sort(xs, 0);
+            assert_eq!(shown(xs), "[0.0, -0.0, 0.0, 1.0]");
+            pt_seq_dec(xs);
         }
     }
 

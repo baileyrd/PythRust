@@ -120,7 +120,7 @@ pub(crate) fn name(code: u8) -> &'static str {
 }
 
 /// The message of a `repr` nested deeper than `run` allows.
-const TOO_DEEP: &str =
+pub(crate) const TOO_DEEP: &str =
     "RecursionError: maximum recursion depth exceeded while getting the repr of an object";
 
 /// The last line Python prints for an uncaught exception: `ValueError:

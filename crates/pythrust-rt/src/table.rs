@@ -6,7 +6,8 @@
 //!
 //! Keys are ints, strings, bools, `None`, and tuples and optionals of
 //! them (inference allows no other), so hashing never meets a float, a
-//! list or a table. Nothing is ever removed, so the index only grows.
+//! list or a table. Removing an entry (`d.pop`, `del d[k]`, D70) shifts
+//! the later ones down and rebuilds the index.
 
 #![allow(unsafe_code)] // Slots are pointers; the C ABI below.
 
@@ -191,6 +192,37 @@ pub unsafe extern "C" fn pt_dict_set(d: *const PtSeq, k: u64, v: u64) {
     // Dropped after the borrow ends: freeing may reach other sequences.
     if let Some(old) = old {
         seq::dec(desc, old);
+    }
+}
+
+/// Removes key `k`'s entry from dict `d`, dropping the references it
+/// held; lowering proved `k` present (a missing one changes nothing).
+///
+/// # Safety
+///
+/// `d` is a live dict and `k` a live value of its key type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_table_remove(d: *const PtSeq, k: u64) {
+    // SAFETY: guaranteed by the caller.
+    let d = unsafe { table(d) };
+    let Some(entry) = find(d, k) else {
+        return;
+    };
+    let step = stride(d.desc);
+    let removed: Vec<u64> = {
+        let mut items = d.items.borrow_mut();
+        let at = entry * step;
+        items.drain(at..at + step).collect()
+    };
+    {
+        let mut index = d.index.borrow_mut();
+        let slots = &mut index.get_or_insert_with(Box::default).slots;
+        let entries = d.items.borrow().len() / step;
+        grow(d, slots, entries);
+    }
+    // Dropped after the borrows end: freeing may reach other sequences.
+    for (k, v) in removed.into_iter().enumerate() {
+        seq::dec(slot(d.desc, k), v);
     }
 }
 
@@ -452,6 +484,54 @@ mod tests {
             assert_eq!(pt_table_contains(d, 2), 1);
             assert_eq!(pt_table_entry(d, 2, 0), 2);
             pt_seq_dec(d);
+        }
+    }
+
+    #[test]
+    fn removing_a_key_keeps_the_rest_in_order_and_findable() {
+        let d = empty(b"dii");
+        let mut status = 9;
+        // SAFETY: `d` and `status` are live.
+        unsafe {
+            for k in 0..20 {
+                pt_dict_set(d, k, k * 10);
+            }
+            for k in (0..20).step_by(2) {
+                pt_table_remove(d, k);
+            }
+            pt_table_remove(d, 99);
+            assert_eq!(pt_seq_len(d), 10);
+            assert_eq!(pt_table_contains(d, 4), 0);
+            assert_eq!((pt_dict_get(d, 7, &mut status), status), (70, 0));
+            pt_dict_set(d, 4, 41);
+            assert_eq!(pt_table_entry(d, 10, 0), 4);
+            pt_seq_dec(d);
+        }
+        let one = empty(b"dii");
+        // SAFETY: `one` is live.
+        unsafe {
+            pt_dict_set(one, 1, 2);
+            pt_table_remove(one, 1);
+            assert_eq!(shown(one), "{}");
+            pt_dict_set(one, 3, 4);
+            assert_eq!(shown(one), "{3: 4}");
+            pt_seq_dec(one);
+        }
+    }
+
+    #[test]
+    fn removing_drops_the_value_reference() {
+        let v = empty(b"li");
+        let d = empty(b"dili");
+        // SAFETY: all live until dropped below, each once.
+        unsafe {
+            pt_dict_set(d, 1, v as u64);
+            assert_eq!(seq::seq(v as u64).rc.get(), 2);
+            pt_table_remove(d, 1);
+            assert_eq!(pt_seq_len(d), 0);
+            assert_eq!(seq::seq(v as u64).rc.get(), 1);
+            pt_seq_dec(d);
+            pt_seq_dec(v);
         }
     }
 
