@@ -79,13 +79,46 @@ def collect(work,output):
     data['status']='complete';verify(data);b.save(output,data)
 
 
-def verify(data):
+def linker_source(python, cc, extra):
+    return ('#!'+python+'\nimport subprocess,sys,time\n'
+            'start=time.perf_counter()\np=subprocess.run('+repr([cc])+
+            '+sys.argv[1:]+'+repr(extra)+')\nsys.exit(p.returncode)\n')
+
+
+def verify(data, canonical=None):
+    c.verify_prepared(data['prepared'],c.canonical_prepared() if canonical is None else canonical)
+    fixed=c.frozen()['probe']
+    c.valid_tools(data['tools'],('cc','ld','objdump','gprof'))
+    if data['tools']!=fixed['tools'] or data['cc']!=fixed['cc']:raise ValueError('unmatched probe tools')
+    for key in ('probe','harness'):
+        c.valid_identity(data[key])
+        if data[key]!=fixed[key]:raise ValueError('unmatched probe source/harness')
     if data['status']!='complete' or set(data['cases'])!=set(c.LABELS): raise ValueError('incomplete probes')
-    if data['probe']['sha256']!=b.digest((b.ROOT/'bench/int_list_selected_counts.c').read_bytes()):raise ValueError('probe source')
     for label,rows in data['cases'].items():
         if set(rows)!=set(NAMES):raise ValueError('probe cases')
         for name,row in rows.items():
             manifest=data['prepared'][label];case=manifest['cases'][name]
+            for key in ('source','count_object','count_linker','count_binary','profile_binary','pg_linker','assembly'):
+                c.valid_identity(row[key])
+            folder=Path(row['source']['path']).parent
+            for key,relative in [('count_object','counts.o'),('count_linker','count-linker/cc'),
+                                 ('count_binary','counts'),('profile_binary','profile'),
+                                 ('pg_linker','pg-linker/cc'),('assembly','generated.s')]:
+                if row[key]['path']!=str(folder/relative):raise ValueError('probe artifact path')
+            if len(row['gmon'])!=7:raise ValueError('missing gmon records')
+            for i,gmon in enumerate(row['gmon']):
+                c.valid_identity(gmon)
+                prefix=str(folder/('gmon-'+str(i)+'.'))
+                if not gmon['path'].startswith(prefix) or not gmon['path'][len(prefix):].isdigit():
+                    raise ValueError('unmatched gmon execution')
+            wraps=['pt_seq_get','pt_list_set','pt_seq_hold','pt_seq_item_held']
+            if label=='candidate':wraps+=['pt_int_list_get','pt_int_list_set']
+            count_flags=[row['count_object']['path']]+['-Wl,--wrap='+name for name in wraps]
+            python=manifest['host']['python_executable']
+            for key,flags in [('pg_linker',['-pg','-no-pie']),('count_linker',count_flags)]:
+                expected=linker_source(python,data['cc'],flags)
+                if row[key+'_source']!=expected:raise ValueError('incorrect probe linker command/flags')
+
             if row['counts']!=parse(row['raw']) or row['stdout']!=case['expected'] or row['returncode']!=0:raise ValueError('count parity')
             want_reads=10852716 if name=='sorting' else 4000000
             want_writes=2714780 if name=='sorting' else 4000000

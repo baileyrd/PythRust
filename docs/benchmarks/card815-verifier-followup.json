@@ -1,0 +1,211 @@
+{
+  "scope": "Verifier-only P2 corrections on existing PR136; no production or measurement change.",
+  "measured_author_head": "83d06f3905e4ce296e924658481d4777ea096aa7",
+  "source_manifest": {
+    "path": "card815-source-manifest.json",
+    "sha256": "d30b154127688a98e405445f862da626e6a65a71e32db63169790da75bf40221"
+  },
+  "checks": [
+    {
+      "name": "red mutations",
+      "command": [
+        "python3.13",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_int_list_campaign.py",
+        "-v"
+      ],
+      "outcome": "expected failure (10 false acceptances)",
+      "published_log": "card815-verifier-followup-logs/red-tests.log",
+      "sha256": "6a16956737ac4b3614360f49c179ee88b91221bafcf533ca9e57d55d0290016a"
+    },
+    {
+      "name": "focused green",
+      "command": [
+        "python3.13",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_int_list_campaign.py",
+        "-v"
+      ],
+      "outcome": "passed",
+      "published_log": "card815-verifier-followup-logs/green-cross-bundle.log",
+      "sha256": "d4b5d5cab246849e5624329f6c2d57e1388cf247a839cc74018468be8431addd"
+    },
+    {
+      "name": "complete benchmark/verifier suite",
+      "command": [
+        "python3.13",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "outcome": "passed (54 tests)",
+      "published_log": "card815-verifier-followup-logs/benchmark-tests-final.log",
+      "sha256": "186838faea0a6d61f9f5d3f5428911f6830be52dc9c1305652be3a518f5f2f92"
+    },
+    {
+      "name": "CI logic",
+      "command": [
+        "python3.13",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "ci"
+      ],
+      "outcome": "passed (20 tests)",
+      "published_log": "card815-verifier-followup-logs/ci-tests.log",
+      "sha256": "436f29bbfc30ab44013f8fa1403a803c62bbf536a6d4e8a5119a17e1176d4a76"
+    },
+    {
+      "name": "CI structure",
+      "command": [
+        "python3.13",
+        "ci/check_jobs.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/ci-jobs.yml"
+      ],
+      "outcome": "passed",
+      "published_log": "card815-verifier-followup-logs/ci-structure.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "outcome": "passed",
+      "published_log": "card815-verifier-followup-logs/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "Clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "outcome": "passed",
+      "published_log": "card815-verifier-followup-logs/clippy.log",
+      "sha256": "ee47c746ad856d9fb56b60e4972a8b6fe4b238ae39d8e7a900fb8752853343c5"
+    },
+    {
+      "name": "full locked Cargo",
+      "command": [
+        "cargo",
+        "test",
+        "--locked"
+      ],
+      "outcome": "passed (1043 passed, 0 failed, 5 existing ignored)",
+      "published_log": "card815-verifier-followup-logs/cargo-test.log",
+      "sha256": "af567c039b81d466de3295b49e70f06834cff72f2ce8c203d22b0610965dc9a9"
+    }
+  ],
+  "all_followup_logs": {
+    "fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ci-structure.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cargo-test.log": "af567c039b81d466de3295b49e70f06834cff72f2ce8c203d22b0610965dc9a9",
+    "green-cross-bundle.log": "d4b5d5cab246849e5624329f6c2d57e1388cf247a839cc74018468be8431addd",
+    "ci-tests.log": "436f29bbfc30ab44013f8fa1403a803c62bbf536a6d4e8a5119a17e1176d4a76",
+    "benchmark-tests-final.log": "186838faea0a6d61f9f5d3f5428911f6830be52dc9c1305652be3a518f5f2f92",
+    "benchmark-tests.log": "1d23a50ea9e558059339c3e85bc79cee060d6c1bf7486ddc83c17f98726c352e",
+    "green-initial.log": "528c8e5b9fa9d7e2c6b9242c08daecfaef14aca4e59cd513eec4cc88be6f91cf",
+    "red-tests.log": "6a16956737ac4b3614360f49c179ee88b91221bafcf533ca9e57d55d0290016a",
+    "clippy.log": "ee47c746ad856d9fb56b60e4972a8b6fe4b238ae39d8e7a900fb8752853343c5"
+  },
+  "preservation_audit": {
+    "measured_author_head": "83d06f3905e4ce296e924658481d4777ea096aa7",
+    "unchanged_original_evidence_files": [
+      "docs/benchmarks/card815-code.json",
+      "docs/benchmarks/card815-code/float_access-baseline.s",
+      "docs/benchmarks/card815-code/float_access-candidate.s",
+      "docs/benchmarks/card815-code/int_access-baseline.s",
+      "docs/benchmarks/card815-code/int_access-candidate.s",
+      "docs/benchmarks/card815-code/sorting-baseline.s",
+      "docs/benchmarks/card815-code/sorting-candidate.s",
+      "docs/benchmarks/card815-code/strings-baseline.s",
+      "docs/benchmarks/card815-code/strings-candidate.s",
+      "docs/benchmarks/card815-logs/baseline-build.log",
+      "docs/benchmarks/card815-logs/baseline-prepare.log",
+      "docs/benchmarks/card815-logs/bench-tests-final.log",
+      "docs/benchmarks/card815-logs/bench-tests.log",
+      "docs/benchmarks/card815-logs/candidate-build-final.log",
+      "docs/benchmarks/card815-logs/candidate-build-tested.log",
+      "docs/benchmarks/card815-logs/candidate-build.log",
+      "docs/benchmarks/card815-logs/candidate-prepare-tested.log",
+      "docs/benchmarks/card815-logs/candidate-prepare.log",
+      "docs/benchmarks/card815-logs/cargo-test.log",
+      "docs/benchmarks/card815-logs/ci-structure-final.log",
+      "docs/benchmarks/card815-logs/ci-structure.log",
+      "docs/benchmarks/card815-logs/ci-tests-final.log",
+      "docs/benchmarks/card815-logs/ci-tests.log",
+      "docs/benchmarks/card815-logs/clippy.log",
+      "docs/benchmarks/card815-logs/codegen-test-final.log",
+      "docs/benchmarks/card815-logs/codegen-test.log",
+      "docs/benchmarks/card815-logs/fmt.log",
+      "docs/benchmarks/card815-logs/miri-workspace-cache.log",
+      "docs/benchmarks/card815-logs/miri.log",
+      "docs/benchmarks/card815-logs/nightly-install.log",
+      "docs/benchmarks/card815-logs/pair24.log",
+      "docs/benchmarks/card815-logs/pair42.log",
+      "docs/benchmarks/card815-logs/path-control-final.log",
+      "docs/benchmarks/card815-logs/path-control.log",
+      "docs/benchmarks/card815-logs/probes.log",
+      "docs/benchmarks/card815-logs/release-affected.log",
+      "docs/benchmarks/card815-logs/release-corpus.log",
+      "docs/benchmarks/card815-logs/release.log",
+      "docs/benchmarks/card815-logs/tsan-build.log",
+      "docs/benchmarks/card815-logs/tsan-native.log",
+      "docs/benchmarks/card815-logs/tsan.log",
+      "docs/benchmarks/card815-pair24.json",
+      "docs/benchmarks/card815-pair42.json",
+      "docs/benchmarks/card815-path-control.json",
+      "docs/benchmarks/card815-preliminary-preparation.json",
+      "docs/benchmarks/card815-probes.json",
+      "docs/benchmarks/card815-validation.json"
+    ],
+    "unchanged_original_evidence_count": 47,
+    "unchanged_candidate_source_inputs": 126,
+    "measured_release_artifacts_still_match": true,
+    "original_report_results_profiles_and_validation_sections_unchanged": true
+  },
+  "not_rerun": [
+    "ordinary benchmark measurements",
+    "profile/count collection",
+    "release compiler/runtime build and release corpus",
+    "Miri",
+    "ThreadSanitizer"
+  ],
+  "never_run_locally": [
+    "Valgrind",
+    "non-Linux native platforms"
+  ],
+  "environment": {
+    "rust": "1.97.0",
+    "python": "CPython3.13.5",
+    "PYTHON": "/usr/bin/python3.13",
+    "permissions": "workspace-write; unchanged"
+  },
+  "publication": "New exact head/tree recorded in PR136 correction comment and Mill Board; independent re-review and fresh hosted CI required."
+}

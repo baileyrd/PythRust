@@ -50,12 +50,18 @@ def collect(work,output):
     verify(record);b.save(output,record)
 
 
-def verify(data):
+def verify(data, canonical=None):
+    c.verify_prepared(data['prepared'],c.canonical_prepared() if canonical is None else canonical)
+    c.valid_identity(data['harness'])
+    if data['harness']!=c.frozen()['path_harness']:raise ValueError('unmatched path-control harness')
     if data['status']!='complete' or set(data['cases'])!=set(NAMES) or data['runs']!=42 or data['seed']!=81500 or data['warmups']!=2:raise ValueError('incomplete path control')
     for name,row in data['cases'].items():
-        if row['source']['sha256']!=b.digest(c.sources()[name].encode()):raise ValueError('path input')
+        c.valid_identity(row['source'])
+        if row['source']['sha256']!=c.frozen()['workloads'][name]['sha256']:raise ValueError('path input')
         if set(row['conditions'])!=set(c.LABELS):raise ValueError('path conditions')
         for label,item in row['conditions'].items():
+            c.valid_identity(item['binary'])
+            c.valid_identity(data['post_binaries'][name][label])
             if item['build_command']!=[data['prepared'][label]['compiler']['path'],'build',row['source']['path']]:raise ValueError('path build')
             if item['command']!=[item['binary']['path']] or item['binary']!=data['post_binaries'][name][label]:raise ValueError('path execution/identity')
         a=row['conditions']['baseline']['binary']['sha256'];d=row['conditions']['candidate']['binary']['sha256']
@@ -68,13 +74,15 @@ def verify(data):
         else:
             candidate=data['cases']['strings']['conditions']['candidate']['binary']['sha256']
             for label,item in row['conditions'].items():
+                c.valid_identity(item['binary'])
+                c.valid_identity(data['self_post'][label])
                 if item['binary']['sha256']!=candidate or item['binary']!=data['self_post'][label]:raise ValueError('not identical-byte self control')
                 if item['command']!=[item['binary']['path']]:raise ValueError('self execution')
         if row['order']!=b.order(c.LABELS,42,81500):raise ValueError('unbalanced diagnostic')
         if [(s['round'],s['kind']) for s in row['samples']]!=[(i,k) for i,seq in enumerate(row['order']) for k in seq]:raise ValueError('missing diagnostic trials')
         if [(s['kind'],s['warmup']) for s in row['warmup_samples']]!=[(k,i) for k in c.LABELS for i in range(2)]:raise ValueError('missing diagnostic warmups')
         for s in row['samples']+row['warmup_samples']:
-            if s['stdout']!=c.EXPECTED['strings'] or s['stderr'] or s['returncode']!=0:raise ValueError('diagnostic parity')
+            if s['stdout']!=c.frozen()['workloads']['strings']['expected'] or s['stderr'] or s['returncode']!=0:raise ValueError('diagnostic parity')
             b.stats([s['wall_seconds']])
             for key in ('user_seconds','system_seconds'):
                 if type(s[key]) not in (int,float) or not b.math.isfinite(s[key]) or s[key]<0:raise ValueError('diagnostic resources')

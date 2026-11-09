@@ -1,0 +1,11 @@
+test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) ... ok
+test_identical_path_control_rejects_relabelled_or_incomplete_data (test_int_list_campaign.CampaignEvidence.test_identical_path_control_rejects_relabelled_or_incomplete_data) ... ok
+test_matched_controls_and_monorphic_generic_inputs (test_int_list_campaign.CampaignEvidence.test_matched_controls_and_monorphic_generic_inputs) ... ok
+test_probes_reject_count_and_provenance_corruption (test_int_list_campaign.CampaignEvidence.test_probes_reject_count_and_provenance_corruption) ... ok
+test_saved_evidence_and_corruptions (test_int_list_campaign.CampaignEvidence.test_saved_evidence_and_corruptions) ... ok
+test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.473s
+
+OK

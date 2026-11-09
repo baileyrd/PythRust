@@ -211,7 +211,8 @@ has not approved, merged or marked the card Done.
 
 ## Reproduction
 
-Use the final harness from a fresh baseline worktree at the admission commit.
+The commands below describe the original collection protocol at measured author
+head `83d06f3905e4ce296e924658481d4777ea096aa7`, using a fresh baseline worktree at the admission commit.
 Activate the repository environment toolchain and build both packages together:
 
 ```sh
@@ -232,3 +233,59 @@ For the historical replay, preparation needs the final Python harness copied
 into the baseline checkout; the production source manifest must remain clean.
 No timings from these instructions are assumed until actually run. All retained
 binary/probe artifacts stay task-local and are excluded from publication.
+
+## Verifier-only independent-review follow-up
+
+The [consolidated review](https://github.com/baileyrd/PythRust/pull/136#issuecomment-6749365396)
+approved production safety at measured author head
+`83d06f3905e4ce296e924658481d4777ea096aa7`, but held merge for two P2 verifier
+false acceptances. The independent audit found the actual saved source identities
+and measurements consistent. This follow-up changes only evidence validation,
+mutation tests and documentation; it preserves production Rust, workload inputs,
+raw samples/profiles, preliminary diagnostics and original validation records.
+No timing or profiling campaign was restarted, and the existing tables and
+qualified control/shared-host/profile/unsupported-list claims remain unchanged.
+
+The [immutable source export](card815-source-manifest.json) inventories all 126
+production files for each condition, with SHA-256 and Git blob IDs derived from
+Git objects at admitted baseline `626a3487223bc48569b627541da5920a653508aa` and
+reviewed candidate `83d06f3905e4ce296e924658481d4777ea096aa7`. Its complete-byte
+SHA-256 is pinned in the verifier. The export also freezes the measured tools,
+compiler/runtime/harness identities and workload text/oracles. Missing/added inputs,
+valid-looking wrong source digests and incomplete tool inventories now reject.
+Historical validation reads this campaign export and archived evidence, rather
+than whichever production/workload files a future checkout contains.
+
+Supporting probes require complete object/binary/profile/gmon/wrapper/tool identity
+records and the exact counting/profiling commands, including every required wrap
+and `-pg -no-pie`. The supplied wrapper source must match the historical command
+template; recomputing a hash after removing flags no longer suffices. The new
+`int_list_evidence.py` checks both primary preparations agree and cross-binds
+probe/path preparations, generated-code binaries/commands and final-build hashes
+to that canonical measured preparation. It also checks the original published
+logs and selected disassembly bytes. Existing CI's `test_int_list_campaign.py`
+step exercises the new mutations and cross-bundle checks.
+
+Ten false acceptances were first reproduced in red mutation tests. Expanded
+regressions cover symmetric input removal/addition, missing/malformed tools, wrong
+source/compiler/runtime identities, absent/empty probe digests, recomputed wrappers
+without required flags/wraps, supporting-bundle substitutions and final-build/code
+linkage. A test verifies the complete historical bundle with an empty future
+production root and rejects a modified export. The current verifier is deliberately
+a validator of this frozen campaign; fresh measurements would need their own
+manifest and must not overwrite these records. Validate the saved bundle with:
+
+```sh
+python3.13 bench/int_list_evidence.py
+```
+
+[Follow-up validation](card815-verifier-followup.json) and its separate logs retain
+the red/green outcomes. Formatting, warnings-denied locked Clippy, the full locked
+CPython 3.13 Cargo suite (1043 passed, zero failed, five existing ignored), all 54
+benchmark/verifier tests, 20 CI logic tests and CI structure checks passed again.
+Release builds/corpus, Miri, TSan, long ordinary timings and profile collection were
+not rerun for this verifier-only correction; their original results and artifacts
+are preserved. The exact new published head/tree and fresh hosted-CI status are
+recorded in the PR correction comment and Mill Board #815. Independent re-review
+and all required checks on that new head remain mandatory; no author approval,
+merge or Done transition is implied.

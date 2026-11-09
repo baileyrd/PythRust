@@ -8,6 +8,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sys
@@ -41,6 +42,71 @@ def sources():
 main()
 ''').replace('def access(', 'def read(').replace('        xs[k] = '+('7' if ty == 'int' else '7.0')+'\n', '')
     return result
+
+
+# Historical acceptance uses this immutable Git-object export, never future
+# production/workload files or whichever checkout happens to run the tests.
+SOURCE_MANIFEST_SHA256 = 'd30b154127688a98e405445f862da626e6a65a71e32db63169790da75bf40221'
+REVIEWED = '83d06f3905e4ce296e924658481d4777ea096aa7'
+
+
+def evidence_root():
+    return Path(__file__).resolve().parents[1]/'docs/benchmarks'
+
+
+def frozen():
+    raw=(evidence_root()/'card815-source-manifest.json').read_bytes()
+    if b.digest(raw)!=SOURCE_MANIFEST_SHA256:
+        raise ValueError('changed #815 source export')
+    return json.loads(raw)
+
+
+def valid_identity(item):
+    if not isinstance(item,dict) or set(item)!={'path','sha256'}:
+        raise ValueError('incomplete identity')
+    if not isinstance(item['path'],str) or not item['path'].startswith('/'):
+        raise ValueError('invalid identity path')
+    if not isinstance(item['sha256'],str) or not re.fullmatch('[0-9a-f]{64}',item['sha256']):
+        raise ValueError('invalid identity digest')
+
+
+def valid_tools(tools, names):
+    if not isinstance(tools,dict) or set(tools)!=set(names):
+        raise ValueError('incomplete tool inventory')
+    for tool in tools.values():
+        if not isinstance(tool,dict) or set(tool)!={'identity','version'}:
+            raise ValueError('incomplete tool record')
+        valid_identity(tool['identity'])
+        if not isinstance(tool['version'],str) or not tool['version'].strip():
+            raise ValueError('missing tool version')
+
+
+def canonical_prepared():
+    return json.loads((evidence_root()/'card815-pair24.json').read_text())['prepared']
+
+
+def verify_prepared(prepared, canonical=None):
+    export=frozen()
+    if set(prepared)!=set(LABELS):raise ValueError('preparation conditions')
+    for label,p in prepared.items():
+        source=export['versions'][label]
+        if p['source']['head']!=BASE or p['source']['tree']!=export['versions']['baseline']['tree']:
+            raise ValueError('wrong admitted source checkpoint')
+        if p['source']['build_inputs']!=source['inputs']:
+            raise ValueError('incomplete or mismatched production source inventory')
+        valid_tools(p['tools'],('cargo','rustc','cc','ld'))
+        if p['tools']!=export['tools'][label]:raise ValueError('unmatched measured tools')
+        for key in ('compiler','runtime','harness'):
+            valid_identity(p[key])
+            if p[key]!=export['artifacts'][label][key]:raise ValueError('unmatched measured '+key)
+        if set(p['cases'])!=set(export['workloads']):raise ValueError('preparation case inventory')
+        for name,row in p['cases'].items():
+            valid_identity(row['source_identity'])
+            valid_identity(row['binary'])
+            if row['source']!=export['workloads'][name]['source'] or row['source_identity']['sha256']!=export['workloads'][name]['sha256']:
+                raise ValueError('unmatched frozen workload')
+    if canonical is not None and prepared!=canonical:
+        raise ValueError('preparation differs from canonical primary campaign')
 
 
 def quiet():
@@ -141,9 +207,11 @@ def measure(work, output, runs, seed):
 
 
 def verify(data):
+    verify_prepared(data['prepared'])
+    workloads=frozen()['workloads']
     if data['schema']!=1 or data['status']!='complete' or data['runs']<24 or data['warmups']!=2:
         raise ValueError('incomplete campaign')
-    if set(data['prepared'])!=set(LABELS) or set(data['cases'])!=set(sources()):
+    if set(data['prepared'])!=set(LABELS) or set(data['cases'])!=set(workloads):
         raise ValueError('wrong cases/conditions')
     if data['before']!=data['after']: raise ValueError('changed timing identities')
     for label,p in data['prepared'].items():
@@ -156,18 +224,19 @@ def verify(data):
         if b.digest(p['build_log_text'].encode())!=p['build_log']['sha256'] or 'Finished `release`' not in p['build_log_text']:
             raise ValueError('missing release build log')
         for key in ('compiler','runtime','harness'):
-            v.hash_record(p[key])
+            valid_identity(p[key])
             if p[key]!=data['before'][label][key]: raise ValueError('unlinked '+key)
-        for name,source in sources().items():
+        for name,fixed in workloads.items():
+            source=fixed['source']
             c=p['cases'][name]
-            for key in ('binary','source_identity','build_output'): v.hash_record(c[key])
+            for key in ('binary','source_identity','build_output'): valid_identity(c[key])
             if c['source']!=source or c['source_identity']['sha256']!=b.digest(source.encode()): raise ValueError('changed input')
             if c['command']!=[c['binary']['path']]: raise ValueError('execution identity/arguments')
             if c['build_command']!=[p['compiler']['path'],'build',c['source_identity']['path']]: raise ValueError('build identity')
             if c['build_output']['path']!=str(Path(c['source_identity']['path']).with_suffix('')) or c['build_output']['sha256']!=c['binary']['sha256']:
                 raise ValueError('source/build/output linkage')
             if any(c[k]!=data['before'][label]['cases'][name][k] for k in ('binary','source_identity')): raise ValueError('unlinked case')
-            if c['expected']!=EXPECTED[name]: raise ValueError('oracle differs')
+            if c['expected']!=fixed['expected']: raise ValueError('oracle differs')
             if c['interpreter']['oracle']!=c['interpreter']['result']: raise ValueError('interpreter parity')
         for name,r in p['refused'].items():
             if name not in ('mixed','dyn') or r['returncode']!=1 or r['stdout'] or not r['stderr']:
@@ -185,7 +254,7 @@ def verify(data):
     for p in (left,right):
         if not p['host']['files'] or not p['host']['load']: raise ValueError('missing host evidence')
         for tool in p['tools'].values():
-            v.hash_record(tool['identity'])
+            valid_identity(tool['identity'])
             if not tool['version']: raise ValueError('missing tool version')
     for ordinal,(name,row) in enumerate(data['cases'].items()):
         if row['order']!=b.order(LABELS,data['runs'],data['seed']+ordinal): raise ValueError('unbalanced order')
