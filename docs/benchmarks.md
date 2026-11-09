@@ -335,3 +335,15 @@ measure current main after PR133. The four original algorithms show PythRust
 faster than CPython and optimized handwritten Rust faster than PythRust on this
 host; checked-arithmetic, startup, optimizer and library differences are explicit.
 No universal ranking or production optimization is claimed.
+
+
+## Proven signed half and remainder #814
+
+[Fresh matched three-way baselines, paired experiment, profiles and ranked
+follow-ups](benchmarks/card814.md) retain a native specialization only for proven
+signed-i64 division/remainder by positive literal `2`. Independent 24/42-round
+pairs reduce numeric time about 49–50% and sorting 4–5%; string/tuple controls and
+the observed small string shift are qualified by byte-identical same-path controls.
+The final numeric gap to ordinary handwritten Rust is 1.86× on this host. No
+production helper inliner, list or string change is included; required independent
+review and hosted CI remain gates.

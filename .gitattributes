@@ -1,3 +1,6 @@
 # Goldens compare byte for byte and sources are lexed as written, so
 # keep LF endings on every platform, Windows checkouts included.
 * text=auto eol=lf
+
+# Preserve raw disassembly bytes, including objdump padding whitespace.
+docs/benchmarks/card814-code/*.s -whitespace

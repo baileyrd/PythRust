@@ -97,7 +97,9 @@ def source_record():
     hashes = {p: digest((ROOT/p).read_bytes()) for p in names}
     return dict(head=run(['git','rev-parse','HEAD']).stdout.decode().strip(),
                 tree=run(['git','rev-parse','HEAD^{tree}']).stdout.decode().strip(),
-                tracked_diff=run(['git','diff','HEAD']).stdout.decode(), build_inputs=hashes)
+                tracked_diff=run(['git','diff','HEAD']).stdout.decode(), build_inputs=hashes,
+                index_diff=run(['git','diff','--cached']).stdout.decode(),
+                status=run(['git','status','--porcelain=v1','--untracked-files=all']).stdout.decode())
 
 
 def host():
@@ -126,13 +128,18 @@ def prepare(args):
     pin(args.cpu)
     args.work.mkdir()  # Never overwrite an existing prepared condition.
     env = dict(os.environ, PYTHRUST_RT=str(runtime))
-    record = dict(schema=1, status='preparing', timestamp=datetime.now(timezone.utc).isoformat(),
+    record = dict(schema=2, control_build_protocol=1, status='preparing', timestamp=datetime.now(timezone.utc).isoformat(),
                   source=source_record(), host=original_host, cpu=args.cpu,
                   compiler=identity(compiler), runtime=identity(runtime),
                   rustc=run([rustc,'-Vv']).stdout.decode(), cargo=run(['cargo','-V']).stdout.decode(),
                   cc=run(['cc','--version']).stdout.decode(), linker=run(['ld','--version']).stdout.decode(),
                   rust_flags=FLAGS, command=sys.argv, conditions={}, builds={}, sources={},
-                  harness=identity(Path(__file__).resolve()))
+                  harness=identity(Path(__file__).resolve()),
+                  environment={k:os.environ.get(k) for k in ('PATH','CARGO_TARGET_DIR','RUSTFLAGS',
+                      'CARGO_ENCODED_RUSTFLAGS','PYTHRUST_RT','PYTHRUST_RT_SRC','LD_PRELOAD',
+                      'LD_LIBRARY_PATH','PYTHONHASHSEED','PYTHONPATH','MALLOC_CONF','GLIBC_TUNABLES')},
+                  tools={k:identity(Path(shutil.which(k)).resolve()) for k in ('cargo','cc','ld')},
+                  rustc_identity=identity(rustc), domain=run([sys.executable,'-B',ROOT/'bench/check_three_way_domain.py']).stdout.decode())
     manifest = args.work/'prepared.json'
     try:
         for name, expected in EXPECTED.items():
@@ -153,11 +160,13 @@ def prepare(args):
                     start=time.perf_counter_ns(); run(cmd, env=env)
                     timings.append((time.perf_counter_ns()-start)/1e9)
                 record['builds'][name+'/'+kind] = dict(command=cmd, samples=timings, **stats(timings))
+            control_builds = {}
             conditions = dict(pythrust=[str(native)], cpython=[sys.executable,'-B',str(pyr)], rust=[str(rb)])
             if name != 'startup':
                 checked = args.work/(name+'-rust-checked')
                 flags=FLAGS.copy(); flags[flags.index('overflow-checks=off')]='overflow-checks=on'
-                run([rustc,*flags,rs,'-o',checked])
+                control_builds['rust_checked'] = [str(rustc), *flags, str(rs), '-o', str(checked)]
+                run(control_builds['rust_checked'])
                 conditions['rust_checked']=[str(checked)]
                 test = args.work/(name+'-rust-tests')
                 run([rustc,'--edition=2021','-O','-C','overflow-checks=on','--test',rs,'-o',test])
@@ -165,7 +174,8 @@ def prepare(args):
                 run([rustc,*FLAGS,'--emit=asm',rs,'-o',args.work/(name+'.s')])
             if name == 'strings':
                 mat=args.work/'strings-rust-materialized'
-                run([rustc,*FLAGS,'--cfg','materialize',rs,'-o',mat])
+                control_builds['rust_materialized'] = [str(rustc), *FLAGS, '--cfg', 'materialize', str(rs), '-o', str(mat)]
+                run(control_builds['rust_materialized'])
                 conditions['rust_materialized']=[str(mat)]
             for kind, cmd in conditions.items():
                 sample(cmd,expected,env=env)
@@ -179,6 +189,8 @@ def prepare(args):
                 record.setdefault('interpreter_checks',{})[name]=dict(source=small.read_text(),stdout=oracle.stdout.decode())
             record['conditions'][name] = {k:dict(command=v, executable=identity(Path(v[0]).resolve()))
                                           for k,v in conditions.items()}
+            for kind, command in control_builds.items():
+                record['conditions'][name][kind]['build_command'] = command
             record['status']='preparing'
             save(manifest,record)
         record['status']='prepared'
@@ -216,7 +228,7 @@ def measure(args):
         raise FileExistsError(args.output)
     check_identities(prepared)
     pin(prepared['cpu'])
-    result=dict(schema=1,status='running',timestamp=datetime.now(timezone.utc).isoformat(),
+    result=dict(schema=prepared['schema'],status='running',timestamp=datetime.now(timezone.utc).isoformat(),
                 prepared=prepared,command=sys.argv,runs=args.runs,seed=args.seed,warmups=2,cases={})
     env=dict(os.environ,PYTHRUST_RT=prepared['runtime']['path'])
     try:
@@ -227,10 +239,12 @@ def measure(args):
             if name=='strings': passes.append(('materialized',['rust','rust_materialized'],args.runs))
             for label,kinds,count in passes:
                 key=name+'/'+label
-                row=dict(order=order(kinds,count,args.seed+len(result['cases'])),samples=[],summary={})
+                row=dict(order=order(kinds,count,args.seed+len(result['cases'])),warmup_samples=[],samples=[],summary={})
                 result['cases'][key]=row
                 for kind in kinds:
-                    for _ in range(2): sample(cond[kind]['command'],expected,env=env)
+                    for warmup in range(2):
+                        row['warmup_samples'].append(dict(kind=kind,warmup=warmup,
+                            **sample(cond[kind]['command'],expected,env=env)))
                 for round_id, sequence in enumerate(row['order']):
                     for kind in sequence:
                         row['samples'].append(dict(round=round_id,kind=kind,
@@ -241,6 +255,7 @@ def measure(args):
                 print(key,row['summary'],flush=True)
         check_identities(prepared)
         result['status']='complete'; result['end_load']=os.getloadavg()
+        result['post_identities']={k:identity(Path(prepared[k]['path'])) for k in ('compiler','runtime','harness')}
     except BaseException as exc:
         result['status']='failed'; result['error']=repr(exc)
         raise
@@ -249,7 +264,7 @@ def measure(args):
 
 
 def verify(data):
-    if data['schema']!=1 or data['status']!='complete' or data['prepared']['status']!='prepared':
+    if data['schema'] not in (1,2) or data['status']!='complete' or data['prepared']['status']!='prepared':
         raise ValueError('incomplete bundle')
     expected_keys={name+'/primary' for name in EXPECTED}
     expected_keys.update(name+'/checked' for name in EXPECTED if name!='startup')

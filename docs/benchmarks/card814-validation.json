@@ -1,0 +1,393 @@
+{
+  "schema": 1,
+  "kind": "reconstructed-historical-validation",
+  "scope": "Historical saved commands and logs only; not validation after verifier corrections.",
+  "limitations": [
+    "Original unsaved aggregate is not recovered; this is a new reconstruction.",
+    "Saved return codes checked against log results; commands were not re-executed by reconstruction."
+  ],
+  "log_count": 20,
+  "groups": [
+    {
+      "record": "evidence/card814-validation/checks.json",
+      "sha256": "a7f3d2bfeb5519d012191dff5fe85c094a6df6b8dd3e72c08a1e7e394d5d1e3a",
+      "checks": [
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--check"
+          ],
+          "returncode": 0,
+          "seconds": 0.49933743476867676,
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/0.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "retained_log": "evidence/card814-validation/0.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "returncode": 0,
+          "seconds": 20.347026109695435,
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/1.log",
+          "sha256": "2d936a4062c82691521b1e4812d05d54505b8465a6768cfb62a9e5aba7142436",
+          "retained_log": "evidence/card814-validation/1.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked"
+          ],
+          "returncode": 101,
+          "seconds": 2.4737982749938965,
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/2.log",
+          "sha256": "399ce4b2b1a6b235c393f97a2c4f51033191a8a4de419844691216dfdcb03001",
+          "retained_log": "evidence/card814-validation/2.log",
+          "log_status_verified": true
+        }
+      ]
+    },
+    {
+      "record": "evidence/card814-validation/complete-checks.json",
+      "sha256": "1e072bc20f7ec1698269b702ab1e55ad38dc6a2ad06fef17e37027444149342c",
+      "checks": [
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all"
+          ],
+          "returncode": 0,
+          "seconds": 0.4616658687591553,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/complete-0.log",
+          "summaries": [],
+          "retained_log": "evidence/card814-validation/complete-0.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--check"
+          ],
+          "returncode": 0,
+          "seconds": 0.505049467086792,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/complete-1.log",
+          "summaries": [],
+          "retained_log": "evidence/card814-validation/complete-1.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "returncode": 0,
+          "seconds": 2.097736358642578,
+          "sha256": "7f0b247cc02ea2c9cea205eca59711f155c51ba044d5e36cb89f055f3c3c603b",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/complete-2.log",
+          "summaries": [],
+          "retained_log": "evidence/card814-validation/complete-2.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked"
+          ],
+          "returncode": 0,
+          "seconds": 100.31301522254944,
+          "sha256": "e2c43e65b95607b7c3d2648a5fc9bb3610a824b1dac61af7f7c9059b164b2fa1",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/complete-3.log",
+          "summaries": [
+            "test result: ok. 759 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.60s",
+            "test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s",
+            "test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.18s",
+            "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s",
+            "test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 51.39s",
+            "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s",
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s",
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s",
+            "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s",
+            "test result: ok. 118 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.74s",
+            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+          ],
+          "retained_log": "evidence/card814-validation/complete-3.log",
+          "log_status_verified": true
+        }
+      ]
+    },
+    {
+      "record": "evidence/card814-validation/evidence-checks.json",
+      "sha256": "151af9d7b9e6d004a56290622197a4fe243975b4a238b8de9d8533a8803a1c5d",
+      "checks": [
+        {
+          "command": [
+            "python3.13",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "bench",
+            "-p",
+            "test_*.py",
+            "-v"
+          ],
+          "returncode": 0,
+          "seconds": 1.6438186168670654,
+          "sha256": "399bc487a02e2a246c8f56fbc8471e67df0e754e1a359d15bc284141a96887df",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/evidence-0.log",
+          "summary": [
+            "Ran 40 tests in 1.535s",
+            "OK"
+          ],
+          "retained_log": "evidence/card814-validation/evidence-0.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "python3.13",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "ci",
+            "-p",
+            "test_*.py",
+            "-v"
+          ],
+          "returncode": 0,
+          "seconds": 0.09962797164916992,
+          "sha256": "6fd9beb0d9cc16afca166257448cdd10bb216cbf3460dd91d6c37c22f4603d6b",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/evidence-1.log",
+          "summary": [
+            "Ran 20 tests in 0.031s",
+            "OK"
+          ],
+          "retained_log": "evidence/card814-validation/evidence-1.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "python3.13",
+            "ci/check_jobs.py"
+          ],
+          "returncode": 0,
+          "seconds": 0.03965950012207031,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/evidence-2.log",
+          "summary": [],
+          "retained_log": "evidence/card814-validation/evidence-2.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "returncode": 0,
+          "seconds": 0.00692296028137207,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/evidence-3.log",
+          "summary": [],
+          "retained_log": "evidence/card814-validation/evidence-3.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--check"
+          ],
+          "returncode": 0,
+          "seconds": 0.5300908088684082,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/evidence-4.log",
+          "summary": [],
+          "retained_log": "evidence/card814-validation/evidence-4.log",
+          "log_status_verified": true
+        }
+      ]
+    },
+    {
+      "record": "evidence/card814-validation/final-checks.json",
+      "sha256": "851135bd83f196ed64edd8a45375b84491afd772f3f224d524f913997311ca4f",
+      "checks": [
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--check"
+          ],
+          "returncode": 0,
+          "seconds": 0.4961702823638916,
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/final-0.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "retained_log": "evidence/card814-validation/final-0.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "returncode": 0,
+          "seconds": 1.9953513145446777,
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/final-1.log",
+          "sha256": "16644a01f1109166a9f289b2d603753becffa8a06e391b72991075069d05110d",
+          "retained_log": "evidence/card814-validation/final-1.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked"
+          ],
+          "returncode": 0,
+          "seconds": 102.70457053184509,
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/final-2.log",
+          "sha256": "6efffa17a94ef62513d8536619f3da3870d43aec55569b771f1b5a6a8a64a290",
+          "retained_log": "evidence/card814-validation/final-2.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "build",
+            "--offline",
+            "--locked",
+            "--release",
+            "-p",
+            "pythrust-compiler",
+            "-p",
+            "pythrust-rt"
+          ],
+          "returncode": 0,
+          "seconds": 12.583236694335938,
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/final-3.log",
+          "sha256": "d8168853a4ab7c3780b0865b2de6ca00b1a0159a403461f0a72f9ddd0b551aee",
+          "retained_log": "evidence/card814-validation/final-3.log",
+          "log_status_verified": true
+        }
+      ]
+    },
+    {
+      "record": "evidence/card814-validation/release-checks.json",
+      "sha256": "9d5e22294d4b69cd9ccbdac9cc6bcf491853c0e68bfd23066a4a5974a629a0f9",
+      "checks": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--test",
+            "conformance",
+            "corpus_matches_native"
+          ],
+          "returncode": 0,
+          "seconds": 13.8231782913208,
+          "sha256": "b1091b769a0664ea766193968de080f87d755a7e859a61446e2f9b19105f6fb9",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/release-0.log",
+          "retained_log": "evidence/card814-validation/release-0.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--test",
+            "expression_limits",
+            "--test",
+            "scalar_pair",
+            "--test",
+            "string_chain",
+            "--test",
+            "signed_half"
+          ],
+          "returncode": 0,
+          "seconds": 2.7542073726654053,
+          "sha256": "5f01ffe14ba321a385d62fdbdbb3bb253f36c42bc9a63b73aab689506c939d7b",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/release-1.log",
+          "retained_log": "evidence/card814-validation/release-1.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "python3.13",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "ci",
+            "-p",
+            "test_*.py",
+            "-v"
+          ],
+          "returncode": 0,
+          "seconds": 0.08266067504882812,
+          "sha256": "3b17b544bd7873b6fd51f7cf8a1a63d61d689fcee7ada37a06332e0c7038cca7",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/release-2.log",
+          "retained_log": "evidence/card814-validation/release-2.log",
+          "log_status_verified": true
+        },
+        {
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "returncode": 0,
+          "seconds": 0.005346775054931641,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "log": "/workspace/scratch/2ce9dd46a989/card814-validation/release-3.log",
+          "retained_log": "evidence/card814-validation/release-3.log",
+          "log_status_verified": true
+        }
+      ]
+    }
+  ]
+}

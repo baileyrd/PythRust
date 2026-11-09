@@ -125,3 +125,15 @@ Estimates (gut, not a plan): M0 to M3 a few weeks; M4 about a month; M5 several 
 4. Report back with: what merged, what diverged from the grammar, and any decision you need from Nano.
 
 Design decisions and rationale are also in the remind-me memory store, tagged `language-design` and `pythrust`.
+
+
+## Signed half campaign #814
+
+[Fresh evidence](benchmarks/card814.md) supports a bounded native signed-i64
+positive-literal-2 shift/mask experiment, preserving generic/fault paths and Python
+negative/boundary behavior. Full local checks pass; independent exact-head review
+and required CI remain pending. Repeated numeric gains are about 49–50%, sorting
+4–5%; string-control limits and identical-byte checks are recorded. #815/#817
+remain separate evidence-ordered follow-ups, and #816 retains a distinct residual
+helper lead supported by an explicitly nonproduction source-inline diagnostic.
+This does not restore rejected #810 accessors or reopen #396/PR119, D29 C or #563.
