@@ -18,7 +18,7 @@
 //! `RecursionError`, as in `run`, rather than a native stack overflow.
 //! Both are per thread, so tasks (M6c) each count from zero.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
@@ -32,6 +32,7 @@ use cranelift_module::{
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 mod concat;
+mod constarg;
 mod exc;
 mod num;
 mod opt;
@@ -66,12 +67,40 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
     cg.rets = program.funcs.iter().map(|f| f.ret).collect();
     let plans = pair::plans(program);
     cg.declare_pairs(program, &plans)?;
+    cg.declare_clones(program, constarg::plan(program, &plans))?;
     cg.declare_thunks(program)?;
     for (i, (func, id)) in program.funcs.iter().zip(&ids).enumerate() {
-        cg.define(func, *id, &ids, &program.types, &plans[i], false)?;
+        let what = |scalar_return, bound| Ctx {
+            func,
+            ids: &ids,
+            types: &program.types,
+            plan: &plans[i],
+            scalar_return,
+            bound,
+        };
+        cg.define(*id, what(false, None))?;
         if let Some(clone) = cg.pairs.get(&ir::FuncId(i)).copied() {
-            cg.define(func, clone, &ids, &program.types, &plans[i], true)?;
+            cg.define(clone, what(true, None))?;
         }
+    }
+    let clones: Vec<_> = cg.clones.iter().map(|(c, id)| (*c, *id)).collect();
+    for (c, id) in clones {
+        let (func, plan) = (&program.funcs[c.callee.0], &plans[c.callee.0]);
+        let param = func
+            .params
+            .get(c.arg)
+            .copied()
+            .ok_or_else(|| backend("clone of a missing parameter".into()))?;
+        let bound = Some((param, c.value));
+        let what = Ctx {
+            func,
+            ids: &ids,
+            types: &program.types,
+            plan,
+            scalar_return: c.scalar,
+            bound,
+        };
+        cg.define(id, what)?;
     }
     cg.define_thunks(program, &ids)?;
     cg.module
@@ -515,6 +544,8 @@ struct Codegen<'r> {
     rets: Vec<Ty>,
     /// Private scalar-return variants; ordinary ids and all ABIs stay boxed.
     pairs: HashMap<ir::FuncId, ClifFunc>,
+    /// Private constant-divisor clones (D69); calls only, never ABIs.
+    clones: BTreeMap<constarg::Clone, ClifFunc>,
     /// The thunk of each function a task runs ([`task`]).
     thunks: HashMap<ir::FuncId, ClifFunc>,
     /// The module values each such function's tasks may reach.
@@ -546,6 +577,7 @@ impl<'r> Codegen<'r> {
             globals: Vec::new(),
             rets: Vec::new(),
             pairs: HashMap::new(),
+            clones: BTreeMap::new(),
             thunks: HashMap::new(),
             reads: HashMap::new(),
         };
@@ -643,33 +675,14 @@ impl<'r> Codegen<'r> {
         Ok(entry)
     }
 
-    fn define(
-        &mut self,
-        func: &Func,
-        id: ClifFunc,
-        ids: &[ClifFunc],
-        types: &[Compound],
-        plan: &pair::Plan,
-        scalar_return: bool,
-    ) -> Result<()> {
+    fn define(&mut self, id: ClifFunc, what: Ctx<'_>) -> Result<()> {
         let mut ctx = Context::new();
-        ctx.func.signature = if scalar_return {
-            self.pair_signature(func)
+        ctx.func.signature = if what.scalar_return {
+            self.pair_signature(what.func)
         } else {
-            self.signature(func)
+            self.signature(what.func)
         };
-        FnGen::build(
-            self,
-            Ctx {
-                func,
-                ids,
-                types,
-                plan,
-                scalar_return,
-            },
-            &mut ctx,
-            &mut FunctionBuilderContext::new(),
-        )?;
+        FnGen::build(self, what, &mut ctx, &mut FunctionBuilderContext::new())?;
         self.module
             .define_function(id, &mut ctx)
             .map_err(module_err)
@@ -683,6 +696,9 @@ struct Ctx<'c> {
     types: &'c [Compound],
     plan: &'c pair::Plan,
     scalar_return: bool,
+    /// In a constant-divisor clone (D69): the parameter bound at entry
+    /// and its value; the caller's argument is ignored.
+    bound: Option<(LocalId, i64)>,
 }
 
 /// Translates one function.
@@ -713,6 +729,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             types,
             plan,
             scalar_return,
+            bound,
         }: Ctx<'c>,
         ctx: &'b mut Context,
         fctx: &'b mut FunctionBuilderContext,
@@ -735,6 +752,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         };
         for (i, var) in vars.iter().enumerate() {
             let v = match func.params.iter().position(|p| p.0 == i) {
+                Some(_) if bound.is_some_and(|(p, _)| p.0 == i) => {
+                    let value = bound.map_or(0, |(_, c)| c);
+                    b.ins().iconst(types::I64, value)
+                }
                 Some(k) => params[k],
                 None if func.locals[i] == Ty::Float => b.ins().f64const(0.0),
                 None => b.ins().iconst(cg.clif_ty(func.locals[i]), 0),
@@ -1261,6 +1282,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             .load(types::I8, MemFlagsData::trusted(), self.ctx, CTX_PENDING)
     }
 
+    /// A planned constant-divisor clone of `callee` for these arguments.
+    fn clone_target(&self, callee: ir::FuncId, args: &[Operand], scalar: bool) -> Option<ClifFunc> {
+        constarg::target(&self.cg.clones, callee, args, scalar)
+    }
+
     /// Calls `callee`, failing at `span` if `MAX_DEPTH` calls are active.
     fn call(
         &mut self,
@@ -1270,12 +1296,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         span: Span,
     ) -> Result<Value> {
         let scalar = self.pair_vars.contains_key(&dest);
-        let id = if scalar {
-            self.cg.pairs.get(&callee)
-        } else {
-            self.ids.get(callee.0)
+        let id = match self.clone_target(callee, args, scalar) {
+            Some(clone) => Some(clone),
+            None if scalar => self.cg.pairs.get(&callee).copied(),
+            None => self.ids.get(callee.0).copied(),
         }
-        .copied()
         .ok_or_else(|| backend("call to an unknown function".to_string()))?;
         let fref = self.cg.module.declare_func_in_func(id, self.b.func);
         let args: Vec<Value> = std::iter::once(self.ctx)
@@ -1709,6 +1734,7 @@ mod tests {
                 types: &program.types,
                 plan: &pair::Plan::default(),
                 scalar_return: false,
+                bound: None,
             },
             &mut ctx,
             &mut FunctionBuilderContext::new(),
@@ -1738,6 +1764,7 @@ mod tests {
                 types: &program.types,
                 plan: &pair::Plan::default(),
                 scalar_return: false,
+                bound: None,
             },
             &mut ctx,
             &mut FunctionBuilderContext::new(),
@@ -1802,6 +1829,57 @@ mod tests {
                 let clif = arithmetic_clif(&format!("n {op} {divisor}"));
                 assert!(clif.contains("srem"), "{clif}");
                 assert_eq!(clif.contains("sdiv"), op == "//", "{clif}");
+            }
+        }
+    }
+
+    /// Optimized machine code of `f(n, d)` returning `body`, with `d`
+    /// bound to `divisor` as a constant-divisor clone would (D69).
+    fn machine_code(body: &str, divisor: Option<i64>) -> String {
+        let src = format!("def f(n: int, d: int) -> int:\n    return {body}\nprint(f(-7, 3))\n");
+        let module = parser::parse(&lexer::lex(&src).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = crate::rc::elide(lower::lower(&module, &types).expect("lower"));
+        let render = |d: &Diagnostic| d.message.clone();
+        let mut cg = Codegen::new(&render).expect("codegen");
+        cg.declare_globals(&program.globals).expect("globals");
+        let ids = cg.declare(&program).expect("declare");
+        cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+        let func = program.funcs.iter().find(|f| f.name == "f").expect("f");
+        let mut ctx = Context::new();
+        ctx.func.signature = cg.signature(func);
+        ctx.set_disasm(true);
+        FnGen::build(
+            &mut cg,
+            Ctx {
+                func,
+                ids: &ids,
+                types: &program.types,
+                plan: &pair::Plan::default(),
+                scalar_return: false,
+                bound: divisor.map(|c| (func.params[1], c)),
+            },
+            &mut ctx,
+            &mut FunctionBuilderContext::new(),
+        )
+        .expect("build CLIF");
+        let isa = cg.module.isa();
+        ctx.compile(isa, &mut Default::default()).expect("compile");
+        ctx.compiled_code()
+            .and_then(|c| c.vcode.clone())
+            .expect("disassembly")
+    }
+
+    #[test]
+    fn a_bound_literal_divisor_needs_no_hardware_division() {
+        // x86-64 `idiv` or its checked `srem` sequence, AArch64 `sdiv`.
+        let divides = |code: &str| ["idiv", "sdiv", "srem"].iter().any(|i| code.contains(i));
+        for body in ["n // d", "n % d", "(n // d) + (n % d)"] {
+            let code = machine_code(body, None);
+            assert!(divides(&code), "{body}:\n{code}");
+            for c in [10, 3, 7, -10, i64::MAX, i64::MIN] {
+                let code = machine_code(body, Some(c));
+                assert!(!divides(&code), "{body} by {c}:\n{code}");
             }
         }
     }

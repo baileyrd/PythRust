@@ -16,6 +16,8 @@ import profile_workloads as p
 import verify_three_way as verifier
 
 NAMES = tuple(b.EXPECTED)
+# The production build inputs #814's candidate changed; later cards name their own.
+DELTA_814 = ('crates/pythrust-compiler/src/codegen/mod.rs', 'crates/pythrust-compiler/tests/conformance.rs')
 
 
 def identities(prepared):
@@ -68,7 +70,7 @@ def pair(args):
     result = dict(schema=1, status='running', timestamp=datetime.now(timezone.utc).isoformat(),
                   command=sys.argv, harness=b.identity(Path(__file__)), prepared=prepared,
                   identities_before=before, host=b.host(), runs=args.runs, seed=args.seed,
-                  warmups=2, cases={})
+                  warmups=2, expected_delta=sorted(args.delta or DELTA_814), cases={})
     try:
         for ordinal, (name, expected) in enumerate(b.EXPECTED.items()):
             row = dict(order=b.order(['baseline','candidate'], args.runs, args.seed+ordinal),
@@ -125,9 +127,11 @@ def verify_pair(data):
     if first['compiler']==second['compiler']: raise ValueError('self comparison')
     if first['cpu']!=second['cpu']: raise ValueError('different CPU')
     left=first['source']['build_inputs'];right=second['source']['build_inputs']
-    if set(left) != set(right): raise ValueError('added/deleted production build input')
+    expected=set(data.get('expected_delta', DELTA_814))
+    if set(left) - set(right) or (set(right) - set(left)) - expected:
+        raise ValueError('added/deleted production build input')
     changed={k for k in left.keys() | right.keys() if left.get(k)!=right.get(k)}
-    if changed != {'crates/pythrust-compiler/src/codegen/mod.rs', 'crates/pythrust-compiler/tests/conformance.rs'}: raise ValueError('unexpected production delta')
+    if changed != expected: raise ValueError('unexpected production delta')
     for ordinal,(name,row) in enumerate(data['cases'].items()):
         if row['order']!=b.order(['baseline','candidate'],data['runs'],data['seed']+ordinal):
             raise ValueError('unreproducible order')
@@ -197,6 +201,7 @@ def main():
     ap.add_argument('--output',type=Path)
     ap.add_argument('--runs',type=int,default=24)
     ap.add_argument('--seed',type=int,default=814)
+    ap.add_argument('--delta',action='append',help='a build input the candidate may change (repeat); default #814')
     args=ap.parse_args()
     if args.action=='verify': print('Verified paired cases:',verify_pair(json.loads(args.output.read_text())));return
     if sys.version_info[:2]!=(3,13): ap.error('CPython 3.13 required')
