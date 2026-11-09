@@ -45,6 +45,7 @@ jobs:
           python -m unittest discover -s bench -p test_three_way.py -v
           python -m unittest discover -s bench -p test_division_campaign.py -v
           python -m unittest discover -s bench -p test_int_list_campaign.py -v
+          python -m unittest discover -s bench -p test_string_copy_campaign.py -v
       # The shipped toolchain: a release `pythrust` links the release
       # runtime, whose optimized code reads narrow arguments differently
       # from the debug runtime the tests above link.
@@ -53,6 +54,7 @@ jobs:
         run: |
           cargo test --locked --test conformance corpus_matches_native
           cargo test --locked --test expression_limits
+          cargo test --locked --test const_divisor
         env:
           PYTHRUST_BIN: ${{ github.workspace }}/target/release/pythrust${{ runner.os == 'Windows' && '.exe' || '' }}
 

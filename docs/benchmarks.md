@@ -358,3 +358,11 @@ The report investigates small string shifts with same-path and identical-byte
 controls, separates profiles/counts, and records parity/release/Miri/TSan checks.
 This supports independent review, not merge/Done; the rejected #810 shared
 accessor and parked D29 C remain rejected/parked.
+
+## Constant-divisor call-site clones #816
+
+[Paired measurements against main, attribution with and without D63, generated
+code and size](benchmarks/card816.md) for a private clone that binds a literal
+divisor argument (D69). Only the tuple workload has an eligible call; the other
+workloads' generated code is instruction-identical and serves as noise controls.
+Results are reported as tables there.

@@ -427,6 +427,7 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 /// Programs the native backend must compile; it grows with the subset.
 const NATIVE: &[&str] = &[
     "signed_half",
+    "const_divisor",
     "flat_expression_order",
     "flat_expression_overflow",
     "aliasing_join_disjoint",

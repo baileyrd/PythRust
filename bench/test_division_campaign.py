@@ -49,6 +49,20 @@ class CampaignTests(unittest.TestCase):
             lambda d:d['cases']['numeric/primary']['warmup_samples'][0].update(returncode=-6),
         ],v.verify_baseline)
 
+    def test_declared_delta_must_match_the_changed_inputs_exactly(self):
+        pair=load('pair')
+        declared=copy.deepcopy(pair);declared['expected_delta']=list(c.DELTA_814)
+        self.assertEqual(c.verify_pair(declared),5)
+        added=copy.deepcopy(declared)
+        added['prepared']['candidate']['source']['build_inputs']['crates/new.rs']='0'*64
+        self.reject(declared,[
+            lambda d:d.update(expected_delta=[c.DELTA_814[0]]),
+            lambda d:d.update(expected_delta=list(c.DELTA_814)+['crates/other.rs']),
+        ],c.verify_pair)
+        with self.assertRaises(ValueError): c.verify_pair(added)
+        added['expected_delta']=list(c.DELTA_814)+['crates/new.rs']
+        self.assertEqual(c.verify_pair(added),5)
+
     def test_pair_resources_seed_identity_fallback_and_statistics(self):
         self.reject(load('pair'),[
             lambda d:d.update(seed=0),
