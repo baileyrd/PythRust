@@ -107,6 +107,18 @@ multiple return/exception paths, cleanup and boundary values. Linux's focused
 have no counter. [Measured evidence](benchmarks.md#internal-two-int-returnunpack-806)
 includes both allocation elimination and retained fallbacks.
 
+#816 adds bounded constant-divisor call-site clones (`codegen/constarg.rs`, D69).
+A direct call that passes an int literal other than 0 and -1 to an `int`
+parameter its callee never redefines and uses as an int `//` or `%` divisor may
+target a private clone whose entry binds that parameter to the literal, in the
+D63 pair variant when the call site uses it. The call keeps its signature,
+arguments, active-call guard, spans, exception tests and cleanup; only the
+divisor becomes a constant Cranelift strength-reduces, and the zero-division
+and `MIN // -1` paths of other divisors are untouched. At most four clones per
+callee, of callees with at most 64 IR instructions; tasks and every ABI use the
+original. Corpus `const_divisor` and the `const_divisor` fatal-path test cover
+it; [measured evidence](benchmarks/card816.md).
+
 #807 adds a narrower string fast path (`codegen/concat.rs`, D64). It recognizes
 only two consecutive concat assignments in one lowered instruction sequence:
 `prefix = Concat(a,b); result = Concat(prefix,c)`. The prefix must be unnamed,

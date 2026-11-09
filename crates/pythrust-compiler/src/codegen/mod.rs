@@ -70,9 +70,17 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
     cg.declare_clones(program, constarg::plan(program, &plans))?;
     cg.declare_thunks(program)?;
     for (i, (func, id)) in program.funcs.iter().zip(&ids).enumerate() {
-        cg.define(func, *id, &ids, &program.types, &plans[i], false, None)?;
+        let what = |scalar_return, bound| Ctx {
+            func,
+            ids: &ids,
+            types: &program.types,
+            plan: &plans[i],
+            scalar_return,
+            bound,
+        };
+        cg.define(*id, what(false, None))?;
         if let Some(clone) = cg.pairs.get(&ir::FuncId(i)).copied() {
-            cg.define(func, clone, &ids, &program.types, &plans[i], true, None)?;
+            cg.define(clone, what(true, None))?;
         }
     }
     let clones: Vec<_> = cg.clones.iter().map(|(c, id)| (*c, *id)).collect();
@@ -84,7 +92,15 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
             .copied()
             .ok_or_else(|| backend("clone of a missing parameter".into()))?;
         let bound = Some((param, c.value));
-        cg.define(func, id, &ids, &program.types, plan, c.scalar, bound)?;
+        let what = Ctx {
+            func,
+            ids: &ids,
+            types: &program.types,
+            plan,
+            scalar_return: c.scalar,
+            bound,
+        };
+        cg.define(id, what)?;
     }
     cg.define_thunks(program, &ids)?;
     cg.module
@@ -659,35 +675,14 @@ impl<'r> Codegen<'r> {
         Ok(entry)
     }
 
-    fn define(
-        &mut self,
-        func: &Func,
-        id: ClifFunc,
-        ids: &[ClifFunc],
-        types: &[Compound],
-        plan: &pair::Plan,
-        scalar_return: bool,
-        bound: Option<(LocalId, i64)>,
-    ) -> Result<()> {
+    fn define(&mut self, id: ClifFunc, what: Ctx<'_>) -> Result<()> {
         let mut ctx = Context::new();
-        ctx.func.signature = if scalar_return {
-            self.pair_signature(func)
+        ctx.func.signature = if what.scalar_return {
+            self.pair_signature(what.func)
         } else {
-            self.signature(func)
+            self.signature(what.func)
         };
-        FnGen::build(
-            self,
-            Ctx {
-                func,
-                ids,
-                types,
-                plan,
-                scalar_return,
-                bound,
-            },
-            &mut ctx,
-            &mut FunctionBuilderContext::new(),
-        )?;
+        FnGen::build(self, what, &mut ctx, &mut FunctionBuilderContext::new())?;
         self.module
             .define_function(id, &mut ctx)
             .map_err(module_err)
