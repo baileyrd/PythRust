@@ -1,0 +1,24 @@
+Traceback (most recent call last):
+  File "/workspace/PythRust/bench/string_copy_campaign.py", line 287, in <module>
+    elif action=='probe':probe()
+                         ~~~~~^^
+  File "/workspace/PythRust/bench/string_copy_campaign.py", line 146, in probe
+    if done.stdout.decode()!=p['cases']['strings']['expected'] or counts['errors'] or counts['reallocations']: raise ValueError('count run invalid: '+raw)
+                                                                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: count run invalid: row0=2000001,4000001,66000032,64000032,2000000,2000000,0,0,0,2000000,0
+row1=2000000,4000000,71785790,64000000,7785790,7785790,0,0,0,7785790,0
+row2=20000,40000,660000,640000,20000,20000,0,0,0,20000,0
+row3=1000000,2000000,38888890,32000000,6888890,6888890,0,1000000,5888890,6888890,4225304
+row4=1000000,2000000,39888890,32000000,7888890,7888890,0,6888890,1000000,7888890,4225348
+row5=1000000,2000000,41785790,32000000,9785790,9785790,0,7888890,1896900,9785790,4225459
+row6=20000,40000,200650000,640000,200010000,200010000,0,199990000,20000,200010000,4225729
+row7=0,0,0,0,0,0,0,0,0,0,0
+row8=0,0,0,0,0,0,0,0,0,0,0
+row9=0,0,0,0,0,0,0,0,0,0,0
+row10=0,0,0,0,0,0,0,0,0,0,0
+errors=0
+outside_allocations=5
+outside_requested=1084
+outside_copies=26
+reallocations=1
+
