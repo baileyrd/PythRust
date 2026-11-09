@@ -1,0 +1,79 @@
+{
+  "baseline/numeric": {
+    "binary_sha256": "c6069af0ded0853e365db8b64b1912533801310475723797a148be132da5a60e",
+    "generated_symbols": [
+      "000000000000aa00 0000000000000108 t py1_steps",
+      "000000000000a8a0 000000000000015f T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 320870\t  11976\t    224\t 333070\t  5150e\t/workspace/scratch/2ce9dd46a989/card814-base/numeric\n"
+  },
+  "baseline/sorting": {
+    "binary_sha256": "6b21095c908f500d60f820feee23a3a2937a56ebe152215c74e9d3b541fea945",
+    "generated_symbols": [
+      "000000000000c360 00000000000008ef t py1_quicksort",
+      "000000000000bd20 0000000000000640 T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 391222\t  14192\t    272\t 405686\t  630b6\t/workspace/scratch/2ce9dd46a989/card814-base/sorting\n"
+  },
+  "baseline/strings": {
+    "binary_sha256": "9e3caea79cfe515a2aa0fa00d2a75e58a6134717213fdea81752fe4ea9608ad1",
+    "generated_symbols": [
+      "000000000000bad0 00000000000003f0 T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 380234\t  14264\t    272\t 394770\t  60612\t/workspace/scratch/2ce9dd46a989/card814-base/strings\n"
+  },
+  "baseline/tuples": {
+    "binary_sha256": "34dc85ed330c8bca3cb3d23d7abfe900728f8921a0843431b7a6636aa6e8c167",
+    "generated_symbols": [
+      "000000000000bda7 0000000000000110 t pt_scalar_pair_1",
+      "000000000000c0e0 00000000000001a8 t pt_scalar_pair_2",
+      "000000000000bc5f 0000000000000148 t py1_digits",
+      "000000000000beb8 0000000000000228 t py2_div_mod",
+      "000000000000bad0 000000000000018f T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 377206\t  14168\t    272\t 391646\t  5f9de\t/workspace/scratch/2ce9dd46a989/card814-base/tuples\n"
+  },
+  "candidate/numeric": {
+    "binary_sha256": "1bd3646e90c133d089f6a657d4f8229be1657caaf86cbb58777b0aa78e63eb6b",
+    "generated_symbols": [
+      "000000000000a9f8 00000000000000b3 t py1_steps",
+      "000000000000a899 000000000000015f T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 320406\t  11976\t    224\t 332606\t  5133e\t/workspace/scratch/2ce9dd46a989/card814-candidate-final/numeric\n"
+  },
+  "candidate/sorting": {
+    "binary_sha256": "430d9d241688ebc216f731b4b56742af4af18b7b103c868ee840df359a730468",
+    "generated_symbols": [
+      "000000000000c340 00000000000008bf t py1_quicksort",
+      "000000000000bd20 0000000000000620 T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 391046\t  14192\t    272\t 405510\t  63006\t/workspace/scratch/2ce9dd46a989/card814-candidate-final/sorting\n"
+  },
+  "candidate/strings": {
+    "binary_sha256": "903f88d6dbc71cadf58ae15b1e4f94bbaa8e65f6d93f0330f84314754aff3ba1",
+    "generated_symbols": [
+      "000000000000bad0 00000000000003f0 T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 380298\t  14264\t    272\t 394834\t  60652\t/workspace/scratch/2ce9dd46a989/card814-candidate-final/strings\n"
+  },
+  "candidate/tuples": {
+    "binary_sha256": "d4d8c45a014a979f389c782dd4aa248b6bf0bc715d6ab819b5ade9313b0608aa",
+    "generated_symbols": [
+      "000000000000bda7 0000000000000110 t pt_scalar_pair_1",
+      "000000000000c0e0 00000000000001a8 t pt_scalar_pair_2",
+      "000000000000bc5f 0000000000000148 t py1_digits",
+      "000000000000beb8 0000000000000228 t py2_div_mod",
+      "000000000000bad0 000000000000018f T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 377318\t  14168\t    272\t 391758\t  5fa4e\t/workspace/scratch/2ce9dd46a989/card814-candidate-final/tuples\n"
+  },
+  "inline/tuples_source_inline": {
+    "binary_sha256": "56e958c3646f9d56c771abf16d3375e9f88a223d72b9f355f50e324a3e6368f8",
+    "generated_symbols": [
+      "000000000000ace8 00000000000000e0 t pt_scalar_pair_1",
+      "000000000000aba8 0000000000000140 t py1_digits",
+      "000000000000aa30 0000000000000174 T pythrust_main"
+    ],
+    "elf_size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n 326598\t  12000\t    224\t 338822\t  52b86\t/workspace/scratch/2ce9dd46a989/card814-controls/tuples_source_inline\n"
+  }
+}

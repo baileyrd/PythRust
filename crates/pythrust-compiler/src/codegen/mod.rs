@@ -1036,6 +1036,18 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     fn rvalue(&mut self, value: &Rvalue, dest: LocalId, span: Span) -> Result<Value> {
         match value {
             Rvalue::Use(op) => Ok(self.operand(*op)),
+            Rvalue::Int(op @ (IntOp::FloorDiv | IntOp::Mod), a, Operand::Int(2))
+                if self.func.ty(*a) == Ty::Int =>
+            {
+                // For every signed i64, arithmetic shift floors by positive two;
+                // its low bit is the corresponding nonnegative remainder. The
+                // numerator is already evaluated by lowering, including faults.
+                let a = self.operand(*a);
+                Ok(match op {
+                    IntOp::FloorDiv => self.b.ins().sshr_imm_s(a, 1),
+                    _ => self.b.ins().band_imm_s(a, 1),
+                })
+            }
             Rvalue::Int(op, a, b) => {
                 let (a, b) = (self.operand(*a), self.operand(*b));
                 self.int_op(*op, a, b, span)
@@ -1666,6 +1678,53 @@ mod tests {
         }
     }
 
+    /// Inspect pre-optimization CLIF, independent of target instructions.
+    fn arithmetic_clif(expression: &str) -> String {
+        let src =
+            format!("def f(n: int, d: int) -> int:\n    return {expression}\nprint(f(-7, 2))\n");
+        let module = parser::parse(&lexer::lex(&src).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = crate::rc::elide(lower::lower(&module, &types).expect("lower"));
+        let render = |d: &Diagnostic| d.message.clone();
+        let mut cg = Codegen::new(&render).expect("codegen");
+        cg.declare_globals(&program.globals).expect("globals");
+        let ids = cg.declare(&program).expect("declare");
+        cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+        let func = program.funcs.iter().find(|f| f.name == "f").expect("f");
+        let mut ctx = Context::new();
+        ctx.func.signature = cg.signature(func);
+        FnGen::build(
+            &mut cg,
+            Ctx {
+                func,
+                ids: &ids,
+                types: &program.types,
+                plan: &pair::Plan::default(),
+                scalar_return: false,
+            },
+            &mut ctx,
+            &mut FunctionBuilderContext::new(),
+        )
+        .expect("build CLIF");
+        ctx.func.display().to_string()
+    }
+
+    #[test]
+    fn only_proven_positive_literal_two_uses_half_instructions() {
+        for (expr, instruction) in [("n // 2", "sshr"), ("n % 2", "band")] {
+            let clif = arithmetic_clif(expr);
+            assert!(clif.contains(instruction), "{clif}");
+            assert!(!clif.contains("sdiv") && !clif.contains("srem"), "{clif}");
+        }
+        for divisor in ["d", "0", "-1", "-2", "1", "3", "10"] {
+            for op in ["//", "%"] {
+                let clif = arithmetic_clif(&format!("n {op} {divisor}"));
+                assert!(clif.contains("srem"), "{clif}");
+                assert_eq!(clif.contains("sdiv"), op == "//", "{clif}");
+            }
+        }
+    }
+
     #[test]
     fn every_inline_fault_test_is_fused() {
         let src = "def f(xs: list[int], s: str, i: int, d: float) -> float:\n    \
@@ -1782,9 +1841,10 @@ mod tests {
     fn renders_each_failure_site_once_at_compile_time() {
         let (_, rendered) = compile("x = 5\nprint(x + 1, x // 2, -x)\n");
         let count = |m: &str| rendered.iter().filter(|r| r.as_str() == m).count();
-        // `+`, `//` and `-` can overflow. Dividing by zero raises instead,
-        // so only its raise site is rendered, around a marker.
-        assert_eq!(count(OVERFLOW), 3);
+        // `+` and `-` can overflow; division by positive literal two cannot.
+        // The specialized site needs neither an overflow nor a zero-divisor
+        // diagnostic. Generic divisions are covered by the CLIF controls.
+        assert_eq!(count(OVERFLOW), 2);
         assert!(!rendered.iter().any(|r| r.contains("ZeroDivisionError")));
     }
 

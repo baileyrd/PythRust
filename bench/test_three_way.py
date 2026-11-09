@@ -89,7 +89,9 @@ class ThreeWayTests(unittest.TestCase):
             if name!='startup':
                 kinds.append('rust_checked');p['rust_tests'][name]='1 passed; 0 failed';p['interpreter_checks'][name]={}
             if name=='strings': kinds.append('rust_materialized')
-            p['conditions'][name]={k:dict(executable=ident.copy(),command=['example']) for k in kinds}
+            p['host'].update(python_executable='/python', python_executable_identity=dict(path='/python',sha256='a'*64))
+            p['conditions'][name]={k:dict(executable=dict(path=('/python' if k=='cpython' else '/example' if k=='pythrust' else '/'+k),sha256='a'*64),
+                command=(['/python','-B','/example'] if k=='cpython' else ['/example' if k=='pythrust' else '/'+k])) for k in kinds}
             for kind in ('pythrust','rust'):
                 p['builds'][name+'/'+kind]=dict(command=['example'],samples=[1]*7,**b.stats([1]*7))
         self.assertEqual(verifier.verify(data),10)
@@ -99,6 +101,88 @@ class ThreeWayTests(unittest.TestCase):
                        lambda d:d['prepared']['rust_tests'].update(numeric='failed')):
             bad=copy.deepcopy(data);mutate(bad)
             with self.assertRaises(ValueError): verifier.verify(bad)
+
+    def test_historical_schema1_bundle(self):
+        data = json.loads((b.ROOT/'docs/benchmarks/card813.json').read_text())
+        self.assertEqual(verifier.verify(data), 10)
+
+    def test_schema2_build_and_invocation_mutations(self):
+        path = b.ROOT/'docs/benchmarks/card814-baseline.json'
+        original = json.loads(path.read_text())
+        self.assertEqual(verifier.verify(original), 10)
+        mutations = [
+            lambda p: p['conditions']['numeric']['pythrust'].update(command=['/different']),
+            lambda p: p['conditions']['numeric']['rust'].update(command=['/different']),
+            lambda p: p['conditions']['numeric']['rust']['command'].append('--extra'),
+            lambda p: p['conditions']['numeric']['cpython']['command'].__setitem__(2, '/wrong.pyr'),
+            lambda p: p['conditions']['numeric']['cpython']['command'].__setitem__(0, '/wrong-python'),
+            lambda p: p['conditions']['numeric']['cpython']['command'].remove('-B'),
+            lambda p: p['host']['python_executable_identity'].update(sha256='0'*64),
+            lambda p: p['builds']['numeric/pythrust']['command'].__setitem__(0, '/wrong-compiler'),
+            lambda p: p['builds']['numeric/pythrust']['command'].__setitem__(2, '/wrong.pyr'),
+        ]
+        cmd = original['prepared']['builds']['numeric/rust']['command']
+        for index, value in enumerate(cmd):
+            replacement = 'opt-level=0' if value == 'opt-level=3' else '/wrong' if index in (0, len(cmd)-1, len(cmd)-3) else 'wrong'
+            mutations.append(lambda p, i=index, v=replacement: p['builds']['numeric/rust']['command'].__setitem__(i, v))
+        mutations.append(lambda p: p['rust_flags'].__setitem__(2, 'opt-level=0'))
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                bad = copy.deepcopy(original); mutate(bad['prepared'])
+                with self.assertRaises(ValueError): verifier.verify(bad)
+
+    def test_cpython_alias_invocation_and_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            alias = Path(temp)/'python3'
+            alias.symlink_to(Path(sys.executable).resolve())
+            code = ("import json,sys; sys.path.insert(0, " + repr(str(b.ROOT/'bench')) +
+                    "); import three_way; print(json.dumps(three_way.host()))")
+            host = json.loads(subprocess.check_output([str(alias), '-B', '-c', code]))
+            self.assertEqual(host['python_executable'], str(alias))
+            self.assertNotEqual(host['python_executable'], host['python_executable_identity']['path'])
+            original = json.loads((b.ROOT/'docs/benchmarks/card814-baseline.json').read_text())
+            p = original['prepared']
+            for key in ('python_executable', 'python_executable_identity'):
+                p['host'][key] = host[key]
+            for name, conditions in p['conditions'].items():
+                conditions['cpython']['executable'] = host['python_executable_identity'].copy()
+                conditions['cpython']['command'][0] = str(alias)
+            self.assertEqual(verifier.verify(original), 10)
+            mutations = [
+                lambda p: p['conditions']['numeric']['cpython']['command'].__setitem__(0, '/different-python'),
+                lambda p: p['host'].update(python_executable='/different-python'),
+                lambda p: p['conditions']['numeric']['cpython']['command'].__setitem__(2, '/different.pyr'),
+                lambda p: p['conditions']['numeric']['cpython']['executable'].update(sha256='0'*64),
+            ]
+            for mutate in mutations:
+                bad = copy.deepcopy(original); mutate(bad['prepared'])
+                with self.assertRaises(ValueError): verifier.verify(bad)
+
+    def test_recorded_control_build_modes(self):
+        original = json.loads((b.ROOT/'docs/benchmarks/card814-baseline.json').read_text())
+        p = original['prepared']
+        for kind in ('rust_checked', 'rust_materialized'):
+            flags = b.FLAGS.copy()
+            if kind == 'rust_checked': flags[flags.index('overflow-checks=off')] = 'overflow-checks=on'
+            else: flags += ['--cfg', 'materialize']
+            item = p['conditions']['strings'][kind]
+            item['build_command'] = [p['rustc_identity']['path'], *flags, p['sources']['strings']['rust']['path'], '-o', item['executable']['path']]
+        p['control_build_protocol'] = 1
+        # Supply the other checked commands required by new preparations.
+        for name in b.EXPECTED:
+            if name in ('startup', 'strings'): continue
+            item = p['conditions'][name]['rust_checked']
+            flags = b.FLAGS.copy(); flags[flags.index('overflow-checks=off')] = 'overflow-checks=on'
+            item['build_command'] = [p['rustc_identity']['path'], *flags, p['sources'][name]['rust']['path'], '-o', item['executable']['path']]
+        self.assertEqual(verifier.verify(original), 10)
+        bad = copy.deepcopy(original)
+        bad['prepared']['conditions']['strings']['rust_checked'].pop('build_command')
+        with self.assertRaises(ValueError): verifier.verify(bad)
+        for kind in ('rust_checked', 'rust_materialized'):
+            for index in range(len(p['conditions']['strings'][kind]['build_command'])):
+                bad = copy.deepcopy(original)
+                bad['prepared']['conditions']['strings'][kind]['build_command'][index] = 'wrong'
+                with self.assertRaises(ValueError): verifier.verify(bad)
 
     def test_identity_corruption_and_refuse_existing_output(self):
         with tempfile.TemporaryDirectory() as temp:
