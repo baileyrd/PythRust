@@ -108,7 +108,7 @@ impl FnBuilder<'_, '_> {
     /// `k` as a key of type `key`, to look up or store: a `bool` meets
     /// an `int` key as the int it is, and is stored as it (grammar.md,
     /// Deviations).
-    fn probe(&mut self, k: Operand, key: Ty, span: Span) -> Result<Operand> {
+    pub(super) fn probe(&mut self, k: Operand, key: Ty, span: Span) -> Result<Operand> {
         let k = match (self.ty(k), key) {
             (Ty::Bool, Ty::Int) => self.as_int(k, span),
             _ => k,
@@ -121,7 +121,7 @@ impl FnBuilder<'_, '_> {
     /// that a generic body's table is `int`-keyed and may keep a stored
     /// `bool` as `True`; there `build` refuses rather than differ
     /// (grammar.md, Deviations).
-    fn stored(&mut self, k: Operand, key: Ty, span: Span) -> Result<Operand> {
+    pub(super) fn stored(&mut self, k: Operand, key: Ty, span: Span) -> Result<Operand> {
         if (self.ty(k), key) == (Ty::Bool, Ty::Int) && self.generic {
             let what = "a bool stored as a key of an int-keyed dict or set in a generic function";
             return Err(unsupported(span, what));
@@ -134,6 +134,18 @@ impl FnBuilder<'_, '_> {
     pub(super) fn dict_read(&mut self, d: Operand, k: Operand, span: Span) -> Result<Operand> {
         let (key, value) = self.key_value(self.ty(d), span)?;
         let probe = self.probe(k, key, span)?;
+        self.require_key(d, k, probe, span)?;
+        Ok(self.temp(value, Rvalue::Index(d, probe), span))
+    }
+
+    /// Raises `KeyError(k)` unless dict `d` holds `probe`, `k` as a key.
+    pub(super) fn require_key(
+        &mut self,
+        d: Operand,
+        k: Operand,
+        probe: Operand,
+        span: Span,
+    ) -> Result<()> {
         let found = Rvalue::Contains {
             hay: d,
             needle: probe,
@@ -150,7 +162,7 @@ impl FnBuilder<'_, '_> {
         self.emit(Inst::Raise { exc, span });
         self.raise_path()?;
         self.switch_to(ok);
-        Ok(self.temp(value, Rvalue::Index(d, probe), span))
+        Ok(())
     }
 
     /// `d[k] = v`, which adds or replaces and never raises.
@@ -173,7 +185,8 @@ impl FnBuilder<'_, '_> {
         Ok(())
     }
 
-    /// `d.get`, `d.keys`, `d.values`, `d.items` and `s.add`.
+    /// `d.get`, `d.pop`, `d.setdefault`, `d.update`, `d.keys`,
+    /// `d.values`, `d.items` and `s.add`.
     pub(super) fn table_method(
         &mut self,
         t: Operand,
@@ -200,6 +213,13 @@ impl FnBuilder<'_, '_> {
             (Ty::Dict(_), "get", [k, rest @ ..]) if rest.len() < 2 => {
                 return self.get(t, k, rest.first(), span)
             }
+            (Ty::Dict(_), "pop", [k, rest @ ..]) if rest.len() < 2 => {
+                return self.dict_pop(t, k, rest.first(), span)
+            }
+            (Ty::Dict(_), "setdefault", [k, rest @ ..]) if rest.len() < 2 => {
+                return self.setdefault(t, k, rest.first(), span)
+            }
+            (Ty::Dict(_), "update", [other]) => return self.update(t, other, span),
             (Ty::Dict(_), "keys", []) => View::Keys,
             (Ty::Dict(_), "values", []) => View::Values,
             (Ty::Dict(_), "items", []) => View::Items,
@@ -243,7 +263,13 @@ impl FnBuilder<'_, '_> {
     }
 
     /// Moves `v`, fitted to `ty`, into `dest`.
-    fn store_dest(&mut self, dest: LocalId, ty: Ty, v: Operand, span: Span) -> Result<()> {
+    pub(super) fn store_dest(
+        &mut self,
+        dest: LocalId,
+        ty: Ty,
+        v: Operand,
+        span: Span,
+    ) -> Result<()> {
         let v = self.expect(v, ty, span)?;
         self.move_into(dest, v, span);
         Ok(())
@@ -445,9 +471,10 @@ impl FnBuilder<'_, '_> {
     }
 
     /// `sorted(xs)`: a new list, of the call's type, of what `xs`
-    /// iterates over, sorted by `<`.
-    pub(super) fn sorted(&mut self, args: &[Operand], span: Span) -> Result<Operand> {
-        let [xs] = args else {
+    /// iterates over, sorted by `<`, descending with `reverse=` (D70).
+    pub(super) fn sorted(&mut self, args: &[Arg], ops: &[Operand], span: Span) -> Result<Operand> {
+        let (positional, reverse) = self.sort_args(args, ops, span)?;
+        let [xs] = positional.as_slice() else {
             return Err(internal(span, "`sorted` of other than one argument"));
         };
         let ty = self.ty_at(span)?;
@@ -464,7 +491,11 @@ impl FnBuilder<'_, '_> {
                 list
             }
         };
-        self.emit(Inst::Sort(list));
+        self.emit(Inst::Sort {
+            list,
+            reverse,
+            span,
+        });
         Ok(list)
     }
 }

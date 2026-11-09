@@ -19,10 +19,27 @@ use crate::stdlib::StdFn;
 const ORD_HEAD: &str = "TypeError: ord() expected a character, but string of length ";
 
 impl FnGen<'_, '_, '_> {
+    /// `xs.index(x)`, raising its `ValueError` at `span`'s site, the
+    /// position `xs.remove(x)` removes (-1 when absent), or
+    /// `xs.count(x)` (D70): `x` is passed as a slot of the list's
+    /// element type.
+    fn list_search(&mut self, f: StdFn, s: Operand, x: Operand, span: Span) -> Result<Value> {
+        let (s, x) = (self.operand(s), self.slot(x));
+        if f == StdFn::ListCount {
+            return self.call_rt_value(Rt::ListCount, &[s, x]);
+        }
+        let raise = self.flag(f == StdFn::ListIndex);
+        let site = self.site(span)?;
+        self.call_rt_value(Rt::ListIndex, &[[s, x, raise].as_slice(), &site].concat())
+    }
+
     /// `f`'s result, of type `ty`, from `args`. Lowering gave `os.listdir`
     /// its path, `os.path.join` at least two parts and `open` its path
     /// alone; a file method's one argument is the file.
     pub(super) fn std(&mut self, f: StdFn, args: &[Operand], ty: Ty, span: Span) -> Result<Value> {
+        if let (StdFn::ListIndex | StdFn::ListFind | StdFn::ListCount, [s, x]) = (f, args) {
+            return self.list_search(f, *s, *x, span);
+        }
         let args: Vec<Value> = args.iter().map(|a| self.operand(*a)).collect();
         match (f, args.as_slice()) {
             (StdFn::Argv, []) => {

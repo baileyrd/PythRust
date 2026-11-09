@@ -180,6 +180,17 @@ Nano's post-M6 order (2026-11-03), step 1: where a string method lacks full Unic
 - [x] *Builtins 4a (D56, D57):* `abs ord chr sum min max any all`, over what `for` iterates; `chr` and an empty `min`/`max` raise a tracked `ValueError`, a float `sum` is CPython's compensated sum (`pythrust-rt/src/fsum.rs`, shared with the interpreter), and `any`/`all` of `map`'s results stop at the deciding one. Native lowering in `lower/reduce.rs`; runtime calls `pt_str_ord`, `pt_str_chr`, `pt_seq_fsum`. Corpus `builtins_reduce` (non-ASCII, checked against CPython), `builtin_ord_length`, `builtin_chr_surrogate`, `builtin_minmax_mixed`, `builtin_sum_start`, `builtin_abs_overflow`.
 - [x] *Builtins 4b:* `enumerate zip` (D51, D58), consumed directly and nested in each other, stepped lazily in CPython's order under `run` (`interp/zip.rs`) and `build` (`lower/zip.rs`, no runtime call). Corpus `enumerate_zip` (non-ASCII and `map` results, checked against CPython), `zip_changed_size`, `enumerate_overflow`, `enumerate_not_value`, `zip_not_value`.
 
+## Post-M6 step 1b: the rest of step 1
+
+The rest of Nano's step 1, one PR each, in order (D67): `try`/`finally` comes before `with open`, which lowers through it.
+
+- [x] *List and dict methods, `del` (D70, D71):* list `pop extend insert remove index count sort`, dict `pop setdefault update`, `del xs[i]` and `del d[k]`, under `run` (`interp/methods.rs`) and `build` (`lower/methods.rs`; runtime `pt_list_insert`, `pt_list_remove`, `pt_list_index`, `pt_list_count`, `pt_table_remove`). `pop`, `remove`, `index` and `d.pop(k)` raise tracked exceptions; `del` faults are catchable and untracked. `reverse=` on `sort` and `sorted`. Every mutator is a change for modes, D4 and rule 4. Corpus `list_methods`, `list_method_faults`, `dict_methods` (non-ASCII, checked against CPython), `list_pop_uncaught`, `list_del_uncaught`, `dict_pop_uncaught`, `dict_del_changed_size`, `list_method_nan`, `list_pop_undeclared`, `list_sort_in_loop`, `list_method_arg_unsupported`, `sort_key_unsupported`, `dict_update_unsupported`, `del_form_unsupported`; native gap `list_index_mixed_number`.
+- [ ] *Slicing reads.*
+- [ ] *f-strings*, with `str.format` on their format engine (D48).
+- [ ] *`try`/`finally`.*
+- [ ] *Text-mode `open` with writing.*
+- [ ] *`with open`.*
+
 ### Diagnostic follow-up #804
 
 D3 still rejects returned parameter aliases, including nested containers and

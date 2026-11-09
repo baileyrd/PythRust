@@ -200,7 +200,7 @@ impl FnBuilder<'_, '_> {
 
     /// Runs `then` where `cond` holds and `orelse` where it does not,
     /// continuing after both.
-    fn either(
+    pub(super) fn either(
         &mut self,
         cond: Operand,
         then: impl FnOnce(&mut Self),

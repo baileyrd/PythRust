@@ -1,0 +1,7 @@
+# expect-exit: 1
+# An uncaught `d.pop(k)` of a missing key ends the program with
+# `KeyError: 'k'` (D71).
+d = {"a": 1}
+print(d.pop("a"))
+print(d.pop("a"))
+print("unreachable")

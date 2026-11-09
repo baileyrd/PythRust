@@ -1,0 +1,10 @@
+# deviation: a tempered function must declare what may escape it (D8); `pop` may raise IndexError, which `raises` tracks (D71). CPython has no `raises`.
+# expect-exit: 1
+# expect-error: tempered `last` can raise IndexError here, so it must declare it; write `-> int raises IndexError`
+
+
+temper def last(mut xs: list[int]) -> int:
+    return xs.pop()
+
+
+print(last([1]))

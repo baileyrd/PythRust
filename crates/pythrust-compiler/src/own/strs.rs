@@ -121,7 +121,9 @@ impl<'a> Held<'a> {
     fn flow_inst(&mut self, inst: &Inst) -> bool {
         match inst {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
-            Inst::Append { list, value, .. } | Inst::SetItem { list, value, .. } => {
+            Inst::Append { list, value, .. }
+            | Inst::SetItem { list, value, .. }
+            | Inst::Insert { list, value, .. } => {
                 let mut value = self.holdings(*value);
                 // A dict keeps its key too.
                 if let Inst::SetItem { index, .. } = inst {

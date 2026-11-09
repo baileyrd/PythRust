@@ -458,6 +458,14 @@ const NATIVE: &[&str] = &[
     "dict_view_changed_size",
     "dict_views",
     "dicts",
+    "dict_methods",
+    "dict_pop_uncaught",
+    "dict_del_changed_size",
+    "list_methods",
+    "list_method_faults",
+    "list_method_nan",
+    "list_pop_uncaught",
+    "list_del_uncaught",
     "fibonacci",
     "for_hold",
     "for_hold_aliases",
@@ -622,6 +630,11 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "builtin_sum_empty_float_generic",
         "a generic function's `sum` of floats with no `start`: `run` gives an empty one \
          as the int `0`, so `build` refuses rather than differ",
+    ),
+    (
+        "list_index_mixed_number",
+        "`list.index` of a number of another type than the list's items: `run` names \
+         the item as written in its `ValueError`, which native code cannot yet",
     ),
 ];
 

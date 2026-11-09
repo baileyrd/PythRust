@@ -160,7 +160,10 @@ impl Checker {
             | StdFn::Lower
             | StdFn::Ord
             | StdFn::Chr
-            | StdFn::FloatSum => {
+            | StdFn::FloatSum
+            | StdFn::ListIndex
+            | StdFn::ListFind
+            | StdFn::ListCount => {
                 let msg = format!("internal: `{name}` is not called by its name");
                 return Err(error(span, msg));
             }
@@ -231,10 +234,13 @@ impl Checker {
         Ok(Type::List(Box::new(elem)))
     }
 
-    /// `sorted(xs)`: a new list of what `xs` iterates over, in `<` order.
+    /// `sorted(xs)`: a new list of what `xs` iterates over, in `<` order,
+    /// or reversed with `reverse=` (D70).
     fn sorted(&mut self, args: &[Arg], span: Span) -> Result<Type> {
         let elem = self.subst.fresh();
-        for (iterable, _) in self.positional("sorted", args, 1, 1, span)? {
+        self.sort_keywords("sorted", args)?;
+        let positional: Vec<Arg> = args.iter().filter(|a| a.name.is_none()).cloned().collect();
+        for (iterable, _) in self.positional("sorted", &positional, 1, 1, span)? {
             let need = Need::Iter {
                 iterable,
                 elem: elem.clone(),

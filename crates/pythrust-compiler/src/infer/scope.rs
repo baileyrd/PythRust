@@ -176,6 +176,7 @@ fn own_exprs(s: &Stmt) -> Vec<&Expr> {
         | StmtKind::Raise(value)
         | StmtKind::With { value, .. } => vec![value],
         StmtKind::Return(value) => value.iter().collect(),
+        StmtKind::Del { value, index } => vec![value, index],
         StmtKind::If { branch, elifs, .. } => std::iter::once(branch)
             .chain(elifs)
             .map(|b| &b.test)
@@ -393,6 +394,7 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             e(value)
         }
         StmtKind::Return(value) => value.iter().for_each(e),
+        StmtKind::Del { value, index } => [value, index].into_iter().for_each(e),
         StmtKind::If {
             branch,
             elifs,

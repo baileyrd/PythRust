@@ -1,0 +1,7 @@
+# deviation: `dict.update` takes one dict of the same type; key-value pairs, keyword arguments or no argument are not supported yet (D70); CPython accepts them.
+# expect-exit: 1
+# expect-error: `dict.update` of list[tuple[str, int]] is not supported yet; pass a dict
+
+d = {"a": 1}
+d.update([("b", 2)])
+print(d)

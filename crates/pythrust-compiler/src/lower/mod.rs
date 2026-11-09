@@ -12,6 +12,7 @@ mod expr;
 mod faults;
 mod globals;
 mod hold;
+mod methods;
 mod opt;
 mod reduce;
 mod seq;

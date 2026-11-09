@@ -1,0 +1,7 @@
+# deviation: `key=` of `list.sort` and `sorted` is not supported yet (D70); CPython accepts it.
+# expect-exit: 1
+# expect-error: `key=` of `list.sort` is not supported yet
+
+xs = ["bb", "a"]
+xs.sort(key=len)
+print(xs)

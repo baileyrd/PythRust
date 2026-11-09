@@ -120,7 +120,9 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
         | Inst::SetGlobal { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
-        | Inst::Sort(_)
+        | Inst::Sort { .. }
+        | Inst::Insert { .. }
+        | Inst::Remove { .. }
         | Inst::Reverse(_)
         | Inst::Raise { .. } => false,
     }
@@ -601,7 +603,9 @@ fn ends(inst: &Inst, l: LocalId) -> bool {
         | Inst::SetGlobal { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
-        | Inst::Sort(_)
+        | Inst::Sort { .. }
+        | Inst::Insert { .. }
+        | Inst::Remove { .. }
         | Inst::Reverse(_)
         | Inst::Raise { .. } => false,
     }

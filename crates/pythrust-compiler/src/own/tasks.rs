@@ -183,9 +183,6 @@ fn holds_world(flow: &Flow) -> bool {
 fn changes(flow: &Flow, inst: &Inst) -> Objs {
     let (mut mutated, mut kept) = (Objs::new(), Objs::new());
     flow.effects(inst, &mut mutated, &mut kept);
-    if let Inst::Sort(list) = inst {
-        mutated.extend(flow.points_to(*list));
-    }
     mutated.extend(kept);
     mutated
 }

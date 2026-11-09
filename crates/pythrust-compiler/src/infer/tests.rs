@@ -445,9 +445,9 @@ fn unknown_method_is_an_error() {
     let b = B::default();
     let msg = err(vec![
         b.assign("xs", b.list(vec![])),
-        b.ex(b.method(b.n("xs"), "pop", vec![])),
+        b.ex(b.method(b.n("xs"), "shuffle", vec![])),
     ]);
-    assert!(msg.starts_with("unknown method `.pop`"), "{msg}");
+    assert!(msg.starts_with("unknown method `.shuffle`"), "{msg}");
 }
 
 #[test]
@@ -2080,7 +2080,7 @@ fn dict_and_set_misuse_is_an_error() {
             "d = {1: 2}\nd.get(1, \"a\")\n",
             "the default of `get` must match",
         ),
-        ("d = {1: 2}\nd.pop(1)\n", "unknown method `.pop`"),
+        ("d = {1: 2}\nd.clear()\n", "unknown method `.clear`"),
         ("print({1: 2} < {1: 2})\n", "cannot order dict[int, int]"),
         (
             "print({1} == [1])\n",
@@ -2125,8 +2125,8 @@ fn dict_and_set_misuse_is_an_error() {
             "cannot order set[int] against set[int]",
         ),
         (
-            "print(sorted([1], reverse=True))\n",
-            "`sorted` takes no keyword arguments",
+            "print(sorted([1], key=len))\n",
+            "`key=` of `sorted` is not supported yet",
         ),
         (
             "d = {1: \"a\"}\nprint(d.get(\"x\"))\n",
@@ -2571,6 +2571,110 @@ fn enumerate_and_zip_refuse_other_places() {
             "print(\",\".join(enumerate([\"a\"])))\n",
             "`str.join` needs a list of str: expected list[str], found list[tuple[int, str]]",
         ),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src:?}: {got}");
+    }
+}
+
+#[test]
+fn list_and_dict_methods_type_their_results() {
+    let src = "xs = [3, 1]\n\
+               xs.extend([4])\n\
+               xs.extend({5})\n\
+               xs.insert(0, 2)\n\
+               xs.remove(True)\n\
+               print(xs.pop(), xs.pop(0), xs.index(1), xs.count(2.0 == 2))\n\
+               xs.sort()\n\
+               xs.sort(reverse=1)\n\
+               print(sorted(xs, reverse=True))\n\
+               d = {\"a\": 1}\n\
+               print(d.pop(\"a\"), d.pop(\"b\", 0), d.setdefault(\"c\", 2))\n\
+               d.update({\"z\": 9})\n\
+               o: dict[str, int | None] = {}\n\
+               print(o.setdefault(\"k\"))\n\
+               del xs[0]\n\
+               del d[\"a\"]\n\
+               print(\"abc\".index(\"b\"), \"abc\".count(\"c\"))\n";
+    let types = infer_src(src).unwrap_or_else(|e| panic!("{e}"));
+    let at = |text: &str| {
+        let start = src.find(text).unwrap_or_else(|| panic!("no {text:?}"));
+        let span = Span {
+            start,
+            end: start + text.len(),
+        };
+        types.at(span).cloned()
+    };
+    let ints = [
+        "xs.pop()",
+        "xs.pop(0)",
+        "xs.index(1)",
+        "xs.count(2.0 == 2)",
+        "d.pop(\"a\")",
+        "d.pop(\"b\", 0)",
+        "d.setdefault(\"c\", 2)",
+        "\"abc\".index(\"b\")",
+        "\"abc\".count(\"c\")",
+    ];
+    for text in ints {
+        assert_eq!(at(text), Some(Type::Int), "{text}");
+    }
+    let list = Type::List(Box::new(Type::Int));
+    assert_eq!(at("sorted(xs, reverse=True)"), Some(list));
+    let opt = Type::Optional(Box::new(Type::Int));
+    assert_eq!(at("o.setdefault(\"k\")"), Some(opt));
+    assert_eq!(at("xs.insert(0, 2)"), Some(Type::None));
+}
+
+#[test]
+fn list_and_dict_method_misuse_is_an_error() {
+    let cases = [
+        ("xs = [1]\nxs.pop(\"a\")\n", "expected int, found str"),
+        ("xs = [1]\nxs.pop(0, 1)\n", "`pop` takes"),
+        ("xs = [1]\nxs.extend(3)\n", "int is not iterable"),
+        ("xs = [1]\nxs.extend([\"a\"])\n", "expected int, found str"),
+        ("xs = [1]\nxs.insert(0, \"a\")\n", "expected int, found str"),
+        ("xs = [1]\nxs.insert(0)\n", "`insert` takes"),
+        (
+            "xs = [1]\nxs.index(1, 0)\n",
+            "`start` of `list.index` is not supported yet",
+        ),
+        ("xs = [1]\nxs.remove(\"a\")\n", "cannot compare"),
+        (
+            "xs = [{1}]\nxs.sort()\n",
+            "cannot order set[int] against set[int]",
+        ),
+        (
+            "xs = [1]\nxs.sort(key=len)\n",
+            "`key=` of `list.sort` is not supported yet",
+        ),
+        (
+            "xs = [1]\nxs.sort(True)\n",
+            "`sort` takes no positional arguments",
+        ),
+        ("xs = [1]\nxs.sort(reverse=\"a\")\n", "expected"),
+        ("xs = [1]\nxs.sort(cmp=1)\n", "unexpected keyword argument"),
+        ("d = {1: 2}\nd.pop(1, \"a\")\n", "expected int, found str"),
+        ("d = {1: 2}\nd.pop(\"a\")\n", "expected int, found str"),
+        ("d = {1: 2}\nd.setdefault(1)\n", "expected int, found None"),
+        ("d = {1: 2}\nd.update({\"a\": 2})\n", "expected"),
+        (
+            "d = {1: 2}\nd.update([(1, 2)])\n",
+            "`dict.update` of list[tuple[int, int]] is not supported yet",
+        ),
+        (
+            "d = {1: 2}\nd.update()\n",
+            "`dict.update` with no argument is not supported yet",
+        ),
+        (
+            "d = {1: 2}\nd.update(a=1)\n",
+            "keyword arguments of `dict.update` are not supported yet",
+        ),
+        ("s = {1}\ns.pop()\n", "set[int] has no method `.pop`"),
+        ("t = (1, 2)\ndel t[0]\n", "does not support item deletion"),
+        ("s = \"ab\"\ndel s[0]\n", "does not support item deletion"),
+        ("xs = [1]\ndel xs[\"a\"]\n", "expected int, found str"),
     ];
     for (src, want) in cases {
         let got = src_err(src);

@@ -1,0 +1,13 @@
+# deviation: `list.index`, `list.count` and `list.remove` use value equality only, with no identity shortcut, so a NaN never matches itself (D70, docs/grammar.md#deviations-from-python)
+x = float("nan")
+xs = [x, 1.0]
+print(xs.count(x), xs.count(1.0))
+try:
+    print(xs.index(x))
+except ValueError as e:
+    print(e)
+try:
+    xs.remove(x)
+except ValueError as e:
+    print(e)
+print(len(xs))
