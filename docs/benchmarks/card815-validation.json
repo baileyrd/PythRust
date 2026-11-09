@@ -1,0 +1,471 @@
+{
+  "baseline": "626a3487223bc48569b627541da5920a653508aa",
+  "baseline_tree": "77fa65f721d8b2b053bd43f66263a5ae3bbc75ab",
+  "branch": "codex/card815-int-list",
+  "validation": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "returncode": 0,
+      "seconds": 0.7743942737579346,
+      "log": "/workspace/card815-run/logs/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "environment": {
+        "PYTHON": "/usr/bin/python3.13",
+        "PYTHRUST_BIN": null,
+        "CARGO_BUILD_JOBS": "4",
+        "RUSTFLAGS": null
+      },
+      "published_log": "card815-logs/fmt.log"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "returncode": 0,
+      "seconds": 66.71781134605408,
+      "log": "/workspace/card815-run/logs/clippy.log",
+      "sha256": "4626075aeead2ed0b97869425770f553539ed871f693bc456094dcba2ce3b983",
+      "environment": {
+        "PYTHON": "/usr/bin/python3.13",
+        "PYTHRUST_BIN": null,
+        "CARGO_BUILD_JOBS": "4",
+        "RUSTFLAGS": null
+      },
+      "published_log": "card815-logs/clippy.log"
+    },
+    {
+      "name": "cargo-test",
+      "command": [
+        "cargo",
+        "test",
+        "--locked"
+      ],
+      "returncode": 0,
+      "seconds": 171.9759349822998,
+      "log": "/workspace/card815-run/logs/cargo-test.log",
+      "sha256": "9477611f134169477c337173cdab1229c3f728fa0e30d553d6bdbd6faeded636",
+      "environment": {
+        "PYTHON": "/usr/bin/python3.13",
+        "PYTHRUST_BIN": null,
+        "CARGO_BUILD_JOBS": "4",
+        "RUSTFLAGS": null
+      },
+      "published_log": "card815-logs/cargo-test.log"
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "pythrust-compiler",
+        "-p",
+        "pythrust-rt"
+      ],
+      "returncode": 0,
+      "seconds": 0.07350730895996094,
+      "log": "/workspace/card815-run/logs/release.log",
+      "sha256": "92434e198f27984c035c376ec77a7cf9e6ebdde782f8ccb1336ae3329b66ddb7",
+      "environment": {
+        "PYTHON": "/usr/bin/python3.13",
+        "PYTHRUST_BIN": null,
+        "CARGO_BUILD_JOBS": "4",
+        "RUSTFLAGS": null
+      },
+      "published_log": "card815-logs/release.log"
+    },
+    {
+      "name": "release-corpus",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "conformance",
+        "corpus_matches_native"
+      ],
+      "returncode": 0,
+      "seconds": 20.49974036216736,
+      "log": "/workspace/card815-run/logs/release-corpus.log",
+      "sha256": "ce9acb9c809e21932e3c3d91dbdef3dfdb4f663f71340e2e5bc2ed418bc547aa",
+      "environment": {
+        "PYTHON": "/usr/bin/python3.13",
+        "PYTHRUST_BIN": "/workspace/card815/target/release/pythrust",
+        "CARGO_BUILD_JOBS": "4",
+        "RUSTFLAGS": null
+      },
+      "published_log": "card815-logs/release-corpus.log"
+    },
+    {
+      "name": "release-affected",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "expression_limits",
+        "--test",
+        "scalar_pair",
+        "--test",
+        "string_chain",
+        "--test",
+        "signed_half",
+        "--test",
+        "cli"
+      ],
+      "returncode": 0,
+      "seconds": 4.901655197143555,
+      "log": "/workspace/card815-run/logs/release-affected.log",
+      "sha256": "2d8d36a81e3ac44a4005507d6fe51b1886e114c145032e00903df91e9d29f415",
+      "environment": {
+        "PYTHON": "/usr/bin/python3.13",
+        "PYTHRUST_BIN": "/workspace/card815/target/release/pythrust",
+        "CARGO_BUILD_JOBS": "4",
+        "RUSTFLAGS": null
+      },
+      "published_log": "card815-logs/release-affected.log"
+    },
+    {
+      "name": "ci-structure",
+      "command": [
+        "python3.13",
+        "ci/check_jobs.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/ci-jobs.yml"
+      ],
+      "returncode": 0,
+      "seconds": 0.06992888450622559,
+      "log": "/workspace/card815-run/logs/ci-structure.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "environment": {
+        "PYTHON": "/usr/bin/python3.13",
+        "PYTHRUST_BIN": null,
+        "CARGO_BUILD_JOBS": "4",
+        "RUSTFLAGS": null
+      },
+      "published_log": "card815-logs/ci-structure.log"
+    },
+    {
+      "name": "ci-tests",
+      "command": [
+        "python3.13",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "ci"
+      ],
+      "returncode": 0,
+      "seconds": 0.11554074287414551,
+      "log": "/workspace/card815-run/logs/ci-tests.log",
+      "sha256": "9cc41442108ff5bbb5666079b5963905963b17d88e20e175ff3796198030ff94",
+      "environment": {
+        "PYTHON": "/usr/bin/python3.13",
+        "PYTHRUST_BIN": null,
+        "CARGO_BUILD_JOBS": "4",
+        "RUSTFLAGS": null
+      },
+      "published_log": "card815-logs/ci-tests.log"
+    }
+  ],
+  "extra_checks": [
+    {
+      "name": "initial held codegen expectation",
+      "returncode": 101,
+      "log": "card815-logs/codegen-test.log"
+    },
+    {
+      "name": "corrected codegen test",
+      "returncode": 0,
+      "log": "card815-logs/codegen-test-final.log"
+    },
+    {
+      "name": "Miri default cache setup",
+      "returncode": 1,
+      "log": "card815-logs/miri.log"
+    },
+    {
+      "name": "Miri workspace cache seeds0..7",
+      "returncode": 0,
+      "log": "card815-logs/miri-workspace-cache.log"
+    },
+    {
+      "name": "runtime TSan integer tests",
+      "returncode": 0,
+      "log": "card815-logs/tsan.log"
+    },
+    {
+      "name": "TSan runtime archive build",
+      "returncode": 0,
+      "log": "card815-logs/tsan-build.log"
+    },
+    {
+      "name": "native marked task 5 pinned and 5 unpinned",
+      "returncode": 0,
+      "log": "card815-logs/tsan-native.log"
+    },
+    {
+      "name": "initial same-path identity assumption",
+      "returncode": 1,
+      "log": "card815-logs/path-control.log"
+    },
+    {
+      "name": "fresh path comparison and separate byte-identical self-control",
+      "returncode": 0,
+      "log": "card815-logs/path-control-final.log"
+    },
+    {
+      "name": "separate counts/profiles",
+      "returncode": 0,
+      "log": "card815-logs/probes.log"
+    },
+    {
+      "name": "final benchmark/verifier tests51",
+      "returncode": 0,
+      "log": "card815-logs/bench-tests-final.log",
+      "command": [
+        "python3.13",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_*.py",
+        "-v"
+      ]
+    },
+    {
+      "name": "final CI structure",
+      "returncode": 0,
+      "log": "card815-logs/ci-structure-final.log",
+      "command": [
+        "python3.13",
+        "ci/check_jobs.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/ci-jobs.yml"
+      ]
+    },
+    {
+      "name": "final CI logic tests20",
+      "returncode": 0,
+      "log": "card815-logs/ci-tests-final.log",
+      "command": [
+        "python3.13",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "ci"
+      ]
+    }
+  ],
+  "commands": {
+    "miri": "XDG_CACHE_HOME=/workspace/card815-run/cache MIRIFLAGS='-Zmiri-permissive-provenance -Zmiri-many-seeds=0..8' cargo +nightly miri test --locked -p pythrust-rt -- sync:: task:: seq::tests::a_hold seq::tests::a_held_item seq::tests::marked_holds seq::tests::integer_access",
+    "tsan": "RUSTFLAGS='-Zsanitizer=thread --cfg pythrust_tsan' TSAN_OPTIONS='halt_on_error=1 history_size=7' cargo +nightly test --locked -Zbuild-std --target x86_64-unknown-linux-gnu -p pythrust-rt --target-dir /workspace/card815-run/tsan --lib -- seq::tests::integer_access"
+  },
+  "log_artifacts": {
+    "fmt.log": {
+      "path": "card815-logs/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "candidate-prepare-tested.log": {
+      "path": "card815-logs/candidate-prepare-tested.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "release.log": {
+      "path": "card815-logs/release.log",
+      "sha256": "92434e198f27984c035c376ec77a7cf9e6ebdde782f8ccb1336ae3329b66ddb7",
+      "bytes": 62
+    },
+    "ci-structure.log": {
+      "path": "card815-logs/ci-structure.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "pair24.log": {
+      "path": "card815-logs/pair24.log",
+      "sha256": "082dd3970327e73c6209e36c52d0b442f81848c0ea45c152a83286db0dc1e9bd",
+      "bytes": 2414
+    },
+    "cargo-test.log": {
+      "path": "card815-logs/cargo-test.log",
+      "sha256": "9477611f134169477c337173cdab1229c3f728fa0e30d553d6bdbd6faeded636",
+      "bytes": 70842
+    },
+    "ci-tests-final.log": {
+      "path": "card815-logs/ci-tests-final.log",
+      "sha256": "71f4ab12980d663928a90da161761b119e0380db137e2586a1f4b02cd0280c33",
+      "bytes": 456
+    },
+    "codegen-test.log": {
+      "path": "card815-logs/codegen-test.log",
+      "sha256": "1834cb91f7761e00ceaa767e38b11a346b50e81aaa750e88b844cf8e3d7724b1",
+      "bytes": 2344
+    },
+    "path-control-final.log": {
+      "path": "card815-logs/path-control-final.log",
+      "sha256": "195a7466877d304f3dfdc85aab1901b4d3a0adf40701d6997a243fee4483f90e",
+      "bytes": 476
+    },
+    "probes.log": {
+      "path": "card815-logs/probes.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "pair42.log": {
+      "path": "card815-logs/pair42.log",
+      "sha256": "428c063cb45ba183e07e0eff49ff30b727a75bd7231a13a661c9702689d12dca",
+      "bytes": 2445
+    },
+    "candidate-build-tested.log": {
+      "path": "card815-logs/candidate-build-tested.log",
+      "sha256": "f2795cb38c971e2c3057d4b343d811bfd005354195c730aa7e75985b1131dd4d",
+      "bytes": 147
+    },
+    "tsan-build.log": {
+      "path": "card815-logs/tsan-build.log",
+      "sha256": "aa78d12c2f1b0ace3da44b0a3b510f7dbe67da82d190a53ccbd231009a9d6f62",
+      "bytes": 144
+    },
+    "nightly-install.log": {
+      "path": "card815-logs/nightly-install.log",
+      "sha256": "bc4c20c3201a08933eabf53c7abdff2b24dad8ac08a623559187829d0270eb8b",
+      "bytes": 334
+    },
+    "release-corpus.log": {
+      "path": "card815-logs/release-corpus.log",
+      "sha256": "ce9acb9c809e21932e3c3d91dbdef3dfdb4f663f71340e2e5bc2ed418bc547aa",
+      "bytes": 304
+    },
+    "tsan.log": {
+      "path": "card815-logs/tsan.log",
+      "sha256": "44a04ee3c56d61acaa1fc877b1572ab641aefa1abd9ad8de733f119e6d2a727a",
+      "bytes": 3052
+    },
+    "codegen-test-final.log": {
+      "path": "card815-logs/codegen-test-final.log",
+      "sha256": "57dc10b6200b4ca149bdfee19d97d86db0fa42715794c91880e5df60e50bbbd2",
+      "bytes": 441
+    },
+    "tsan-native.log": {
+      "path": "card815-logs/tsan-native.log",
+      "sha256": "031017e5c41701cc5c949212c906f250418ab6fc069d2fc86e1fcc910ab46ac4",
+      "bytes": 475
+    },
+    "ci-tests.log": {
+      "path": "card815-logs/ci-tests.log",
+      "sha256": "9cc41442108ff5bbb5666079b5963905963b17d88e20e175ff3796198030ff94",
+      "bytes": 456
+    },
+    "ci-structure-final.log": {
+      "path": "card815-logs/ci-structure-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "bench-tests.log": {
+      "path": "card815-logs/bench-tests.log",
+      "sha256": "6fbc8dd5525ac7a5f62c30cddfa2300fa77d31079e94a6b5a23e01f41dded5a8",
+      "bytes": 6911
+    },
+    "candidate-build-final.log": {
+      "path": "card815-logs/candidate-build-final.log",
+      "sha256": "1ef7d972f223ebd89b709ad7de82bdcfb26a61604fef07786c9e85668a6bdef9",
+      "bytes": 147
+    },
+    "baseline-build.log": {
+      "path": "card815-logs/baseline-build.log",
+      "sha256": "04df84e74e6ed01a93cb1cfb795351e5ff46d572539557cc769c61d68467de72",
+      "bytes": 1488
+    },
+    "miri-workspace-cache.log": {
+      "path": "card815-logs/miri-workspace-cache.log",
+      "sha256": "fb368c012ba29b648a6cbcd5b5b480999e1b2b5faea1b519ed41ad1e42657294",
+      "bytes": 17334
+    },
+    "candidate-prepare.log": {
+      "path": "card815-logs/candidate-prepare.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "candidate-build.log": {
+      "path": "card815-logs/candidate-build.log",
+      "sha256": "b5b57cc5c07c680d232d88e3df4203af67c52caeacd04a0d8e04b1865b99b129",
+      "bytes": 219
+    },
+    "release-affected.log": {
+      "path": "card815-logs/release-affected.log",
+      "sha256": "2d8d36a81e3ac44a4005507d6fe51b1886e114c145032e00903df91e9d29f415",
+      "bytes": 2714
+    },
+    "path-control.log": {
+      "path": "card815-logs/path-control.log",
+      "sha256": "3431b7cbe7d2131d786a4c9510cb7d67ce56f70f207578de71c891ee7c634b26",
+      "bytes": 554
+    },
+    "clippy.log": {
+      "path": "card815-logs/clippy.log",
+      "sha256": "4626075aeead2ed0b97869425770f553539ed871f693bc456094dcba2ce3b983",
+      "bytes": 1346
+    },
+    "bench-tests-final.log": {
+      "path": "card815-logs/bench-tests-final.log",
+      "sha256": "c56747e6086b06669653f4341a4e2ae4735eca672c4d90c64e2d2358d02e2dcd",
+      "bytes": 6911
+    },
+    "baseline-prepare.log": {
+      "path": "card815-logs/baseline-prepare.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "miri.log": {
+      "path": "card815-logs/miri.log",
+      "sha256": "e24cfcffe0dd870427890811a161db4a601b75a14ebdce7eff188679313b4046",
+      "bytes": 191
+    }
+  },
+  "final_build_artifacts": {
+    "compiler": {
+      "path": "/workspace/card815/target/release/pythrust",
+      "sha256": "7fe5725803851d9d34b9ad5e345790260b21889193f68905c19192bde503b58b"
+    },
+    "runtime": {
+      "path": "/workspace/card815/target/release/libpythrust_rt.a",
+      "sha256": "d413f8eb7ff662a72efa48b0fadb6cb55d1f8238423be54bd8b11f7cada68f0e"
+    }
+  },
+  "measured_artifacts_match_final_build": true,
+  "nightly": "rustc 1.102.0-nightly (5b7b37aef 2026-11-08)",
+  "local_never_run": [
+    "Valgrind",
+    "non-Linux native platform execution",
+    "full hosted race/memcheck calibration"
+  ],
+  "native_tsan": {
+    "compiler": "/workspace/card815-revised/candidate/pythrust",
+    "source": "examples/tasks_int_list_access.pyr",
+    "runtime": "/workspace/card815-run/tsan/x86_64-unknown-linux-gnu/debug/libpythrust_rt.a",
+    "cc_wrapper": "ci/tsan-cc",
+    "environment": {
+      "TSAN_OPTIONS": "halt_on_error=1 history_size=7"
+    },
+    "executions": "5 taskset -c 0 and 5 unpinned; each exit0, empty stderr, CPython stdout match"
+  }
+}

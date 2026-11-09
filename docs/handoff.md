@@ -137,3 +137,14 @@ and required CI remain pending. Repeated numeric gains are about 49–50%, sorti
 remain separate evidence-ordered follow-ups, and #816 retains a distinct residual
 helper lead supported by an explicitly nonproduction source-inline diagnostic.
 This does not restore rejected #810 accessors or reopen #396/PR119, D29 C or #563.
+
+## Compiler-selected integer-list experiment #815
+
+One bounded compiler/runtime interface experiment (D66) routes only proven
+ordinary `list[int]` reads/stores to typed helpers, retaining Slot safeguards
+and existing float/generic/held paths. [Fresh same-host evidence](benchmarks/card815.md)
+shows repeatable sorting/integer gains and records the small noisy controls,
+separate profiles/counts and all validation. This candidate awaits independent
+exact-head review and required hosted CI; #815 is unfinished. #810's rejected
+shared-accessor optimization, #396/PR119, D29 C, deferred #563 and later #817/#816
+work are unchanged.

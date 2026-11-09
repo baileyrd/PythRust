@@ -1,0 +1,56 @@
+test_baseline_identity_environment_input_and_warmups (test_division_campaign.CampaignTests.test_baseline_identity_environment_input_and_warmups) ... ok
+test_committed_campaign (test_division_campaign.CampaignTests.test_committed_campaign) ... ok
+test_control_invocations_match_each_condition (test_division_campaign.CampaignTests.test_control_invocations_match_each_condition) ... ok
+test_control_source_output_binding_even_with_matching_identity_copies (test_division_campaign.CampaignTests.test_control_source_output_binding_even_with_matching_identity_copies) ... ok
+test_controls_preserve_types_algorithms_and_abort_status (test_division_campaign.CampaignTests.test_controls_preserve_types_algorithms_and_abort_status) ... ok
+test_identical_binary_negative_control_and_probe_provenance (test_division_campaign.CampaignTests.test_identical_binary_negative_control_and_probe_provenance) ... ok
+test_pair_command_and_build_input_union (test_division_campaign.CampaignTests.test_pair_command_and_build_input_union) ... ok
+test_pair_resources_seed_identity_fallback_and_statistics (test_division_campaign.CampaignTests.test_pair_resources_seed_identity_fallback_and_statistics) ... ok
+test_profiles_require_exact_prepared_pair_and_separate_counts (test_division_campaign.CampaignTests.test_profiles_require_exact_prepared_pair_and_separate_counts) ... ok
+test_bundle_rejects_omitted_and_different_snapshot (test_int_format.EvidenceTests.test_bundle_rejects_omitted_and_different_snapshot) ... ok
+test_committed_bundle (test_int_format.EvidenceTests.test_committed_bundle) ... ok
+test_counts_require_all_fields_and_exact_allocation_mechanism (test_int_format.EvidenceTests.test_counts_require_all_fields_and_exact_allocation_mechanism) ... ok
+test_every_resource_field_required_in_both_conditions (test_int_format.EvidenceTests.test_every_resource_field_required_in_both_conditions) ... ok
+test_exact_before_after_identities_required (test_int_format.EvidenceTests.test_exact_before_after_identities_required) ... ok
+test_missing_matrix_order_samples_and_changed_output_rejected (test_int_format.EvidenceTests.test_missing_matrix_order_samples_and_changed_output_rejected) ... ok
+test_unchanged_workloads_and_focused_extremes (test_int_format.EvidenceTests.test_unchanged_workloads_and_focused_extremes) ... ok
+test_unexpected_control_matrix_rejected (test_int_format.EvidenceTests.test_unexpected_control_matrix_rejected) ... ok
+test_valid_recomputes (test_int_format.EvidenceTests.test_valid_recomputes) ... ok
+test_bundle_checks_real_evidence_and_rejects_wrong_access_counts (test_int_list_access.EvidenceTests.test_bundle_checks_real_evidence_and_rejects_wrong_access_counts) ... ok
+test_correct_evidence_recomputes (test_int_list_access.EvidenceTests.test_correct_evidence_recomputes) ... ok
+test_counter_parser_rejects_missing_duplicate_and_invalid (test_int_list_access.EvidenceTests.test_counter_parser_rejects_missing_duplicate_and_invalid) ... ok
+test_exact_unchanged_primary_and_matched_access_control (test_int_list_access.EvidenceTests.test_exact_unchanged_primary_and_matched_access_control) ... ok
+test_repeat_evidence_rejects_missing_order_resources_or_statistics (test_int_list_access.EvidenceTests.test_repeat_evidence_rejects_missing_order_resources_or_statistics) ... ok
+test_wrong_or_incomplete_evidence_fails (test_int_list_access.EvidenceTests.test_wrong_or_incomplete_evidence_fails) ... ok
+test_identical_path_control_rejects_relabelled_or_incomplete_data (test_int_list_campaign.CampaignEvidence.test_identical_path_control_rejects_relabelled_or_incomplete_data) ... ok
+test_matched_controls_and_monorphic_generic_inputs (test_int_list_campaign.CampaignEvidence.test_matched_controls_and_monorphic_generic_inputs) ... ok
+test_probes_reject_count_and_provenance_corruption (test_int_list_campaign.CampaignEvidence.test_probes_reject_count_and_provenance_corruption) ... ok
+test_saved_evidence_and_corruptions (test_int_list_campaign.CampaignEvidence.test_saved_evidence_and_corruptions) ... ok
+test_failed_run_and_wrong_or_unstable_output_fail (test_profile_workloads.HarnessTests.test_failed_run_and_wrong_or_unstable_output_fail) ... ok
+test_fixture_determinism_shapes_and_group_oracle (test_profile_workloads.HarnessTests.test_fixture_determinism_shapes_and_group_oracle) ... ok
+test_granularity_same_work_per_pair (test_profile_workloads.HarnessTests.test_granularity_same_work_per_pair) ... ok
+test_missing_profile_fails (test_profile_workloads.HarnessTests.test_missing_profile_fails) ... ok
+test_result_verifier_rejects_missing_and_wrong_statistics (test_profile_workloads.HarnessTests.test_result_verifier_rejects_missing_and_wrong_statistics) ... ok
+test_stats_and_invalid_samples (test_profile_workloads.HarnessTests.test_stats_and_invalid_samples) ... ok
+test_strict_counts (test_profile_workloads.HarnessTests.test_strict_counts) ... ok
+test_checker_rejects_stderr_or_wrong_stdout (test_sha256_pilot.PilotTests.test_checker_rejects_stderr_or_wrong_stdout) ... ok
+test_independent_statistics_and_invalid_samples (test_sha256_pilot.PilotTests.test_independent_statistics_and_invalid_samples) ... ok
+test_interleaving_excludes_warmup_and_checks_every_run (test_sha256_pilot.PilotTests.test_interleaving_excludes_warmup_and_checks_every_run) ... ok
+test_micro_requires_success_and_exactly_one_time (test_sha256_pilot.PilotTests.test_micro_requires_success_and_exactly_one_time) ... ok
+test_order_has_every_runtime_once_and_is_reproducible (test_sha256_pilot.PilotTests.test_order_has_every_runtime_once_and_is_reproducible) ... ok
+test_saved_evidence_and_corruption_detection (test_sha256_pilot.PilotTests.test_saved_evidence_and_corruption_detection) ... ok
+test_balanced_order_and_invalid_counts (test_three_way.ThreeWayTests.test_balanced_order_and_invalid_counts) ... ok
+test_complete_bundle_and_corruption (test_three_way.ThreeWayTests.test_complete_bundle_and_corruption) ... ok
+test_cpython_alias_invocation_and_identity (test_three_way.ThreeWayTests.test_cpython_alias_invocation_and_identity) ... ok
+test_historical_schema1_bundle (test_three_way.ThreeWayTests.test_historical_schema1_bundle) ... ok
+test_identity_corruption_and_refuse_existing_output (test_three_way.ThreeWayTests.test_identity_corruption_and_refuse_existing_output) ... ok
+test_preparation_evidence_rejects_corruption (test_three_way.ThreeWayTests.test_preparation_evidence_rejects_corruption) ... ok
+test_recorded_control_build_modes (test_three_way.ThreeWayTests.test_recorded_control_build_modes) ... ok
+test_sample_failures (test_three_way.ThreeWayTests.test_sample_failures) ... ok
+test_schema2_build_and_invocation_mutations (test_three_way.ThreeWayTests.test_schema2_build_and_invocation_mutations) ... ok
+test_stats_and_bad_values (test_three_way.ThreeWayTests.test_stats_and_bad_values) ... ok
+
+----------------------------------------------------------------------
+Ran 51 tests in 2.696s
+
+OK

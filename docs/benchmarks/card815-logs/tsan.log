@@ -1,0 +1,36 @@
+   Compiling compiler_builtins v0.1.160 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling libc v0.2.191
+   Compiling object v0.39.1
+   Compiling std v0.0.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std)
+   Compiling test v0.0.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/test)
+   Compiling rustc-std-workspace-core v1.99.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/rustc-std-workspace-core)
+   Compiling alloc v0.0.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling memchr v2.8.3
+   Compiling unwind v0.0.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/unwind)
+   Compiling adler2 v2.0.1
+   Compiling rustc-demangle v0.1.28
+   Compiling cfg-if v1.0.4
+   Compiling rustc-literal-escaper v0.0.8
+   Compiling rustc-std-workspace-alloc v1.99.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/rustc-std-workspace-alloc)
+   Compiling panic_abort v0.0.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/panic_abort)
+   Compiling panic_unwind v0.0.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/panic_unwind)
+   Compiling gimli v0.34.0
+   Compiling hashbrown v0.17.1
+   Compiling miniz_oxide v0.9.1
+   Compiling std_detect v0.1.5 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std_detect)
+   Compiling addr2line v0.27.1
+   Compiling rustc-std-workspace-std v1.99.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/rustc-std-workspace-std)
+   Compiling proc_macro v0.0.0 (/workspace/.pythrust-tools/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/proc_macro)
+   Compiling getopts v0.2.24
+   Compiling pythrust-rt v0.0.0 (/workspace/card815/crates/pythrust-rt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 02s
+     Running unittests src/lib.rs (/workspace/card815-run/tsan/x86_64-unknown-linux-gnu/debug/build/pythrust-rt/d502d878a6be0892/out/pythrust_rt-d502d878a6be0892)
+
+running 3 tests
+test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... ok
+test seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... ok
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 118 filtered out; finished in 0.17s
+

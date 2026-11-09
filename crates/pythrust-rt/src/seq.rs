@@ -990,6 +990,42 @@ pub unsafe extern "C" fn pt_list_set(s: *const PtSeq, i: i64, v: u64) -> u8 {
     0
 }
 
+/// Ordinary integer-list read, selected by the compiler's monomorphic type.
+/// Uses the same borrow and negative/bounds checks as [`pt_seq_get`].
+/// Integers own no reference, so retaining a slot does no work.
+///
+/// # Safety
+///
+/// `s` is a live `list[int]` (descriptor exactly `li`) and `status` points
+/// to a writable byte. This is an internal compiler/runtime contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_int_list_get(s: *const PtSeq, i: i64, status: *mut u8) -> u64 {
+    // SAFETY: guaranteed by the caller, as for pt_seq_get.
+    let s = unsafe { seq(s as u64) };
+    let Some((_, v)) = s.items.get(i, |_, _| {}) else {
+        // SAFETY: guaranteed by the caller.
+        unsafe { report(status, 1) };
+        return 0;
+    };
+    // SAFETY: guaranteed by the caller.
+    unsafe { report(status, 0) };
+    v
+}
+
+/// Ordinary integer-list store. A failed bounds check changes nothing.
+/// The same `Slot::replace` borrow/synchronization path is retained;
+/// integer slots need no retain, transitive marking or release.
+///
+/// # Safety
+///
+/// `s` is a live `list[int]` (descriptor exactly `li`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_int_list_set(s: *const PtSeq, i: i64, v: u64) -> u8 {
+    // SAFETY: guaranteed by the caller, as for pt_list_set.
+    let s = unsafe { seq(s as u64) };
+    u8::from(s.items.replace(i, v, |_| {}).is_none())
+}
+
 /// Adds a reference. Null is ignored.
 ///
 /// # Safety
@@ -1609,6 +1645,14 @@ mod tests {
     /// success/failure. Invalid stores leave the list untouched, even marked.
     #[test]
     fn integer_access_preserves_bounds_status_and_marked_stores() {
+        integer_bounds(pt_seq_get, pt_list_set);
+        integer_bounds(pt_int_list_get, pt_int_list_set);
+    }
+
+    fn integer_bounds(
+        get: unsafe extern "C" fn(*const PtSeq, i64, *mut u8) -> u64,
+        set: unsafe extern "C" fn(*const PtSeq, i64, u64) -> u8,
+    ) {
         for marked in [false, true] {
             for values in [&[][..], &[10, 20, 30][..]] {
                 let list = make(b"li", values);
@@ -1619,26 +1663,26 @@ mod tests {
                 // SAFETY: list and status stay live; integer slots own no refs.
                 unsafe {
                     for i in [i64::MIN, -4, 3, i64::MAX] {
-                        assert_eq!(pt_seq_get(list, i, &mut status), 0);
+                        assert_eq!(get(list, i, &mut status), 0);
                         assert_eq!(status, 1);
-                        assert_eq!(pt_list_set(list, i, 99), 1);
+                        assert_eq!(set(list, i, 99), 1);
                     }
                     assert_eq!(&*seq(list as u64).items.borrow(), values);
                     if values.is_empty() {
                         for i in [-1, 0, 1] {
-                            assert_eq!(pt_seq_get(list, i, &mut status), 0);
+                            assert_eq!(get(list, i, &mut status), 0);
                             assert_eq!(status, 1);
-                            assert_eq!(pt_list_set(list, i, 99), 1);
+                            assert_eq!(set(list, i, 99), 1);
                         }
                     } else {
-                        assert_eq!(pt_list_set(list, -3, u64::MAX), 0);
-                        assert_eq!(pt_list_set(list, -1, 7), 0);
-                        assert_eq!(pt_seq_get(list, 0, &mut status), u64::MAX);
+                        assert_eq!(set(list, -3, u64::MAX), 0);
+                        assert_eq!(set(list, -1, 7), 0);
+                        assert_eq!(get(list, 0, &mut status), u64::MAX);
                         assert_eq!(status, 0);
                         seq(list as u64).rc.inc();
                         let held = pt_seq_hold(list) as *mut PtSeq;
                         // Ordinary reads still borrow under an existing hold.
-                        assert_eq!(pt_seq_get(list, -1, &mut status), 7);
+                        assert_eq!(get(list, -1, &mut status), 7);
                         assert_eq!(status, 0);
                         assert_eq!(pt_seq_get_held(held, -1, &mut status), 7);
                         assert_eq!(pt_seq_item_held(held, -1, &mut status), 7);
@@ -1683,6 +1727,11 @@ mod tests {
 
     #[test]
     fn integer_access_keeps_shared_reads_synchronized() {
+        integer_shared_reads(pt_seq_get);
+        integer_shared_reads(pt_int_list_get);
+    }
+
+    fn integer_shared_reads(get: unsafe extern "C" fn(*const PtSeq, i64, *mut u8) -> u64) {
         let list = make(b"li", &[1, 2, 3]);
         mark(b"li", list as u64);
         let address = list as usize;
@@ -1694,7 +1743,7 @@ mod tests {
                     for i in 0..if cfg!(miri) { 8 } else { 10_000 } {
                         // SAFETY: owner keeps list live until every reader joins.
                         unsafe {
-                            assert_eq!(pt_seq_get(list, i % 3, &mut status), (i % 3 + 1) as u64);
+                            assert_eq!(get(list, i % 3, &mut status), (i % 3 + 1) as u64);
                             assert_eq!(status, 0);
                         }
                     }

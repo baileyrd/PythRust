@@ -1,0 +1,59 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/cli.rs (target/debug/deps/cli-cc3c076f54dd426d)
+
+running 22 tests
+test a_failed_final_flush_is_a_runtime_error ... ok
+test d4_cli_running_outer_loops_are_not_hidden_by_other_temporaries ... ok
+test d4_cli_pending_iterables_are_not_running_loops ... ok
+test d4_cli_reports_context_and_safe_guidance ... ok
+test discovery_does_not_resolve_symlinks ... ok
+test discovery_follows_the_programs_path_and_paths_may_climb ... ok
+test int_accumulator_errors_whatever_the_loop_runs ... ok
+test int_power_overflow_is_a_runtime_error ... ok
+test fclone_lites_manifest_checks_its_fast_driver ... ok
+test negative_int_exponent_says_use_a_float_base ... ok
+test output_precedes_the_runtime_error_on_one_stream ... ok
+test loose_callee_stores_reach_tempered_call_checks ... ok
+test run_passes_the_arguments_after_the_file_to_sys_argv ... ok
+test return_copy_diagnostics_are_actionable_in_every_cli_mode ... ok
+test rust_binding_errors_render_against_their_file ... ok
+test joined_receiver_aliases_reject_before_any_execution ... ok
+test rust_binding_names_are_resolved ... ok
+test rust_binding_checks_and_run_and_build_name_their_gaps ... ok
+test the_rust_flag_names_the_manifest ... ok
+test rust_binding_without_functions_is_refused ... ok
+test the_manifest_is_found_above_and_read_only_when_needed ... ok
+test d4_concrete_fixes_compile_and_preserve_values ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+     Running tests/expression_limits.rs (target/debug/deps/expression_limits-b58c24403a6b89e1)
+
+running 3 tests
+test expression_depth_boundary_and_wide_controls ... ok
+test recursive_wrappers_cannot_hide_flat_depth ... ok
+test long_flat_expressions_return_source_diagnostics ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/scalar_pair.rs (target/debug/deps/scalar_pair-905b4796d981001e)
+
+running 1 test
+test unpack_eliminates_allocations_and_mixed_sites_keep_boxed_fallback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+     Running tests/signed_half.rs (target/debug/deps/signed_half-9cb2078d88bf4ddc)
+
+running 1 test
+test half_preserves_checked_overflow_and_fault_order ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/string_chain.rs (target/debug/deps/string_chain-403b8e572b4a0b9d)
+
+running 1 test
+test chains_eliminate_prefix_allocations_and_copies_with_fallback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+
