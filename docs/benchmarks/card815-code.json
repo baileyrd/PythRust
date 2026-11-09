@@ -1,0 +1,420 @@
+{
+  "baseline": {
+    "sorting": {
+      "binary": {
+        "path": "/workspace/card815-run/baseline/sorting",
+        "sha256": "a6cd90408196b5847cb2cd082f6ed9889d6af30d05b511292e0ad73004983428"
+      },
+      "disassembly": {
+        "path": "/workspace/card815/docs/benchmarks/card815-code/sorting-baseline.s",
+        "sha256": "3c7a48e38c3f0b6bf0b70208232451a12ae7fb9f748bd01fc4fff2e9c467fe1a"
+      },
+      "symbols": [
+        "pythrust_main",
+        "pt_seq_get",
+        "pt_list_set",
+        "py1_quicksort"
+      ],
+      "commands": [
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pythrust_main",
+          "/workspace/card815-run/baseline/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_seq_get",
+          "/workspace/card815-run/baseline/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_list_set",
+          "/workspace/card815-run/baseline/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_get",
+          "/workspace/card815-run/baseline/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_set",
+          "/workspace/card815-run/baseline/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=py1_quicksort",
+          "/workspace/card815-run/baseline/sorting"
+        ]
+      ]
+    },
+    "int_access": {
+      "binary": {
+        "path": "/workspace/card815-run/baseline/int_access",
+        "sha256": "12020a33ebd3661e4e5f38a809753f3abf87bbfeccf272f0c7fec1067823558b"
+      },
+      "disassembly": {
+        "path": "/workspace/card815/docs/benchmarks/card815-code/int_access-baseline.s",
+        "sha256": "b27e9b0886bf33923b8335876849ccee6608ab3122efe24844739c13560b8824"
+      },
+      "symbols": [
+        "pythrust_main",
+        "pt_seq_get",
+        "pt_list_set",
+        "py1_access"
+      ],
+      "commands": [
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pythrust_main",
+          "/workspace/card815-run/baseline/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_seq_get",
+          "/workspace/card815-run/baseline/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_list_set",
+          "/workspace/card815-run/baseline/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_get",
+          "/workspace/card815-run/baseline/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_set",
+          "/workspace/card815-run/baseline/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=py1_access",
+          "/workspace/card815-run/baseline/int_access"
+        ]
+      ]
+    },
+    "float_access": {
+      "binary": {
+        "path": "/workspace/card815-run/baseline/float_access",
+        "sha256": "62836043aaefb71984db79e38fcafd5a2e864bb7a5d7cd501e3d5f708d20b170"
+      },
+      "disassembly": {
+        "path": "/workspace/card815/docs/benchmarks/card815-code/float_access-baseline.s",
+        "sha256": "d0ba66f3dd0052785b1a47ee486ec5f8f170f480dec80672ab41ba4df51952c2"
+      },
+      "symbols": [
+        "pythrust_main",
+        "pt_seq_get",
+        "pt_list_set",
+        "py1_access"
+      ],
+      "commands": [
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pythrust_main",
+          "/workspace/card815-run/baseline/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_seq_get",
+          "/workspace/card815-run/baseline/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_list_set",
+          "/workspace/card815-run/baseline/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_get",
+          "/workspace/card815-run/baseline/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_set",
+          "/workspace/card815-run/baseline/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=py1_access",
+          "/workspace/card815-run/baseline/float_access"
+        ]
+      ]
+    },
+    "strings": {
+      "binary": {
+        "path": "/workspace/card815-run/baseline/strings",
+        "sha256": "d92b52a4b40460c67a8ab19845c0a9c1eb80a8131ba53b46959ed764b914ace1"
+      },
+      "disassembly": {
+        "path": "/workspace/card815/docs/benchmarks/card815-code/strings-baseline.s",
+        "sha256": "0359d1bb364a8aa91c65f6007475a7bfe0213635264a10b9939eb0f9c6910d56"
+      },
+      "symbols": [
+        "pythrust_main"
+      ],
+      "commands": [
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pythrust_main",
+          "/workspace/card815-run/baseline/strings"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_seq_get",
+          "/workspace/card815-run/baseline/strings"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_list_set",
+          "/workspace/card815-run/baseline/strings"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_get",
+          "/workspace/card815-run/baseline/strings"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_set",
+          "/workspace/card815-run/baseline/strings"
+        ]
+      ]
+    }
+  },
+  "candidate": {
+    "sorting": {
+      "binary": {
+        "path": "/workspace/card815-revised/candidate/sorting",
+        "sha256": "3b2e6bcb59f7900ccee2574962b243096ea6cd183536730c7acfe74c465a3e51"
+      },
+      "disassembly": {
+        "path": "/workspace/card815/docs/benchmarks/card815-code/sorting-candidate.s",
+        "sha256": "ed248a49d8a05a629c451de5659a80b12b12d1cfcfba3d545dc3ae0e85cae78a"
+      },
+      "symbols": [
+        "pythrust_main",
+        "pt_int_list_get",
+        "pt_int_list_set",
+        "py1_quicksort"
+      ],
+      "commands": [
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pythrust_main",
+          "/workspace/card815-revised/candidate/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_seq_get",
+          "/workspace/card815-revised/candidate/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_list_set",
+          "/workspace/card815-revised/candidate/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_get",
+          "/workspace/card815-revised/candidate/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_set",
+          "/workspace/card815-revised/candidate/sorting"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=py1_quicksort",
+          "/workspace/card815-revised/candidate/sorting"
+        ]
+      ]
+    },
+    "int_access": {
+      "binary": {
+        "path": "/workspace/card815-revised/candidate/int_access",
+        "sha256": "5e81835740cf4b06398ed88fbeec4827a81ec724fd1b0ce2c42c72bf3e81a5c2"
+      },
+      "disassembly": {
+        "path": "/workspace/card815/docs/benchmarks/card815-code/int_access-candidate.s",
+        "sha256": "c6ac8c13ee5392b6edce762f4d8f12cafe1a9c3816f7946c8d189192302843dd"
+      },
+      "symbols": [
+        "pythrust_main",
+        "pt_int_list_get",
+        "pt_int_list_set",
+        "py1_access"
+      ],
+      "commands": [
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pythrust_main",
+          "/workspace/card815-revised/candidate/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_seq_get",
+          "/workspace/card815-revised/candidate/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_list_set",
+          "/workspace/card815-revised/candidate/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_get",
+          "/workspace/card815-revised/candidate/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_set",
+          "/workspace/card815-revised/candidate/int_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=py1_access",
+          "/workspace/card815-revised/candidate/int_access"
+        ]
+      ]
+    },
+    "float_access": {
+      "binary": {
+        "path": "/workspace/card815-revised/candidate/float_access",
+        "sha256": "783a1afad8dee3378108321143361d0bbcd6294a7349ebf7e19a3f70d30c00f9"
+      },
+      "disassembly": {
+        "path": "/workspace/card815/docs/benchmarks/card815-code/float_access-candidate.s",
+        "sha256": "9777575da2065e064c99b97b487cdff0fce8bbe424c697fe88335874b72db1e6"
+      },
+      "symbols": [
+        "pythrust_main",
+        "pt_seq_get",
+        "pt_list_set",
+        "py1_access"
+      ],
+      "commands": [
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pythrust_main",
+          "/workspace/card815-revised/candidate/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_seq_get",
+          "/workspace/card815-revised/candidate/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_list_set",
+          "/workspace/card815-revised/candidate/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_get",
+          "/workspace/card815-revised/candidate/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_set",
+          "/workspace/card815-revised/candidate/float_access"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=py1_access",
+          "/workspace/card815-revised/candidate/float_access"
+        ]
+      ]
+    },
+    "strings": {
+      "binary": {
+        "path": "/workspace/card815-revised/candidate/strings",
+        "sha256": "7601f892a4f2b4aab425205bed2f2ecb78b189dd61de2f3caefde81e33bf26e7"
+      },
+      "disassembly": {
+        "path": "/workspace/card815/docs/benchmarks/card815-code/strings-candidate.s",
+        "sha256": "7d5b786bcc4ced963e0eeaf4e25d803e507e787c7d2fbefafeaef899789c444b"
+      },
+      "symbols": [
+        "pythrust_main"
+      ],
+      "commands": [
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pythrust_main",
+          "/workspace/card815-revised/candidate/strings"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_seq_get",
+          "/workspace/card815-revised/candidate/strings"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_list_set",
+          "/workspace/card815-revised/candidate/strings"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_get",
+          "/workspace/card815-revised/candidate/strings"
+        ],
+        [
+          "objdump",
+          "-d",
+          "--disassemble=pt_int_list_set",
+          "/workspace/card815-revised/candidate/strings"
+        ]
+      ]
+    }
+  }
+}

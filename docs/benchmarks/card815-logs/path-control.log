@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/workspace/card815/bench/int_list_path_control.py", line 71, in <module>
+    if sys.argv[1]=='collect':collect(Path(sys.argv[2]),Path(sys.argv[3]))
+                              ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/card815/bench/int_list_path_control.py", line 30, in collect
+    if not row['byte_identical']:raise ValueError('not a negative string control')
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not a negative string control

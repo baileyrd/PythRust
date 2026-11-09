@@ -105,6 +105,13 @@ impl FnGen<'_, '_, '_> {
         dest: LocalId,
         span: Span,
     ) -> Result<Value> {
+        // Only ordinary accesses to the monomorphic list[int] type select
+        // the typed entry. Holds and every other descriptor keep their path.
+        let get = if matches!(get, Rt::SeqGet) && self.int_list(s) {
+            Rt::IntListGet
+        } else {
+            get
+        };
         let (s, i) = (self.operand(s), self.operand(i));
         let (v, status) = self.with_status(get, &[s, i])?;
         self.raise_on(status, ExcKind::Index, LIST_INDEX, span)?;
@@ -155,8 +162,22 @@ impl FnGen<'_, '_, '_> {
         span: Span,
     ) -> Result<()> {
         let (s, i, v) = (self.operand(list), self.operand(index), self.slot(value));
-        let status = self.call_rt_value(Rt::ListSet, &[s, i, v])?;
+        let set = if self.int_list(list) {
+            Rt::IntListSet
+        } else {
+            Rt::ListSet
+        };
+        let status = self.call_rt_value(set, &[s, i, v])?;
         self.raise_on(status, ExcKind::Index, LIST_STORE, span)
+    }
+
+    /// The lowered type, never an annotation or result-type guess, proves
+    /// that every slot is an integer with no owned/reachable heap value.
+    fn int_list(&self, op: Operand) -> bool {
+        let Ty::List(id) = self.func.ty(op) else {
+            return false;
+        };
+        matches!(self.types.get(id.0), Some(Compound::List(Ty::Int)))
     }
 
     /// Raises `kind` holding `message` when a runtime call's status is 1.

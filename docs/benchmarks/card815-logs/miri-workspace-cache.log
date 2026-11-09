@@ -1,0 +1,298 @@
+Preparing a sysroot for Miri (target: x86_64-unknown-linux-gnu)... done
+   Compiling pythrust-rt v0.0.0 (/workspace/card815/crates/pythrust-rt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.44s
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/pythrust-rt/cda474ea4af09f39/out/pythrust_rt-cda474ea4af09f39)
+Trying seed: 0
+Trying seed: 7
+Trying seed: 6
+Trying seed: 5
+
+running 30 tests
+test seq::tests::a_held_item_is_borrowed_and_counts_nothing ... ok
+test seq::tests::a_hold_reads_without_borrowing_and_ends_free ... ok
+
+running 30 tests
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... test seq::tests::a_held_item_is_borrowed_and_counts_nothing ... ok
+test seq::tests::a_hold_reads_without_borrowing_and_ends_free ... ok
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... ok
+
+running 30 tests
+test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... 
+running 30 tests
+test seq::tests::a_held_item_is_borrowed_and_counts_nothing ... test seq::tests::a_held_item_is_borrowed_and_counts_nothing ... ok
+test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... ok
+test seq::tests::a_hold_reads_without_borrowing_and_ends_free ... ok
+test seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... ok
+ok
+test seq::tests::a_hold_reads_without_borrowing_and_ends_free ... test seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... ok
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... ok
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... ok
+ok
+test seq::tests::marked_holds_survive_concurrent_readers ... test seq::tests::marked_holds_survive_concurrent_readers ... ok
+test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... ok
+test seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... ok
+test sync::tests::a_marked_read_retains_under_its_borrow ... okok
+
+test sync::tests::a_marked_store_retains_before_it_lands ... test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... ok
+ok
+test sync::tests::a_slot_admits_many_readers_on_one_thread ... test sync::tests::a_marked_read_retains_under_its_borrow ... ok
+test sync::tests::atomics_cost ... okignored, a measurement, not a check
+
+ok
+test sync::tests::copying_reads_and_swaps_take_python_indexes ... test sync::tests::a_marked_store_retains_before_it_lands ... oktest seq::tests::marked_holds_survive_concurrent_readers ... 
+test seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... ok
+test sync::tests::copying_reads_respect_a_held_borrow ... ok
+test sync::tests::a_slot_admits_many_readers_on_one_thread ... ok
+test sync::tests::marked_counts_balance_across_threads ... ok
+test sync::tests::atomics_cost ... ignored, a measurement, not a check
+test sync::tests::copying_reads_and_swaps_take_python_indexes ... ok
+oktest sync::tests::marked_slots_admit_concurrent_readers ... 
+test sync::tests::copying_reads_respect_a_held_borrow ... ok
+ok
+test seq::tests::marked_holds_survive_concurrent_readers ... test sync::tests::marked_counts_balance_across_threads ... ok
+test sync::tests::a_marked_read_retains_under_its_borrow ... ok
+test sync::tests::a_marked_store_retains_before_it_lands ... ok
+ok
+test sync::tests::marked_slots_admit_concurrent_readers ... test sync::tests::a_slot_admits_many_readers_on_one_thread ... ok
+test sync::tests::atomics_cost ... ignored, a measurement, not a check
+test sync::tests::copying_reads_and_swaps_take_python_indexes ... ok
+test sync::tests::copying_reads_respect_a_held_borrow ... ok
+test sync::tests::marked_counts_balance_across_threads ... ok
+test sync::tests::a_marked_read_retains_under_its_borrow ... ok
+test sync::tests::a_marked_store_retains_before_it_lands ... ok
+test sync::tests::marking_keeps_the_count_and_is_idempotent ... ok
+test sync::tests::a_slot_admits_many_readers_on_one_thread ... ok
+test sync::tests::unmarked_counts_count ... ok
+oktest sync::tests::marked_slots_admit_concurrent_readers ... 
+test sync::tests::atomics_cost ... ignored, a measurement, not a check
+ok
+test task::tests::a_list_of_futures_holds_their_handles ... test sync::tests::copying_reads_and_swaps_take_python_indexes ... ok
+test sync::tests::copying_reads_respect_a_held_borrow ... ok
+test task::tests::a_marked_argument_is_counted_by_every_worker ... ok
+test sync::tests::marked_counts_balance_across_threads ... ok
+ok
+ok
+test task::tests::a_task_publishes_its_unfinished_line ... test sync::tests::marked_slots_admit_concurrent_readers ... test sync::tests::marking_keeps_the_count_and_is_idempotent ... okok
+
+test sync::tests::unmarked_counts_count ... test task::tests::a_worker_starts_each_task_clean ... ok
+test task::tests::a_list_of_futures_holds_their_handles ... ok
+test task::tests::an_abandoned_outcome_is_released_by_the_worker ... ok
+test task::tests::a_marked_argument_is_counted_by_every_worker ... ok
+test task::tests::an_outcome_taken_is_released_on_the_submitters_thread ... ok
+test sync::tests::marking_keeps_the_count_and_is_idempotent ... ok
+test sync::tests::unmarked_counts_count ... ok
+test task::tests::a_list_of_futures_holds_their_handles ... ok
+test task::tests::a_task_publishes_its_unfinished_line ... ok
+test task::tests::a_marked_argument_is_counted_by_every_worker ... ok
+test sync::tests::marking_keeps_the_count_and_is_idempotent ... ok
+test task::tests::a_worker_starts_each_task_clean ... ok
+test sync::tests::unmarked_counts_count ... ok
+ok
+test task::tests::a_list_of_futures_holds_their_handles ... test task::tests::an_abandoned_outcome_is_released_by_the_worker ... ok
+test task::tests::a_task_publishes_its_unfinished_line ... ok
+ok
+test task::tests::a_worker_starts_each_task_clean ... test task::tests::a_marked_argument_is_counted_by_every_worker ... ok
+test task::tests::an_outcome_taken_is_released_on_the_submitters_thread ... ok
+test task::tests::an_abandoned_outcome_is_released_by_the_worker ... ok
+test task::tests::an_outcome_taken_is_released_on_the_submitters_thread ... ok
+test task::tests::a_task_publishes_its_unfinished_line ... ok
+test task::tests::a_worker_starts_each_task_clean ... ok
+test task::tests::an_abandoned_outcome_is_released_by_the_worker ... ok
+test task::tests::an_outcome_taken_is_released_on_the_submitters_thread ... ok
+test task::tests::handles_count_until_the_last ... ok
+test task::tests::leaving_the_block_waits_for_every_task ... ok
+test task::tests::null_executors_and_futures_are_nothing ... ok
+test task::tests::outcomes_holding_a_marked_argument_are_released_once ... ok
+test task::tests::results_are_taken_once_and_end_at_an_exception ... ok
+test task::tests::tasks_give_their_results ... ok
+test task::tests::handles_count_until_the_last ... ok
+test task::tests::the_default_pool_is_cpythons ... ok
+test task::tests::leaving_the_block_waits_for_every_task ... ok
+oktest task::tests::what_escapes_a_task_is_raised_by_each_result ... 
+test task::tests::handles_count_until_the_last ... ok
+ok
+
+test result: okoktest task::tests::null_executors_and_futures_are_nothing ... 
+. 29 passed; 0 failed; 1 ignored; 0 measured; 91 filtered outtest task::tests::handles_count_until_the_last ... ; finished in 9.29s
+
+ok
+Trying seed: 4
+test task::tests::leaving_the_block_waits_for_every_task ... ok
+ok
+test task::tests::leaving_the_block_waits_for_every_task ... test task::tests::outcomes_holding_a_marked_argument_are_released_once ... ok
+test task::tests::null_executors_and_futures_are_nothing ... ok
+test task::tests::outcomes_holding_a_marked_argument_are_released_once ... ok
+test task::tests::null_executors_and_futures_are_nothing ... ok
+test task::tests::outcomes_holding_a_marked_argument_are_released_once ... ok
+test task::tests::results_are_taken_once_and_end_at_an_exception ... ok
+test task::tests::results_are_taken_once_and_end_at_an_exception ... ok
+test task::tests::tasks_give_their_results ... ok
+ok
+test task::tests::results_are_taken_once_and_end_at_an_exception ... test task::tests::tasks_give_their_results ... ok
+oktest task::tests::the_default_pool_is_cpythons ... 
+test task::tests::the_default_pool_is_cpythons ... ok
+test task::tests::tasks_give_their_results ... okok
+
+test task::tests::what_escapes_a_task_is_raised_by_each_result ... test task::tests::what_escapes_a_task_is_raised_by_each_result ... ok
+
+test result: okok
+. 29 passed; 0 failed; 1 ignored; 0 measured; 91 filtered out; finished in 9.24s
+
+
+test result: okTrying seed: 3
+. 29 passed; 0 failed; 1 ignored; 0 measured; 91 filtered outok
+; finished in 9.08s
+
+test task::tests::the_default_pool_is_cpythons ... Trying seed: 1
+ok
+test task::tests::what_escapes_a_task_is_raised_by_each_result ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 91 filtered out; finished in 9.39s
+
+Trying seed: 2
+
+running 30 tests
+test seq::tests::a_held_item_is_borrowed_and_counts_nothing ... ok
+test seq::tests::a_hold_reads_without_borrowing_and_ends_free ... ok
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... ok
+test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... ok
+test seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... ok
+test seq::tests::marked_holds_survive_concurrent_readers ... ok
+test sync::tests::a_marked_read_retains_under_its_borrow ... ok
+test sync::tests::a_marked_store_retains_before_it_lands ... ok
+test sync::tests::a_slot_admits_many_readers_on_one_thread ... ok
+test sync::tests::atomics_cost ... ignored, a measurement, not a check
+test sync::tests::copying_reads_and_swaps_take_python_indexes ... ok
+test sync::tests::copying_reads_respect_a_held_borrow ... ok
+test sync::tests::marked_counts_balance_across_threads ... ok
+test sync::tests::marked_slots_admit_concurrent_readers ... ok
+test sync::tests::marking_keeps_the_count_and_is_idempotent ... ok
+test sync::tests::unmarked_counts_count ... ok
+test task::tests::a_list_of_futures_holds_their_handles ... ok
+test task::tests::a_marked_argument_is_counted_by_every_worker ... 
+running 30 tests
+test seq::tests::a_held_item_is_borrowed_and_counts_nothing ... ok
+test seq::tests::a_hold_reads_without_borrowing_and_ends_free ... ok
+test task::tests::a_task_publishes_its_unfinished_line ... 
+running 30 tests
+oktest seq::tests::a_held_item_is_borrowed_and_counts_nothing ... 
+test task::tests::a_worker_starts_each_task_clean ... ok
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... ok
+test task::tests::an_abandoned_outcome_is_released_by_the_worker ... okok
+
+test task::tests::an_outcome_taken_is_released_on_the_submitters_thread ... test seq::tests::a_hold_reads_without_borrowing_and_ends_free ... ok
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... 
+running 30 tests
+test seq::tests::a_held_item_is_borrowed_and_counts_nothing ... ok
+test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... ok
+test seq::tests::a_hold_reads_without_borrowing_and_ends_free ... okok
+
+test seq::tests::integer_access_keeps_shared_reads_synchronized ... test seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... ok
+test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... okok
+
+oktest seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... 
+test seq::tests::marked_holds_survive_concurrent_readers ... test seq::tests::integer_access_leaves_owned_element_fallbacks_counted ... ok
+test seq::tests::integer_access_preserves_bounds_status_and_marked_stores ... ok
+ok
+test seq::tests::marked_holds_survive_concurrent_readers ... test seq::tests::marked_holds_survive_concurrent_readers ... ok
+test sync::tests::a_marked_read_retains_under_its_borrow ... ok
+test sync::tests::a_marked_store_retains_before_it_lands ... ok
+ok
+test task::tests::handles_count_until_the_last ... test sync::tests::a_marked_read_retains_under_its_borrow ... okok
+
+test sync::tests::a_marked_read_retains_under_its_borrow ... test sync::tests::a_slot_admits_many_readers_on_one_thread ... ok
+ok
+test task::tests::leaving_the_block_waits_for_every_task ... test sync::tests::a_marked_store_retains_before_it_lands ... ok
+oktest sync::tests::atomics_cost ... 
+ok
+test sync::tests::a_marked_store_retains_before_it_lands ... test sync::tests::a_slot_admits_many_readers_on_one_thread ... ignored, a measurement, not a check
+test sync::tests::copying_reads_and_swaps_take_python_indexes ... ok
+test sync::tests::atomics_cost ... ok
+ignored, a measurement, not a check
+ok
+test sync::tests::a_slot_admits_many_readers_on_one_thread ... test sync::tests::copying_reads_and_swaps_take_python_indexes ... test sync::tests::copying_reads_respect_a_held_borrow ... ok
+test task::tests::null_executors_and_futures_are_nothing ... ok
+ok
+test sync::tests::marked_counts_balance_across_threads ... test task::tests::outcomes_holding_a_marked_argument_are_released_once ... ok
+ok
+test sync::tests::atomics_cost ... test sync::tests::copying_reads_respect_a_held_borrow ... ignored, a measurement, not a check
+ok
+test sync::tests::marked_slots_admit_concurrent_readers ... test sync::tests::copying_reads_and_swaps_take_python_indexes ... ok
+test sync::tests::marked_counts_balance_across_threads ... ok
+test sync::tests::copying_reads_respect_a_held_borrow ... ok
+test sync::tests::marked_counts_balance_across_threads ... ok
+ok
+test sync::tests::marked_slots_admit_concurrent_readers ... test task::tests::results_are_taken_once_and_end_at_an_exception ... ok
+test sync::tests::marked_slots_admit_concurrent_readers ... ok
+test task::tests::tasks_give_their_results ... ok
+test task::tests::the_default_pool_is_cpythons ... ok
+test task::tests::what_escapes_a_task_is_raised_by_each_result ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 91 filtered outok
+test sync::tests::marking_keeps_the_count_and_is_idempotent ... ; finished in 9.13s
+
+ok
+test sync::tests::unmarked_counts_count ... ok
+oktest sync::tests::marking_keeps_the_count_and_is_idempotent ... 
+test task::tests::a_list_of_futures_holds_their_handles ... ok
+test sync::tests::unmarked_counts_count ... ok
+test task::tests::a_marked_argument_is_counted_by_every_worker ... ok
+test task::tests::a_list_of_futures_holds_their_handles ... ok
+test sync::tests::marking_keeps_the_count_and_is_idempotent ... ok
+test task::tests::a_marked_argument_is_counted_by_every_worker ... ok
+test task::tests::a_task_publishes_its_unfinished_line ... ok
+test sync::tests::unmarked_counts_count ... ok
+test task::tests::a_worker_starts_each_task_clean ... ok
+ok
+test task::tests::an_abandoned_outcome_is_released_by_the_worker ... test task::tests::a_list_of_futures_holds_their_handles ... ok
+test task::tests::an_outcome_taken_is_released_on_the_submitters_thread ... ok
+test task::tests::a_marked_argument_is_counted_by_every_worker ... ok
+test task::tests::a_task_publishes_its_unfinished_line ... ok
+test task::tests::a_worker_starts_each_task_clean ... ok
+test task::tests::a_task_publishes_its_unfinished_line ... ok
+test task::tests::a_worker_starts_each_task_clean ... ok
+test task::tests::an_abandoned_outcome_is_released_by_the_worker ... ok
+test task::tests::an_abandoned_outcome_is_released_by_the_worker ... ok
+test task::tests::an_outcome_taken_is_released_on_the_submitters_thread ... ok
+test task::tests::an_outcome_taken_is_released_on_the_submitters_thread ... ok
+test task::tests::handles_count_until_the_last ... ok
+test task::tests::leaving_the_block_waits_for_every_task ... ok
+test task::tests::null_executors_and_futures_are_nothing ... ok
+test task::tests::outcomes_holding_a_marked_argument_are_released_once ... ok
+ok
+test task::tests::results_are_taken_once_and_end_at_an_exception ... test task::tests::handles_count_until_the_last ... ok
+test task::tests::leaving_the_block_waits_for_every_task ... ok
+test task::tests::handles_count_until_the_last ... ok
+test task::tests::tasks_give_their_results ... ok
+oktest task::tests::leaving_the_block_waits_for_every_task ... 
+test task::tests::null_executors_and_futures_are_nothing ... ok
+test task::tests::outcomes_holding_a_marked_argument_are_released_once ... ok
+ok
+test task::tests::the_default_pool_is_cpythons ... test task::tests::null_executors_and_futures_are_nothing ... ok
+test task::tests::what_escapes_a_task_is_raised_by_each_result ... ok
+test task::tests::outcomes_holding_a_marked_argument_are_released_once ... ok
+test task::tests::results_are_taken_once_and_end_at_an_exception ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 91 filtered out; finished in 9.40s
+
+ok
+test task::tests::tasks_give_their_results ... ok
+test task::tests::results_are_taken_once_and_end_at_an_exception ... ok
+test task::tests::the_default_pool_is_cpythons ... ok
+test task::tests::what_escapes_a_task_is_raised_by_each_result ... ok
+test task::tests::tasks_give_their_results ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 91 filtered out; finished in 9.10s
+
+ok
+test task::tests::the_default_pool_is_cpythons ... ok
+test task::tests::what_escapes_a_task_is_raised_by_each_result ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 91 filtered out; finished in 9.55s
+
+   Doc-tests pythrust_rt
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

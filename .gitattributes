@@ -4,3 +4,7 @@
 
 # Preserve raw disassembly bytes, including objdump padding whitespace.
 docs/benchmarks/card814-code/*.s -whitespace
+docs/benchmarks/card815-code/*.s -whitespace
+
+# Preserve raw compiler/test output, including progress-line whitespace.
+docs/benchmarks/card815-logs/*.log -whitespace

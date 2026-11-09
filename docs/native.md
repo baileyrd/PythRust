@@ -192,3 +192,20 @@ These are current named gaps, also enforced by `NATIVE_GAPS` in `tests/conforman
 
 - **Targets:** CI covers x86-64 Linux, AArch64 Linux, AArch64 macOS and x86-64 Windows (MSVC), one runner each, since codegen targets the host and links with the host linker. x86-64 macOS and AArch64 Windows are untested. The Windows GNU toolchain (MinGW) is not supported.
 - **Diagnostics:** for a native program that fails, `corpus_matches_native` requires its stderr to equal `run`'s byte for byte (message, location, carets). CI checks this on every target above.
+
+## Compiler-selected integer-list experiment #815
+
+D66 adds internal `pt_int_list_get`/`pt_int_list_set` calls only for ordinary
+accesses whose lowered receiver is a monomorphic `list[int]`. They retain the
+existing Slot borrow/synchronization and Python bounds/status behavior while
+omitting integer descriptor ownership traversal. Float and other descriptors,
+tuple fields and held reads keep their existing interfaces. This changes the
+internal compiler/runtime interface, so a compiler must still use its matching
+runtime; it changes no representation or binding/task ABI.
+
+The [fresh evidence](benchmarks/card815.md) supports the bounded candidate for
+independent review: sorting improves 47–48%, isolated/inferred integer access
+70–72%, with float/generic controls within spread. Small string shifts and a
+separate identical-byte diagnostic are reported explicitly. Local parity,
+release, Miri and affected TSan checks pass; hosted CI and independent exact-head
+review remain necessary. #810 remains rejected and D29 C remains parked.

@@ -347,3 +347,14 @@ the observed small string shift are qualified by byte-identical same-path contro
 The final numeric gap to ordinary handwritten Rust is 1.86× on this host. No
 production helper inliner, list or string change is included; required independent
 review and hosted CI remain gates.
+
+## Compiler-selected integer-list access #815
+
+[Fresh matched measurements, raw evidence and limitations](benchmarks/card815.md)
+compare current main 626a348 with a narrow internal compiler-selected integer
+access interface. Sorting medians fall 47–48% and integer load/store controls
+70–72% in 24/42 balanced rounds; float/inferred-float controls stay within spread.
+The report investigates small string shifts with same-path and identical-byte
+controls, separates profiles/counts, and records parity/release/Miri/TSan checks.
+This supports independent review, not merge/Done; the rejected #810 shared
+accessor and parked D29 C remain rejected/parked.

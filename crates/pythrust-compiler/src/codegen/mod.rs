@@ -117,12 +117,14 @@ enum Rt {
     SeqPush,
     SeqLen,
     SeqGet,
+    IntListGet,
     SeqHold,
     SeqReleaseHeld,
     SeqLenHeld,
     SeqGetHeld,
     SeqItemHeld,
     ListSet,
+    IntListSet,
     SeqInc,
     SeqDec,
     SeqEq,
@@ -190,7 +192,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 104] = [
+    const ALL: [Rt; 106] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -225,12 +227,14 @@ impl Rt {
         Rt::SeqPush,
         Rt::SeqLen,
         Rt::SeqGet,
+        Rt::IntListGet,
         Rt::SeqHold,
         Rt::SeqReleaseHeld,
         Rt::SeqLenHeld,
         Rt::SeqGetHeld,
         Rt::SeqItemHeld,
         Rt::ListSet,
+        Rt::IntListSet,
         Rt::SeqInc,
         Rt::SeqDec,
         Rt::SeqEq,
@@ -333,12 +337,14 @@ impl Rt {
             Rt::SeqPush => "pt_seq_push",
             Rt::SeqLen => "pt_seq_len",
             Rt::SeqGet => "pt_seq_get",
+            Rt::IntListGet => "pt_int_list_get",
             Rt::SeqHold => "pt_seq_hold",
             Rt::SeqReleaseHeld => "pt_seq_release_held",
             Rt::SeqLenHeld => "pt_seq_len_held",
             Rt::SeqGetHeld => "pt_seq_get_held",
             Rt::SeqItemHeld => "pt_seq_item_held",
             Rt::ListSet => "pt_list_set",
+            Rt::IntListSet => "pt_int_list_set",
             Rt::SeqInc => "pt_seq_inc",
             Rt::SeqDec => "pt_seq_dec",
             Rt::SeqEq => "pt_seq_eq",
@@ -437,9 +443,11 @@ impl Rt {
             Rt::SeqNew => (vec![ptr, ptr, I64], Some(ptr)),
             Rt::SeqPush => (vec![ptr, I64], None),
             Rt::SeqLen | Rt::SeqLenHeld => (vec![ptr], Some(I64)),
-            Rt::SeqGet | Rt::SeqGetHeld | Rt::SeqItemHeld => (vec![ptr, I64, ptr], Some(I64)),
+            Rt::SeqGet | Rt::IntListGet | Rt::SeqGetHeld | Rt::SeqItemHeld => {
+                (vec![ptr, I64, ptr], Some(I64))
+            }
             Rt::SeqHold => (vec![ptr], Some(ptr)),
-            Rt::ListSet => (vec![ptr, I64, I64], Some(I8)),
+            Rt::ListSet | Rt::IntListSet => (vec![ptr, I64, I64], Some(I8)),
             Rt::SeqInc | Rt::SeqDec | Rt::SeqReleaseHeld | Rt::WriteSeq => (vec![ptr], None),
             Rt::SeqEq => (vec![ptr, ptr], Some(I8)),
             Rt::SeqCmp => (vec![ptr, ptr], Some(I64)),
@@ -1707,6 +1715,79 @@ mod tests {
         )
         .expect("build CLIF");
         ctx.func.display().to_string()
+    }
+
+    /// Inspect the actual runtime references imported by a generated function.
+    fn list_calls(source: &str) -> Vec<&'static str> {
+        let module = parser::parse(&lexer::lex(source).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = crate::rc::elide(lower::lower(&module, &types).expect("lower"));
+        let render = |d: &Diagnostic| d.message.clone();
+        let mut cg = Codegen::new(&render).expect("codegen");
+        cg.declare_globals(&program.globals).expect("globals");
+        let ids = cg.declare(&program).expect("declare");
+        cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+        let func = program.funcs.iter().find(|f| f.name == "f").expect("f");
+        let mut ctx = Context::new();
+        ctx.func.signature = cg.signature(func);
+        FnGen::build(
+            &mut cg,
+            Ctx {
+                func,
+                ids: &ids,
+                types: &program.types,
+                plan: &pair::Plan::default(),
+                scalar_return: false,
+            },
+            &mut ctx,
+            &mut FunctionBuilderContext::new(),
+        )
+        .expect("build CLIF");
+        let clif = ctx.func.display().to_string();
+        cg.rt
+            .iter()
+            .filter_map(|(&name, id)| {
+                clif.contains(&format!("u0:{} ", id.as_u32()))
+                    .then_some(name)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn integer_list_calls_are_selected_by_the_receiver_type() {
+        for (annotation, value, typed) in [
+            (": list[int]", "7", true),
+            ("", "7", true),
+            (": list[float]", "7.0", false),
+            ("", "7.0", false),
+            (": list[bool]", "True", false),
+            (": list[str]", "\"a\"", false),
+            (": list[list[int]]", "[7]", false),
+            (": list[int | None]", "None", false),
+        ] {
+            let src = format!(
+                "def f(xs{annotation}):\n    xs[-1] = {value}\n    print(xs[-1])\nf([{value}])\n"
+            );
+            let calls = list_calls(&src);
+            for (symbol, want) in [
+                ("pt_int_list_get", typed),
+                ("pt_int_list_set", typed),
+                ("pt_seq_get", !typed),
+                ("pt_list_set", !typed),
+            ] {
+                assert_eq!(calls.contains(&symbol), want, "{src}: {calls:?}");
+            }
+        }
+        let held =
+            list_calls("def f(xs: list[int]):\n    for x in xs:\n        print(x)\nf([7])\n");
+        assert!(!held.contains(&"pt_int_list_get"), "{held:?}");
+        assert!(
+            held.contains(&"pt_seq_get_held") || held.contains(&"pt_seq_item_held"),
+            "{held:?}"
+        );
+        let tuple = list_calls("def f(xs: tuple[int, int]):\n    print(xs[0])\nf((1, 2))\n");
+        assert!(tuple.contains(&"pt_seq_get"), "{tuple:?}");
+        assert!(!tuple.contains(&"pt_int_list_get"), "{tuple:?}");
     }
 
     #[test]
