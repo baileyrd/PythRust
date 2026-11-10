@@ -1,0 +1,32 @@
+# Comprehensions over task results and inside task bodies.
+import concurrent.futures
+
+
+def square(n):
+    return n * n
+
+
+def labels(words):
+    return [w + "!" for w in words if w]
+
+
+temper def squares(xs: list[int]) -> list[int]:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        return [r for r in (pause ex.map(sq, xs))]
+
+
+temper def sq(x: int) -> int:
+    return x * x
+
+
+def main():
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        print([r + 1 for r in ex.map(square, [1, 2, 3])])
+        f = ex.submit(labels, ["é", "", "🙂"])
+        print(f.result())
+        futures = [ex.submit(square, n) for n in range(3)]
+        print([g.result() for g in futures])
+    print(squares([4, 5]))
+
+
+main()

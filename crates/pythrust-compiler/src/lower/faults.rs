@@ -209,6 +209,15 @@ impl<'a> Sites<'a> {
                 [test, body, orelse].into_iter().for_each(|x| self.expr(x));
             }
             ExprKind::Attr { value, .. } => self.expr(value),
+            // As the loop it stands for (D85).
+            ExprKind::ListComp { elt, clauses } => {
+                for c in clauses {
+                    self.expr(&c.iter);
+                    self.target(&c.target, None);
+                    c.ifs.iter().for_each(|x| self.expr(x));
+                }
+                self.expr(elt);
+            }
             ExprKind::Name(_)
             | ExprKind::Int(_)
             | ExprKind::Float(_)

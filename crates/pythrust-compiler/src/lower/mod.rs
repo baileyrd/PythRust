@@ -7,6 +7,7 @@
 //! compiled. Anything outside the subset the IR covers is a
 //! `DiagKind::Backend` error naming the construct, never a guess.
 
+mod comp;
 mod exc;
 mod expr;
 mod faults;

@@ -142,24 +142,21 @@ impl<'m> Interp<'m, '_> {
         }
     }
 
-    /// `for target in results`: each step takes the next task's result,
-    /// raising what escaped it there.
-    pub(super) fn for_results(
+    /// [`Interp::each`] over `map`'s results: each step takes the next
+    /// task's result, raising what escaped it there.
+    pub(super) fn each_result(
         &mut self,
         results: &RefCell<VecDeque<Outcome<'m>>>,
         target: &'m Target,
-        body: &'m Block,
-        orelse: &'m Block,
-    ) -> Exec<'m, super::Flow<'m>> {
-        loop {
-            let Some(outcome) = next(results) else {
-                return self.exec_block(orelse);
-            };
+        mut step: impl FnMut(&mut Self) -> Exec<'m, Option<super::Flow<'m>>>,
+    ) -> Exec<'m, Option<super::Flow<'m>>> {
+        while let Some(outcome) = next(results) {
             self.assign(target, taken(outcome)?)?;
-            if let Some(flow) = super::loop_exit(self.exec_block(body)?) {
-                return Ok(flow);
+            if let Some(flow) = step(self)? {
+                return Ok(Some(flow));
             }
         }
+        Ok(None)
     }
 
     /// `x in results` (or `not in`): takes results until one equals `x`.

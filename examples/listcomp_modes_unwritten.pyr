@@ -1,0 +1,10 @@
+# deviation: a tempered function must write the modes its body needs (D2), a comprehension's element included (D85); CPython has no modes.
+# expect-error: tempered `push` changes `xs` in place; write `mut xs`
+# expect-exit: 1
+temper def push(xs: list[int]) -> None:
+    done = [xs.append(x) for x in range(2)]
+
+
+ys = [1]
+push(ys)
+print(ys)

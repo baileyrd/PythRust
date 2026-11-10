@@ -1,7 +1,7 @@
 //! Statements and control flow.
 
 use crate::ast::{
-    Arg, BinOp, Block, Branch, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind,
+    Arg, BinOp, Block, Branch, CompFor, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::Result;
 use crate::infer::Type;
@@ -19,6 +19,17 @@ pub(super) enum Looped<'s> {
         target: &'s Target,
         body: &'s Block,
         orelse: &'s Block,
+        takes: Option<Span>,
+    },
+    /// A comprehension's clause (D85): binds `target`, runs the filters,
+    /// then the `rest` of the clauses, the innermost appending `elt` to
+    /// `out` ([`FnBuilder::comp_body`]). `takes` as for `For`.
+    Comp {
+        target: &'s Target,
+        ifs: &'s [Expr],
+        elt: &'s Expr,
+        rest: &'s [CompFor],
+        out: LocalId,
         takes: Option<Span>,
     },
     /// `ex.map(f, xs)` (M6c): runs the task `f` on the item and appends
@@ -294,7 +305,7 @@ impl FnBuilder<'_, '_> {
     /// branch to the join) carry on. `branch`: evaluated only when an
     /// earlier test failed (`elif`), so stuck there, the statement may
     /// still return another way.
-    fn cond(&mut self, test: &Expr, branch: bool) -> Result<Operand> {
+    pub(super) fn cond(&mut self, test: &Expr, branch: bool) -> Result<Operand> {
         let cond = self.pooled_stmt(|b| {
             let t = b.expr(test)?;
             Ok(b.truthy(t, test.span))
@@ -409,17 +420,27 @@ impl FnBuilder<'_, '_> {
         body: &Block,
         orelse: &Block,
     ) -> Result<()> {
-        // In `build` each step takes its result itself ([`FnBuilder::for_results`]).
-        let results = matches!(self.node_type(iter.span)?, Type::Results(_));
-        let takes = (results && !self.native_tasks()).then_some(iter.span);
         let looped = Looped::For {
             target,
             body,
             orelse,
-            takes,
+            takes: self.takes(iter)?,
         };
+        self.loop_over(&looped, iter)
+    }
+
+    /// Where a loop over `iter` takes a task's result each step: over
+    /// `map`'s results in `run`. In `build` each step takes its result
+    /// itself ([`FnBuilder::for_results`]).
+    pub(super) fn takes(&self, iter: &Expr) -> Result<Option<Span>> {
+        let results = matches!(self.node_type(iter.span)?, Type::Results(_));
+        Ok((results && !self.native_tasks()).then_some(iter.span))
+    }
+
+    /// Lowers `looped` over `iter`, as `for` iterates it.
+    pub(super) fn loop_over(&mut self, looped: &Looped, iter: &Expr) -> Result<()> {
         if let Some(z) = self.zip_of(iter)? {
-            return self.for_zip(&looped, &z);
+            return self.for_zip(looped, &z);
         }
         if let Some(args) = self.range_args(iter) {
             let mut ops = Vec::new();
@@ -427,7 +448,7 @@ impl FnBuilder<'_, '_> {
                 ops.push(self.expr(&a.value)?);
             }
             let bounds = self.range_bounds(args, &ops, iter.span)?;
-            return self.for_range(&looped, bounds, iter.span);
+            return self.for_range(looped, bounds, iter.span);
         }
         // `for x in d.keys()` (or values, or items) reads `d` itself.
         if let Some((d, view)) = self.dict_view(iter) {
@@ -440,14 +461,14 @@ impl FnBuilder<'_, '_> {
                     Part::Item(self.cx.seqs.tuple(vec![k, v]))
                 }
             };
-            return self.for_table(&looped, d, part, iter.span);
+            return self.for_table(looped, d, part, iter.span);
         }
         let s = self.expr(iter)?;
         if self.ty(s) == Ty::Results {
             let item = self.result_ty(iter.span)?;
-            return self.for_results(&looped, s, item, iter.span);
+            return self.for_results(looped, s, item, iter.span);
         }
-        self.for_value(&looped, s, iter.span)
+        self.for_value(looped, s, iter.span)
     }
 
     /// `for x in rs` over `map`'s results in `build`: takes the next
@@ -492,7 +513,10 @@ impl FnBuilder<'_, '_> {
             // bound and keeps whatever it held; only `else` runs.
             return match l {
                 Looped::For { orelse, .. } => self.block(orelse),
-                Looped::Map { .. } | Looped::Collect { .. } | Looped::Fold { .. } => Ok(()),
+                Looped::Comp { .. }
+                | Looped::Map { .. }
+                | Looped::Collect { .. }
+                | Looped::Fold { .. } => Ok(()),
             };
         }
         let item = match self.ty(s) {
@@ -593,6 +617,20 @@ impl FnBuilder<'_, '_> {
                 }
                 self.bind_iteration(target, next)?;
                 self.loop_body(body, latch, end)
+            }
+            Looped::Comp {
+                target,
+                ifs,
+                elt,
+                rest,
+                out,
+                takes,
+            } => {
+                if let Some(at) = takes {
+                    self.took_result(*at)?;
+                }
+                self.bind_iteration(target, next)?;
+                self.comp_body(ifs, elt, rest, *out, latch)
             }
             Looped::Map { f, out, exec, span } => {
                 self.pooled_stmt(|b| {

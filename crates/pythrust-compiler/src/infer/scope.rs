@@ -5,7 +5,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ast::{
-    Arg, Block, CmpOp, Expr, ExprKind, FuncDef, Ident, LogicalOp, Stmt, StmtKind, Target,
+    Arg, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Ident, LogicalOp, Stmt, StmtKind, Target,
     TargetKind, TypeExpr, UnaryOp,
 };
 use crate::span::Span;
@@ -29,6 +29,13 @@ pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
         }
         _ => {}
     });
+    for e in exprs(block) {
+        if let ExprKind::ListComp { clauses, .. } = &e.kind {
+            clauses
+                .iter()
+                .for_each(|c| target_names(&c.target, &mut out));
+        }
+    }
     out
 }
 
@@ -235,6 +242,7 @@ fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
             .chain([start, stop, step].into_iter().filter_map(|x| x.as_deref()))
             .collect(),
         ExprKind::Attr { value, .. } => vec![value],
+        ExprKind::ListComp { elt, clauses } => comp_parts(elt, clauses),
         ExprKind::Name(_)
         | ExprKind::Int(_)
         | ExprKind::Float(_)
@@ -243,6 +251,16 @@ fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
         | ExprKind::None => Vec::new(),
     };
     parts.into_iter().for_each(|p| subexprs(p, out));
+}
+
+/// A comprehension's expressions in the order they first run: each
+/// clause's iterable and filters, then the element.
+pub(crate) fn comp_parts<'a>(elt: &'a Expr, clauses: &'a [CompFor]) -> Vec<&'a Expr> {
+    clauses
+        .iter()
+        .flat_map(|c| std::iter::once(&c.iter).chain(&c.ifs))
+        .chain([elt])
+        .collect()
 }
 
 /// A `with` statement's parts (M6c).
@@ -285,7 +303,8 @@ pub(crate) fn withs(block: &[Stmt]) -> Vec<With<'_>> {
     out
 }
 
-/// The iterable of every `for` in `block`, nested ones included (M6c).
+/// The iterable of every `for` in `block`, nested ones and a
+/// comprehension's clauses included (M6c, D85).
 pub(crate) fn for_iters(block: &[Stmt]) -> Vec<&Expr> {
     let mut out = Vec::new();
     walk(block, &mut |s| {
@@ -293,6 +312,11 @@ pub(crate) fn for_iters(block: &[Stmt]) -> Vec<&Expr> {
             out.push(iter);
         }
     });
+    for e in exprs(block) {
+        if let ExprKind::ListComp { clauses, .. } = &e.kind {
+            out.extend(clauses.iter().map(|c| &c.iter));
+        }
+    }
     out
 }
 
@@ -331,7 +355,7 @@ pub(crate) fn task_call(e: &Expr) -> Option<(&str, &Ident, &[Arg])> {
     Some((name.as_str(), attr, &args[1..]))
 }
 
-fn target_names(target: &Target, out: &mut BTreeSet<String>) {
+pub(super) fn target_names(target: &Target, out: &mut BTreeSet<String>) {
     match &target.kind {
         TargetKind::Name(name) => {
             out.insert(name.clone());
@@ -516,6 +540,9 @@ fn expr_names<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span)>) {
                 .for_each(|x| expr_names(x, out));
         }
         ExprKind::Attr { value, .. } => expr_names(value, out),
+        ExprKind::ListComp { elt, clauses } => comp_parts(elt, clauses)
+            .into_iter()
+            .for_each(|x| expr_names(x, out)),
         ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) => {}
         ExprKind::None => {}
     }
