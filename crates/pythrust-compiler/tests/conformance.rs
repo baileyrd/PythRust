@@ -428,6 +428,8 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 const NATIVE: &[&str] = &[
     "slice_list",
     "slice_bound_generic",
+    "slice_bound_unproduced",
+    "slice_bound_unproduced_uncaught",
     "slice_str",
     "slice_tuple",
     "slice_zero",

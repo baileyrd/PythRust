@@ -94,8 +94,11 @@ pub fn infer(module: &Module) -> Result<Types> {
     // Whatever still waits involves only variables nothing ever bound: no
     // value of those types is ever built (`bubble_sort([])` compares no
     // elements), so the operation never runs. It is accepted, and the
-    // variables stay unconstrained in the typed view.
-    solve::default_assigns(&mut c.subst, mem::take(&mut c.pending))?;
+    // variables stay unconstrained in the typed view, except slice bounds
+    // need an integer representative even on paths that never produce one.
+    let waiting = solve::default_assigns(&mut c.subst, mem::take(&mut c.pending))?;
+    c.resolve_schemes()?;
+    solve::default_slice_bounds(&mut c.subst, waiting)?;
     c.resolve_schemes()?;
     let mut types = c.finish();
     tasks::check(module, &defs, &types)?;

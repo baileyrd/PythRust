@@ -1206,3 +1206,26 @@ fn slice_bound(s: &Subst, c: &Constraint, bound: &Type) -> Result<Step> {
         ),
     ))
 }
+
+/// Only after module inference, ordinary defaults and late-global scheme
+/// solving: an unresolved bound is a value never produced (an empty list's
+/// item, for example). Give its producer an int representation so native
+/// instructions still verify, without defaulting original generic schemes.
+pub(super) fn default_slice_bounds(
+    s: &mut Subst,
+    pending: Vec<Constraint>,
+) -> Result<Vec<Constraint>> {
+    let mut waiting = solve(s, pending)?;
+    while let Some(i) = waiting.iter().position(
+        |c| matches!(&c.need, Need::SliceBound(t) if matches!(s.resolve(t), Type::Var(_))),
+    ) {
+        let c = waiting.swap_remove(i);
+        if let Need::SliceBound(t) = &c.need {
+            expect(s, &c, &Type::Int, t)?;
+        }
+        // Propagate the representative through producer/result constraints,
+        // and validate other bounds before choosing any further default.
+        waiting = solve(s, waiting)?;
+    }
+    Ok(waiting)
+}

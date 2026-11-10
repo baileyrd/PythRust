@@ -19,6 +19,13 @@ to selected field reads and boxed construction with the exact positional type;
 literal zero instead takes the existing non-returning exception path. Computed
 tuple components, slice stores/deletion and other receiver types are language
 subset diagnostics, not native gaps. The binding runtime embeds `slice.rs`.
+After ordinary module constraint solving, assignment defaults and late-global
+scheme solving, still-unresolved slice-bound variables choose an integer
+representative. Such values are never produced (empty-container reads/reductions
+or empty iteration), but their native producer and continuation still need
+well-typed instructions. Original generic schemes remain deferred; normal bool
+and int callers keep their distinct types. Original faults and their evaluation
+order remain observable (`slice_bound_unproduced` and its uncaught neighbour).
 No external binding/task ABI or allocation-failure policy changes.
 
 ## Pipeline

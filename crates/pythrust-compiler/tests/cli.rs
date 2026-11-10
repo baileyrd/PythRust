@@ -864,3 +864,110 @@ fn slice_zero_keeps_runtime_span_message_and_output() {
         assert_eq!(native.stderr, run.stderr);
     }
 }
+
+/// A bound whose source faults (or an empty loop's item) still needs a
+/// verifiable native representation. Exercise each family independently.
+#[test]
+fn slice_never_produced_bounds_keep_native_faults_and_empty_iteration() {
+    let tmp = scratch("slice_never_produced");
+    let compiler = diagnostic_compiler();
+    let mut cargo = Command::new(env!("CARGO"));
+    cargo
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .args(["build", "--locked", "-p", "pythrust-rt"]);
+    if compiler.parent().is_some_and(|p| p.ends_with("release")) {
+        cargo.arg("--release");
+    }
+    let runtime = cargo.output().unwrap();
+    assert!(runtime.status.success(), "{runtime:?}");
+    let prefix =
+        "def get(xs):\n    return xs[0]\ndef forward(xs):\n    return get(xs)\nxs = []\nd = {}\n";
+    let mut failures = Vec::new();
+    for (family, bound) in [
+        ("index", "xs[0]"),
+        ("lookup", "d[0]"),
+        ("pop", "xs.pop()"),
+        ("forward", "forward(xs)"),
+        ("min", "min(xs)"),
+        ("max", "max(xs)"),
+    ] {
+        let class = match family {
+            "lookup" => "KeyError",
+            "min" | "max" => "ValueError",
+            _ => "IndexError",
+        };
+        for (kind, receiver) in [("str", "\"aé🙂\""), ("list", "[0, 1, 2]")] {
+            for (position, component) in [
+                ("start", format!("{bound}:")),
+                ("stop", format!(":{bound}")),
+                ("step", format!("::{bound}")),
+            ] {
+                let name = format!("{family}_{kind}_{position}");
+                let src = format!("{prefix}print('before')\ntry:\n    print({receiver}[{component}])\nexcept {class} as e:\n    print(e)\nprint('after')\n");
+                let path = source(&tmp, &name, &src);
+                let run = Command::new(&compiler)
+                    .arg("run")
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+                assert!(run.status.success(), "{name}: {run:?}");
+                let build = Command::new(&compiler)
+                    .arg("build")
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+                if !build.status.success() {
+                    failures.push(format!(
+                        "{name}: {}",
+                        text(&build.stderr).lines().next().unwrap_or("build failed")
+                    ));
+                    continue;
+                }
+                let native = Command::new(path.with_extension(std::env::consts::EXE_EXTENSION))
+                    .output()
+                    .unwrap();
+                assert_eq!(native.status.code(), run.status.code(), "{name}");
+                assert_eq!(native.stdout, run.stdout, "{name}");
+                assert_eq!(native.stderr, run.stderr, "{name}");
+            }
+        }
+    }
+    for (kind, receiver) in [("str", "\"aé🙂\""), ("list", "[0, 1, 2]")] {
+        for (position, component) in [("start", "n:"), ("stop", ":n"), ("step", "::n")] {
+            let name = format!("empty_{kind}_{position}");
+            let src = format!("for n in []:\n    print({receiver}[{component}])\nprint('after')\n");
+            let path = source(&tmp, &name, &src);
+            let run = Command::new(&compiler)
+                .arg("run")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(run.status.success());
+            assert_eq!(run.stdout, b"after\n");
+            let build = Command::new(&compiler)
+                .arg("build")
+                .arg(&path)
+                .output()
+                .unwrap();
+            if !build.status.success() {
+                failures.push(format!(
+                    "{name}: {}",
+                    text(&build.stderr).lines().next().unwrap_or("build failed")
+                ));
+                continue;
+            }
+            let native = Command::new(path.with_extension(std::env::consts::EXE_EXTENSION))
+                .output()
+                .unwrap();
+            assert!(native.status.success(), "{name}: {native:?}");
+            assert_eq!(native.stdout, run.stdout);
+            assert_eq!(native.stderr, run.stderr);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

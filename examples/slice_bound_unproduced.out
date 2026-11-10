@@ -1,0 +1,83 @@
+index str start
+list index out of range
+index str stop
+list index out of range
+index str step
+list index out of range
+index list start
+list index out of range
+index list stop
+list index out of range
+index list step
+list index out of range
+lookup str start
+0
+lookup str stop
+0
+lookup str step
+0
+lookup list start
+0
+lookup list stop
+0
+lookup list step
+0
+pop str start
+pop from empty list
+pop str stop
+pop from empty list
+pop str step
+pop from empty list
+pop list start
+pop from empty list
+pop list stop
+pop from empty list
+pop list step
+pop from empty list
+forward str start
+list index out of range
+forward str stop
+list index out of range
+forward str step
+list index out of range
+forward list start
+list index out of range
+forward list stop
+list index out of range
+forward list step
+list index out of range
+min str start
+min() iterable argument is empty
+min str stop
+min() iterable argument is empty
+min str step
+min() iterable argument is empty
+min list start
+min() iterable argument is empty
+min list stop
+min() iterable argument is empty
+min list step
+min() iterable argument is empty
+max str start
+max() iterable argument is empty
+max str stop
+max() iterable argument is empty
+max str step
+max() iterable argument is empty
+max list start
+max() iterable argument is empty
+max list stop
+max() iterable argument is empty
+max list step
+max() iterable argument is empty
+after empty str start
+after empty str stop
+after empty str step
+after empty list start
+after empty list stop
+after empty list step
+list index out of range
+[1, 2] é🙂
+receiver
+list index out of range
+after faults

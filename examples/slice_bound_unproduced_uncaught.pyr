@@ -1,0 +1,9 @@
+# expect-exit: 1
+def get(xs):
+    return xs[0]
+def main():
+    xs = []
+    print("before")
+    print("aé🙂"[::get(xs)])
+    print("unreachable")
+main()
