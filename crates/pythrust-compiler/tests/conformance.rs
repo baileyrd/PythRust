@@ -430,6 +430,8 @@ const NATIVE: &[&str] = &[
     "listcomp_narrow",
     "listcomp_tasks",
     "listcomp_tempered",
+    "open_text_mode",
+    "unicode_error",
     "raises_finally",
     "slice_list",
     "slice_bound_generic",
@@ -1810,6 +1812,211 @@ fn files_match_cpython() -> Res<()> {
     assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
     dir.pass();
     Ok(())
+}
+
+/// The program of [`text_files_match_cpython`]: text and binary files
+/// written and read back, every closed-file message, decode errors and
+/// their positions, and universal newlines, each across a chunk. Its
+/// files are relative: each backend runs in its own directory.
+const TEXT_FILES: &str = r#"w = open("out.txt", "w")
+print(w)
+print(w.write("héllo\nwörld\r\nthird\rlast"))
+w.close()
+w = open("out.txt", "a", encoding="UTF8")
+print(w, w.write("\n🙂 end\n"))
+w.flush()
+w.close()
+w.close()
+for op in ["write", "flush"]:
+    try:
+        if op == "write":
+            w.write("x")
+        else:
+            w.flush()
+    except ValueError as e:
+        print(op, e)
+r = open("out.txt")
+print(r, [r.readline()])
+for line in r:
+    print([line])
+print([r.read(), r.readline()])
+r.close()
+for op in ["read", "readline", "for"]:
+    try:
+        if op == "read":
+            r.read()
+        elif op == "readline":
+            r.readline()
+        else:
+            for line in r:
+                pass
+    except ValueError as e:
+        print(op, e)
+print(list(open("out.txt", "rt")))
+print(sorted(list(open("out.txt"))))
+b = open("out.txt", "rb")
+print(b, b.read())
+b.close()
+try:
+    b.read()
+except ValueError as e:
+    print(e)
+try:
+    b.flush()
+except ValueError as e:
+    print(e)
+wb = open("copy.bin", "wb")
+print(wb, wb.write(open("bad.bin", "rb").read()))
+wb.close()
+for op in ["write", "flush"]:
+    try:
+        if op == "write":
+            wb.write(open("bad.bin", "rb").read())
+        else:
+            wb.flush()
+    except ValueError as e:
+        print(op, e)
+ab = open("copy.bin", "ab")
+ab.write(open("crlf.txt", "rb").read())
+ab.close()
+print(len(open("copy.bin", "rb").read()))
+def lengths(f):
+    n = 0
+    for line in f:
+        n += len(line)
+    return n
+print(lengths(open("crlf.txt")), [open("crlf.txt").read()[-3:]])
+for name in ["copy.bin", "late.bin", "mid.bin"]:
+    try:
+        print(lengths(open(name)))
+    except UnicodeDecodeError as e:
+        print("for", e)
+    try:
+        print(len(open(name).read()))
+    except ValueError as e:
+        print("read", e)
+m = open("mid.bin")
+print([m.readline()])
+try:
+    m.readline()
+except UnicodeDecodeError as e:
+    print("readline", e)
+def read_all(f):
+    return f.read()
+print(len(read_all(open("crlf.txt"))), len(read_all(open("crlf.txt", "rb"))))
+kept = open("kept.txt", "w")
+kept.write("kept 🙂\n")
+"#;
+
+/// Writes [`TEXT_FILES`]'s inputs into `dir`.
+fn text_inputs(dir: &Path) -> Res<()> {
+    let mut crlf = vec![b'x'; 8191];
+    crlf.extend_from_slice(b"\r\ny\r\n");
+    let mut late = vec![b'a'; 9000];
+    late.extend_from_slice(b"\nbbbbbbbbbb\xff\n");
+    let files: [(&str, &[u8]); 4] = [
+        ("crlf.txt", &crlf),
+        ("late.bin", &late),
+        ("mid.bin", b"line\n\xe2\x82"),
+        ("bad.bin", b"\xff\x00ab"),
+    ];
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    for (name, data) in files {
+        fs::write(dir.join(name), data).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// What running `cmd` in a fresh copy of the inputs at `dir` prints, then
+/// the files it wrote, read back.
+fn text_run(cmd: &mut Command, dir: &Path) -> Res<Run> {
+    text_inputs(dir)?;
+    let mut got = run(cmd.current_dir(dir), TIMEOUT)?;
+    for name in ["out.txt", "copy.bin", "kept.txt"] {
+        let data = fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
+        got.stdout.push_str(&format!("{name}: {data:?}\n"));
+    }
+    Ok(got)
+}
+
+/// Text modes and writing (D91-D99) on real files agree with CPython in
+/// both backends, on each platform's line separator (D94); a file left
+/// open for writing is flushed at exit (D98).
+#[test]
+fn text_files_match_cpython() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("text_files")?;
+    let exe = native_case(&dir, "text_files", TEXT_FILES)?;
+    let source = exe.with_extension("pyr");
+    let mut python = Command::new(python());
+    python.args(["-I", "-X", "utf8"]).arg(&source);
+    let mut want = text_run(&mut python, &dir.join("cpython"))?;
+    want.stdout = universal_newlines(want.stdout);
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    for line in [
+        "write I/O operation on closed file.",
+        "write write to closed file\nflush flush of closed file",
+        "position 819: invalid start byte",
+        "readline 'utf-8' codec can't decode bytes in position 0-1: unexpected end of data",
+        "kept.txt: [107, 101, 112, 116, 32, 240, 159, 153, 130,",
+    ] {
+        assert!(want.stdout.contains(line), "{line}: {}", want.stdout);
+    }
+    let mut pythrust = Command::new(pythrust_bin()?);
+    pythrust.arg("run").arg(&source);
+    assert_eq!(text_run(&mut pythrust, &dir.join("run"))?, want);
+    assert_eq!(
+        text_run(&mut Command::new(&exe), &dir.join("native"))?,
+        want
+    );
+    dir.pass();
+    Ok(())
+}
+
+/// Every exit flushes the files open for writing (D98): an uncaught
+/// exception, as CPython, and a fatal fault, which CPython has none of
+/// here (it promotes to a bigint), so `run` and native agree alone.
+#[test]
+fn every_exit_flushes_open_writers() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("exit_flush")?;
+    // `write("before\n")` in text mode, on each platform's separator (D94).
+    const LINE: &str = match cfg!(windows) {
+        true => "before\r\n",
+        false => "before\n",
+    };
+    let uncaught =
+        "f = open(\"out.txt\", \"w\")\nf.write(\"before\\n\")\nraise ValueError(\"x\")\n";
+    let fault = "f = open(\"out.txt\", \"w\")\nf.write(\"before\\n\")\n\
+                 x = 9223372036854775807\nprint(x + 1)\n";
+    for (name, src, python_too) in [("uncaught", uncaught, true), ("fault", fault, false)] {
+        let exe = native_case(&dir, name, src)?;
+        let source = exe.with_extension("pyr");
+        let mut pythrust = Command::new(pythrust_bin()?);
+        pythrust.arg("run").arg(&source);
+        let got = written(&mut pythrust, &dir.join(format!("{name}-run")))?;
+        assert_eq!(got, LINE, "{name}");
+        let native = written(&mut Command::new(&exe), &dir.join(format!("{name}-native")))?;
+        assert_eq!(native, got, "{name}");
+        if python_too {
+            let mut python = Command::new(python());
+            python.args(["-I", "-X", "utf8"]).arg(&source);
+            let py = written(&mut python, &dir.join(format!("{name}-cpython")))?;
+            assert_eq!(py, got, "{name}");
+        }
+    }
+    dir.pass();
+    Ok(())
+}
+
+/// What `cmd`, run in the empty directory `dir`, left in `out.txt`; it
+/// must exit 1.
+fn written(cmd: &mut Command, dir: &Path) -> Res<String> {
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let ran = run(cmd.current_dir(dir), TIMEOUT)?;
+    assert_eq!(ran.status, 1, "{cmd:?}");
+    let path = dir.join("out.txt");
+    fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// fclone-lite, the M6 driver (`apps/fclone-lite`), prints the same

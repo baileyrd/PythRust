@@ -9,6 +9,7 @@
 //! │   PermissionError
 //! ├── RuntimeError: RecursionError
 //! └── ValueError
+//!     └── UnicodeError: UnicodeDecodeError
 //! ```
 
 use std::cmp::Ordering;
@@ -32,10 +33,12 @@ pub enum ExcKind {
     Permission,
     IsADirectory,
     NotADirectory,
+    Unicode,
+    UnicodeDecode,
 }
 
 impl ExcKind {
-    pub const ALL: [ExcKind; 15] = [
+    pub const ALL: [ExcKind; 17] = [
         ExcKind::Value,
         ExcKind::Index,
         ExcKind::ZeroDivision,
@@ -51,6 +54,8 @@ impl ExcKind {
         ExcKind::Permission,
         ExcKind::IsADirectory,
         ExcKind::NotADirectory,
+        ExcKind::Unicode,
+        ExcKind::UnicodeDecode,
     ];
 
     /// The builtin exception class named `name`.
@@ -75,6 +80,8 @@ impl ExcKind {
             ExcKind::Permission => "PermissionError",
             ExcKind::IsADirectory => "IsADirectoryError",
             ExcKind::NotADirectory => "NotADirectoryError",
+            ExcKind::Unicode => "UnicodeError",
+            ExcKind::UnicodeDecode => "UnicodeDecodeError",
         }
     }
 
@@ -89,6 +96,8 @@ impl ExcKind {
             | ExcKind::Permission
             | ExcKind::IsADirectory
             | ExcKind::NotADirectory => Some(ExcKind::Os),
+            ExcKind::Unicode => Some(ExcKind::Value),
+            ExcKind::UnicodeDecode => Some(ExcKind::Unicode),
             ExcKind::Value
             | ExcKind::Arithmetic
             | ExcKind::Lookup

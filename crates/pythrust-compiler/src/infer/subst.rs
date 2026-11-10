@@ -46,6 +46,7 @@ impl Subst {
             Type::View(view, item) => Type::View(view, Box::new(self.zonk(&item))),
             Type::Optional(inner) => Type::Optional(Box::new(self.zonk(&inner))),
             Type::Future(r) => Type::Future(Box::new(self.zonk(&r))),
+            Type::File(w, d) => Type::File(w, Box::new(self.zonk(&d))),
             Type::Results(r) => Type::Results(Box::new(self.zonk(&r))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.zonk(t)).collect()),
             other => other,
@@ -67,6 +68,7 @@ impl Subst {
             | (Type::Future(x), Type::Future(y))
             | (Type::Results(x), Type::Results(y)) => self.unify(x, y),
             (Type::View(v, x), Type::View(w, y)) if v == w => self.unify(x, y),
+            (Type::File(v, x), Type::File(w, y)) if v == w => self.unify(x, y),
             (Type::Dict(k1, v1), Type::Dict(k2, v2)) => {
                 self.unify(k1, k2)?;
                 self.unify(v1, v2)
@@ -119,6 +121,7 @@ impl Subst {
             | Type::Set(elem)
             | Type::Optional(elem)
             | Type::View(_, elem)
+            | Type::File(_, elem)
             | Type::Future(elem)
             | Type::Results(elem) => self.free_vars(&elem, out),
             Type::Dict(k, v) => {
@@ -143,6 +146,7 @@ impl Subst {
             Type::View(view, item) => Type::View(view, Box::new(self.rename(&item, map))),
             Type::Optional(inner) => Type::Optional(Box::new(self.rename(&inner, map))),
             Type::Future(r) => Type::Future(Box::new(self.rename(&r, map))),
+            Type::File(w, d) => Type::File(w, Box::new(self.rename(&d, map))),
             Type::Results(r) => Type::Results(Box::new(self.rename(&r, map))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.rename(t, map)).collect()),
             other => other,

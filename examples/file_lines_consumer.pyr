@@ -1,0 +1,8 @@
+# expect-exit: 1
+# deviation: D100: only `for` and `list(...)` read a file's lines yet; CPython's `sorted` takes any iterable.
+# expect-error: only `for` and `list(...)` read a file's lines yet; use `list(f)`
+try:
+    f = open("no/such/dir/never.txt")
+    print(sorted(f))
+except OSError:
+    print("missing")

@@ -29,7 +29,7 @@ impl Owner {
             Type::List(_) => Some(Owner::List),
             Type::Set(_) => Some(Owner::Set),
             Type::Dict(..) => Some(Owner::Dict),
-            Type::File => Some(Owner::File),
+            Type::File(..) => Some(Owner::File),
             Type::Future(_) => Some(Owner::Future),
             _ => None,
         }
@@ -58,7 +58,7 @@ const fn m(owner: Owner, name: &'static str, min: usize, max: usize) -> Method {
 /// Every method but an executor's. A name with several owners (`index`
 /// and `count` on `str` and list, `pop` on list and dict) waits for the
 /// receiver's type (D52).
-const METHODS: [Method; 34] = [
+const METHODS: [Method; 37] = [
     m(Owner::Str, "split", 0, 2),
     m(Owner::Str, "join", 1, 1),
     m(Owner::Str, "strip", 0, 1),
@@ -90,7 +90,10 @@ const METHODS: [Method; 34] = [
     m(Owner::Dict, "keys", 0, 0),
     m(Owner::Dict, "values", 0, 0),
     m(Owner::Dict, "items", 0, 0),
-    m(Owner::File, "read", 0, 0),
+    m(Owner::File, "read", 0, 1),
+    m(Owner::File, "readline", 0, 0),
+    m(Owner::File, "write", 1, 1),
+    m(Owner::File, "flush", 0, 0),
     m(Owner::File, "close", 0, 0),
     m(Owner::Future, "result", 0, 0),
 ];
@@ -117,6 +120,64 @@ fn deferred(name: &str) -> bool {
             name,
             "extend" | "insert" | "remove" | "sort" | "setdefault" | "update"
         )
+}
+
+/// A file's methods CPython has that are not supported yet (D91).
+const FILE_GAPS: [&str; 6] = [
+    "readlines",
+    "writelines",
+    "seek",
+    "tell",
+    "truncate",
+    "fileno",
+];
+
+/// The types of a call to a file's method (D91).
+pub(super) struct FileSig {
+    /// The one argument's type, if it takes one.
+    pub param: Option<Type>,
+    pub result: Type,
+    /// Whether only a text file has it: the file's data is `str`.
+    pub text: bool,
+}
+
+/// What method `name` of a file, written or not, of `data` (resolved
+/// or not) takes, given `got` arguments, and gives (D91), or why that
+/// file has none (D92, D99).
+pub(super) fn file_signature(
+    name: &str,
+    writes: bool,
+    data: &Type,
+    got: usize,
+) -> std::result::Result<FileSig, String> {
+    let sig = |param: Option<Type>, result: Type, text: bool| FileSig {
+        param,
+        result,
+        text,
+    };
+    match name {
+        "read" | "readline" if writes => Err("file opened for writing is not readable".to_string()),
+        "write" if !writes => Err("file opened for reading is not writable".to_string()),
+        "read" if got > 0 => Err("`read` of a size is not supported yet".to_string()),
+        "readline" if *data == Type::Bytes => {
+            Err("`readline` of a binary file is not supported yet".to_string())
+        }
+        "read" => Ok(sig(None, data.clone(), false)),
+        "readline" => Ok(sig(None, Type::Str, true)),
+        "write" => Ok(sig(Some(data.clone()), Type::Int, false)),
+        _ => Ok(sig(None, Type::None, false)),
+    }
+}
+
+/// Whether file method `name` is had only by a file that is written
+/// (`Some(true)`) or read (`Some(false)`): what a call to it says of a
+/// receiver whose type is not known yet.
+fn file_direction(name: &str) -> Option<bool> {
+    match name {
+        "read" | "readline" => Some(false),
+        "write" => Some(true),
+        _ => None,
+    }
 }
 
 /// The positional arguments `owner`'s method `name` takes, if it has
@@ -153,6 +214,13 @@ impl Checker {
         if matches!(name, "submit" | "map") {
             return self.task(value, attr, args);
         }
+        if FILE_GAPS.contains(&name) {
+            let receiver = self.expr(value)?;
+            if let Type::File(..) = self.subst.resolve(&receiver) {
+                let msg = format!("`{name}` of a file is not supported yet");
+                return Err(error(attr.span, msg));
+            }
+        }
         let Some(first) = lookup(&METHODS, name, None) else {
             let msg = format!(
                 "unknown method `.{name}`; the methods are `str.split`, `.join`, \
@@ -161,15 +229,27 @@ impl Checker {
                  `.upper` and `.lower`, `list.append`, `.pop`, `.extend`, \
                  `.insert`, `.remove`, `.index`, `.count` and `.sort`, `set.add`, \
                  `dict.get`, `.pop`, `.setdefault`, `.update`, `.keys`, \
-                 `.values` and `.items`, a file's `.read` \
-                 and `.close`, an executor's `.submit` and `.map`, and a future's \
+                 `.values` and `.items`, a file's `.read`, `.readline`, \
+                 `.write`, `.flush` and `.close`, an executor's `.submit` and `.map`, and a future's \
                  `.result`"
             );
             return Err(error(attr.span, msg));
         };
         let receiver = self.expr(value)?;
         let here = Owner::of(&self.subst.resolve(&receiver));
-        if deferred(name) && here != Some(Owner::Str) {
+        // A file method fixes an unknown receiver as a file that is
+        // written or read, its data still open, so a generic function's
+        // call is typed by its caller; `flush` and `close` wait for it.
+        if first.owner == Owner::File && here != Some(Owner::File) {
+            let Some(writes) = file_direction(name) else {
+                // `None` whatever the file, so known in generic code too.
+                let out = self.deferred_method(first.name, receiver, args, attr.span)?;
+                self.expect(attr.span, &Type::None, &out, "a file's `flush` and `close`")?;
+                return Ok(Type::None);
+            };
+            let file = Type::File(writes, Box::new(self.subst.fresh()));
+            self.expect(value.span, &file, &receiver, "a file method needs a file")?;
+        } else if deferred(name) && here != Some(Owner::Str) {
             return self.deferred_method(first.name, receiver, args, attr.span);
         }
         let found = lookup(&METHODS, name, here).unwrap_or(first);
@@ -181,7 +261,7 @@ impl Checker {
             Owner::List | Owner::Set => self.insert(name, value.span, &receiver, &args[0]),
             Owner::Dict if name == "get" => self.get(value.span, &receiver, args, attr.span),
             Owner::Dict => self.view(name, value.span, &receiver),
-            Owner::File => self.file(name, value.span, &receiver),
+            Owner::File => self.file(name, &receiver, args, attr.span),
             Owner::Future => self.result(value.span, &receiver),
         }
     }
@@ -329,15 +409,25 @@ impl Checker {
         Err(error(at, msg))
     }
 
-    /// `f.read()` is `bytes`; `f.close()` is `None`.
-    fn file(&mut self, name: &str, at: Span, receiver: &Type) -> Result<Type> {
-        let needs = format!("`{name}` needs a file from `open`");
-        self.expect(at, &Type::File, receiver, &needs)?;
-        Ok(if name == "read" {
-            Type::Bytes
-        } else {
-            Type::None
-        })
+    /// A method of a file, written or not (D91, D92).
+    fn file(&mut self, name: &str, receiver: &Type, args: &[Arg], span: Span) -> Result<Type> {
+        let Type::File(writes, data) = self.subst.resolve(receiver) else {
+            return Err(error(span, format!("internal: `{name}` of no file")));
+        };
+        let mut types = Vec::new();
+        for arg in args {
+            types.push((self.expr(&arg.value)?, arg.value.span));
+        }
+        let data = self.subst.resolve(&data);
+        let sig = file_signature(name, writes, &data, args.len()).map_err(|m| error(span, m))?;
+        if sig.text {
+            self.expect(span, &Type::Str, &data, "`readline` needs a text file")?;
+        }
+        if let (Some(param), Some((t, at))) = (sig.param, types.first()) {
+            let what = format!("argument of `{name}`");
+            self.expect(*at, &param, t, &what)?;
+        }
+        Ok(sig.result)
     }
 
     /// `xs.append(v)` or `s.add(v)`: `v` flows into the element type.

@@ -1,0 +1,7 @@
+# expect-exit: 1
+# deviation: D91: only the modes r, rt, w, wt, a, at, rb, wb and ab are supported; CPython also takes "r+", "x" and reordered spellings.
+# expect-error: mode 'r+' of `open` is not supported yet
+try:
+    open("no-such-file.txt", "r+")
+except OSError:
+    print("missing")

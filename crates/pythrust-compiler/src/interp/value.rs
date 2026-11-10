@@ -148,12 +148,11 @@ pub(super) struct Func<'m> {
     pub locals: HashSet<&'m str>,
 }
 
-/// A file open for reading bytes: the path it was opened by, and the
-/// open file until `close`. Dropping the last reference closes it.
+/// A file (D91), the runtime's state for it. Dropping the last
+/// reference closes it, flushing a writer (D98).
 #[derive(Debug)]
 pub(super) struct File {
-    pub name: String,
-    pub file: RefCell<Option<std::fs::File>>,
+    pub file: RefCell<crate::textio::File>,
 }
 
 /// An `int` or `float` operand. `bool` counts as `int`, as in Python.
@@ -239,7 +238,7 @@ impl<'m> Value<'m> {
             Value::Builtin(_) | Value::Method(_) => "builtin_function_or_method",
             Value::Exc(e) => e.kind.name(),
             Value::Bytes(_) => "bytes",
-            Value::File(_) => "_io.BufferedReader",
+            Value::File(f) => f.file.borrow().kind().qualified(),
             Value::Executor => "ThreadPoolExecutor",
             Value::Future(_) => "Future",
             Value::Results(_) => "generator",
@@ -713,7 +712,7 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
         Value::Float(f) => float_repr(*f),
         Value::Str(s) => str_repr(s),
         Value::Bytes(b) => bytes_repr(b),
-        Value::File(f) => format!("<_io.BufferedReader name={}>", str_repr(&f.name)),
+        Value::File(f) => f.file.borrow().repr(str_repr),
         // Never shown: inference refuses passing one to `print` or `str`.
         Value::Executor | Value::Future(_) | Value::Results(_) => {
             format!("<{}>", v.type_name())

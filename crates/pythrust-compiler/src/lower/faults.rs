@@ -1,6 +1,6 @@
 //! Which functions may return with a catchable fault pending: a division
 //! by zero, an index out of range, a wrong unpacking arity
-//! (docs/research/faults.md), a read of a closed file, a NUL in the
+//! (docs/research/faults.md), any use of a closed file, a NUL in the
 //! path given to `open`, an empty separator given to `split` (D53), or
 //! a `del` of a missing item (D71). Such a fault is never in a `raises` set,
 //! so lowering tests the pending flag after a call to one of these as it
@@ -8,9 +8,11 @@
 //!
 //! Syntactic and conservative: `/`, `//` and `%` by anything but a
 //! nonzero literal, an index into anything but a tuple, and unpacking
-//! anything but a tuple fault, as do any `.read()` (a file's, whatever
-//! the receiver's inferred type), any `.split(sep)` and any call to
-//! `open`; a call by name to a function that faults
+//! anything but a tuple fault, as do any file method's call (whatever
+//! the receiver's inferred type), a `for` or `list` over a file or a
+//! value generic code leaves open, which may be one (D91: a generic
+//! function's raises set cannot name what reading it raises), any
+//! `.split(sep)` and any call to `open`; a call by name to a function that faults
 //! does too, closed over the call graph, and so does a body that
 //! starts a task of one (`submit` or `map`), which takes its results.
 
@@ -18,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{BinOp, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind, UnaryOp};
 use crate::infer::{scope, Type, Types};
+use crate::stdlib::StdFn;
 
 /// The functions in `defs` that may leave a catchable fault pending.
 pub(super) fn faulting<'a>(
@@ -106,6 +109,7 @@ impl<'a> Sites<'a> {
                 body,
                 orelse,
             } => {
+                self.faults |= self.may_be_file(iter);
                 self.expr(iter);
                 self.target(target, None);
                 self.block(body);
@@ -155,12 +159,14 @@ impl<'a> Sites<'a> {
                 }
                 match &func.kind {
                     ExprKind::Name(name) => {
-                        self.faults |= name == "open";
+                        let lines =
+                            name == "list" && args.iter().any(|a| self.may_be_file(&a.value));
+                        self.faults |= name == "open" || lines;
                         self.calls.insert(name);
                     }
                     ExprKind::Attr { value, attr } => {
-                        self.faults |=
-                            attr.name == "read" || (attr.name == "split" && !args.is_empty());
+                        self.faults |= StdFn::file_method(&attr.name).is_some()
+                            || (attr.name == "split" && !args.is_empty());
                         self.expr(value);
                     }
                     _ => self.expr(func),
@@ -225,6 +231,14 @@ impl<'a> Sites<'a> {
             | ExprKind::Bool(_)
             | ExprKind::None => {}
         }
+    }
+
+    /// Whether `e` is a file, or of a type generic code leaves open.
+    fn may_be_file(&self, e: &Expr) -> bool {
+        matches!(
+            self.types.at(e.span),
+            None | Some(Type::Var(_) | Type::File(..))
+        )
     }
 
     fn is_tuple(&self, e: &Expr) -> bool {

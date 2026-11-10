@@ -20,6 +20,8 @@ pub mod ir;
 mod slice;
 pub mod span;
 pub mod stdlib;
+#[path = "../../pythrust-rt/src/textio.rs"]
+pub mod textio;
 pub mod token;
 
 pub mod codegen;

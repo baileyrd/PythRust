@@ -11,6 +11,7 @@
 //! from its initializer, a call to a [`StdFn`] only the parser can write.
 
 use crate::exc::ExcKind;
+pub use crate::textio::{Kind, Mode};
 
 /// A module and the dotted names it exposes.
 pub struct ModuleDef {
@@ -78,10 +79,18 @@ pub enum StdFn {
     Islink,
     /// `os.path.getsize(p)`, following links.
     Getsize,
-    /// The builtin `open(p, "rb")`: a file for reading bytes.
+    /// The builtin `open(p, mode, encoding=...)` (D91): its operands
+    /// are the path, the mode literal and the encoding to show.
     Open,
-    /// `f.read()` of a file: the rest of it, as `bytes`.
+    /// `f.read()` of a file: the rest of it, `str` or `bytes`.
     Read,
+    /// `f.readline()` of a text file, `""` at the end; also each step
+    /// of `for line in f`.
+    Readline,
+    /// `f.write(s)` of a writer: how many code points or bytes.
+    Write,
+    /// `f.flush()` of a file.
+    Flush,
     /// `f.close()` of a file; closing it again does nothing.
     Close,
     /// `hashlib.sha256(data).hexdigest()` of `bytes`, one call: the hash
@@ -140,7 +149,7 @@ pub enum StdFn {
 }
 
 impl StdFn {
-    pub const ALL: [StdFn; 33] = [
+    pub const ALL: [StdFn; 36] = [
         StdFn::Argv,
         StdFn::Listdir,
         StdFn::Join,
@@ -150,6 +159,9 @@ impl StdFn {
         StdFn::Getsize,
         StdFn::Open,
         StdFn::Read,
+        StdFn::Readline,
+        StdFn::Write,
+        StdFn::Flush,
         StdFn::Close,
         StdFn::Sha256,
         StdFn::Executor,
@@ -189,8 +201,11 @@ impl StdFn {
             StdFn::Islink => "os.path.islink",
             StdFn::Getsize => "os.path.getsize",
             StdFn::Open => "open",
-            StdFn::Read => "BufferedReader.read",
-            StdFn::Close => "BufferedReader.close",
+            StdFn::Read => "file.read",
+            StdFn::Readline => "file.readline",
+            StdFn::Write => "file.write",
+            StdFn::Flush => "file.flush",
+            StdFn::Close => "file.close",
             StdFn::Sha256 => "hashlib.sha256",
             StdFn::Executor => "concurrent.futures.ThreadPoolExecutor",
             StdFn::Split => "str.split",
@@ -226,12 +241,27 @@ impl StdFn {
         }
     }
 
-    /// A file's method called `attr`: `read` or `close`.
+    /// A file's method called `attr` (D91).
     pub fn file_method(attr: &str) -> Option<StdFn> {
         match attr {
             "read" => Some(StdFn::Read),
+            "readline" => Some(StdFn::Readline),
+            "write" => Some(StdFn::Write),
+            "flush" => Some(StdFn::Flush),
             "close" => Some(StdFn::Close),
             _ => None,
+        }
+    }
+
+    /// What file method `self` of a file of `kind` raises, tracked
+    /// (D93, D96): an `OSError`, and a `UnicodeDecodeError` reading
+    /// text. Closing a reader raises nothing; using a closed file raises
+    /// an untracked `ValueError` (D21).
+    pub fn file_raises(self, kind: Kind) -> &'static [ExcKind] {
+        match (self, kind.is_text(), kind.writes()) {
+            (StdFn::Read | StdFn::Readline, true, false) => &[ExcKind::Os, ExcKind::UnicodeDecode],
+            (StdFn::Close, _, false) => &[],
+            _ => &[ExcKind::Os],
         }
     }
 
@@ -258,16 +288,20 @@ impl StdFn {
     }
 
     /// Whether a call may leave an exception pending, tracked or not:
-    /// what [`StdFn::raises`] names, and `split`'s untracked
-    /// `ValueError` for an empty separator (D53).
+    /// what [`StdFn::raises`] names, `split`'s untracked `ValueError`
+    /// for an empty separator (D53), and a file method's (D96).
     pub fn may_raise(self) -> bool {
-        self.raises().is_some() || self == StdFn::Split
+        self.raises().is_some()
+            || matches!(
+                self,
+                StdFn::Split | StdFn::Readline | StdFn::Write | StdFn::Flush | StdFn::Close
+            )
     }
 
     /// The class of what it may raise, tracked in `raises` (D8). An
-    /// `OSError` is raised as the subclass the error's kind names.
-    /// Reading a closed file also raises a `ValueError`, untracked like
-    /// the operator faults: it means a bug, as an index out of range does.
+    /// `OSError` is raised as the subclass the error's kind names. A
+    /// file method's depends on the file's mode
+    /// ([`StdFn::file_raises`]); `Read` here is a binary file's.
     pub fn raises(self) -> Option<ExcKind> {
         match self {
             StdFn::Listdir | StdFn::Getsize | StdFn::Open | StdFn::Read => Some(ExcKind::Os),
@@ -277,6 +311,9 @@ impl StdFn {
             | StdFn::Isdir
             | StdFn::Isfile
             | StdFn::Islink
+            | StdFn::Readline
+            | StdFn::Write
+            | StdFn::Flush
             | StdFn::Close
             | StdFn::Sha256
             | StdFn::Executor
@@ -404,14 +441,14 @@ mod tests {
 
     #[test]
     fn file_and_str_methods_are_unwritable_names() {
-        for attr in ["read", "close"] {
+        for attr in ["read", "readline", "write", "flush", "close"] {
             let Some(f) = StdFn::file_method(attr) else {
                 panic!("{attr} is a file method")
             };
             assert!(f.name().ends_with(&format!(".{attr}")));
             assert!(MODULES.iter().all(|m| !m.exposes(f.name())));
         }
-        assert_eq!(StdFn::file_method("write"), None);
+        assert_eq!(StdFn::file_method("seek"), None);
         let str_methods = [
             "split",
             "join",

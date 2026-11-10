@@ -1,0 +1,8 @@
+# expect-exit: 1
+# deviation: D92, D99: reading a file opened for writing is a compile error; CPython raises io.UnsupportedOperation when it runs.
+# expect-error: file opened for writing is not readable
+try:
+    f = open("no/such/dir/never.txt", "a")
+    print(f.readline())
+except OSError:
+    print("missing")

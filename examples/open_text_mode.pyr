@@ -1,7 +1,10 @@
-# expect-exit: 1
-# deviation: only `open(path, "rb")` is supported yet; text mode and writing come later
-# expect-error: only binary reading is supported yet
+# Text mode is the default (D91): a missing file raises FileNotFoundError,
+# caught as OSError, before any read.
 try:
     print(open("no-such-file.txt").read())
 except OSError:
     print("missing")
+try:
+    open("no-such-file.txt", "rt", encoding="utf-8").readline()
+except FileNotFoundError:
+    print("missing again")

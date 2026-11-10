@@ -623,10 +623,10 @@ impl<'a> Flow<'a> {
         }
     }
 
-    /// Whether the body calls `read` or `close` on parameter `i`, a
-    /// file: a syntactic `mut` (reading moves the file, closing ends it),
-    /// since files have no points-to sets. A copy of the parameter
-    /// (`g = f`) is not followed.
+    /// Whether the body calls a method of parameter `i`, a file, or
+    /// iterates it: a syntactic `mut` (D97; reading moves the file,
+    /// writing and closing change it), since files have no points-to
+    /// sets. A copy of the parameter (`g = f`) is not followed.
     fn reads_file(&self, i: usize) -> bool {
         let Some(&param) = self.func.params.get(i) else {
             return false;
@@ -634,7 +634,11 @@ impl<'a> Flow<'a> {
         let insts = self.func.blocks.iter().flat_map(|b| &b.insts);
         insts.into_iter().any(|inst| match inst {
             Inst::Assign {
-                value: Rvalue::Std(StdFn::Read | StdFn::Close, args),
+                value:
+                    Rvalue::Std(
+                        StdFn::Read | StdFn::Readline | StdFn::Write | StdFn::Flush | StdFn::Close,
+                        args,
+                    ),
                 ..
             } => args.first() == Some(&Operand::Local(param)),
             _ => false,

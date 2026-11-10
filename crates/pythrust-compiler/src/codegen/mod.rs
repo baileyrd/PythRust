@@ -201,6 +201,11 @@ enum Rt {
     WriteObj,
     Open,
     FileRead,
+    FileReadText,
+    FileReadline,
+    FileWriteStr,
+    FileWriteBytes,
+    FileFlush,
     FileClose,
     Sha256Hex,
     Mark,
@@ -231,7 +236,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 116] = [
+    const ALL: [Rt; 121] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -321,6 +326,11 @@ impl Rt {
         Rt::WriteObj,
         Rt::Open,
         Rt::FileRead,
+        Rt::FileReadText,
+        Rt::FileReadline,
+        Rt::FileWriteStr,
+        Rt::FileWriteBytes,
+        Rt::FileFlush,
         Rt::FileClose,
         Rt::Sha256Hex,
         Rt::Mark,
@@ -441,6 +451,11 @@ impl Rt {
             Rt::WriteObj => "pt_write_obj",
             Rt::Open => "pt_open",
             Rt::FileRead => "pt_file_read",
+            Rt::FileReadText => "pt_file_read_text",
+            Rt::FileReadline => "pt_file_readline",
+            Rt::FileWriteStr => "pt_file_write_str",
+            Rt::FileWriteBytes => "pt_file_write_bytes",
+            Rt::FileFlush => "pt_file_flush",
             Rt::FileClose => "pt_file_close",
             Rt::Sha256Hex => "pt_sha256_hex",
             Rt::StrSplit => "pt_str_split",
@@ -542,11 +557,14 @@ impl Rt {
             Rt::OsPathJoin => (vec![ptr, ptr], Some(ptr)),
             Rt::OsPathIs => (vec![ptr, I8], Some(I8)),
             Rt::OsPathGetsize => (vec![ptr; 5], Some(I64)),
-            Rt::ObjInc | Rt::ObjDec | Rt::WriteObj | Rt::FileClose => (vec![ptr], None),
+            Rt::ObjInc | Rt::ObjDec | Rt::WriteObj => (vec![ptr], None),
             Rt::ObjLen => (vec![ptr], Some(I64)),
             Rt::ObjEq => (vec![ptr, ptr], Some(I8)),
             Rt::ObjStr | Rt::Sha256Hex => (vec![ptr], Some(ptr)),
-            Rt::Open | Rt::FileRead => (vec![ptr; 5], Some(ptr)),
+            Rt::Open => (vec![ptr; 7], Some(ptr)),
+            Rt::FileRead | Rt::FileReadText | Rt::FileReadline => (vec![ptr; 5], Some(ptr)),
+            Rt::FileWriteStr | Rt::FileWriteBytes => (vec![ptr; 6], Some(I64)),
+            Rt::FileFlush | Rt::FileClose => (vec![ptr; 5], None),
             Rt::Mark => (vec![ptr, ptr, I64], None),
             Rt::ExecNew => (vec![], Some(ptr)),
             Rt::ExecEnd | Rt::FutInc | Rt::FutDec | Rt::ListReverse => (vec![ptr], None),
@@ -689,7 +707,7 @@ impl<'r> Codegen<'r> {
             | Ty::Set(_)
             | Ty::View(_)
             | Ty::Bytes
-            | Ty::File
+            | Ty::File(_)
             | Ty::Exec
             | Ty::Future
             | Ty::Results
@@ -1080,7 +1098,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::Dict(_)
             | Ty::Set(_)
             | Ty::View(_) => Rt::WriteSeq,
-            Ty::Bytes | Ty::File => Rt::WriteObj,
+            Ty::Bytes | Ty::File(_) => Rt::WriteObj,
             Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
                 return Err(backend(
                     "printing a task's handle or a loop's hold".to_string(),
@@ -1347,7 +1365,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::Dict(_)
             | Ty::Set(_)
             | Ty::View(_) => Rt::StrFromSeq,
-            Ty::Bytes | Ty::File => Rt::ObjStr,
+            Ty::Bytes | Ty::File(_) => Rt::ObjStr,
             Ty::Exc => Rt::ExcStr,
             Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
                 return Err(backend(
@@ -1643,7 +1661,7 @@ fn is_table(ty: Ty) -> bool {
 fn rc_inc(types: &[Compound], ty: Ty) -> Result<Rt> {
     match counted(types, ty) {
         Ty::Str => Ok(Rt::StrInc),
-        Ty::Bytes | Ty::File => Ok(Rt::ObjInc),
+        Ty::Bytes | Ty::File(_) => Ok(Rt::ObjInc),
         Ty::Future => Ok(Rt::FutInc),
         Ty::Exec => Err(backend("copying an executor".to_string())),
         Ty::Held(_) => Err(backend("copying a loop's hold".to_string())),
@@ -1656,7 +1674,7 @@ fn rc_inc(types: &[Compound], ty: Ty) -> Result<Rt> {
 fn rc_dec(types: &[Compound], ty: Ty) -> Rt {
     match counted(types, ty) {
         Ty::Str => Rt::StrDec,
-        Ty::Bytes | Ty::File => Rt::ObjDec,
+        Ty::Bytes | Ty::File(_) => Rt::ObjDec,
         Ty::Future => Rt::FutDec,
         Ty::Exec => Rt::ExecEnd,
         Ty::Held(_) => Rt::SeqReleaseHeld,
@@ -2088,8 +2106,14 @@ mod tests {
     /// so it holds for every class, outer and inner (B4).
     #[test]
     fn the_cycle_refusal_covers_every_exception_class() {
-        for outer in ExcKind::ALL {
-            for inner in ExcKind::ALL {
+        // `UnicodeDecodeError` cannot be constructed (D93).
+        let made = || {
+            ExcKind::ALL
+                .into_iter()
+                .filter(|k| *k != ExcKind::UnicodeDecode)
+        };
+        for outer in made() {
+            for inner in made() {
                 let (o, i) = (outer.name(), inner.name());
                 let src = format!("es: list[Exception] = [{i}(0)]\ne = {o}(es)\n");
                 assert!(refused_as_cycle(&src), "{src}");

@@ -421,6 +421,7 @@ impl<'m> Interp<'m, '_> {
             Some(items) => items,
             None => match self.eval(iter)? {
                 Value::Results(r) => return self.each_result(&r, target, step),
+                Value::File(f) => return self.each_line(&f, target, iter.span, step),
                 v => v.iter(iter.span)?,
             },
         };
@@ -458,6 +459,25 @@ impl<'m> Interp<'m, '_> {
             Ok(None)
         })?;
         Ok(())
+    }
+
+    /// `for line in f` over a text file (D91): each step reads a line,
+    /// which may raise; an empty one ends the loop.
+    /// [`Self::each`] over a text reader's lines (D91).
+    fn each_line(
+        &mut self,
+        f: &value::File,
+        target: &'m Target,
+        span: Span,
+        mut step: impl FnMut(&mut Self) -> Exec<'m, Option<Flow<'m>>>,
+    ) -> Exec<'m, Option<Flow<'m>>> {
+        while let Some(line) = stdlib::next_line(f, span)? {
+            self.assign(target, line)?;
+            if let Some(flow) = step(self)? {
+                return Ok(Some(flow));
+            }
+        }
+        Ok(None)
     }
 
     /// For `for x in d.keys()` (or `values()`, `items()`) on a dict `d`:
@@ -744,10 +764,13 @@ impl<'m> Interp<'m, '_> {
             .collect::<Exec<'m, Vec<Value<'m>>>>()?;
         // `any` and `all` take `map`'s results until one decides.
         let decides = matches!(callee, Value::Builtin(Builtin::Any | Builtin::All));
+        let reads = matches!(callee, Value::Builtin(b) if crate::infer::reads_results(b.name()));
         for (arg, v) in args.iter().zip(values) {
             let v = match v {
                 // `list`, `sorted`, `set`, `sum`, `min` or `max` of `map`'s results.
                 Value::Results(r) if !decides => tasks::drain(&r)?,
+                // A text file's lines (D91).
+                Value::File(f) if reads => Value::list(stdlib::lines(&f, arg.value.span)?),
                 v => v,
             };
             self.tag(&v, arg.value.span);

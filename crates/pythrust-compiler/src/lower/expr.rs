@@ -8,6 +8,7 @@ use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, T
 use crate::span::Span;
 use crate::stdlib::StdFn;
 
+use super::stmt::Looped;
 use super::vars::runtime;
 use super::{internal, unsupported, FnBuilder};
 
@@ -574,7 +575,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
-            Ty::Exc | Ty::File | Ty::Exec | Ty::Future | Ty::Results => Operand::Bool(true),
+            Ty::Exc | Ty::File(_) | Ty::Exec | Ty::Future | Ty::Results => Operand::Bool(true),
             Ty::Bytes
             | Ty::Str
             | Ty::List(_)
@@ -833,6 +834,9 @@ impl<'a> FnBuilder<'_, 'a> {
         if name == "print" {
             return self.print(args, ops, span);
         }
+        if name == "open" {
+            return self.open(args, &ops, span);
+        }
         if let Some(stub) = self.cx.stubs.get(name).copied() {
             return self.rust(stub, args, ops, span);
         }
@@ -892,9 +896,31 @@ impl<'a> FnBuilder<'_, 'a> {
         }
     }
 
-    /// A module function's call: `os.listdir()` lists `"."`,
-    /// `os.path.join(a)` is `a`, and `open` drops its mode, which
-    /// inference proved is `"rb"`. One that may raise is followed by the
+    /// `open(path, mode, encoding=...)`: the path, the mode literal and
+    /// the encoding its `repr` shows, as written or `"utf-8"` (D91, D95).
+    /// Inference proved both are literals, or absent, or `None`.
+    fn open(&mut self, args: &[Arg], ops: &[Operand], span: Span) -> Result<Operand> {
+        let literal = |kw: &str, k: usize| {
+            args.iter().enumerate().find_map(|(i, a)| {
+                let named = a.name.as_ref().map_or(i == k, |n| n.name == kw);
+                match &a.value.kind {
+                    ExprKind::Str(s) if named => Some(s.clone()),
+                    _ => None,
+                }
+            })
+        };
+        let mode = literal("mode", 1).unwrap_or_else(|| "r".to_string());
+        let encoding = literal("encoding", usize::MAX).unwrap_or_else(|| "utf-8".to_string());
+        let Some(path) = ops.first().copied() else {
+            return Err(super::internal(span, "`open` of no path"));
+        };
+        let mode = self.temp(Ty::Str, Rvalue::StrLit(mode), span);
+        let encoding = self.temp(Ty::Str, Rvalue::StrLit(encoding), span);
+        self.std(StdFn::Open, vec![path, mode, encoding], span)
+    }
+
+    /// A module function's call: `os.listdir()` lists `"."` and
+    /// `os.path.join(a)` is `a`. One that may raise is followed by the
     /// test for it.
     pub(super) fn std(&mut self, f: StdFn, mut ops: Vec<Operand>, span: Span) -> Result<Operand> {
         match (f, ops.as_slice()) {
@@ -902,7 +928,6 @@ impl<'a> FnBuilder<'_, 'a> {
             (StdFn::Listdir, []) => {
                 ops.push(self.temp(Ty::Str, Rvalue::StrLit(".".to_string()), span));
             }
-            (StdFn::Open, [_, _]) => ops.truncate(1),
             _ => {}
         }
         let ty = self.ty_at(span)?;
@@ -1028,6 +1053,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 | Ty::Bytes,
             ) => (Ty::Int, Rvalue::Len(arg)),
             ("list", ty @ Ty::List(_)) => (ty, Rvalue::CopyList(arg)),
+            ("list", Ty::File(_)) => return self.file_lines(arg, span),
             ("list", Ty::Dict(_) | Ty::Set(_) | Ty::View(_)) => {
                 (self.ty_at(span)?, Rvalue::CopyList(arg))
             }
@@ -1040,6 +1066,20 @@ impl<'a> FnBuilder<'_, 'a> {
             }
         };
         Ok(self.temp(ty, value, span))
+    }
+
+    /// `list(f)` of a text file: its lines left, a new list (D91).
+    fn file_lines(&mut self, f: Operand, span: Span) -> Result<Operand> {
+        let ty = self.ty_at(span)?;
+        let out = self.pooled(ty);
+        self.assign(out, Rvalue::NewSeq(Vec::new()), span);
+        let collect = Looped::Collect {
+            out,
+            first: false,
+            span,
+        };
+        self.for_value(&collect, f, span)?;
+        Ok(Operand::Local(out))
     }
 
     /// `int(s)` or `float(s)` of a string, which may raise `ValueError`.
@@ -1070,7 +1110,7 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Set(_) => "set",
         Ty::View(_) => "dict view",
         Ty::Bytes => "bytes",
-        Ty::File => "_io.BufferedReader",
+        Ty::File(kind) => kind.qualified(),
         Ty::Exec => "ThreadPoolExecutor",
         Ty::Future => "Future",
         // CPython's `Executor.map` gives a generator.

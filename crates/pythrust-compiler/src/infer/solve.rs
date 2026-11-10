@@ -36,8 +36,15 @@ pub(super) enum Need {
     },
     /// `len(x)`.
     Len(Type),
-    /// Iterating `iterable` yields `elem` (`for`, `in`).
+    /// Iterating `iterable` yields `elem` (`in`, the builtins that read
+    /// an iterable).
     Iter {
+        iterable: Type,
+        elem: Type,
+    },
+    /// A `for` statement's iterating: as [`Need::Iter`], and also a text
+    /// reader's lines (D91).
+    Loop {
         iterable: Type,
         elem: Type,
     },
@@ -226,6 +233,10 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             iterable: r(iterable),
             elem: r(elem),
         },
+        Need::Loop { iterable, elem } => Need::Loop {
+            iterable: r(iterable),
+            elem: r(elem),
+        },
         Need::Index {
             value,
             index,
@@ -315,7 +326,7 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Probe { container, item } => vec![container, item],
         Need::ToList { arg, elem } => vec![arg, elem],
         Need::Key { key, index } => vec![key, index],
-        Need::Iter { iterable, elem } => vec![iterable, elem],
+        Need::Iter { iterable, elem } | Need::Loop { iterable, elem } => vec![iterable, elem],
         Need::Assign { target, value, .. } => vec![target, value],
         Need::Index {
             value, index, out, ..
@@ -340,6 +351,10 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         Need::Len(t) => len(s, c, t),
         Need::SliceBound(t) => slice_bound(s, c, t),
         Need::Iter { iterable, elem } => iter(s, c, iterable, elem),
+        Need::Loop { iterable, elem } => match known(s, iterable) {
+            Some(Type::File(writes, data)) => lines(s, c, writes, &data, elem),
+            _ => iter(s, c, iterable, elem),
+        },
         Need::Index {
             value,
             index,
@@ -411,6 +426,18 @@ fn method(
         }
         Type::List(elem) => list_method(s, c, name, elem, args)?,
         Type::Dict(key, value) => dict_method(s, c, name, key, value, args)?,
+        Type::File(writes, data) => {
+            let data = s.resolve(data);
+            let sig = methods::file_signature(name, *writes, &data, args.len())
+                .map_err(|m| error(c, m))?;
+            if sig.text {
+                expect(s, c, &Type::Str, &data)?;
+            }
+            if let (Some(param), Some(arg)) = (sig.param, args.first()) {
+                expect(s, c, &param, arg)?;
+            }
+            (vec![], sig.result)
+        }
         _ => return Err(error(c, format!("{} has no method `.{name}`", s.zonk(&t)))),
     };
     expect(s, c, out, &result)?;
@@ -651,7 +678,7 @@ fn comparable(s: &Subst, c: &Constraint, t: &Type) -> Result<Step> {
             );
             return Err(error(c, msg));
         }
-        Type::File => {
+        Type::File(..) => {
             let msg = "files compare by identity, which is not supported".to_string();
             return Err(error(c, msg));
         }
@@ -719,6 +746,20 @@ fn len(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
     Err(error(c, msg))
 }
 
+/// A text reader's lines are `str`s (D91); other files have none to
+/// read.
+fn lines(s: &mut Subst, c: &Constraint, writes: bool, data: &Type, elem: &Type) -> Result<Step> {
+    let data = s.resolve(data);
+    let line = match data == Type::Bytes && !writes {
+        true => Err("iterating a binary file is not supported yet".to_string()),
+        false => methods::file_signature("readline", writes, &data, 0),
+    };
+    let line = line.map_err(|m| error(c, m))?;
+    expect(s, c, &Type::Str, &data)?;
+    expect(s, c, elem, &line.result)?;
+    Ok(Step::Done(vec![]))
+}
+
 fn iter(s: &mut Subst, c: &Constraint, iterable: &Type, elem: &Type) -> Result<Step> {
     let Some(t) = known(s, iterable) else {
         return Ok(Step::Waiting);
@@ -732,6 +773,11 @@ fn iter(s: &mut Subst, c: &Constraint, iterable: &Type, elem: &Type) -> Result<S
         Type::Str => expect(s, c, elem, &Type::Str)?,
         Type::Range => expect(s, c, elem, &Type::Int)?,
         Type::Tuple(items) => items.iter().try_for_each(|item| expect(s, c, elem, item))?,
+        Type::File(..) => {
+            let msg = "only `for` and `list(...)` read a file's lines yet; \
+                       use `list(f)`";
+            return Err(error(c, msg.to_string()));
+        }
         other => {
             let msg = format!("{} is not iterable", s.zonk(other));
             return Err(error(c, msg));
@@ -943,6 +989,7 @@ fn to_list(s: &mut Subst, c: &Constraint, arg: &Type, elem: &Type) -> Result<Ste
             expect(s, c, elem, item)?;
             Ok(Step::Done(vec![]))
         }
+        Type::File(writes, data) => lines(s, c, *writes, data, elem),
         other => {
             let msg = format!(
                 "`list` copies a list, dict, set, dict view or `map`'s results, not {}",
