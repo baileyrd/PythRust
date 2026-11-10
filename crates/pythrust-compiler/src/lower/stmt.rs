@@ -442,7 +442,19 @@ impl FnBuilder<'_, '_> {
 
     /// Lowers `looped` over `iter`, as `for` iterates it.
     pub(super) fn loop_over(&mut self, looped: &Looped, iter: &Expr) -> Result<()> {
+        self.loop_over_then(looped, iter, |_| Ok(()))
+    }
+
+    /// [`FnBuilder::loop_over`], with `then` lowered once `iter` is
+    /// evaluated and before its first item.
+    pub(super) fn loop_over_then(
+        &mut self,
+        looped: &Looped,
+        iter: &Expr,
+        then: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
         if let Some(z) = self.zip_of(iter)? {
+            then(self)?;
             return self.for_zip(looped, &z);
         }
         if let Some(args) = self.range_args(iter) {
@@ -451,6 +463,7 @@ impl FnBuilder<'_, '_> {
                 ops.push(self.expr(&a.value)?);
             }
             let bounds = self.range_bounds(args, &ops, iter.span)?;
+            then(self)?;
             return self.for_range(looped, bounds, iter.span);
         }
         // `for x in d.keys()` (or values, or items) reads `d` itself.
@@ -464,9 +477,11 @@ impl FnBuilder<'_, '_> {
                     Part::Item(self.cx.seqs.tuple(vec![k, v]))
                 }
             };
+            then(self)?;
             return self.for_table(looped, d, part, iter.span);
         }
         let s = self.expr(iter)?;
+        then(self)?;
         if self.ty(s) == Ty::Results {
             let item = self.result_ty(iter.span)?;
             return self.for_results(looped, s, item, iter.span);

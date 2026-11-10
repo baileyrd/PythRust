@@ -827,7 +827,7 @@ impl<'a> FnBuilder<'_, 'a> {
 
     /// A builtin call; `ops` are `args`' values. Inference allows
     /// keywords only for `print`.
-    fn builtin(
+    pub(super) fn builtin(
         &mut self,
         name: &str,
         args: &[Arg],

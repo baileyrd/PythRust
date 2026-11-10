@@ -408,26 +408,49 @@ impl<'m> Interp<'m, '_> {
         iter: &'m Expr,
         mut step: impl FnMut(&mut Self) -> Exec<'m, Option<Flow<'m>>>,
     ) -> Exec<'m, Option<Flow<'m>>> {
+        self.each_with(target, iter, &mut (), |_, _| Ok(()), |s, _| step(s))
+    }
+
+    /// [`Self::each`], with `then` run once `iter` is evaluated and
+    /// before its first item, and `st` lent to both.
+    fn each_with<S>(
+        &mut self,
+        target: &'m Target,
+        iter: &'m Expr,
+        st: &mut S,
+        then: impl FnOnce(&mut Self, &mut S) -> Exec<'m, ()>,
+        mut step: impl FnMut(&mut Self, &mut S) -> Exec<'m, Option<Flow<'m>>>,
+    ) -> Exec<'m, Option<Flow<'m>>> {
         if let Some(mut z) = self.lazy(iter)? {
+            then(self, st)?;
             while let Some(v) = z.step()? {
                 self.assign(target, v)?;
-                if let Some(flow) = step(self)? {
+                if let Some(flow) = step(self, st)? {
                     return Ok(Some(flow));
                 }
             }
             return Ok(None);
         }
         let mut items = match self.dict_view(iter)? {
-            Some(items) => items,
-            None => match self.eval(iter)? {
-                Value::Results(r) => return self.each_result(&r, target, step),
-                Value::File(f) => return self.each_line(&f, target, iter.span, step),
-                v => v.iter(iter.span)?,
-            },
+            Some(items) => {
+                then(self, st)?;
+                items
+            }
+            None => {
+                let v = self.eval(iter)?;
+                then(self, st)?;
+                match v {
+                    Value::Results(r) => return self.each_result(&r, target, |s| step(s, st)),
+                    Value::File(f) => {
+                        return self.each_line(&f, target, iter.span, |s| step(s, st))
+                    }
+                    v => v.iter(iter.span)?,
+                }
+            }
         };
         for v in items.by_ref() {
             self.assign(target, v)?;
-            if let Some(flow) = step(self)? {
+            if let Some(flow) = step(self, st)? {
                 return Ok(Some(flow));
             }
         }
@@ -440,10 +463,23 @@ impl<'m> Interp<'m, '_> {
     /// A comprehension's clauses (D85, D116), as the nested loops they
     /// stand for: each pass that passes every filter gathers into `out`.
     fn comp(&mut self, clauses: &'m [CompFor], out: &mut Gathered<'m>) -> Exec<'m, ()> {
+        self.comp_then(clauses, out, |_, _| Ok(()))
+    }
+
+    /// [`Self::comp`], with `then` run once the first iterable is
+    /// evaluated and before its first item: a reducer's other arguments,
+    /// read where CPython reads them (D123).
+    fn comp_then(
+        &mut self,
+        clauses: &'m [CompFor],
+        out: &mut Gathered<'m>,
+        then: impl FnOnce(&mut Self, &mut Gathered<'m>) -> Exec<'m, ()>,
+    ) -> Exec<'m, ()> {
         let Some((c, rest)) = clauses.split_first() else {
+            then(self, out)?;
             return self.gather(out);
         };
-        self.each(&c.target, &c.iter, |s| {
+        self.each_with(&c.target, &c.iter, out, then, |s, out| {
             for test in &c.ifs {
                 if !s.eval(test)?.truthy() {
                     return Ok(None);
@@ -773,19 +809,32 @@ impl<'m> Interp<'m, '_> {
         if let Some(out) = self.reduce_lazy(&callee, args, span)? {
             return Ok(out);
         }
-        if let Some(out) = self.reduce_gen(&callee, args, span)? {
+        if let Some(out) = self.reduce_gen(func, &callee, args, span)? {
             return Ok(out);
         }
-        let mut evaluated = Args {
-            positional: Vec::new(),
-            keywords: Vec::new(),
-            span,
-        };
         // Every argument is evaluated before any is consumed, as in CPython.
         let values = args
             .iter()
             .map(|arg| self.eval(&arg.value))
             .collect::<Exec<'m, Vec<Value<'m>>>>()?;
+        self.apply(func, callee, args, values, span)
+    }
+
+    /// The call of `callee` at `span` with `values`, one per argument of
+    /// `args`, evaluated.
+    fn apply(
+        &mut self,
+        func: &'m Expr,
+        callee: Value<'m>,
+        args: &'m [Arg],
+        values: Vec<Value<'m>>,
+        span: Span,
+    ) -> Exec<'m, Value<'m>> {
+        let mut evaluated = Args {
+            positional: Vec::new(),
+            keywords: Vec::new(),
+            span,
+        };
         // `any` and `all` take `map`'s results until one decides.
         let decides = matches!(callee, Value::Builtin(Builtin::Any | Builtin::All));
         let reads = matches!(callee, Value::Builtin(b) if crate::infer::reads_results(b.name()));
@@ -837,13 +886,15 @@ impl<'m> Interp<'m, '_> {
         }
     }
 
-    /// `any`, `all` or an int `sum` of a generator expression (D119),
-    /// run as its loop: `sum` adds each item as it comes, from a `start`
-    /// read first (D123), and `any`/`all` stop at the item that decides.
-    /// `None` for any other call, whose generator expression gathers a
-    /// list.
+    /// A builtin reducer of a generator expression (D119), run as its
+    /// loop: `any`/`all` stop at the item that decides and `sum` adds each
+    /// item as it comes; with other arguments, the rest gather a list. The
+    /// other arguments are read once the first iterable is evaluated and
+    /// before its first item, as in CPython (D123). `None` for any other
+    /// call.
     fn reduce_gen(
         &mut self,
+        func: &'m Expr,
         callee: &Value<'m>,
         args: &'m [Arg],
         span: Span,
@@ -852,31 +903,45 @@ impl<'m> Interp<'m, '_> {
             return Ok(None);
         };
         let ExprKind::Comp {
-            gather: Gather::Gen(e),
+            gather: gather @ Gather::Gen(e),
             clauses,
         } = &arg.value.kind
         else {
             return Ok(None);
         };
-        let mut out = match (b, rest) {
-            (Builtin::Any | Builtin::All, []) => Gathered::Truth(e, *b == Builtin::Any, false),
-            // An int `sum` streams; in an unannotated function its type is
-            // open, so the items decide, as `build` decides per instantiation.
-            (Builtin::Sum, [] | [_]) if self.types.at(span) != Some(&Type::Float) => {
-                let start = match rest.first() {
-                    Some(a) => self.eval(&a.value)?,
-                    None => Value::Int(0),
-                };
-                let total = match start {
-                    Value::Float(f) => Total::Floats(f, Vec::new()),
-                    v => Total::Int(v.int().unwrap_or(0)),
-                };
-                Gathered::Sum(e, total, span)
+        match (b, rest) {
+            (Builtin::Any | Builtin::All, []) => {
+                let mut out = Gathered::Truth(e, *b == Builtin::Any, false);
+                self.comp(clauses, &mut out)?;
+                Ok(Some(out.into_value()))
             }
-            _ => return Ok(None),
-        };
-        self.comp(clauses, &mut out)?;
-        Ok(Some(out.into_value()))
+            // In an unannotated function the type is open, so the items
+            // decide int or float, as `build` decides per instantiation.
+            (Builtin::Sum, [] | [_]) => {
+                let mut out = Gathered::Sum(e, Total::Int(0), span);
+                self.comp_then(clauses, &mut out, |s, out| {
+                    if let (Some(a), Gathered::Sum(_, total, _)) = (rest.first(), out) {
+                        *total = Total::from_start(s.eval(&a.value)?);
+                    }
+                    Ok(())
+                })?;
+                Ok(Some(self.float_sum(out.into_value(), span)))
+            }
+            (_, [_, ..]) => {
+                let mut out = Gathered::new(gather, false);
+                let mut values = Vec::new();
+                self.comp_then(clauses, &mut out, |s, _| {
+                    for a in rest {
+                        values.push(s.eval(&a.value)?);
+                    }
+                    Ok(())
+                })?;
+                values.insert(0, out.into_value());
+                let callee = callee.clone();
+                Ok(Some(self.apply(func, callee, args, values, span)?))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// `any`, `all`, `min`, `max` or `set` of an `enumerate(...)` or
@@ -1171,6 +1236,14 @@ enum Total<'m> {
 }
 
 impl<'m> Total<'m> {
+    /// A total from `sum`'s `start`.
+    fn from_start(start: Value<'m>) -> Self {
+        match start {
+            Value::Float(f) => Total::Floats(f, Vec::new()),
+            v => Total::Int(v.int().unwrap_or(0)),
+        }
+    }
+
     fn add(&mut self, x: Value<'m>, span: Span) -> Exec<'m, ()> {
         match (&mut *self, x) {
             (Total::Floats(_, items), x) => items.push(x),

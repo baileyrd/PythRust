@@ -38,14 +38,16 @@ impl FnBuilder<'_, '_> {
         let ty = self.ty_at(span)?;
         let out = self.pooled(ty);
         self.assign(out, Rvalue::NewSeq(Vec::new()), span);
-        self.comp_clauses(gather, clauses, Sink::Into(out))?;
+        self.comp_clauses(gather, clauses, Sink::Into(out), |_| Ok(()))?;
         Ok(Operand::Local(out))
     }
 
-    /// `any`, `all` or an int `sum` (`name`) of a generator expression
-    /// (D119), run as its loop, a `sum`'s `start` read first (D123);
-    /// `None` for any other call, whose generator expression gathers a
-    /// list as a list comprehension does.
+    /// A builtin reducer (`name`) of a generator expression (D119), run
+    /// as its loop: `any`/`all` stop at the item that decides and an int
+    /// `sum` adds each item as it comes; with other arguments, the rest
+    /// gather a list. The other arguments are read once the first
+    /// iterable is evaluated and before its first item, as in CPython
+    /// (D123). `None` for any other call.
     pub(super) fn reduce_gen(
         &mut self,
         name: &str,
@@ -62,35 +64,58 @@ impl FnBuilder<'_, '_> {
         else {
             return Ok(None);
         };
-        let (sink, out) = match (name, rest) {
+        match (name, rest) {
             ("any" | "all", []) => {
                 let out = self.pooled(Ty::Bool);
                 let any = name == "any";
                 self.assign(out, Rvalue::Use(Operand::Bool(!any)), span);
-                (Sink::Truth { any, out, span }, out)
+                let sink = Sink::Truth { any, out, span };
+                self.comp_clauses(gather, clauses, sink, |_| Ok(()))?;
+                Ok(Some(Operand::Local(out)))
             }
             ("sum", [] | [_]) if self.ty_at(span)? == Ty::Int => {
-                let start = match rest.first() {
-                    Some(a) => {
-                        let v = self.expr(&a.value)?;
-                        self.as_int(v, a.value.span)
-                    }
-                    None => Operand::Int(0),
-                };
                 let out = self.pooled(Ty::Int);
-                self.assign(out, Rvalue::Use(start), span);
-                (Sink::Sum(out, span), out)
+                self.assign(out, Rvalue::Use(Operand::Int(0)), span);
+                self.comp_clauses(gather, clauses, Sink::Sum(out, span), |b| {
+                    let Some(a) = rest.first() else {
+                        return Ok(());
+                    };
+                    let v = b.expr(&a.value)?;
+                    let start = b.as_int(v, a.value.span);
+                    b.assign(out, Rvalue::Use(start), span);
+                    Ok(())
+                })?;
+                Ok(Some(Operand::Local(out)))
             }
-            _ => return Ok(None),
-        };
-        self.comp_clauses(gather, clauses, sink)?;
-        Ok(Some(Operand::Local(out)))
+            (_, [_, ..]) => {
+                let ty = self.ty_at(arg.value.span)?;
+                let out = self.pooled(ty);
+                self.assign(out, Rvalue::NewSeq(Vec::new()), span);
+                let mut ops = vec![Operand::Local(out)];
+                self.comp_clauses(gather, clauses, Sink::Into(out), |b| {
+                    for a in rest {
+                        ops.push(b.expr(&a.value)?);
+                    }
+                    Ok(())
+                })?;
+                self.builtin(name, args, ops, span).map(Some)
+            }
+            _ => Ok(None),
+        }
     }
 
-    /// The loop of the first of `clauses`, the rest nested inside it;
-    /// with none left, sends one pass to `sink`.
-    fn comp_clauses(&mut self, gather: &Gather, clauses: &[CompFor], sink: Sink) -> Result<()> {
+    /// The loop of the first of `clauses`, the rest nested inside it,
+    /// with `then` lowered once its iterable is evaluated; with none
+    /// left, sends one pass to `sink`.
+    fn comp_clauses(
+        &mut self,
+        gather: &Gather,
+        clauses: &[CompFor],
+        sink: Sink,
+        then: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
         let Some((c, rest)) = clauses.split_first() else {
+            then(self)?;
             return self.pooled_stmt(|b| b.gather(gather, sink));
         };
         let looped = Looped::Comp {
@@ -101,7 +126,7 @@ impl FnBuilder<'_, '_> {
             sink,
             takes: self.takes(&c.iter)?,
         };
-        self.loop_over(&looped, &c.iter)
+        self.loop_over_then(&looped, &c.iter, then)
     }
 
     /// One pass: appends the item, adds it to the set, stores the key
@@ -198,7 +223,7 @@ impl FnBuilder<'_, '_> {
         }
         // As a statement of the body: what a nested loop holds (its
         // iterable) is released each pass.
-        self.pooled_stmt(|b| b.comp_clauses(gather, rest, sink))?;
+        self.pooled_stmt(|b| b.comp_clauses(gather, rest, sink, |_| Ok(())))?;
         let Sink::Truth { any, out, span } = sink else {
             self.terminate(Term::Goto(latch));
             return Ok(());

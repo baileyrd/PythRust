@@ -1,0 +1,21 @@
+# expect-exit: 1
+# `sorted` gathers its items, but reads `reverse=` first (D123): an
+# unbound one fails after `iter`, before `item`.
+def source() -> list[int]:
+    print("iter")
+    return [1]
+
+
+def item(x: int) -> int:
+    print("item", x)
+    return x
+
+
+def ordered(flag: bool) -> list[int]:
+    if flag:
+        reverse = False
+    return sorted((item(x) for x in source()), reverse=reverse)
+
+
+print(ordered(True))
+print(ordered(False))
