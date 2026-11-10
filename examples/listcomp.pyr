@@ -1,0 +1,73 @@
+# List comprehensions (#1202): filters, nested `for`, scoping, iterables.
+words = ["héllo", "wörld", "", "🙂ok"]
+print([w.upper() for w in words if w])
+print([len(w) for w in words])
+print([(i, j) for i in range(3) for j in range(i)])
+print([c for w in words for c in w if c != "o"])
+print([x * y for x in [1, 2, 3] if x > 1 for y in [10, 20] if y < 20 or x == 3])
+print([n for n in range(10) if n % 2 == 0 if n > 2])
+d = {"ä": 1, "b": 2, "ç": 3}
+print([k for k in d])
+print([k for k in d.keys()])
+print([v * 2 for v in d.values()])
+print([k + str(v) for k, v in d.items() if v != 2])
+print([e for e in {3}])
+print([(i, w) for i, w in enumerate(words) if w])
+print([i + n for i, n in enumerate([5, 6], 1)])
+print([a + b for a, b in zip(["α", "β"], ["x", "y", "z"])])
+print([n for n in (1, 2, 3)])
+print([ch for ch in "naïve"])
+print([[j for j in range(i)] for i in range(4)])
+print([a + b for (a, b) in [(1, 2), (3, 4)]])
+print([y for x in [[1, 2], [3]] for y in x])
+print([x for x in range(5) if x > 9])
+print([0.5 * f for f in [1, 2]])
+print([n if n > 1 else -n for n in [1, 2, 3]])
+print([w for w in words][1:3])
+print(len([1 for _ in "añb"]))
+
+x = "outer"
+print([x for x in range(3)], x)
+xs = [3, 1, 2]
+print([xs for xs in xs])
+print(xs)
+print([x + str(i) for i in range(2)])
+
+
+def squares(n):
+    return [i * i for i in range(n) if i % 2 == 0]
+
+
+def pairs(names):
+    out = [(name, len(name)) for name in names]
+    return out
+
+
+def evens(limit: int) -> list[int]:
+    i = "unrelated"
+    got = [i for i in range(limit) if i % 2 == 0]
+    print(i)
+    return got
+
+
+print(squares(7))
+print(pairs(["ünï", "b"]))
+print(evens(5))
+
+nums = [1, 2, 3]
+copied = [n for n in nums]
+copied.append(4)
+print(nums, copied)
+
+nested = [[1], [2]]
+same = [row for row in nested]
+same[0].append(9)
+print(nested, same)
+
+
+def noisy(v):
+    print("call", v)
+    return v
+
+
+print([noisy(v) for v in [noisy(1), noisy(2)] if noisy(v) > 1])

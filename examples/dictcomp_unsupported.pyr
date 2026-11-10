@@ -1,0 +1,4 @@
+# deviation: dict comprehensions are a named parse error until #1206 (D87); CPython runs them.
+# expect-exit: 1
+# expect-error: dict comprehensions are not supported yet
+print({w: len(w) for w in ["é"]})

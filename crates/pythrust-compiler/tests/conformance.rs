@@ -426,6 +426,10 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 
 /// Programs the native backend must compile; it grows with the subset.
 const NATIVE: &[&str] = &[
+    "listcomp",
+    "listcomp_narrow",
+    "listcomp_tasks",
+    "listcomp_tempered",
     "slice_list",
     "slice_bound_generic",
     "slice_bound_unproduced",
