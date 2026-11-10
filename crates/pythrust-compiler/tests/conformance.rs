@@ -1894,7 +1894,6 @@ fn text_inputs(dir: &Path) -> Res<()> {
 fn text_run(cmd: &mut Command, dir: &Path) -> Res<Run> {
     text_inputs(dir)?;
     let mut got = run(cmd.current_dir(dir), TIMEOUT)?;
-    got.stdout = universal_newlines(got.stdout);
     for name in ["out.txt", "copy.bin", "kept.txt"] {
         let data = fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
         got.stdout.push_str(&format!("{name}: {data:?}\n"));
@@ -1913,7 +1912,8 @@ fn text_files_match_cpython() -> Res<()> {
     let source = exe.with_extension("pyr");
     let mut python = Command::new(python());
     python.args(["-I", "-X", "utf8"]).arg(&source);
-    let want = text_run(&mut python, &dir.join("cpython"))?;
+    let mut want = text_run(&mut python, &dir.join("cpython"))?;
+    want.stdout = universal_newlines(want.stdout);
     assert_eq!(want.status, 0, "{}", want.stdout);
     for line in [
         "write I/O operation on closed file.",
