@@ -1,0 +1,13 @@
+# expect-exit: 1
+# expect-error: is read by a task
+# deviation: static subset rejects this form before execution.
+import concurrent.futures
+def read(xs):
+    return xs[0][0]
+def main():
+    xs = [[1]]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(read, xs[:])
+        xs[0].append(2)
+        print(f.result())
+main()

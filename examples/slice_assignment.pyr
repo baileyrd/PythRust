@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: slice assignment is not supported yet
+# deviation: static subset rejects this form before execution.
+xs = [1, 2]
+xs[:] = [3]
+print(xs)

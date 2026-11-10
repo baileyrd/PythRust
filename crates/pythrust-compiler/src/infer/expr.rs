@@ -87,6 +87,31 @@ impl Checker {
                 let out = self.subst.fresh();
                 self.subscript(value, index, Access::Read, out)
             }
+            ExprKind::Slice {
+                value,
+                start,
+                stop,
+                step,
+            } => {
+                let receiver = self.expr(value)?;
+                for x in [start, stop, step].into_iter().flatten() {
+                    let t = self.expr(x)?;
+                    if !self.subst.resolve(&t).is_intlike() {
+                        self.expect(x.span, &Type::Int, &t, "slice bounds must be integers")?;
+                    }
+                }
+                let out = self.subst.fresh();
+                let bounds = [start, stop, step].map(|x| x.as_deref().map(slice_literal));
+                self.need(
+                    Need::Slice {
+                        value: receiver,
+                        bounds,
+                        out: out.clone(),
+                    },
+                    e.span,
+                );
+                Ok(out)
+            }
             ExprKind::Attr { attr, .. } => {
                 let msg = format!("methods can only be called: `.{}(...)`", attr.name);
                 Err(error(attr.span, msg))
@@ -568,4 +593,19 @@ pub(super) fn int_literal(e: &Expr) -> Option<i64> {
         },
         _ => None,
     }
+}
+
+/// Signed literal syntax for fixed positional tuple slices.
+pub(super) fn slice_literal(e: &Expr) -> Option<i64> {
+    if let ExprKind::Unary {
+        op: UnaryOp::Pos,
+        operand,
+    } = &e.kind
+    {
+        return match operand.kind {
+            ExprKind::Int(n) => Some(n),
+            _ => None,
+        };
+    }
+    int_literal(e)
 }

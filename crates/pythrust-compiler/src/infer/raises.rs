@@ -635,6 +635,18 @@ impl<'a> Cx<'_, 'a> {
                 self.expr(value, out);
                 self.expr(index, out);
             }
+            ExprKind::Slice {
+                value,
+                start,
+                stop,
+                step,
+            } => {
+                self.expr(value, out);
+                [start, stop, step]
+                    .into_iter()
+                    .flatten()
+                    .for_each(|x| self.expr(x, out));
+            }
             ExprKind::Attr { value, .. } => self.expr(value, out),
             ExprKind::Name(_)
             | ExprKind::Int(_)

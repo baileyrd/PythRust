@@ -391,6 +391,13 @@ pub enum Rvalue {
     /// or a dict's keys, a set's elements or a view's items, of the
     /// destination's type.
     CopyList(Operand),
+    /// Fresh string/list slice, with nonzero step checked by lowering.
+    /// Bits 0/1/2 distinguish present start/stop/step from omission.
+    Slice {
+        source: Operand,
+        bounds: [Operand; 3],
+        present: u8,
+    },
     /// A new list, tuple, set or dict, of the destination's type,
     /// holding `items`: for a dict, keys and values alternating.
     NewSeq(Vec<Operand>),
@@ -607,6 +614,9 @@ impl Rvalue {
             | Rvalue::Entry(a, b, _)
             | Rvalue::Float(_, a, b)
             | Rvalue::IntPow(a, b) => vec![*a, *b],
+            Rvalue::Slice { source, bounds, .. } => {
+                std::iter::once(*source).chain(*bounds).collect()
+            }
             Rvalue::Contains { hay, needle } => vec![*hay, *needle],
             Rvalue::Call(_, args)
             | Rvalue::NewSeq(args)

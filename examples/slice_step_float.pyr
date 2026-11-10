@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: slice bounds must be integers
+# deviation: static subset rejects this form before execution.
+print("before")
+print("abc"[::1.0])

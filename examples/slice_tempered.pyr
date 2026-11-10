@@ -1,0 +1,22 @@
+# Fresh flat outer lists may be returned or changed while originals live.
+temper def copy(xs: list[int]) -> list[int]:
+    return xs[::-1]
+temper def resize(mut xs: list[int]) -> None:
+    for x in xs[:]:
+        xs.append(x)
+    print(xs)
+temper def change(mut xs: list[int]) -> list[int]:
+    ys = xs[:]
+    ys.append(9)
+    xs.append(8)
+    print(xs)
+    return ys
+xs = [1, 2, 3]
+print(copy(xs), xs)
+resize(xs)
+print(change(xs), xs)
+temper def nested(mut xs: list[list[int]]) -> None:
+    ys = xs[:]
+    ys[0].append(3)
+    print(ys)
+nested([[1]])

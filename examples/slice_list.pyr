@@ -1,0 +1,26 @@
+# List slice normalization and fresh/shallow copies.
+xs = [0, 1, 2, 3, 4]
+for a in [-9223372036854775808, -100, -5, -1, 0, 2, 5, 100, 9223372036854775807]:
+    for b in [-9223372036854775808, -6, -1, 0, 3, 6, 9223372036854775807]:
+        for c in [-9223372036854775808, -7, -2, -1, 1, 2, 7, 9223372036854775807]:
+            print(xs[a:b:c])
+for c in [-9223372036854775808, -2, -1, 1, 2, 9223372036854775807]:
+    print(xs[::c], xs[:3:c], xs[2::c], xs[:-1:c])
+    empty: list[int] = []
+    print(empty[::c])
+print(xs[:], xs[2:2], xs[1:4], xs[True:False:-1])
+copy = xs[:]
+copy[0] = 90
+xs.append(5)
+print(xs, copy)
+rows = [[1], [2], [3]]
+selected = rows[::2]
+selected[0].append(4)
+selected.append([5])
+print(rows, selected)
+xs[:][0] = 99
+print(xs)
+def fresh():
+    return [["é"], ["🙂"]][::-1]
+kept = fresh()
+print(kept[0][0], kept[1][0])

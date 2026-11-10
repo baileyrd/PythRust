@@ -792,3 +792,73 @@ fn d4_cli_running_outer_loops_are_not_hidden_by_other_temporaries() {
         assert!(!path.with_extension(std::env::consts::EXE_EXTENSION).exists());
     }
 }
+
+/// Literal zero is a runtime operator fault on every receiver, through
+/// generic callers too. Native diagnostics preserve run's exact site.
+#[test]
+fn slice_zero_keeps_runtime_span_message_and_output() {
+    let tmp = scratch("slice_zero_diagnostics");
+    let compiler = diagnostic_compiler();
+    let mut cargo = Command::new(env!("CARGO"));
+    cargo
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .args(["build", "--locked", "-p", "pythrust-rt"]);
+    if compiler.parent().is_some_and(|p| p.ends_with("release")) {
+        cargo.arg("--release");
+    }
+    let runtime = cargo.output().unwrap();
+    assert!(runtime.status.success(), "{runtime:?}");
+    for (name, expr) in [
+        ("str", "\"é🙂\"[::0]"),
+        ("list", "[1, 2][::0]"),
+        ("tuple", "(1, \"é\")[::0][0]"),
+        ("computed", "cut([1, 2], 0)"),
+    ] {
+        let src = format!("def cut(xs, step):\n    return xs[::step]\nprint(\"before\")\nprint({expr})\nprint(\"after\")\n");
+        let path = source(&tmp, name, &src);
+        let compiler = diagnostic_compiler();
+        let check = Command::new(&compiler)
+            .arg("check")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(check.status.success(), "{check:?}");
+        let run = Command::new(&compiler)
+            .arg("run")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(run.status.code(), Some(1));
+        assert_eq!(run.stdout, b"before\n");
+        let err = text(&run.stderr);
+        assert!(
+            err.contains("ValueError: slice step cannot be zero"),
+            "{err}"
+        );
+        let (line, col, underline) = if name == "computed" {
+            (2, 12, "xs[::step]")
+        } else {
+            (4, 7, expr.strip_suffix("[0]").unwrap_or(expr))
+        };
+        assert!(
+            err.contains(&format!(":{line}:{col}: runtime error:")),
+            "{err}"
+        );
+        assert!(
+            err.contains(&"^".repeat(underline.chars().count())),
+            "{err}"
+        );
+        let build = Command::new(&compiler)
+            .arg("build")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(build.status.success(), "{build:?}");
+        let native = Command::new(path.with_extension(std::env::consts::EXE_EXTENSION))
+            .output()
+            .unwrap();
+        assert_eq!(native.status.code(), run.status.code());
+        assert_eq!(native.stdout, run.stdout);
+        assert_eq!(native.stderr, run.stderr);
+    }
+}

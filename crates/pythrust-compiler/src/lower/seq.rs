@@ -148,7 +148,7 @@ impl FnBuilder<'_, '_> {
     }
 
     /// Field `k` of tuple `t`, a new temporary.
-    fn field(&mut self, t: Operand, k: usize, span: Span) -> Result<Operand> {
+    pub(super) fn field(&mut self, t: Operand, k: usize, span: Span) -> Result<Operand> {
         let ty = self.slot_ty(self.ty(t), k, span)?;
         Ok(self.temp(ty, Rvalue::Field(t, k), span))
     }

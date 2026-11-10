@@ -49,6 +49,16 @@ fn height(expr: &Expr) -> usize {
             .unwrap_or(0)
             .max(height(func)),
         ExprKind::Subscript { value, index } => height(value).max(height(index)),
+        ExprKind::Slice {
+            value,
+            start,
+            stop,
+            step,
+        } => std::iter::once(&**value)
+            .chain([start, stop, step].into_iter().filter_map(|x| x.as_deref()))
+            .map(height)
+            .max()
+            .unwrap_or(0),
         ExprKind::Attr { value, .. } => height(value),
     };
     child + 1

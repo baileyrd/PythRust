@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: slicing dict[int, int] is not supported yet
+# deviation: static subset rejects this form before execution.
+print("before")
+print({1: 2}[:])

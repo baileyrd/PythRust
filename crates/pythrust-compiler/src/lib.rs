@@ -16,6 +16,8 @@ pub mod ast;
 pub mod diag;
 pub mod exc;
 pub mod ir;
+#[path = "../../pythrust-rt/src/slice.rs"]
+mod slice;
 pub mod span;
 pub mod stdlib;
 pub mod token;

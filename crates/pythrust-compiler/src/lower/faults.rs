@@ -171,6 +171,19 @@ impl<'a> Sites<'a> {
                 self.expr(value);
                 self.expr(index);
             }
+            ExprKind::Slice {
+                value,
+                start,
+                stop,
+                step,
+            } => {
+                self.faults = true;
+                self.expr(value);
+                [start, stop, step]
+                    .into_iter()
+                    .flatten()
+                    .for_each(|x| self.expr(x));
+            }
             ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
                 items.iter().for_each(|x| self.expr(x))
             }

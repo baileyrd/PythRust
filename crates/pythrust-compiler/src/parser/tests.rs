@@ -342,6 +342,18 @@ fn sx(e: &Expr) -> String {
             format!("(call {}{})", sx(func), args.collect::<String>())
         }
         ExprKind::Subscript { value, index } => format!("(sub {} {})", sx(value), sx(index)),
+        ExprKind::Slice {
+            value,
+            start,
+            stop,
+            step,
+        } => format!(
+            "(slice {} {} {} {})",
+            sx(value),
+            start.as_deref().map(sx).unwrap_or_default(),
+            stop.as_deref().map(sx).unwrap_or_default(),
+            step.as_deref().map(sx).unwrap_or_default()
+        ),
         ExprKind::Attr { value, attr } => format!("(. {} {})", sx(value), attr.name),
     }
 }

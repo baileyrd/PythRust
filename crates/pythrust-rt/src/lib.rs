@@ -30,6 +30,7 @@ pub mod os;
 pub mod range;
 pub mod seq;
 mod sha256;
+pub mod slice;
 pub mod str;
 mod sync;
 pub mod sys;

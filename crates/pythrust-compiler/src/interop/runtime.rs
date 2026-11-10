@@ -56,6 +56,10 @@ pub const EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../../pythrust-rt/src/sha256.rs"),
     ),
     (
+        "src/slice.rs",
+        include_str!("../../../pythrust-rt/src/slice.rs"),
+    ),
+    (
         "src/str.rs",
         include_str!("../../../pythrust-rt/src/str.rs"),
     ),

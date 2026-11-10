@@ -221,6 +221,14 @@ fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
             .chain(args.iter().map(|a| &a.value))
             .collect(),
         ExprKind::Subscript { value, index } => vec![value, index],
+        ExprKind::Slice {
+            value,
+            start,
+            stop,
+            step,
+        } => std::iter::once(&**value)
+            .chain([start, stop, step].into_iter().filter_map(|x| x.as_deref()))
+            .collect(),
         ExprKind::Attr { value, .. } => vec![value],
         ExprKind::Name(_)
         | ExprKind::Int(_)
@@ -481,6 +489,18 @@ fn expr_names<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span)>) {
         ExprKind::Subscript { value, index } => {
             expr_names(value, out);
             expr_names(index, out);
+        }
+        ExprKind::Slice {
+            value,
+            start,
+            stop,
+            step,
+        } => {
+            expr_names(value, out);
+            [start, stop, step]
+                .into_iter()
+                .flatten()
+                .for_each(|x| expr_names(x, out));
         }
         ExprKind::Attr { value, .. } => expr_names(value, out),
         ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) => {}

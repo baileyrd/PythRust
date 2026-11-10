@@ -1313,6 +1313,40 @@ pub unsafe extern "C" fn pt_str_from_seq(s: *const PtSeq) -> *mut PtStr {
     }
 }
 
+/// Fresh shallow list slice. Retain elements while the source is guarded.
+///
+/// # Safety
+/// `s` is a live list; `step` is nonzero (checked at the source site).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_slice(
+    s: *const PtSeq,
+    start: i64,
+    stop: i64,
+    step: i64,
+    present: i64,
+) -> *mut PtSeq {
+    // SAFETY: guaranteed by the caller, following pt_list_copy.
+    let s = unsafe { seq(s as u64) };
+    let items = s.items.borrow();
+    let indices = crate::slice::indices(
+        items.len(),
+        (present & 1 != 0).then_some(start),
+        (present & 2 != 0).then_some(stop),
+        step,
+    );
+    let desc = slot(s.desc, 0);
+    let selected = indices
+        .into_iter()
+        .flatten()
+        .map(|k| {
+            let v = items[k];
+            inc(desc, v);
+            v
+        })
+        .collect();
+    new_seq(s.desc, selected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1987,6 +2021,24 @@ mod tests {
             free_all(todo);
             assert_eq!(seq(inner as u64).rc.get(), 1);
             pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn sliced_heap_elements_survive_source_destruction() {
+        let inner = make(b"li", &[7]);
+        let source = make(b"lli", &[inner as u64, inner as u64]);
+        // SAFETY: source and inner are live; slicing borrows source and
+        // adds owned references to each selected element before returning.
+        unsafe {
+            let selected = pt_list_slice(source, 0, 0, -1, 0);
+            pt_seq_dec(source);
+            pt_seq_dec(inner);
+            assert_eq!(shown(selected), "[[7], [7]]");
+            let nested = seq(selected as u64).items.borrow()[0];
+            pt_seq_push(nested as *const PtSeq, 9);
+            assert_eq!(shown(selected), "[[7, 9], [7, 9]]");
+            pt_seq_dec(selected);
         }
     }
 

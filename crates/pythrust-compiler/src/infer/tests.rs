@@ -2681,3 +2681,26 @@ fn list_and_dict_method_misuse_is_an_error() {
         assert!(got.contains(want), "{src:?}: {got}");
     }
 }
+
+#[test]
+fn slice_tuple_zero_has_no_fabricated_result_type() {
+    for src in [
+        "try:\n    print((1, 'a')[::0][0])\nexcept ValueError:\n    print('caught')\n",
+        "def f() -> str:\n    return (1, 'a')[::0]\n",
+        "def f(c):\n    return (1, 'a')[::0] if c else 'live'\nprint(f(False))\n",
+        "def f(xs):\n    return xs[::0]\nprint(f((1, 'a')))\n",
+    ] {
+        assert!(infer_src(src).is_ok(), "{src}");
+    }
+}
+
+#[test]
+fn slice_bounds_traverse_declared_raises() {
+    let src = "temper def bound() -> int raises IndexError:\n    raise IndexError('bound')\ntemper def f(xs: list[int]) -> list[int]:\n    return xs[bound()::0]\n";
+    assert!(src_err(src).contains("must declare"));
+    assert!(infer_src(&src.replace(
+        "def f(xs: list[int]) -> list[int]:",
+        "def f(xs: list[int]) -> list[int] raises IndexError:"
+    ))
+    .is_ok());
+}

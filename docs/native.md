@@ -2,6 +2,25 @@
 
 How `pythrust build` works, what it covers today, and the order the rest lands in. Decisions behind it: [research/backend.md](research/backend.md) (Cranelift, AOT) and [research/ir.md](research/ir.md) (one CFG IR, `pythrust-rt`).
 
+## Slice reads (#1168)
+
+`run` and `build` support string/list slices and fixed positional tuple slices.
+`Slice` in the IR allocates a fresh string or shallow list through the private
+`pt_str_slice`/`pt_list_slice` runtime helpers. The compiler evaluates all operands
+before checking zero step, raising a catchable, untracked `ValueError` at the
+slice site. Bound calls retain their declared exception and cleanup paths.
+A shared safe `slice.rs` normalizes with internal `i128` arithmetic, preserving
+omitted negative-step stop and avoiding `i64::MIN` negation or final-increment
+overflow. Strings count code points. List elements gain references under the
+source read guard, before it can release them. The result has a fresh outer
+identity but preserves nested reachability in ownership and task checks; loop
+holds and element-retain elision keep their existing rules. Tuple slices lower
+to selected field reads and boxed construction with the exact positional type;
+literal zero instead takes the existing non-returning exception path. Computed
+tuple components, slice stores/deletion and other receiver types are language
+subset diagnostics, not native gaps. The binding runtime embeds `slice.rs`.
+No external binding/task ABI or allocation-failure policy changes.
+
 ## Pipeline
 
 ```
@@ -41,7 +60,7 @@ Ints (checked `i64`), floats (`f64`), bools, `None`, strings; top-level function
 
 Semantics kept from `run`: a read of a variable no assignment has reached fails (`UnboundLocalError` in a function, `NameError` at module level), via a per-variable flag checked unless the read follows an assignment in the entry block or earlier in its own block. A module-level call before the function's `def` raises `NameError`; a call that could reach a function not yet defined is rejected. More than 1000 active calls is a `RecursionError` (the interpreter's `MAX_DEPTH`), counted in the thread's context around each call, so each worker has its own. Defaults are evaluated when the `def` runs, once, so a list default is shared across calls. A function reading a module variable the module has not assigned yet raises `NameError`. An out-of-range string index is an `IndexError` and a repeat too large to allocate a `MemoryError`, as in `run`; so are float division by zero, `**` out of range, a negative `int ** int` exponent, and failed conversions, each with `run`'s message. A message with a run-time part (`could not convert string to float: 'x'`, the `2.0 ** -1` fix-it) is rendered at compile time around a marker, and the runtime fills the marker in (`pt_fail_mid`).
 
-String methods and reduction/iterator builtins from [post-M6 step 1](roadmap.md#post-m6-step-1-strings-and-builtins) also build: Unicode-aware split/strip/case/search methods, `abs ord chr sum min max any all`, and lazily consumed `enumerate`/`zip`. List methods currently include `append`; planned methods such as list `index`/`count` have not landed. Tuple concatenation and cross-length ordering build; tuple multiplication is currently rejected by inference, even with a literal count. `list(xs)` is not a general iterable constructor; the [canonical differences](grammar.md#deviations-from-python) also record numeric conversion and list `+=` limitations. Coverage is corpus parity, not a claim that every checked program builds.
+String methods and reduction/iterator builtins from [post-M6 step 1](roadmap.md#post-m6-step-1-strings-and-builtins) also build: Unicode-aware split/strip/case/search methods, `abs ord chr sum min max any all`, and lazily consumed `enumerate`/`zip`. List/dict methods and item deletion from D70/D71 build too. Tuple concatenation and cross-length ordering build; tuple multiplication is currently rejected by inference, even with a literal count. `list(xs)` is not a general iterable constructor; the [canonical differences](grammar.md#deviations-from-python) also record numeric conversion and list `+=` limitations. Coverage is corpus parity, not a claim that every checked program builds.
 
 ### Portable SHA-256 pilot (#809)
 

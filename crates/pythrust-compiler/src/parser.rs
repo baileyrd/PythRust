@@ -325,6 +325,7 @@ impl<'a> Parser<'a> {
                     index: *index,
                 })
             }
+            ExprKind::Slice { .. } => "`del` of a slice is not supported yet",
             ExprKind::Name(_) => "`del` of a name is not supported yet",
             ExprKind::Tuple(_) => "`del` of several targets is not supported yet",
             ExprKind::Attr { .. } => "`del` of an attribute is not supported yet",
@@ -957,15 +958,43 @@ impl<'a> Parser<'a> {
 
     fn subscript(&mut self, value: Expr) -> Result<Expr> {
         self.bump();
-        let index = self.expr()?;
+        let first = self.slice_component()?;
+        if self.eat(&TokenKind::Colon) {
+            let stop = self.slice_component()?;
+            let step = if self.eat(&TokenKind::Colon) {
+                self.slice_component()?
+            } else {
+                None
+            };
+            self.expect(&TokenKind::RBracket)?;
+            return bounded(Expr {
+                span: self.span_from(value.span),
+                kind: ExprKind::Slice {
+                    value: Box::new(value),
+                    start: first,
+                    stop,
+                    step,
+                },
+            });
+        }
+        let Some(index) = first else {
+            return Err(error(self.tok(0).span, "expected an expression, found `]`"));
+        };
         self.expect(&TokenKind::RBracket)?;
         bounded(Expr {
             span: self.span_from(value.span),
             kind: ExprKind::Subscript {
                 value: Box::new(value),
-                index: Box::new(index),
+                index,
             },
         })
+    }
+
+    fn slice_component(&mut self) -> Result<Option<Box<Expr>>> {
+        if self.at(&TokenKind::Colon) || self.at(&TokenKind::RBracket) {
+            return Ok(None);
+        }
+        self.expr().map(|e| Some(Box::new(e)))
     }
 
     fn attr(&mut self, value: Expr) -> Result<Expr> {
@@ -1116,6 +1145,7 @@ fn to_target(expr: Expr) -> Result<Target> {
             TargetKind::Name(name)
         }
         ExprKind::Subscript { value, index } => TargetKind::Subscript { value, index },
+        ExprKind::Slice { .. } => return Err(error(span, "slice assignment is not supported yet")),
         ExprKind::Tuple(items) if !items.is_empty() => {
             let targets = items.into_iter().map(to_target);
             TargetKind::Tuple(targets.collect::<Result<_>>()?)
@@ -1329,7 +1359,10 @@ fn expr_noun(kind: &ExprKind) -> &'static str {
         ExprKind::Unary { .. } | ExprKind::Binary { .. } | ExprKind::Logical { .. } => {
             "an operator expression"
         }
-        ExprKind::Name(_) | ExprKind::Subscript { .. } | ExprKind::Attr { .. } => "this expression",
+        ExprKind::Name(_)
+        | ExprKind::Subscript { .. }
+        | ExprKind::Slice { .. }
+        | ExprKind::Attr { .. } => "this expression",
     }
 }
 
