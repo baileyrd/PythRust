@@ -64,9 +64,7 @@ impl Codegen<'_> {
             let mut ctx = Context::new();
             ctx.func.signature = self.thunk_signature();
             self.thunk_body(program, f, callee, &mut ctx)?;
-            self.module
-                .define_function(thunk, &mut ctx)
-                .map_err(module_err)?;
+            self.define_function(thunk, &mut ctx)?;
         }
         Ok(())
     }

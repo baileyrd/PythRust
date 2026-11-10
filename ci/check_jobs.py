@@ -34,7 +34,14 @@ EXPECTED_JOBS = {
     "check", "memcheck", "miri", "race", "rust-version", "compiler-rust-version", "driver",
     "all",
 }
-EXPECTED_OS = {"ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "windows-latest"}
+EXPECTED_TARGETS = {
+    "ubuntu-latest": ("x86_64-unknown-linux-gnu", "x64"),
+    "ubuntu-24.04-arm": ("aarch64-unknown-linux-gnu", "arm64"),
+    "macos-latest": ("aarch64-apple-darwin", "arm64"),
+    "windows-latest": ("x86_64-pc-windows-msvc", "x64"),
+    "macos-15-intel": ("x86_64-apple-darwin", "x64"),
+    "windows-11-arm": ("aarch64-pc-windows-msvc", "arm64"),
+}
 GATE = "all"
 
 
@@ -47,9 +54,15 @@ def problems(workflow: object) -> list[str]:
     found += [f"job `{j}` has no `runs-on`" for j, body in jobs.items() if "runs-on" not in body]
     if set(jobs) != EXPECTED_JOBS:
         found.append(f"jobs are {sorted(jobs)}, expected {sorted(EXPECTED_JOBS)}")
-    os = jobs.get("check", {}).get("strategy", {}).get("matrix", {}).get("os", [])
-    if set(os) != EXPECTED_OS:
-        found.append(f"`check` runs on {sorted(os)}, expected {sorted(EXPECTED_OS)}")
+    matrix = jobs.get("check", {}).get("strategy", {}).get("matrix", {})
+    expected = [
+        {"os": os, "target": target, "architecture": arch}
+        for os, (target, arch) in EXPECTED_TARGETS.items()
+    ]
+    lanes = matrix.get("include", [])
+    if (set(matrix) != {"include"} or not isinstance(lanes, list)
+            or len(lanes) != len(expected) or any(lane not in lanes for lane in expected)):
+        found.append(f"`check` matrix must contain exactly these native lanes: {expected}")
     needs = set(jobs.get(GATE, {}).get("needs", []))
     if needs != EXPECTED_JOBS - {GATE}:
         found.append(f"`{GATE}` needs {sorted(needs)}, expected every other job")
