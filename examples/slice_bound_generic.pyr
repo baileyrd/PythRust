@@ -1,0 +1,48 @@
+# Unresolved int-or-bool obligations survive schemes and later bindings.
+def start(xs, n):
+    return xs[n:]
+def stop(xs, n):
+    return xs[:n]
+def step(xs, n):
+    return xs[::n]
+def cut(xs, a, b, c):
+    return xs[a:b:c]
+def forward(xs, a, b, c):
+    return cut(xs, a, b, c)
+def boolean(n: bool) -> bool:
+    return n
+def saturate(xs, n):
+    result = xs[n:]
+    boolean(n)
+    return result
+def late_start(xs):
+    return xs[start_flag:]
+def late_stop(xs):
+    return xs[:stop_flag]
+def late_step(xs):
+    return xs[::step_flag]
+
+start_flag = True
+stop_flag = False
+step_flag = True
+xs = [0, 1, 2]
+s = "aé🙂"
+for b in [True, False]:
+    print((start(xs, b), stop(xs, b), start(s, b), stop(s, b)))
+    print(saturate(xs, b), saturate(s, b))
+    print((forward(xs, b, 3, True), forward(s, b, 3, True)))
+    print((forward(xs, 0, b, 1), forward(s, 0, b, 1)))
+    try:
+        print(step(xs, b))
+    except ValueError as e:
+        print("list", e)
+    try:
+        print(step(s, b))
+    except ValueError as e:
+        print("str", e)
+for n in [-1, 1, 2]:
+    print((start(xs, n), stop(xs, n), step(xs, n)))
+    print((start(s, n), stop(s, n), step(s, n)))
+    print((forward(xs, n, 3, n), forward(s, n, 3, n)))
+print(late_start(xs), late_stop(xs), late_step(xs))
+print((late_start(s), late_stop(s), late_step(s)))

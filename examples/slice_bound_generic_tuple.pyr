@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: a tuple slice needs literal bounds
+# deviation: accepting generic bool bounds does not admit computed tuple slices.
+def cut(xs, n):
+    return xs[::n]
+print(cut((1, "é"), True))

@@ -813,6 +813,8 @@ fn slice_zero_keeps_runtime_span_message_and_output() {
         ("list", "[1, 2][::0]"),
         ("tuple", "(1, \"é\")[::0][0]"),
         ("computed", "cut([1, 2], 0)"),
+        ("computed_bool", "cut([1, 2], False)"),
+        ("computed_bool_str", "cut(\"é🙂\", False)"),
     ] {
         let src = format!("def cut(xs, step):\n    return xs[::step]\nprint(\"before\")\nprint({expr})\nprint(\"after\")\n");
         let path = source(&tmp, name, &src);
@@ -835,7 +837,7 @@ fn slice_zero_keeps_runtime_span_message_and_output() {
             err.contains("ValueError: slice step cannot be zero"),
             "{err}"
         );
-        let (line, col, underline) = if name == "computed" {
+        let (line, col, underline) = if name.starts_with("computed") {
             (2, 12, "xs[::step]")
         } else {
             (4, 7, expr.strip_suffix("[0]").unwrap_or(expr))

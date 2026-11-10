@@ -51,6 +51,9 @@ pub(super) enum Need {
         out: Type,
         access: Access,
     },
+    /// A slice component must resolve to int or bool, without unifying
+    /// either with the other or prematurely fixing a generic variable.
+    SliceBound(Type),
     /// A receiver-typed slice. None is omitted, Some(None) computed.
     Slice {
         value: Type,
@@ -245,6 +248,7 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             value: r(value),
             elems: elems.iter().map(r).collect(),
         },
+        Need::SliceBound(t) => Need::SliceBound(r(t)),
         Need::Hashable(t) => Need::Hashable(r(t)),
         Need::Comparable(t) => Need::Comparable(r(t)),
         Need::Key { key, index } => Need::Key {
@@ -297,7 +301,11 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Binary(b) => vec![&b.left, &b.right, &b.out],
         Need::Negate { operand, out } => vec![operand, out],
         Need::Equal { left, right } | Need::Order { left, right } => vec![left, right],
-        Need::Len(t) | Need::Hashable(t) | Need::Comparable(t) | Need::ToNumber { arg: t, .. } => {
+        Need::Len(t)
+        | Need::SliceBound(t)
+        | Need::Hashable(t)
+        | Need::Comparable(t)
+        | Need::ToNumber { arg: t, .. } => {
             vec![t]
         }
         Need::OrNone { value, out }
@@ -330,6 +338,7 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         Need::Equal { left, right } => equal(s, c, left, right),
         Need::Order { left, right } => order(s, c, left, right),
         Need::Len(t) => len(s, c, t),
+        Need::SliceBound(t) => slice_bound(s, c, t),
         Need::Iter { iterable, elem } => iter(s, c, iterable, elem),
         Need::Index {
             value,
@@ -1178,4 +1187,22 @@ fn slice_of(
     };
     expect(s, c, &result, out)?;
     Ok(Step::Done(Vec::new()))
+}
+
+/// Checking waits through generalization/instantiation and saturation.
+/// It never supplies a type: bool and int remain distinct everywhere else.
+fn slice_bound(s: &Subst, c: &Constraint, bound: &Type) -> Result<Step> {
+    let Some(t) = known(s, bound) else {
+        return Ok(Step::Waiting);
+    };
+    if t.is_intlike() {
+        return Ok(Step::Done(Vec::new()));
+    }
+    Err(error(
+        c,
+        format!(
+            "slice bounds must be integers: expected int, found {}",
+            s.zonk(&t)
+        ),
+    ))
 }

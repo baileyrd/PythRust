@@ -96,9 +96,7 @@ impl Checker {
                 let receiver = self.expr(value)?;
                 for x in [start, stop, step].into_iter().flatten() {
                     let t = self.expr(x)?;
-                    if !self.subst.resolve(&t).is_intlike() {
-                        self.expect(x.span, &Type::Int, &t, "slice bounds must be integers")?;
-                    }
+                    self.need(Need::SliceBound(t), x.span);
                 }
                 let out = self.subst.fresh();
                 let bounds = [start, stop, step].map(|x| x.as_deref().map(slice_literal));

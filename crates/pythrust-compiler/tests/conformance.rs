@@ -427,6 +427,7 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 /// Programs the native backend must compile; it grows with the subset.
 const NATIVE: &[&str] = &[
     "slice_list",
+    "slice_bound_generic",
     "slice_str",
     "slice_tuple",
     "slice_zero",
