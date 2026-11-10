@@ -1,0 +1,18 @@
+# expect-exit: 1
+# An exception no handler catches still runs every `finally` block on its
+# way out, innermost first, then ends the program (D88).
+def inner(xs: list[str]) -> None:
+    try:
+        xs.append("é")
+        raise KeyError("missing")
+    finally:
+        print("inner finally", xs)
+
+
+try:
+    inner(["a"])
+except ValueError:
+    print("not this")
+finally:
+    print("outer finally")
+print("unreachable")

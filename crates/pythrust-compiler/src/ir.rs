@@ -326,6 +326,11 @@ pub enum Inst {
     /// `raise exc`: makes the `Exc` pending, with its own reference, as
     /// raised at `span`. Nothing may be pending.
     Raise { exc: Operand, span: Span },
+    /// Sets the pending exception, which there is, aside while a
+    /// `finally` block runs: none is pending after.
+    Stash,
+    /// Makes the exception stashed last pending again, as it was raised.
+    Restore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -442,6 +447,9 @@ pub enum Rvalue {
     /// The pending exception, which there is, with its reference; none
     /// is pending after.
     Catch,
+    /// The exception stashed last ([`Inst::Stash`]), which there is, with
+    /// its reference: one a `finally` block's own exception replaces.
+    Unstash,
     /// `exec.submit(func, *args)` (M6c): a new future of the task that
     /// calls `func` with `args` on one of `exec`'s workers. The operands
     /// are borrowed; the task gets references of its own.
@@ -631,7 +639,8 @@ impl Rvalue {
             | Rvalue::Global(_)
             | Rvalue::Raised
             | Rvalue::PendingIs(_)
-            | Rvalue::Catch => Vec::new(),
+            | Rvalue::Catch
+            | Rvalue::Unstash => Vec::new(),
         }
     }
 }
@@ -653,6 +662,7 @@ impl Inst {
                 list, index, value, ..
             } => [list, index, value].into_iter().any(local),
             Inst::Raise { exc, .. } | Inst::Reverse(exc) => local(exc),
+            Inst::Stash | Inst::Restore => false,
             Inst::Sort { list, reverse, .. } => local(list) || local(reverse),
             Inst::Insert {
                 list, index, value, ..

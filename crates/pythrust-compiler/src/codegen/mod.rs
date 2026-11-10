@@ -176,6 +176,9 @@ enum Rt {
     RaiseMsg,
     PendingIs,
     Catch,
+    Stash,
+    Restore,
+    Unstash,
     Uncaught,
     DictSet,
     DictGet,
@@ -228,7 +231,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 113] = [
+    const ALL: [Rt; 116] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -293,6 +296,9 @@ impl Rt {
         Rt::RaiseMsg,
         Rt::PendingIs,
         Rt::Catch,
+        Rt::Stash,
+        Rt::Restore,
+        Rt::Unstash,
         Rt::Uncaught,
         Rt::DictSet,
         Rt::DictGet,
@@ -410,6 +416,9 @@ impl Rt {
             Rt::RaiseMsg => "pt_raise_msg",
             Rt::PendingIs => "pt_pending_is",
             Rt::Catch => "pt_catch",
+            Rt::Stash => "pt_stash",
+            Rt::Restore => "pt_restore",
+            Rt::Unstash => "pt_unstash",
             Rt::Uncaught => "pt_uncaught",
             Rt::DictSet => "pt_dict_set",
             Rt::DictGet => "pt_dict_get",
@@ -514,7 +523,8 @@ impl Rt {
             Rt::RaiseValue => (vec![ptr; 7], None),
             Rt::RaiseMsg => (vec![I8, ptr, ptr, ptr, ptr, ptr, ptr], None),
             Rt::PendingIs => (vec![I32], Some(I8)),
-            Rt::Catch => (vec![], Some(ptr)),
+            Rt::Catch | Rt::Unstash => (vec![], Some(ptr)),
+            Rt::Stash | Rt::Restore => (vec![], None),
             Rt::Uncaught => (vec![], None),
             Rt::DictSet => (vec![ptr, I64, I64], None),
             Rt::DictGet => (vec![ptr, I64, ptr], Some(I64)),
@@ -961,6 +971,12 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 self.set_global(*global, null)?;
             }
             Inst::Raise { exc, span } => self.raise(*exc, *span)?,
+            Inst::Stash => {
+                self.call_rt(Rt::Stash, &[]);
+            }
+            Inst::Restore => {
+                self.call_rt(Rt::Restore, &[]);
+            }
         }
         Ok(())
     }
@@ -1277,6 +1293,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Raised => Ok(self.pending_flag()),
             Rvalue::PendingIs(classes) => self.pending_is(classes),
             Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
+            Rvalue::Unstash => self.call_rt_value(Rt::Unstash, &[]),
             Rvalue::Submit { exec, func, args } => self.submit(*exec, *func, args),
             Rvalue::TaskResult(fut) => self.task_result(*fut, dest),
             Rvalue::NextResult(rs) => self.next_result(*rs, dest),

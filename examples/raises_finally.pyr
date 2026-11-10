@@ -1,0 +1,37 @@
+# A tempered function's `raises` covers what its `finally` blocks let
+# escape too, plus what escapes the `try` body and handlers (D90). The
+# body's escapes count even where the block always raises.
+temper def parse(s: str) -> int raises ValueError, IndexError:
+    try:
+        return int(s)
+    finally:
+        print("parsed", s)
+
+
+temper def replace(s: str) -> int raises ValueError, IndexError:
+    try:
+        return int(s)
+    finally:
+        raise IndexError("always: " + s)
+
+
+temper def handled(s: str) -> int raises IndexError:
+    try:
+        return int(s)
+    except ValueError:
+        return -1
+    finally:
+        if s == "ø":
+            raise IndexError("ø")
+
+
+print(parse("12"))
+try:
+    replace("3")
+except IndexError as e:
+    print(e)
+print(handled("x"))
+try:
+    handled("ø")
+except IndexError as e:
+    print("caught", e)

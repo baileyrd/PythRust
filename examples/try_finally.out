@@ -1,0 +1,24 @@
+body
+finally after body
+no raise
+finally after handler 0
+caught café 2
+finally after handler 2
+0 2
+finally sees returned 5
+returned 5 ['returned 5']
+finally after the handler's return
+7
+[1, 99]
+finally while it escapes
+outer caught: on its way out
+replaced by: second
+inner finally ñ
+outer finally ñ
+ñ!
+[0, 0, 10, 2, 20, 3, 30, 40]
+3
+inner finally raises
+invalid literal for int() with base 10: 'ß'
+module loop
+module finally

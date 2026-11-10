@@ -273,7 +273,11 @@ impl<'m> Interp<'m, '_> {
                 let exc = self.exception(value)?;
                 return Err(Unwind::Raise(exc, stmt.span));
             }
-            StmtKind::Try { body, handlers } => return self.exec_try(body, handlers),
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => return self.exec_try(body, handlers, finally.as_ref()),
             StmtKind::With {
                 value,
                 binding,
@@ -300,9 +304,29 @@ impl<'m> Interp<'m, '_> {
         }
     }
 
-    /// `try`: an exception the body raises runs the first handler that
-    /// names it. Faults, unmatched exceptions and other flow pass through.
-    fn exec_try(&mut self, body: &'m Block, handlers: &'m [Handler]) -> Exec<'m, Flow<'m>> {
+    /// `try`: then its `finally` block, however the rest was left but
+    /// by a fault, which stops the program (D88). An exception the block
+    /// raises replaces what the rest gave; no jump leaves it (D89).
+    fn exec_try(
+        &mut self,
+        body: &'m Block,
+        handlers: &'m [Handler],
+        finally: Option<&'m Block>,
+    ) -> Exec<'m, Flow<'m>> {
+        let out = self.exec_handled(body, handlers);
+        let Some(finally) = finally else {
+            return out;
+        };
+        if let Err(Unwind::Fault(_)) = out {
+            return out;
+        }
+        self.exec_block(finally)?;
+        out
+    }
+
+    /// An exception `body` raises runs the first handler that names it.
+    /// Faults, unmatched exceptions and other flow pass through.
+    fn exec_handled(&mut self, body: &'m Block, handlers: &'m [Handler]) -> Exec<'m, Flow<'m>> {
         let (exc, span) = match self.exec_block(body) {
             Err(Unwind::Raise(exc, span)) => (exc, span),
             done => return done,
@@ -1057,12 +1081,17 @@ fn collect_block<'m>(block: &'m [Stmt], names: &mut HashSet<&'m str>) {
                 collect_block(&branch.body, names);
                 collect_block(orelse, names);
             }
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 collect_block(body, names);
                 for h in handlers {
                     names.extend(h.binding.as_ref().map(|b| b.name.as_str()));
                     collect_block(&h.body, names);
                 }
+                finally.iter().for_each(|f| collect_block(f, names));
             }
             StmtKind::With { binding, body, .. } => {
                 names.insert(&binding.name);

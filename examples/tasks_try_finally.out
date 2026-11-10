@@ -1,0 +1,33 @@
+task 0
+end finally 0
+task 1
+end finally 1
+task 2
+end finally 2
+-1
+task 0
+break finally 0
+task 1
+break finally 1
+-1
+task 0
+continue finally 0
+task 1
+continue finally 1
+task 2
+continue finally 2
+-1
+task 0
+return finally 0
+task 1
+return finally 1
+1
+task 0
+raise finally 0
+task 1
+raise finally 1
+caught raised in the block
+body
+task 9
+finally got 9
+0

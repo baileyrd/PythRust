@@ -111,9 +111,14 @@ impl<'a> Sites<'a> {
                 self.block(body);
                 self.block(orelse);
             }
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 self.block(body);
                 handlers.iter().for_each(|h| self.block(&h.body));
+                finally.iter().for_each(|f| self.block(f));
             }
             StmtKind::With { value, body, .. } => {
                 self.expr(value);

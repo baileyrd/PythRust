@@ -1,0 +1,143 @@
+# `finally` runs however its `try` is left (D88): normally, after a
+# handler, on an exception no handler catches (raised again afterwards,
+# the same object), and on `return`, `break` and `continue`. A `return`
+# value is evaluated before the block runs; an exception the block raises
+# replaces the pending one.
+log: list[str] = []
+
+
+def note(s: str) -> str:
+    log.append(s)
+    return s
+
+
+def plain() -> None:
+    try:
+        print("body")
+    finally:
+        print("finally after body")
+
+
+def handled(n: int) -> int:
+    try:
+        if n > 0:
+            raise ValueError("café " + str(n))
+        print("no raise")
+    except ValueError as e:
+        print("caught", e)
+    finally:
+        print("finally after handler", n)
+    return n
+
+
+def returns(n: int) -> str:
+    try:
+        return note("returned " + str(n))
+    finally:
+        print("finally sees", log[-1])
+
+
+def returns_from_handler() -> int:
+    try:
+        raise IndexError("ünïcode")
+    except IndexError:
+        return 7
+    finally:
+        print("finally after the handler's return")
+
+
+def keeps(xs: list[int]) -> list[int]:
+    try:
+        return xs
+    finally:
+        xs.append(99)
+
+
+def escapes() -> int:
+    try:
+        raise ZeroDivisionError("on its way out")
+    finally:
+        print("finally while it escapes")
+
+
+def replaced() -> int:
+    try:
+        raise ValueError("first")
+    finally:
+        raise IndexError("second")
+
+
+def nested(s: str) -> str:
+    try:
+        try:
+            return s + "!"
+        finally:
+            print("inner finally", s)
+    finally:
+        print("outer finally", s)
+
+
+def loops() -> list[int]:
+    out: list[int] = []
+    for i in range(6):
+        try:
+            if i == 1:
+                continue
+            if i == 4:
+                break
+            out.append(i)
+        finally:
+            out.append(10 * i)
+    return out
+
+
+def loop_inside_finally() -> int:
+    total = 0
+    try:
+        total = 1
+    finally:
+        for i in range(10):
+            if i == 3:
+                break
+            if i == 1:
+                continue
+            total += i
+    return total
+
+
+def raises_in_finally_caught() -> str:
+    try:
+        try:
+            raise ValueError("lost")
+        finally:
+            print("inner finally raises")
+            int("ß")
+    except ValueError as e:
+        return str(e)
+
+
+plain()
+print(handled(0), handled(2))
+print(returns(5), log)
+print(returns_from_handler())
+print(keeps([1]))
+try:
+    escapes()
+except ZeroDivisionError as e:
+    print("outer caught:", e)
+try:
+    replaced()
+except ValueError:
+    print("not this")
+except IndexError as e:
+    print("replaced by:", e)
+print(nested("ñ"))
+print(loops())
+print(loop_inside_finally())
+print(raises_in_finally_caught())
+while True:
+    try:
+        print("module loop")
+        break
+    finally:
+        print("module finally")

@@ -1147,10 +1147,17 @@ fn for_iterables(
                 for_iterables(program, &branch.body, out, copies);
                 for_iterables(program, orelse, out, copies);
             }
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 for_iterables(program, body, out, copies);
                 for handler in handlers {
                     for_iterables(program, &handler.body, out, copies);
+                }
+                if let Some(f) = finally {
+                    for_iterables(program, f, out, copies);
                 }
             }
             StmtKind::With { body, .. } => for_iterables(program, body, out, copies),
@@ -1303,6 +1310,7 @@ pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
             list, index, value, ..
         } => vec![*list, *index, *value],
         Inst::Raise { exc, .. } | Inst::Reverse(exc) => vec![*exc],
+        Inst::Stash | Inst::Restore => vec![],
         Inst::Sort { list, reverse, .. } => vec![*list, *reverse],
         Inst::Insert {
             list, index, value, ..

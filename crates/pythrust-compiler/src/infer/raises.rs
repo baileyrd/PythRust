@@ -249,12 +249,17 @@ fn bindings<'a>(block: &'a [Stmt], out: &mut Bindings<'a>) {
                     .for_each(|b| bindings(&b.body, out));
                 bindings(orelse, out);
             }
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 bindings(body, out);
                 for h in handlers {
                     caught(h.binding.as_ref(), &h.classes, out);
                     bindings(&h.body, out);
                 }
+                finally.iter().for_each(|f| bindings(f, out));
             }
             StmtKind::With { binding, body, .. } => {
                 out.entry(&binding.name).or_default().push(Source::Opaque);
@@ -536,7 +541,11 @@ impl<'a> Cx<'_, 'a> {
                 out.extend(self.block(body));
                 out.extend(self.block(orelse));
             }
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 let classes: Vec<ExcKind> = handlers
                     .iter()
                     .flat_map(|h| &h.classes)
@@ -546,6 +555,9 @@ impl<'a> Cx<'_, 'a> {
                 handlers
                     .iter()
                     .for_each(|h| out.extend(self.block(&h.body)));
+                // What escapes the body escapes still when `finally` always
+                // raises: an over-approximation a declared set allows (D90).
+                finally.iter().for_each(|f| out.extend(self.block(f)));
             }
             StmtKind::With { value, body, .. } => {
                 self.expr(value, &mut out);

@@ -56,6 +56,12 @@ struct Parser<'a> {
     depth: usize,
     in_func: bool,
     in_loop: bool,
+    /// Inside a `finally` block of this function (or the module's code):
+    /// `return` would leave it (D89).
+    in_finally: bool,
+    /// Inside a `finally` block entered since the innermost loop:
+    /// `break` and `continue` would leave it (D89).
+    jump_leaves_finally: bool,
     /// Modules imported so far.
     modules: Vec<&'static ModuleDef>,
     /// The Rust bindings `import` may name, and those it has.
@@ -85,6 +91,8 @@ impl<'a> Parser<'a> {
             depth: 0,
             in_func: false,
             in_loop: false,
+            in_finally: false,
+            jump_leaves_finally: false,
             modules: Vec::new(),
             bindings,
             imported_bindings: Vec::new(),
@@ -189,10 +197,20 @@ impl<'a> Parser<'a> {
     }
 
     fn looping<T>(&mut self, rule: Rule<'a, T>) -> Result<T> {
-        let outer = self.in_loop;
-        self.in_loop = true;
+        let outer = (self.in_loop, self.jump_leaves_finally);
+        (self.in_loop, self.jump_leaves_finally) = (true, false);
         let out = rule(self);
-        self.in_loop = outer;
+        (self.in_loop, self.jump_leaves_finally) = outer;
+        out
+    }
+
+    /// A `finally` block: no `return`, `break` or `continue` may leave it
+    /// (D89).
+    fn finally_block(&mut self) -> Result<Block> {
+        let outer = (self.in_finally, self.jump_leaves_finally);
+        (self.in_finally, self.jump_leaves_finally) = (true, true);
+        let out = self.block();
+        (self.in_finally, self.jump_leaves_finally) = outer;
         out
     }
 
@@ -298,6 +316,9 @@ impl<'a> Parser<'a> {
         if !self.in_func {
             return Err(error(span, "`return` outside function"));
         }
+        if self.in_finally {
+            return Err(error(span, leaves_finally("return")));
+        }
         if !starts_expr(self.peek()) {
             return Ok(StmtKind::Return(None));
         }
@@ -339,6 +360,9 @@ impl<'a> Parser<'a> {
         let span = self.bump().span;
         if !self.in_loop {
             return Err(error(span, format!("`{word}` outside loop")));
+        }
+        if self.jump_leaves_finally {
+            return Err(error(span, leaves_finally(word)));
         }
         Ok(kind)
     }
@@ -547,21 +571,36 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `'try' ':' block handler+`. `else` and `finally` clauses are later.
+    /// `'try' ':' block (handler+ [finally] | finally)`. An `else`
+    /// clause is later.
     fn try_stmt(&mut self) -> Result<Stmt> {
         let start = self.bump().span;
         self.expect(&TokenKind::Colon)?;
         let body = self.block()?;
-        let mut handlers = vec![self.handler()?];
+        let mut handlers = Vec::new();
         while self.at(&TokenKind::Except) {
             handlers.push(self.handler()?);
         }
-        if self.at(&TokenKind::Else) {
+        if self.at(&TokenKind::Else) && !handlers.is_empty() {
             let span = self.tok(0).span;
             return Err(error(span, "`else` on `try` is not supported yet"));
         }
+        let finally = match self.eat(&TokenKind::Finally) {
+            true => {
+                self.expect(&TokenKind::Colon)?;
+                Some(self.finally_block()?)
+            }
+            false if handlers.is_empty() => {
+                return Err(self.unexpected("`except` or `finally`"));
+            }
+            false => None,
+        };
         Ok(Stmt {
-            kind: StmtKind::Try { body, handlers },
+            kind: StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            },
             span: self.span_from(start),
         })
     }
@@ -1455,6 +1494,7 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Is => "is",
         TokenKind::Try => "try",
         TokenKind::Except => "except",
+        TokenKind::Finally => "finally",
         TokenKind::Raise => "raise",
         TokenKind::Del => "del",
         TokenKind::Import => "import",
@@ -1518,3 +1558,9 @@ pub(crate) fn test_binding(name: &str, src: &str) -> Binding {
 
 #[cfg(test)]
 mod tests;
+
+/// Why `word` may not leave a `finally` block (D89; CPython 3.13 allows
+/// it, swallowing a pending exception).
+fn leaves_finally(word: &str) -> String {
+    format!("`{word}` inside `finally` is not supported")
+}

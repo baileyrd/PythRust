@@ -8,10 +8,11 @@
 use crate::ast::{Block, Expr, ExprKind, Handler};
 use crate::diag::Result;
 use crate::exc::ExcKind;
+use crate::ir::Rvalue::Unstash;
 use crate::ir::{Inst, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
-use super::{internal, FnBuilder, Try, Unbind};
+use super::{internal, Fin, FnBuilder, Try, Unbind};
 
 impl FnBuilder<'_, '_> {
     /// `raise value`; `raise ValueError` raises a new one without an
@@ -29,12 +30,123 @@ impl FnBuilder<'_, '_> {
         self.raise_path()
     }
 
+    /// `try`, its handlers and its `finally` block. The block is lowered
+    /// once per way out: falling off the end, an exception on its way out
+    /// (stashed while the block runs, then raised again as it was), and
+    /// each `return`, `break` or `continue` leaving the `try`.
+    pub(super) fn try_stmt(
+        &mut self,
+        body: &Block,
+        handlers: &[Handler],
+        finally: Option<&Block>,
+    ) -> Result<()> {
+        let Some(fin) = finally else {
+            return self.try_except(body, handlers);
+        };
+        let (dispatch, end) = (self.new_block(), self.new_block());
+        let (pools, stashes) = (self.pools.len(), self.stashes);
+        self.finallys.push(Fin {
+            body: fin.clone(),
+            loops: self.loops.len(),
+            tries: self.tries.len(),
+            pools,
+            unbinds: self.unbinds.len(),
+        });
+        self.tries.push(Try {
+            dispatch,
+            pools,
+            stashes,
+        });
+        let lowered = match handlers {
+            [] => self.block(body),
+            _ => self.try_except(body, handlers),
+        };
+        self.tries.pop();
+        self.finallys.pop();
+        lowered?;
+        self.block(fin)?;
+        self.terminate(Term::Goto(end));
+        self.switch_to(dispatch);
+        self.emit(Inst::Stash);
+        self.stashes += 1;
+        let lowered = self.block(fin);
+        self.stashes -= 1;
+        lowered?;
+        self.emit(Inst::Restore);
+        self.raise_path()?;
+        self.switch_to(end);
+        Ok(())
+    }
+
+    /// On the way out of the `try` statements of `self.finallys[from..]`,
+    /// innermost first: each one's statements end and its handlers'
+    /// names that `left` picks are unbound, then its `finally` block runs
+    /// where the `try` is, outside its body. Then the names `left` picks
+    /// outside them all are unbound: a handler's name stays bound for the
+    /// `finally` blocks inside the handler, as in Python. `keep` holds a
+    /// `return`'s value, released if a block raises out of its `try`.
+    pub(super) fn leave_finallys(
+        &mut self,
+        from: usize,
+        left: impl Fn(&Unbind) -> bool,
+        keep: Option<LocalId>,
+    ) -> Result<()> {
+        let mut bound = self.unbinds.len();
+        for i in (from..self.finallys.len()).rev() {
+            let fin = self.finallys[i].clone();
+            let temps: Vec<LocalId> = self.pools[fin.pools..].concat();
+            temps.into_iter().for_each(|t| self.emit(Inst::Release(t)));
+            self.unbind_range(fin.unbinds..bound, &left)?;
+            bound = bound.min(fin.unbinds);
+            let loops = self.loops.split_off(fin.loops);
+            let tries = self.tries.split_off(fin.tries);
+            let finallys = self.finallys.split_off(i);
+            let unbinds = self.unbinds.split_off(fin.unbinds);
+            self.returning.extend(keep.map(|k| (k, fin.tries)));
+            let lowered = self.block(&fin.body);
+            if keep.is_some() {
+                self.returning.pop();
+            }
+            self.loops.truncate(fin.loops);
+            self.tries.truncate(fin.tries);
+            self.finallys.truncate(i);
+            self.unbinds.truncate(fin.unbinds);
+            self.loops.extend(loops);
+            self.tries.extend(tries);
+            self.finallys.extend(finallys);
+            self.unbinds.extend(unbinds);
+            lowered?;
+        }
+        self.unbind_range(0..bound, &left)
+    }
+
+    /// Unbinds the names of `self.unbinds[range]` that `left` picks.
+    fn unbind_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        left: &impl Fn(&Unbind) -> bool,
+    ) -> Result<()> {
+        let leaving: Vec<Unbind> = self.unbinds[range]
+            .iter()
+            .filter(|u| left(u))
+            .cloned()
+            .collect();
+        leaving
+            .into_iter()
+            .try_for_each(|u| self.unbind(&u.name, u.span))
+    }
+
     /// `try` and its handlers. The body raises into a dispatch that runs
     /// the first handler naming the pending exception's kind.
-    pub(super) fn try_stmt(&mut self, body: &Block, handlers: &[Handler]) -> Result<()> {
+    fn try_except(&mut self, body: &Block, handlers: &[Handler]) -> Result<()> {
         let (dispatch, end) = (self.new_block(), self.new_block());
         let pools = self.pools.len();
-        self.tries.push(Try { dispatch, pools });
+        let stashes = self.stashes;
+        self.tries.push(Try {
+            dispatch,
+            pools,
+            stashes,
+        });
         let lowered = self.block(body);
         self.tries.pop();
         lowered?;
@@ -111,11 +223,14 @@ impl FnBuilder<'_, '_> {
     /// and unbinding the handler names left, else the unwind block, whose
     /// exit releases everything (or the program ends).
     pub(super) fn raise_path(&mut self) -> Result<()> {
+        self.abandon_returns();
         let Some(t) = self.tries.last().copied() else {
+            self.drop_stashes(0);
             let unwind = self.unwind_block();
             self.jump_away(Term::Goto(unwind));
             return Ok(());
         };
+        self.drop_stashes(t.stashes);
         let left: Vec<LocalId> = self.pools[t.pools..].concat();
         left.into_iter().for_each(|l| self.emit(Inst::Release(l)));
         let depth = self.tries.len();
@@ -124,12 +239,35 @@ impl FnBuilder<'_, '_> {
         Ok(())
     }
 
+    /// Releases the return values a raise from here abandons: those whose
+    /// running `finally` block it leaves. A `try` inside the block catches
+    /// without abandoning, and the `return` goes on.
+    fn abandon_returns(&mut self) {
+        let depth = self.tries.len();
+        let left: Vec<LocalId> = self
+            .returning
+            .iter()
+            .filter(|(_, tries)| depth <= *tries)
+            .map(|(l, _)| *l)
+            .collect();
+        left.into_iter().for_each(|l| self.emit(Inst::Release(l)));
+    }
+
+    /// Drops the exceptions stashed above the first `kept`: an exception
+    /// raised in a `finally` block replaces the one it was running for
+    /// (D88).
+    fn drop_stashes(&mut self, kept: usize) {
+        for _ in kept..self.stashes {
+            let span = Span { start: 0, end: 0 };
+            if let Operand::Local(e) = self.temp(Ty::Exc, Unstash, span) {
+                self.emit(Inst::Release(e));
+            }
+        }
+    }
+
     /// Unbinds the names of the handlers being left: those `left` picks.
     pub(super) fn unbind_left(&mut self, left: impl Fn(&Unbind) -> bool) -> Result<()> {
-        let leaving: Vec<Unbind> = self.unbinds.iter().filter(|u| left(u)).cloned().collect();
-        leaving
-            .into_iter()
-            .try_for_each(|u| self.unbind(&u.name, u.span))
+        self.unbind_range(0..self.unbinds.len(), &left)
     }
 
     /// Unbinds variable `name`: a later read fails as unbound.

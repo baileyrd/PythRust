@@ -124,7 +124,9 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
         | Inst::Insert { .. }
         | Inst::Remove { .. }
         | Inst::Reverse(_)
-        | Inst::Raise { .. } => false,
+        | Inst::Raise { .. }
+        | Inst::Stash
+        | Inst::Restore => false,
     }
 }
 
@@ -173,7 +175,8 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::NewExc(..)
         | Rvalue::Raised
         | Rvalue::PendingIs(_)
-        | Rvalue::Catch => false,
+        | Rvalue::Catch
+        | Rvalue::Unstash => false,
     }
 }
 
@@ -608,7 +611,9 @@ fn ends(inst: &Inst, l: LocalId) -> bool {
         | Inst::Insert { .. }
         | Inst::Remove { .. }
         | Inst::Reverse(_)
-        | Inst::Raise { .. } => false,
+        | Inst::Raise { .. }
+        | Inst::Stash
+        | Inst::Restore => false,
     }
 }
 
