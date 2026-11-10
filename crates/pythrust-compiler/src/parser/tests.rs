@@ -46,6 +46,7 @@ fn kind_of(word: &str) -> TokenKind {
         "raise" => T::Raise,
         "del" => T::Del,
         "as" => T::As,
+        "with" => T::With,
         "+" => T::Plus,
         "-" => T::Minus,
         "*" => T::Star,
@@ -1835,4 +1836,49 @@ fn pause_covers_the_expression_to_its_right() {
     let m = parse(&lex(wrapped).unwrap()).unwrap();
     let covered = &wrapped[m.pauses[0].covers.start..m.pauses[0].covers.end];
     assert_eq!(covered, "(pause f())");
+}
+
+/// `with open(...)` desugars to a hidden temp closed by `finally`
+/// (D109-D113); other values stay executor `with`s.
+#[test]
+fn with_open_is_try_finally_on_a_hidden_file() {
+    let body = ": NL INDENT y NL DEDENT";
+    assert_eq!(
+        ok(&format!("with open ( p ) as f {body}")),
+        "(= with#0 (call open p)) (= f with#0) (try (y) (finally ((call (. with#0 close)))))"
+    );
+    assert_eq!(
+        ok(&format!("with open ( p ) {body}")),
+        "(= with#0 (call open p)) (try (y) (finally ((call (. with#0 close)))))"
+    );
+    assert_eq!(
+        ok(&format!(
+            "with open ( a ) as f , ex ( ) as e , open ( b ) {body}"
+        )),
+        "(= with#0 (call open a)) (= f with#0) (try ((with (call ex) e \
+         ((= with#1 (call open b)) (try (y) (finally ((call (. with#1 close)))))))) \
+         (finally ((call (. with#0 close)))))"
+    );
+    assert_eq!(
+        ok(&format!("with ( open ( p ) ) as f {body}")),
+        "(= with#0 (call open p)) (= f with#0) (try (y) (finally ((call (. with#0 close)))))"
+    );
+    assert_eq!(
+        ok(&format!("with ex ( ) as e {body}")),
+        "(with (call ex) e (y))"
+    );
+    assert_eq!(
+        err(&format!("with ex ( ) {body}")),
+        "`with` needs a name: write `with value as name:`"
+    );
+    assert_eq!(
+        err(&format!(
+            "with ( open ( a ) as f , open ( b ) as g ) {body}"
+        )),
+        "parenthesized `with` items are not supported yet"
+    );
+    assert_eq!(
+        err(&format!("with open ( p ) as f [ 0 ] {body}")),
+        "expected `:`, found `[`"
+    );
 }

@@ -1,0 +1,8 @@
+# expect-exit: 1
+# deviation: D113: Python 3.10's parenthesized `with` items are not supported yet; `with open(a) as f, open(b) as g:` is the accepted spelling.
+# expect-error: parenthesized `with` items are not supported yet
+try:
+    with (open("no/such/dir/a.txt") as f, open("no/such/dir/b.txt") as g):
+        print(f.read(), g.read())
+except OSError:
+    print("missing")

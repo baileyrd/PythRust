@@ -1908,6 +1908,9 @@ kept = open("kept.txt", "w")
 kept.write("kept 🙂\n")
 "#;
 
+/// The files [`TEXT_FILES`] writes.
+const TEXT_OUTPUTS: &[&str] = &["out.txt", "copy.bin", "kept.txt"];
+
 /// Writes [`TEXT_FILES`]'s inputs into `dir`.
 fn text_inputs(dir: &Path) -> Res<()> {
     let mut crlf = vec![b'x'; 8191];
@@ -1928,11 +1931,11 @@ fn text_inputs(dir: &Path) -> Res<()> {
 }
 
 /// What running `cmd` in a fresh copy of the inputs at `dir` prints, then
-/// the files it wrote, read back.
-fn text_run(cmd: &mut Command, dir: &Path) -> Res<Run> {
+/// the `outputs` it wrote, read back.
+fn text_run(cmd: &mut Command, dir: &Path, outputs: &[&str]) -> Res<Run> {
     text_inputs(dir)?;
     let mut got = run(cmd.current_dir(dir), TIMEOUT)?;
-    for name in ["out.txt", "copy.bin", "kept.txt"] {
+    for name in outputs {
         let data = fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
         got.stdout.push_str(&format!("{name}: {data:?}\n"));
     }
@@ -1950,7 +1953,7 @@ fn text_files_match_cpython() -> Res<()> {
     let source = exe.with_extension("pyr");
     let mut python = Command::new(python());
     python.args(["-I", "-X", "utf8"]).arg(&source);
-    let mut want = text_run(&mut python, &dir.join("cpython"))?;
+    let mut want = text_run(&mut python, &dir.join("cpython"), TEXT_OUTPUTS)?;
     want.stdout = universal_newlines(want.stdout);
     assert_eq!(want.status, 0, "{}", want.stdout);
     for line in [
@@ -1964,11 +1967,140 @@ fn text_files_match_cpython() -> Res<()> {
     }
     let mut pythrust = Command::new(pythrust_bin()?);
     pythrust.arg("run").arg(&source);
-    assert_eq!(text_run(&mut pythrust, &dir.join("run"))?, want);
     assert_eq!(
-        text_run(&mut Command::new(&exe), &dir.join("native"))?,
+        text_run(&mut pythrust, &dir.join("run"), TEXT_OUTPUTS)?,
         want
     );
+    assert_eq!(
+        text_run(&mut Command::new(&exe), &dir.join("native"), TEXT_OUTPUTS)?,
+        want
+    );
+    dir.pass();
+    Ok(())
+}
+
+/// `with open(...)` (D109-D113) closes its file on every way out of the
+/// block: falling off the end, `return`, `break`, `continue`, a caught
+/// exception and an uncaught one; several items nest, executors mixed in.
+const WITH_FILES: &str = r#"import concurrent.futures
+
+
+def rstate(f):
+    try:
+        f.read()
+        return "open"
+    except ValueError as e:
+        return str(e)
+
+
+def wstate(f):
+    try:
+        f.write("")
+        return "open"
+    except ValueError as e:
+        return str(e)
+
+
+def first(path):
+    with open(path) as f:
+        return f.readline()
+
+
+def save(path, s):
+    with open(path, "w") as f:
+        f.write(s)
+        return len(s)
+    return -1
+
+
+def width(s):
+    return len(s)
+
+
+with open("a.txt", "w") as out:
+    print(out.write("héllo 🙂\nsecond\n"))
+print(wstate(out))
+print([open("a.txt").read()])
+with open("a.txt") as src:
+    with open("b.txt", "w") as dst:
+        for line in src:
+            dst.write(line.upper())
+print(rstate(src), wstate(dst))
+with open("a.txt") as src, open("c.txt", "a", encoding="utf-8") as dst:
+    dst.write(src.read())
+print(rstate(src), wstate(dst))
+print([first("b.txt")])
+for name in ["a.txt", "b.txt"]:
+    with open(name) as f:
+        if name == "a.txt":
+            continue
+        print("b", [f.readline()])
+print(rstate(f))
+for name in ["a.txt", "b.txt"]:
+    with open(name) as f:
+        break
+print(rstate(f))
+try:
+    with open("a.txt") as f:
+        raise ValueError("inside")
+except ValueError as e:
+    print(e, rstate(f))
+try:
+    with open("no/such/dir/x.txt") as f:
+        print("never")
+except OSError:
+    print("missing", rstate(f))
+with open("d.txt", "w"):
+    pass
+print([open("d.txt").read()])
+with open("a.txt") as h:
+    keep = h
+    h = open("b.txt")
+print(rstate(keep), rstate(h))
+def mixed():
+    with concurrent.futures.ThreadPoolExecutor() as ex, open("a.txt", "rb") as raw:
+        print(ex.submit(width, "wörd").result(), len(raw.read()))
+
+
+mixed()
+try:
+    with open("e.txt", "w") as w:
+        w.write("partial\n")
+        raise ValueError("boom")
+except ValueError as e:
+    print(e, [open("e.txt").read()])
+print(save("s.txt", "säved"), [open("s.txt").read()])
+with (open("s.txt")) as p:
+    print(p.read())
+with open("s.txt") as last:
+    raise KeyError("end")
+"#;
+
+/// [`WITH_FILES`] agrees with CPython in both backends, including the
+/// files it leaves behind.
+#[test]
+fn with_open_matches_cpython() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("with_files")?;
+    let exe = native_case(&dir, "with_files", WITH_FILES)?;
+    let source = exe.with_extension("pyr");
+    let outputs = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "s.txt"];
+    let mut python = Command::new(python());
+    python.args(["-I", "-X", "utf8"]).arg(&source);
+    let mut want = text_run(&mut python, &dir.join("cpython"), &outputs)?;
+    want.stdout = universal_newlines(want.stdout);
+    assert_eq!(want.status, 1, "{}", want.stdout);
+    for line in [
+        "missing I/O operation on closed file.",
+        "boom ['partial\\n']",
+    ] {
+        assert!(want.stdout.contains(line), "{line}: {}", want.stdout);
+    }
+    let mut pythrust = Command::new(pythrust_bin()?);
+    pythrust.arg("run").arg(&source);
+    assert_eq!(text_run(&mut pythrust, &dir.join("run"), &outputs)?, want);
+    let native = text_run(&mut Command::new(&exe), &dir.join("native"), &outputs)?;
+    assert_eq!(native, want);
     dir.pass();
     Ok(())
 }

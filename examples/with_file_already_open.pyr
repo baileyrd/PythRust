@@ -1,0 +1,9 @@
+# expect-exit: 1
+# deviation: D109: `with` takes `open(...)` directly; CPython accepts any file, as it accepts any context manager.
+# expect-error: `with` takes `open(...)` directly; a file already open is not supported yet
+try:
+    g = open("no/such/dir/never.txt")
+    with g as f:
+        print(f.read())
+except OSError:
+    print("missing")

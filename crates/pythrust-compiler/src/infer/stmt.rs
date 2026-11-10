@@ -113,7 +113,12 @@ impl Checker {
                 body,
             } => {
                 let t = self.expr(value)?;
-                let what = "`with` takes an executor: \
+                if matches!(self.subst.resolve(&t), Type::File(..)) {
+                    let msg = "`with` takes `open(...)` directly; \
+                               a file already open is not supported yet";
+                    return Err(error(value.span, msg.to_string()));
+                }
+                let what = "`with` takes an executor or `open(...)`: \
                             `concurrent.futures.ThreadPoolExecutor()`";
                 self.expect(value.span, &Type::Executor, &t, what)?;
                 self.bind_name(&binding.name, binding.span, &Type::Executor)?;

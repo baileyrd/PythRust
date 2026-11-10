@@ -71,6 +71,8 @@ struct Parser<'a> {
     stubs: Vec<StubDef>,
     /// The `pause` markers so far (M6c).
     pauses: Vec<Pause>,
+    /// File `with` items desugared so far: numbers their hidden temps.
+    withs: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -98,6 +100,7 @@ impl<'a> Parser<'a> {
             imported_bindings: Vec::new(),
             stubs: Vec::new(),
             pauses: Vec::new(),
+            withs: 0,
         })
     }
 
@@ -238,7 +241,7 @@ impl<'a> Parser<'a> {
             body.extend(self.import_stmt()?);
         }
         while !self.at(&TokenKind::EndMarker) {
-            body.push(self.stmt()?);
+            body.extend(self.stmts()?);
         }
         Ok(Module {
             body,
@@ -246,6 +249,14 @@ impl<'a> Parser<'a> {
             pauses: std::mem::take(&mut self.pauses),
             span: start.merge(self.eof.span),
         })
+    }
+
+    /// One statement, or the several a file `with` desugars to.
+    fn stmts(&mut self) -> Result<Vec<Stmt>> {
+        if self.at(&TokenKind::With) {
+            return self.with_stmt();
+        }
+        Ok(vec![self.stmt()?])
     }
 
     fn stmt(&mut self) -> Result<Stmt> {
@@ -256,7 +267,6 @@ impl<'a> Parser<'a> {
             TokenKind::While => self.while_stmt(),
             TokenKind::For => self.for_stmt(),
             TokenKind::Try => self.try_stmt(),
-            TokenKind::With => self.with_stmt(),
             TokenKind::Import => {
                 let msg = "`import` must come at module top level, before other statements";
                 Err(error(self.tok(0).span, msg))
@@ -275,20 +285,20 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Newline)?;
         self.expect(&TokenKind::Indent)?;
         self.nested(|p| {
-            let mut body = vec![p.block_stmt()?];
+            let mut body = p.block_stmt()?;
             while !p.eat(&TokenKind::Dedent) {
-                body.push(p.block_stmt()?);
+                body.extend(p.block_stmt()?);
             }
             Ok(body)
         })
     }
 
-    fn block_stmt(&mut self) -> Result<Stmt> {
+    fn block_stmt(&mut self) -> Result<Vec<Stmt>> {
         if matches!(self.peek(), TokenKind::Def | TokenKind::Temper) {
             let span = self.tok(0).span;
             return Err(error(span, "`def` is only allowed at module top level"));
         }
-        self.stmt()
+        self.stmts()
     }
 
     fn simple_stmt(&mut self) -> Result<Stmt> {
@@ -600,28 +610,6 @@ impl<'a> Parser<'a> {
                 body,
                 handlers,
                 finally,
-            },
-            span: self.span_from(start),
-        })
-    }
-
-    /// `'with' expr 'as' NAME ':' block`. Inference checks that the
-    /// value is an executor, the one context manager so far.
-    fn with_stmt(&mut self) -> Result<Stmt> {
-        let start = self.bump().span;
-        let value = self.expr()?;
-        if !self.eat(&TokenKind::As) {
-            let msg = "`with` needs a name: write `with value as name:`";
-            return Err(error(self.tok(0).span, msg));
-        }
-        let binding = self.binding_name("a name to bind the value to")?;
-        self.expect(&TokenKind::Colon)?;
-        let body = self.block()?;
-        Ok(Stmt {
-            kind: StmtKind::With {
-                value,
-                binding,
-                body,
             },
             span: self.span_from(start),
         })
@@ -1540,6 +1528,7 @@ fn describe(kind: &TokenKind) -> String {
 
 mod imports;
 mod stubs;
+mod with;
 
 /// The binding `name` from stub source `src`, its spans moved past any
 /// test program's, as `pythrust` places each stub's.
