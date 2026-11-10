@@ -45,7 +45,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 e.span,
             ),
             ExprKind::Attr { .. } => Err(unsupported(e.span, "attributes other than methods")),
-            ExprKind::ListComp { elt, clauses } => self.list_comp(elt, clauses, e.span),
+            ExprKind::Comp { gather, clauses } => self.comp(gather, clauses, e.span),
         }
     }
 

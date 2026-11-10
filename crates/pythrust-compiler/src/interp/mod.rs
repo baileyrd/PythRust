@@ -31,8 +31,8 @@ use std::iter;
 use std::rc::Rc;
 
 use crate::ast::{
-    Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp, Module,
-    Stmt, StmtKind, Target, TargetKind,
+    Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Handler, Ident, LogicalOp,
+    Module, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
@@ -437,17 +437,11 @@ impl<'m> Interp<'m, '_> {
         Ok(None)
     }
 
-    /// A comprehension's clauses (D85), as the nested loops they stand
-    /// for: each element that passes every filter is appended to `out`.
-    fn comp(
-        &mut self,
-        elt: &'m Expr,
-        clauses: &'m [CompFor],
-        out: &mut Vec<Value<'m>>,
-    ) -> Exec<'m, ()> {
+    /// A comprehension's clauses (D85, D116), as the nested loops they
+    /// stand for: each pass that passes every filter gathers into `out`.
+    fn comp(&mut self, clauses: &'m [CompFor], out: &mut Gathered<'m>) -> Exec<'m, ()> {
         let Some((c, rest)) = clauses.split_first() else {
-            out.push(self.eval(elt)?);
-            return Ok(());
+            return self.gather(out);
         };
         self.each(&c.target, &c.iter, |s| {
             for test in &c.ifs {
@@ -455,9 +449,27 @@ impl<'m> Interp<'m, '_> {
                     return Ok(None);
                 }
             }
-            s.comp(elt, rest, out)?;
+            s.comp(rest, out)?;
             Ok(None)
         })?;
+        Ok(())
+    }
+
+    /// One pass's item, or key then value, into `out`; a duplicate key
+    /// keeps its place and takes the later value, as in CPython.
+    fn gather(&mut self, out: &mut Gathered<'m>) -> Exec<'m, ()> {
+        match out {
+            Gathered::List(e, items) => items.push(self.eval(e)?),
+            Gathered::Set(e, set) => {
+                let v = self.eval(e)?;
+                set.insert(Key::of(&v, e.span)?, v, Value::None);
+            }
+            Gathered::Dict(k, v, dict) => {
+                let key = self.eval(k)?;
+                let value = self.eval(v)?;
+                dict.insert(Key::of(&key, k.span)?, key, value);
+            }
+        }
         Ok(())
     }
 
@@ -673,10 +685,11 @@ impl<'m> Interp<'m, '_> {
                 e.span,
             ),
             ExprKind::Attr { value, attr } => Ok(methods::bind(self.eval(value)?, attr)?),
-            ExprKind::ListComp { elt, clauses } => {
-                let mut out = Vec::new();
-                self.comp(elt, clauses, &mut out)?;
-                Ok(Value::list(out))
+            ExprKind::Comp { gather, clauses } => {
+                let keyed = self.int_keyed(e.span);
+                let mut out = Gathered::new(gather, keyed);
+                self.comp(clauses, &mut out)?;
+                Ok(out.into_value())
             }
         }
     }
@@ -1057,12 +1070,38 @@ fn bind_keyword<'m>(
     Ok(())
 }
 
+/// A comprehension's result as it fills, with what it gathers each pass.
+enum Gathered<'m> {
+    List(&'m Expr, Vec<Value<'m>>),
+    Set(&'m Expr, Table<'m>),
+    Dict(&'m Expr, &'m Expr, Table<'m>),
+}
+
+impl<'m> Gathered<'m> {
+    /// Empty, for `gather`; a table bool key becomes its int when `int_keyed`.
+    fn new(gather: &'m Gather, int_keyed: bool) -> Self {
+        match gather {
+            Gather::List(e) => Gathered::List(e, Vec::new()),
+            Gather::Set(e) => Gathered::Set(e, Table::keyed(int_keyed)),
+            Gather::Dict(k, v) => Gathered::Dict(k, v, Table::keyed(int_keyed)),
+        }
+    }
+
+    fn into_value(self) -> Value<'m> {
+        match self {
+            Gathered::List(_, items) => Value::list(items),
+            Gathered::Set(_, set) => Value::set(set),
+            Gathered::Dict(_, _, dict) => Value::dict(dict),
+        }
+    }
+}
+
 /// Names a function binds: its parameters and every assignment target.
 fn locals_of(def: &FuncDef) -> HashSet<&str> {
     let mut names: HashSet<&str> = def.params.iter().map(|p| p.name.name.as_str()).collect();
     collect_block(&def.body, &mut names);
     for e in scope::exprs(&def.body) {
-        if let ExprKind::ListComp { clauses, .. } = &e.kind {
+        if let ExprKind::Comp { clauses, .. } = &e.kind {
             clauses
                 .iter()
                 .for_each(|c| collect_target(&c.target, &mut names));

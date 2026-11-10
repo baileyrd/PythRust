@@ -369,13 +369,18 @@ fn sx(e: &Expr) -> String {
             step.as_deref().map(sx).unwrap_or_default()
         ),
         ExprKind::Attr { value, attr } => format!("(. {} {})", sx(value), attr.name),
-        ExprKind::ListComp { elt, clauses } => {
+        ExprKind::Comp { gather, clauses } => {
             let clauses = clauses.iter().map(|c| {
                 let ifs = c.ifs.iter().map(|x| format!(" (if {})", sx(x)));
                 let ifs: String = ifs.collect();
                 format!(" (for {} {}{ifs})", sx_target(&c.target), sx(&c.iter))
             });
-            format!("(listcomp {}{})", sx(elt), clauses.collect::<String>())
+            let head = match gather {
+                Gather::List(e) => format!("listcomp {}", sx(e)),
+                Gather::Set(e) => format!("setcomp {}", sx(e)),
+                Gather::Dict(k, v) => format!("dictcomp {} {}", sx(k), sx(v)),
+            };
+            format!("({head}{})", clauses.collect::<String>())
         }
     }
 }
@@ -528,16 +533,35 @@ fn comprehension_forms_not_supported_yet_are_named() {
     assert_eq!(err("( x for x in xs ) NL"), gen);
     assert_eq!(err("f ( x for x in xs ) NL"), gen);
     assert_eq!(err("f ( 1 , x for x in xs ) NL"), gen);
+}
+
+/// `{e for ...}` is a set comprehension and `{k: v for ...}` a dict one
+/// (D116), with a list comprehension's own scope; `{}` stays a dict and
+/// a `for` after a second item is a syntax error, as in CPython.
+#[test]
+fn set_and_dict_comprehensions() {
     assert_eq!(
-        err("{ x for x in xs } NL"),
-        "set comprehensions are not supported yet"
+        ok("s = { x for x in xs if x } NL"),
+        "(= s (setcomp x@4 (for x@4 xs (if x@4))))"
     );
     assert_eq!(
-        err("{ k : 1 for k in xs } NL"),
-        "dict comprehensions are not supported yet"
+        ok("d = { k : v for k , v in xs for w in k } NL"),
+        "(= d (dictcomp k@4 v@4 (for (tuple k@4 v@4) xs) (for w@4 k@4)))"
     );
-    let src = "{ x for x in xs } NL";
-    assert_eq!(text(src, parse_err(src).span), "for");
+    assert_eq!(ok("d = { } NL"), "(= d (dict))");
+    assert_eq!(ok("s = { x , y } NL"), "(= s (set x y))");
+    assert_eq!(
+        err("s = { x , y for y in z } NL"),
+        "expected `}`, found `for`"
+    );
+    assert_eq!(
+        err("d = { 1 : 2 , k : v for k in z } NL"),
+        "expected `}`, found `for`"
+    );
+    assert_eq!(
+        err("d = { k : v for k [ 0 ] in z } NL"),
+        "a comprehension target other than a name or a tuple of names is not supported yet"
+    );
 }
 
 #[test]

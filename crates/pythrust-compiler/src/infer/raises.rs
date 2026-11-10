@@ -668,13 +668,13 @@ impl<'a> Cx<'_, 'a> {
             ExprKind::Attr { value, .. } => self.expr(value, out),
             // As the loop it stands for (D85): each iterable is read as
             // `for` reads it.
-            ExprKind::ListComp { elt, clauses } => {
+            ExprKind::Comp { gather, clauses } => {
                 for c in clauses {
                     self.expr(&c.iter, out);
                     self.read(&c.iter, out);
                     c.ifs.iter().for_each(|x| self.expr(x, out));
                 }
-                self.expr(elt, out);
+                gather.exprs().into_iter().for_each(|x| self.expr(x, out));
             }
             ExprKind::Name(_)
             | ExprKind::Int(_)

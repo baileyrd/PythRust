@@ -5,8 +5,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ast::{
-    Arg, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Ident, LogicalOp, Stmt, StmtKind, Target,
-    TargetKind, TypeExpr, UnaryOp,
+    Arg, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Ident, LogicalOp, Stmt, StmtKind,
+    Target, TargetKind, TypeExpr, UnaryOp,
 };
 use crate::span::Span;
 
@@ -30,7 +30,7 @@ pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
         _ => {}
     });
     for e in exprs(block) {
-        if let ExprKind::ListComp { clauses, .. } = &e.kind {
+        if let ExprKind::Comp { clauses, .. } = &e.kind {
             clauses
                 .iter()
                 .for_each(|c| target_names(&c.target, &mut out));
@@ -242,7 +242,7 @@ fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
             .chain([start, stop, step].into_iter().filter_map(|x| x.as_deref()))
             .collect(),
         ExprKind::Attr { value, .. } => vec![value],
-        ExprKind::ListComp { elt, clauses } => comp_parts(elt, clauses),
+        ExprKind::Comp { gather, clauses } => comp_parts(gather, clauses),
         ExprKind::Name(_)
         | ExprKind::Int(_)
         | ExprKind::Float(_)
@@ -255,11 +255,11 @@ fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
 
 /// A comprehension's expressions in the order they first run: each
 /// clause's iterable and filters, then the element.
-pub(crate) fn comp_parts<'a>(elt: &'a Expr, clauses: &'a [CompFor]) -> Vec<&'a Expr> {
+pub(crate) fn comp_parts<'a>(gather: &'a Gather, clauses: &'a [CompFor]) -> Vec<&'a Expr> {
     clauses
         .iter()
         .flat_map(|c| std::iter::once(&c.iter).chain(&c.ifs))
-        .chain([elt])
+        .chain(gather.exprs())
         .collect()
 }
 
@@ -313,7 +313,7 @@ pub(crate) fn for_iters(block: &[Stmt]) -> Vec<&Expr> {
         }
     });
     for e in exprs(block) {
-        if let ExprKind::ListComp { clauses, .. } = &e.kind {
+        if let ExprKind::Comp { clauses, .. } = &e.kind {
             out.extend(clauses.iter().map(|c| &c.iter));
         }
     }
@@ -540,7 +540,7 @@ fn expr_names<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span)>) {
                 .for_each(|x| expr_names(x, out));
         }
         ExprKind::Attr { value, .. } => expr_names(value, out),
-        ExprKind::ListComp { elt, clauses } => comp_parts(elt, clauses)
+        ExprKind::Comp { gather, clauses } => comp_parts(gather, clauses)
             .into_iter()
             .for_each(|x| expr_names(x, out)),
         ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) => {}
