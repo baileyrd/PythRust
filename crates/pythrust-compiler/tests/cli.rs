@@ -604,6 +604,24 @@ fn return_copy_diagnostics_are_actionable_in_every_cli_mode() {
     }
 }
 
+/// Builds the runtime `compiler` links, once per test binary: cargo
+/// links its archive anew on every build, even an up-to-date one, so a
+/// build running beside another test's link can hide the archive from it.
+fn build_runtime(compiler: &Path) {
+    static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    BUILT.get_or_init(|| {
+        let mut cargo = Command::new(env!("CARGO"));
+        cargo
+            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .args(["build", "--locked", "-p", "pythrust-rt"]);
+        if compiler.parent().is_some_and(|p| p.ends_with("release")) {
+            cargo.arg("--release");
+        }
+        let built = cargo.output().unwrap();
+        assert!(built.status.success(), "{built:?}");
+    });
+}
+
 fn diagnostic_compiler() -> PathBuf {
     std::env::var_os("PYTHRUST_BIN")
         .map(PathBuf::from)
@@ -683,15 +701,7 @@ fn d4_concrete_fixes_compile_and_preserve_values() {
     let tmp = scratch("d4_applied_fixes");
     // `cargo test` does not itself emit the runtime's static archive.
     let compiler = diagnostic_compiler();
-    let mut cargo = Command::new(env!("CARGO"));
-    cargo
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .args(["build", "--locked", "-p", "pythrust-rt"]);
-    if compiler.parent().is_some_and(|p| p.ends_with("release")) {
-        cargo.arg("--release");
-    }
-    let built = cargo.output().unwrap();
-    assert!(built.status.success(), "{built:?}");
+    build_runtime(&compiler);
     for (name, src, old, new, hint, expected) in [
         ("alias", "temper def f() -> tuple[list[int], list[int]]:\n    a = [1]\n    b = a\n    c = b\n    b.append(2)\n    print(c)\n    return a, b\nprint(f())\n", "    b.append(2)", "    b = list(b)\n    b.append(2)", "b = list(b)", "[1]\n([1], [1, 2])\n"),
         ("optional_named", "temper def f() -> int:\n    a = [1]\n    b: list[int] | None = a\n    a.append(2)\n    if b is None:\n        return 0\n    return len(a) * 10 + len(b)\nprint(f())\n", "    a.append(2)", "    a = list(a)\n    a.append(2)", "a = list(a)", "21\n"),
@@ -799,15 +809,7 @@ fn d4_cli_running_outer_loops_are_not_hidden_by_other_temporaries() {
 fn slice_zero_keeps_runtime_span_message_and_output() {
     let tmp = scratch("slice_zero_diagnostics");
     let compiler = diagnostic_compiler();
-    let mut cargo = Command::new(env!("CARGO"));
-    cargo
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .args(["build", "--locked", "-p", "pythrust-rt"]);
-    if compiler.parent().is_some_and(|p| p.ends_with("release")) {
-        cargo.arg("--release");
-    }
-    let runtime = cargo.output().unwrap();
-    assert!(runtime.status.success(), "{runtime:?}");
+    build_runtime(&compiler);
     for (name, expr) in [
         ("str", "\"é🙂\"[::0]"),
         ("list", "[1, 2][::0]"),
@@ -871,15 +873,7 @@ fn slice_zero_keeps_runtime_span_message_and_output() {
 fn slice_never_produced_bounds_keep_native_faults_and_empty_iteration() {
     let tmp = scratch("slice_never_produced");
     let compiler = diagnostic_compiler();
-    let mut cargo = Command::new(env!("CARGO"));
-    cargo
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .args(["build", "--locked", "-p", "pythrust-rt"]);
-    if compiler.parent().is_some_and(|p| p.ends_with("release")) {
-        cargo.arg("--release");
-    }
-    let runtime = cargo.output().unwrap();
-    assert!(runtime.status.success(), "{runtime:?}");
+    build_runtime(&compiler);
     let prefix =
         "def get(xs):\n    return xs[0]\ndef forward(xs):\n    return get(xs)\nxs = []\nd = {}\n";
     let mut failures = Vec::new();
