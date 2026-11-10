@@ -16,7 +16,7 @@
 //! Closing the temp, not `f`, closes the file the item opened even when
 //! the body rebinds `f`, as CPython's `__exit__` does.
 
-use super::{error, Parser};
+use super::{error, Parser, MAX_DEPTH};
 use crate::ast::{Block, Expr, ExprKind, Ident, Stmt, StmtKind, Target, TargetKind};
 use crate::diag::Result;
 use crate::span::Span;
@@ -39,12 +39,28 @@ impl Parser<'_> {
         let mut items = vec![self.with_item()?];
         while self.eat(&TokenKind::Comma) {
             items.push(self.with_item()?);
+            self.item_depth(&items)?;
         }
         self.expect(&TokenKind::Colon)?;
-        let body = self.block()?;
+        // Each item past the first nests the body one level deeper.
+        let extra = items.len() - 1;
+        self.depth += extra;
+        let body = self.block();
+        self.depth -= extra;
+        let body = body?;
         let span = self.span_from(start);
         let nested = items.into_iter().rev();
         Ok(nested.fold(body, |inner, item| with_one(item, inner, start, span)))
+    }
+
+    /// Every item nests the body one level, as a block does, so a flat
+    /// line of items is bounded like nested blocks (MAX_DEPTH).
+    fn item_depth(&self, items: &[Item]) -> Result<()> {
+        if self.depth + items.len() <= MAX_DEPTH {
+            return Ok(());
+        }
+        let at = items.last().map_or(self.last, |item| item.value.span);
+        Err(error(at, "too deeply nested"))
     }
 
     /// `value ['as' NAME]`: only `open(...)` may omit the name (D112).
