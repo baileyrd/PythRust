@@ -11,9 +11,9 @@
 //! keyword argument.
 
 use crate::ast::{
-    Arg, BinOp, Binding, Block, Branch, CmpOp, CompFor, Expr, ExprKind, FuncDef, Handler, Ident,
-    LogicalOp, Mode, Module, Param, ParamMode, Pause, Stmt, StmtKind, StubDef, Target, TargetKind,
-    TypeExpr, UnaryOp,
+    Arg, BinOp, Binding, Block, Branch, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Handler,
+    Ident, LogicalOp, Mode, Module, Param, ParamMode, Pause, Stmt, StmtKind, StubDef, Target,
+    TargetKind, TypeExpr, UnaryOp,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
@@ -1118,7 +1118,7 @@ impl<'a> Parser<'a> {
         } else {
             let first = self.expr()?;
             if self.at(&TokenKind::For) {
-                return self.list_comp(first, start);
+                return self.comp(Gather::List(Box::new(first)), &TokenKind::RBracket, start);
             }
             self.rest_of_list(first)?
         };
@@ -1139,19 +1139,17 @@ impl<'a> Parser<'a> {
         Err(error(self.tok(0).span, msg))
     }
 
-    /// `comp_for+ ']'`, after `'[' elt`.
-    fn list_comp(&mut self, mut elt: Expr, start: Span) -> Result<Expr> {
+    /// `comp_for+ close`, after the opening bracket and what `gather`
+    /// holds.
+    fn comp(&mut self, mut gather: Gather, close: &TokenKind, start: Span) -> Result<Expr> {
         let mut clauses = Vec::new();
         while self.at(&TokenKind::For) {
             clauses.push(self.comp_for()?);
         }
-        self.expect(&TokenKind::RBracket)?;
-        comp::own_names(&mut elt, &mut clauses, start.start)?;
+        self.expect(close)?;
+        comp::own_names(&mut gather, &mut clauses, start.start)?;
         bounded(Expr {
-            kind: ExprKind::ListComp {
-                elt: Box::new(elt),
-                clauses,
-            },
+            kind: ExprKind::Comp { gather, clauses },
             span: self.span_from(start),
         })
     }
@@ -1174,18 +1172,29 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `'{' '}'` (an empty dict), a dict display `{k: v, ...}` or a set
-    /// display `{a, ...}`; the first item decides which, as in Python.
+    /// `'{' '}'` (an empty dict), a dict display `{k: v, ...}`, a set
+    /// display `{a, ...}`, or a dict or set comprehension (D116); the
+    /// first item decides which, as in Python.
     fn braces(&mut self) -> Result<Expr> {
         let start = self.bump().span;
-        let kind = if self.at(&TokenKind::RBrace) {
+        let close = &TokenKind::RBrace;
+        let kind = if self.at(close) {
             ExprKind::Dict(Vec::new())
         } else {
             let first = self.expr()?;
-            self.no_comp("set comprehensions")?;
-            match self.at(&TokenKind::Colon) {
-                true => ExprKind::Dict(self.dict_items(first)?),
-                false => ExprKind::Set(self.rest_of_list(first)?),
+            if self.at(&TokenKind::For) {
+                return self.comp(Gather::Set(Box::new(first)), close, start);
+            }
+            if !self.at(&TokenKind::Colon) {
+                ExprKind::Set(self.rest_of_list(first)?)
+            } else {
+                self.bump();
+                let value = self.expr()?;
+                if self.at(&TokenKind::For) {
+                    let gather = Gather::Dict(Box::new(first), Box::new(value));
+                    return self.comp(gather, close, start);
+                }
+                ExprKind::Dict(self.dict_items(first, value)?)
             }
         };
         self.expect(&TokenKind::RBrace)?;
@@ -1195,19 +1204,15 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `':' expr (',' expr ':' expr)* [',']`, after the first key.
-    fn dict_items(&mut self, first: Expr) -> Result<Vec<(Expr, Expr)>> {
-        let mut key = first;
-        let mut items = Vec::new();
-        loop {
+    /// `(',' expr ':' expr)* [',']`, after the first `key: value`.
+    fn dict_items(&mut self, key: Expr, value: Expr) -> Result<Vec<(Expr, Expr)>> {
+        let mut items = vec![(key, value)];
+        while self.eat(&TokenKind::Comma) && starts_expr(self.peek()) {
+            let key = self.expr()?;
             self.expect(&TokenKind::Colon)?;
             items.push((key, self.expr()?));
-            self.no_comp("dict comprehensions")?;
-            if !self.eat(&TokenKind::Comma) || !starts_expr(self.peek()) {
-                return Ok(items);
-            }
-            key = self.expr()?;
         }
+        Ok(items)
     }
 
     /// `(',' expr)* [',']`, after the first item.
@@ -1438,7 +1443,11 @@ fn expr_noun(kind: &ExprKind) -> &'static str {
         | ExprKind::None => "a literal",
         ExprKind::Tuple(_) => "an empty tuple",
         ExprKind::List(_) => "a list",
-        ExprKind::ListComp { .. } => "a list comprehension",
+        ExprKind::Comp { gather, .. } => match gather {
+            Gather::List(_) => "a list comprehension",
+            Gather::Set(_) => "a set comprehension",
+            Gather::Dict(..) => "a dict comprehension",
+        },
         ExprKind::Dict(_) => "a dict display",
         ExprKind::Set(_) => "a set display",
         ExprKind::Call { .. } => "a function call",

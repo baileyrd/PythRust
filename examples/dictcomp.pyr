@@ -1,0 +1,42 @@
+# Dict and set comprehensions (D116): insertion order, a later duplicate
+# key overwrites the value in place, the key is evaluated before the
+# value, and the targets are the comprehension's own (D85).
+
+
+def key(k):
+    print("key", k)
+    return k
+
+
+def value(v):
+    print("value", v)
+    return v
+
+
+words = ["héllo", "wörld", "héllo", "ünï", "ça"]
+print({w: len(w) for w in words})
+print(sorted({w[0] for w in words}))
+print({len(w): w for w in words})
+ages = {"zoë": 31, "åsa": 27, "li": 31}
+print({v: k for k, v in ages.items()})
+print({k for k, v in ages.items() if v > 30} == {"zoë", "li"})
+print({(i, j): i * j for i in range(3) for j in range(3) if i < j})
+print({c: [w for w in words if w[0] == c] for c in "hü"})
+print({key(i): value(i * 10) for i in range(2)})
+print({i: c for i, c in enumerate("hé")})
+print({a: b for a, b in zip("xyz", [1, 2])})
+print(sorted({x % 4 for x in range(10) if x % 2}))
+print(len({x: x for x in []}), len({x for x in "" if x}))
+x = "outer"
+print({x: x * 2 for x in "ab"}, {x for x in [x]}, x)
+grid = [[1, 2], [3, 4]]
+print({r[0]: {c for c in r} for r in grid})
+maybe: list[int | None] = [1, None, 3]
+print({m: m + 1 for m in maybe if m is not None})
+
+
+def counts(text):
+    return {ch: text.count(ch) for ch in text if ch != " "}
+
+
+print(counts("añña b"))

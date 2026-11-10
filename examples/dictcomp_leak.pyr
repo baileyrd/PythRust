@@ -1,0 +1,4 @@
+# expect-exit: 1
+# expect-error: name `k` is not defined
+d = {k: 1 for k in "ab"}
+print(k)

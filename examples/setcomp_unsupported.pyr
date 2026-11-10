@@ -1,4 +1,0 @@
-# deviation: set comprehensions are a named parse error until #1206 (D87); CPython runs them.
-# expect-exit: 1
-# expect-error: set comprehensions are not supported yet
-print({x for x in "aé"} == {"a", "é"})

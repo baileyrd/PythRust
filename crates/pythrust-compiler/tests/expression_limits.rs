@@ -181,3 +181,72 @@ fn flat_with_items_cannot_hide_block_depth() {
         );
     }
 }
+
+/// Each comprehension clause and filter is one level of nesting for the
+/// passes that walk it, so one flat line of them is bounded like nested
+/// expressions (MAX_DEPTH), for every gather kind.
+#[test]
+fn flat_comprehension_chains_cannot_hide_depth() {
+    let dir = common::scratch("expression_limits", "comp_chain");
+    let fors = |n: usize| -> String { (0..n).map(|i| format!(" for x{i} in xs")).collect() };
+    let ifs = |n: usize| -> String { " if True".repeat(n) };
+    let gathers = |chain: &str| -> [String; 3] {
+        [
+            format!("[0{chain}]"),
+            format!("{{0{chain}}}"),
+            format!("{{0: 0{chain}}}"),
+        ]
+    };
+    for long in [fors(1_000), format!("{}{}", fors(1), ifs(5_000))] {
+        for comp in gathers(&long) {
+            rejected(&dir, &format!("x = {comp}\n"));
+            // A later syntax error after the long chain is still a diagnostic.
+            rejected(&dir, &format!("x = {comp} +\n"));
+        }
+    }
+    // Clauses and filters add up; a nested comprehension adds its own.
+    for chain in [
+        format!("{}{}", fors(50), ifs(50)),
+        format!(" for y in [0{}]{}", fors(60), fors(40)),
+    ] {
+        for comp in gathers(&chain) {
+            rejected(&dir, &format!("x = {comp}\n"));
+        }
+    }
+    // The boundary, counting the gathered expression's own height (60):
+    // one clause or filter fewer is accepted in every command.
+    let deep = chain("1", " + ", 60);
+    let gathers = |chain: &str| -> [String; 3] {
+        [
+            format!("[{deep}{chain}]"),
+            format!("{{{deep}{chain}}}"),
+            format!("{{{deep}: 0{chain}}}"),
+        ]
+    };
+    let src = "xs = [1]\n";
+    for (ok, over) in [
+        (fors(39), fors(40)),
+        (
+            format!("{}{}", fors(1), ifs(38)),
+            format!("{}{}", fors(1), ifs(39)),
+        ),
+    ] {
+        for (comp, too_deep) in gathers(&ok).into_iter().zip(gathers(&over)) {
+            let prog = format!("{src}x = {comp}\nprint(len(x))\n");
+            for command in ["check", "run", "build"] {
+                let out = compiler(command, &dir, &prog);
+                assert!(out.status.success(), "{command}: {out:?}");
+            }
+            let out = compiler("run", &dir, &prog);
+            assert_eq!(out.stdout, b"1\n");
+            let err = compiler("check", &dir, &format!("{src}x = {too_deep}\n"));
+            let msg = String::from_utf8_lossy(&err.stderr);
+            assert!(
+                err.status.code() == Some(1)
+                    && msg.contains("input.pyr:2:")
+                    && msg.contains("too deeply nested"),
+                "{msg}"
+            );
+        }
+    }
+}

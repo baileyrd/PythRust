@@ -216,13 +216,13 @@ impl<'a> Sites<'a> {
             }
             ExprKind::Attr { value, .. } => self.expr(value),
             // As the loop it stands for (D85).
-            ExprKind::ListComp { elt, clauses } => {
+            ExprKind::Comp { gather, clauses } => {
                 for c in clauses {
                     self.expr(&c.iter);
                     self.target(&c.target, None);
                     c.ifs.iter().for_each(|x| self.expr(x));
                 }
-                self.expr(elt);
+                gather.exprs().into_iter().for_each(|x| self.expr(x));
             }
             ExprKind::Name(_)
             | ExprKind::Int(_)

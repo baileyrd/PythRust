@@ -4,19 +4,19 @@
 use std::collections::BTreeSet;
 
 use super::error;
-use crate::ast::{comp_name, CompFor, Expr, ExprKind, Target, TargetKind};
+use crate::ast::{comp_name, CompFor, Expr, ExprKind, Gather, Target, TargetKind};
 use crate::diag::Result;
 
 /// Renames the names `clauses` bind, wherever the comprehension starting
-/// at `offset` sees them: its element, its filters, every target, and
-/// every iterable but the first, which runs in the enclosing scope.
-pub(super) fn own_names(elt: &mut Expr, clauses: &mut [CompFor], offset: usize) -> Result<()> {
+/// at `offset` sees them: what it gathers, its filters, every target,
+/// and every iterable but the first, which runs in the enclosing scope.
+pub(super) fn own_names(gather: &mut Gather, clauses: &mut [CompFor], offset: usize) -> Result<()> {
     let mut names = BTreeSet::new();
     clauses
         .iter()
         .try_for_each(|c| bound(&c.target, &mut names))?;
     let rename = |e: &mut Expr| rename(e, &names, offset);
-    rename(elt);
+    gather.exprs_mut().into_iter().for_each(rename);
     for (i, c) in clauses.iter_mut().enumerate() {
         rename_target(&mut c.target, offset);
         if i > 0 {
@@ -106,8 +106,8 @@ fn rename(e: &mut Expr, names: &BTreeSet<String>, offset: usize) {
                 .for_each(|x| go(x));
         }
         ExprKind::Attr { value, .. } => go(value),
-        ExprKind::ListComp { elt, clauses } => {
-            go(elt);
+        ExprKind::Comp { gather, clauses } => {
+            gather.exprs_mut().into_iter().for_each(go);
             for c in clauses {
                 go(&mut c.iter);
                 c.ifs.iter_mut().for_each(go);

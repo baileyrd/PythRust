@@ -305,12 +305,41 @@ pub enum ExprKind {
         value: Box<Expr>,
         attr: Ident,
     },
-    /// `'[' expr comp_for+ ']'`: a list comprehension. `clauses` is never
-    /// empty. The names its targets bind are its own ([`comp_name`]).
-    ListComp {
-        elt: Box<Expr>,
+    /// A list, set or dict comprehension: `'[' expr comp_for+ ']'`,
+    /// `'{' expr comp_for+ '}'` or `'{' expr ':' expr comp_for+ '}'`.
+    /// `clauses` is never empty. The names its targets bind are its own
+    /// ([`comp_name`]).
+    Comp {
+        gather: Gather,
         clauses: Vec<CompFor>,
     },
+}
+
+/// What a comprehension gathers each pass, and into what (D85, D116).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gather {
+    List(Box<Expr>),
+    Set(Box<Expr>),
+    /// The key, evaluated first, as in CPython 3.8+, then the value.
+    Dict(Box<Expr>, Box<Expr>),
+}
+
+impl Gather {
+    /// The expressions gathered each pass, in evaluation order.
+    pub fn exprs(&self) -> Vec<&Expr> {
+        match self {
+            Gather::List(e) | Gather::Set(e) => vec![e],
+            Gather::Dict(k, v) => vec![k, v],
+        }
+    }
+
+    /// [`Self::exprs`], mutably.
+    pub fn exprs_mut(&mut self) -> Vec<&mut Expr> {
+        match self {
+            Gather::List(e) | Gather::Set(e) => vec![e],
+            Gather::Dict(k, v) => vec![k, v],
+        }
+    }
 }
 
 /// `'for' target_list 'in' or_expr ('if' or_expr)*` in a comprehension.

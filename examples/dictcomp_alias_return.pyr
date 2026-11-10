@@ -1,0 +1,8 @@
+# deviation: a tempered function may not return a value sharing a list with a parameter (D3), a dict comprehension's included (D116); CPython returns the shared rows.
+# expect-error: tempered `byfirst` returns a value sharing a list with its parameter `rows`
+# expect-exit: 1
+temper def byfirst(rows: list[list[int]]) -> dict[int, list[int]]:
+    return {r[0]: r for r in rows}
+
+
+print(byfirst([[1, 2]]))

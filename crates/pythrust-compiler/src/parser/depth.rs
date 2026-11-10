@@ -1,6 +1,6 @@
 //! Bound trees at construction, including syntax parsed without recursion.
 use super::{error, MAX_DEPTH};
-use crate::ast::{Expr, ExprKind};
+use crate::ast::{CompFor, Expr, ExprKind};
 use crate::diag::Result;
 
 /// Every child has already passed this check. The candidate can therefore
@@ -60,13 +60,22 @@ fn height(expr: &Expr) -> usize {
             .max()
             .unwrap_or(0),
         ExprKind::Attr { value, .. } => height(value),
-        ExprKind::ListComp { elt, clauses } => clauses
-            .iter()
-            .flat_map(|c| std::iter::once(&c.iter).chain(&c.ifs))
-            .map(height)
-            .max()
-            .unwrap_or(0)
-            .max(height(elt)),
+        ExprKind::Comp { gather, clauses } => {
+            comp_links(clauses)
+                + clauses
+                    .iter()
+                    .flat_map(|c| std::iter::once(&c.iter).chain(&c.ifs))
+                    .chain(gather.exprs())
+                    .map(height)
+                    .max()
+                    .unwrap_or(0)
+        }
     };
     child + 1
+}
+
+/// Passes walk a comprehension as the loops it stands for, one level per
+/// clause and per filter, so a flat chain of them is that deep.
+fn comp_links(clauses: &[CompFor]) -> usize {
+    clauses.iter().map(|c| 1 + c.ifs.len()).sum()
 }

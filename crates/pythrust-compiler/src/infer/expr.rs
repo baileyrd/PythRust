@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{
-    source_name, Arg, CmpOp, CompFor, Expr, ExprKind, Ident, LogicalOp, TypeExpr, UnaryOp,
+    source_name, Arg, CmpOp, CompFor, Expr, ExprKind, Gather, Ident, LogicalOp, TypeExpr, UnaryOp,
 };
 use crate::diag::Result;
 use crate::span::Span;
@@ -118,19 +118,16 @@ impl Checker {
                 let msg = format!("methods can only be called: `.{}(...)`", attr.name);
                 Err(error(attr.span, msg))
             }
-            ExprKind::ListComp { elt, clauses } => {
-                let t = self.comp_clauses(elt, clauses)?;
-                Ok(Type::List(Box::new(t)))
-            }
+            ExprKind::Comp { gather, clauses } => self.comp_clauses(gather, clauses, e.span),
         }
     }
 
-    /// The element type of a comprehension (D85), typed as the loop it
-    /// stands for: each clause binds its target as `for` does. Rebinding
-    /// a name ends its narrowing.
-    fn comp_clauses(&mut self, elt: &Expr, clauses: &[CompFor]) -> Result<Type> {
+    /// The type of the comprehension at `span` (D85, D116), typed as the
+    /// loop it stands for: each clause binds its target as `for` does.
+    /// Rebinding a name ends its narrowing.
+    fn comp_clauses(&mut self, gather: &Gather, clauses: &[CompFor], span: Span) -> Result<Type> {
         let Some((c, rest)) = clauses.split_first() else {
-            return self.expr(elt);
+            return self.gathered(gather, span);
         };
         let iterable = self.consumed(&c.iter)?;
         let elem = self.subst.fresh();
@@ -144,16 +141,37 @@ impl Checker {
         scope::target_names(&c.target, &mut bound);
         let saved = self.frame.narrowed.clone();
         self.frame.narrowed.retain(|n, _| !bound.contains(n));
-        let out = self.comp_filters(&c.ifs, elt, rest);
+        let out = self.comp_filters(&c.ifs, gather, rest, span);
         self.frame.narrowed = saved;
         out
     }
 
+    /// What `gather` makes, as a display of its one item would: a list,
+    /// a set of one hashable type, or a dict with hashable keys.
+    fn gathered(&mut self, gather: &Gather, span: Span) -> Result<Type> {
+        match gather {
+            Gather::List(e) => Ok(Type::List(Box::new(self.expr(e)?))),
+            Gather::Set(e) => self.set(std::slice::from_ref(e), span),
+            Gather::Dict(k, v) => {
+                let key = self.expr(k)?;
+                let value = self.expr(v)?;
+                self.need(Need::Hashable(key.clone()), span);
+                Ok(Type::Dict(Box::new(key), Box::new(value)))
+            }
+        }
+    }
+
     /// A comprehension's filters, each narrowing what follows it as an
     /// `if` test narrows its block, then its later clauses.
-    fn comp_filters(&mut self, ifs: &[Expr], elt: &Expr, rest: &[CompFor]) -> Result<Type> {
+    fn comp_filters(
+        &mut self,
+        ifs: &[Expr],
+        gather: &Gather,
+        rest: &[CompFor],
+        span: Span,
+    ) -> Result<Type> {
         let Some((test, more)) = ifs.split_first() else {
-            return self.comp_clauses(elt, rest);
+            return self.comp_clauses(gather, rest, span);
         };
         self.expr(test)?;
         let saved = (self.frame.truthy.clone(), self.frame.truth_uses.len());
@@ -163,7 +181,7 @@ impl Checker {
         // on a name tested only for truth gets its hint.
         let out = self
             .narrowed(&inside, &[], |c| {
-                let t = c.comp_filters(more, elt, rest)?;
+                let t = c.comp_filters(more, gather, rest, span)?;
                 c.settle()?;
                 Ok(t)
             })

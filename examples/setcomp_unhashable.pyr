@@ -1,0 +1,5 @@
+# deviation: an unhashable set element is a compile error, so nothing runs; CPython prints, then raises TypeError (D116, as displays).
+# expect-exit: 1
+# expect-error: unhashable type: list[int]
+print("before")
+s = {[x] for x in [1, 2]}

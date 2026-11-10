@@ -1,7 +1,8 @@
 //! Statements and control flow.
 
 use crate::ast::{
-    Arg, BinOp, Block, Branch, CompFor, Expr, ExprKind, FuncDef, Stmt, StmtKind, Target, TargetKind,
+    Arg, BinOp, Block, Branch, CompFor, Expr, ExprKind, FuncDef, Gather, Stmt, StmtKind, Target,
+    TargetKind,
 };
 use crate::diag::Result;
 use crate::infer::Type;
@@ -28,7 +29,7 @@ pub(super) enum Looped<'s> {
     Comp {
         target: &'s Target,
         ifs: &'s [Expr],
-        elt: &'s Expr,
+        gather: &'s Gather,
         rest: &'s [CompFor],
         out: LocalId,
         takes: Option<Span>,
@@ -659,7 +660,7 @@ impl FnBuilder<'_, '_> {
             Looped::Comp {
                 target,
                 ifs,
-                elt,
+                gather,
                 rest,
                 out,
                 takes,
@@ -668,7 +669,7 @@ impl FnBuilder<'_, '_> {
                     self.took_result(*at)?;
                 }
                 self.bind_iteration(target, next)?;
-                self.comp_body(ifs, elt, rest, *out, latch)
+                self.comp_body(ifs, gather, rest, *out, latch)
             }
             Looped::Map { f, out, exec, span } => {
                 self.pooled_stmt(|b| {

@@ -1,0 +1,37 @@
+# Dict and set comprehensions in tempered code see the loop's alias,
+# mode and `raises` checks (D116, as D85).
+temper def index(words: list[str]) -> dict[str, int]:
+    return {w: i for i, w in enumerate(words)}
+
+
+temper def lengths(words: list[str]) -> set[int]:
+    return {len(w) for w in words if len(w) > 0}
+
+
+temper def copies(rows: list[list[int]]) -> dict[int, list[int]]:
+    return {i: row[:] for i, row in enumerate(rows)}
+
+
+temper def parse(xs: list[str]) -> dict[str, int] raises ValueError:
+    return {s: int(s) for s in xs}
+
+
+temper def grow(mut xs: list[int]) -> None:
+    seen = {x for x in xs}
+    xs.append(len(seen))
+
+
+print(index(["ä", "b", "ä"]))
+print(sorted(lengths(["", "ab", "çd", "e"])))
+rows = [[1], [2, 3]]
+c = copies(rows)
+c[0].append(9)
+print(c, rows)
+print(parse(["1", "22"]))
+try:
+    parse(["x"])
+except ValueError as e:
+    print(e)
+xs = [1, 1, 2]
+grow(xs)
+print(xs)
