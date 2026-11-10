@@ -591,12 +591,15 @@ struct Codegen<'r> {
 impl<'r> Codegen<'r> {
     fn new(render: &'r dyn Fn(&Diagnostic) -> String) -> Result<Self> {
         let mut flags = settings::builder();
-        // PIC, because system linkers default to position-independent
-        // executables.
-        for (name, value) in [("opt_level", "speed"), ("is_pic", "true")] {
+        let triple = target_lexicon::Triple::host();
+        // AArch64 COFF has no GOT/page relocations in cranelift-object
+        // 0.137. Use absolute addresses there; MSVC emits PE base
+        // relocations for ASLR. Other hosts keep PIC for their PIE linkers.
+        let pic = if arm64_coff(&triple) { "false" } else { "true" };
+        for (name, value) in [("opt_level", "speed"), ("is_pic", pic)] {
             flags.set(name, value).map_err(|e| backend(e.to_string()))?;
         }
-        let isa = isa::lookup(target_lexicon::Triple::host())
+        let isa = isa::lookup(triple)
             .map_err(|e| backend(format!("unsupported host: {e}")))?
             .finish(settings::Flags::new(flags))
             .map_err(|e| backend(e.to_string()))?;
@@ -719,9 +722,37 @@ impl<'r> Codegen<'r> {
             self.signature(what.func)
         };
         FnGen::build(self, what, &mut ctx, &mut FunctionBuilderContext::new())?;
-        self.module
-            .define_function(id, &mut ctx)
-            .map_err(module_err)
+        self.define_function(id, &mut ctx)
+    }
+
+    /// Ordinary functions, pair/constant-divisor clones and task thunks
+    /// all use the same relocation policy before object emission.
+    fn define_function(&mut self, id: ClifFunc, ctx: &mut Context) -> Result<()> {
+        far_coff_symbols(self.module.isa().triple(), &mut ctx.func);
+        self.module.define_function(id, ctx).map_err(module_err)
+    }
+}
+
+fn arm64_coff(triple: &target_lexicon::Triple) -> bool {
+    matches!(
+        triple.architecture,
+        target_lexicon::Architecture::Aarch64(_)
+    ) && triple.binary_format == target_lexicon::BinaryFormat::Coff
+}
+
+/// Non-PIC near addresses also need unsupported AArch64 page relocations.
+/// Far addresses use Abs8, which the COFF writer and PE loader support.
+fn far_coff_symbols(triple: &target_lexicon::Triple, func: &mut cranelift_codegen::ir::Function) {
+    if !arm64_coff(triple) {
+        return;
+    }
+    for value in func.global_values.values_mut() {
+        if let cranelift_codegen::ir::GlobalValueData::Symbol { colocated, .. } = value {
+            *colocated = false;
+        }
+    }
+    for ext in func.dfg.ext_funcs.values_mut() {
+        ext.colocated = false;
     }
 }
 
@@ -2064,6 +2095,63 @@ mod tests {
                 assert!(refused_as_cycle(&src), "{src}");
             }
         }
+    }
+
+    #[test]
+    fn coff_relocations_are_target_specific() {
+        let render = |_: &Diagnostic| String::new();
+        let mut cg = Codegen::new(&render).unwrap();
+        let mut func = cranelift_codegen::ir::Function::new();
+        let data = cg.module.declare_anonymous_data(false, false).unwrap();
+        let gv = cg.module.declare_data_in_func(data, &mut func);
+        let sig = cg.module.make_signature();
+        let local = cg
+            .module
+            .declare_function("local", Linkage::Local, &sig)
+            .unwrap();
+        let fref = cg.module.declare_func_in_func(local, &mut func);
+        for target in [
+            "aarch64-pc-windows-msvc",
+            "x86_64-pc-windows-msvc",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+        ] {
+            let triple = target.parse().unwrap();
+            let far = target == "aarch64-pc-windows-msvc";
+            assert_eq!(arm64_coff(&triple), far, "{target}");
+            let mut f = func.clone();
+            far_coff_symbols(&triple, &mut f);
+            assert_eq!(f.dfg.ext_funcs[fref].colocated, !far, "{target}");
+            let cranelift_codegen::ir::GlobalValueData::Symbol { colocated, .. } =
+                f.global_values[gv]
+            else {
+                panic!("expected a data symbol");
+            };
+            assert_eq!(colocated, !far, "{target}");
+        }
+    }
+
+    #[test]
+    fn emits_globals_literals_and_task_function_addresses() {
+        let (object, _) = compile(
+            "import concurrent.futures\ngreeting = 'hello'\ndef work(n):\n    return greeting + str(n)\ndef start():\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(work, 42)\n        print(f.result())\nstart()\n",
+        );
+        assert!(object.len() > 64);
+    }
+
+    #[test]
+    fn emits_both_constant_divisor_clone_variants_with_data_references() {
+        let src = "greeting = 'hello'\ndef split(n: int, d: int) -> tuple[int, int]:\n    print(greeting)\n    return n // d, n % d\na, b = split(42, 10)\nprint(a, b)\nboxed = split(42, 10)\nprint(boxed)\n";
+        let module = parser::parse(&lexer::lex(src).unwrap()).unwrap();
+        let types = infer::infer(&module).unwrap();
+        let p = crate::rc::elide(lower::lower(&module, &types).unwrap());
+        let clones = constarg::plan(&p, &pair::plans(&p));
+        assert!(clones.iter().any(|c| c.scalar));
+        assert!(clones.iter().any(|c| !c.scalar));
+        let (object, _) = compile(src);
+        assert!(object.len() > 64);
     }
 
     #[test]

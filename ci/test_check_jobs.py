@@ -14,7 +14,10 @@ GUARD = ROOT / ".github" / "workflows" / "ci-jobs.yml"
 
 def sound() -> dict:
     jobs = {j: {} for j in check_jobs.EXPECTED_JOBS}
-    jobs["check"] = {"strategy": {"matrix": {"os": sorted(check_jobs.EXPECTED_OS)}}}
+    jobs["check"] = {"strategy": {"matrix": {"include": [
+        {"os": os, "target": target, "architecture": arch}
+        for os, (target, arch) in check_jobs.EXPECTED_TARGETS.items()
+    ]}}}
     jobs["all"] = {"needs": sorted(check_jobs.EXPECTED_JOBS - {"all"})}
     for body in jobs.values():
         body["runs-on"] = "ubuntu-latest"
@@ -36,7 +39,22 @@ class Problems(unittest.TestCase):
 
     def test_a_missing_platform_is_one(self) -> None:
         w = sound()
-        w["jobs"]["check"]["strategy"]["matrix"]["os"].remove("windows-latest")
+        w["jobs"]["check"]["strategy"]["matrix"]["include"].pop()
+        self.assertEqual(len(check_jobs.problems(w)), 1)
+
+    def test_a_wrong_or_duplicate_native_lane_is_one(self) -> None:
+        for field, value in [("target", "x86_64-pc-windows-msvc"), ("architecture", "x64")]:
+            w = sound()
+            w["jobs"]["check"]["strategy"]["matrix"]["include"][-1][field] = value
+            self.assertEqual(len(check_jobs.problems(w)), 1)
+        w = sound()
+        lanes = w["jobs"]["check"]["strategy"]["matrix"]["include"]
+        lanes.append(lanes[-1])
+        self.assertEqual(len(check_jobs.problems(w)), 1)
+
+    def test_excluding_a_native_lane_is_one(self) -> None:
+        w = sound()
+        w["jobs"]["check"]["strategy"]["matrix"]["exclude"] = [{"os": "windows-11-arm"}]
         self.assertEqual(len(check_jobs.problems(w)), 1)
 
     def test_a_gate_missing_a_job_is_one(self) -> None:

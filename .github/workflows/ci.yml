@@ -19,11 +19,29 @@ jobs:
   check:
     # Native builds emit host code and link with the host linker (`cc`,
     # or MSVC's link.exe on Windows), so each target needs its own runner:
-    # x86-64 and AArch64 Linux, AArch64 macOS, x86-64 Windows.
+    # x86-64 and AArch64 Linux, macOS and Windows (MSVC).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            architecture: x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            architecture: arm64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            architecture: arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            architecture: x64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            architecture: x64
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            architecture: arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +49,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+          architecture: ${{ matrix.architecture }}
+      # Windows ARM runners may also have an emulated x64 toolchain.
+      # Select the native host explicitly, then verify what actually runs.
+      - run: rustup toolchain install stable-${{ matrix.target }} --profile minimal --component rustfmt,clippy && rustup default stable-${{ matrix.target }}
+      - name: Verify native runner, Rust and CPython oracle
+        run: python ci/check_host.py ${{ matrix.target }} ${{ matrix.architecture }}
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
