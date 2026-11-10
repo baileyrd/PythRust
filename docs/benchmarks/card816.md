@@ -52,9 +52,11 @@ sample was below the baseline's in the same round.
 The numeric, sorting and strings executables are instruction-identical
 between the conditions (their `objdump -d` text differs only in
 addresses; the binaries differ in the embedded source path), and the
-startup executables are byte-identical. Their differences, including the
-large relative startup shifts on identical bytes, are this host's noise
-floor, not effects of the change.
+startup executables are byte-identical. Control differences, including
+the large relative startup shifts on identical bytes, are consistent with
+shared-host and path variability; instruction-identical code can still
+differ through layout and path effects. These campaigns show no
+repeatable material control slowdown.
 
 ### Attribution: the clone alone and combined with D63
 
@@ -97,7 +99,10 @@ control's text is unchanged (320710 both).
   extreme and signed numerators against literal divisors 10, -10, 3, -7,
   1, 2, `i64::MAX` and `i64::MIN`; the fallbacks -1, 0 and dynamic
   divisors; a redefined parameter; recursion with a literal divisor; a
-  try/except inside a clone; side-effecting and failing arguments. The
+  try/except inside a clone; side-effecting and failing arguments.
+  Helpers called only with `i64::MAX` and `i64::MIN` keep those
+  divisors under the per-callee cap, so their boxed and pair clones are
+  generated and checked (a unit test pins that selection). The
   native build matches, and runs clean under `valgrind --leak-check=full`.
 - `tests/const_divisor.rs`: native output, stderr and exit status equal
   `run`'s for overflow inside a clone and inside a pair clone's second

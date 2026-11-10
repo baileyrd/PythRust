@@ -233,6 +233,19 @@ mod tests {
     }
 
     #[test]
+    fn the_corpus_fixture_clones_the_extreme_divisors() {
+        let got = clones(include_str!("../../../../examples/const_divisor.pyr"));
+        for extreme in [i64::MAX, i64::MIN] {
+            for scalar in [false, true] {
+                assert!(
+                    got.iter().any(|(_, v, s)| *v == extreme && *s == scalar),
+                    "{extreme} (pair: {scalar}) not cloned: {got:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn clones_are_capped_per_callee() {
         let calls: String = (2..12).map(|d| format!("print(r(99, {d}))\n")).collect();
         let got = clones(&format!(
