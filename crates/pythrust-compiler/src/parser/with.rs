@@ -1,5 +1,5 @@
 //! `with` statements: the scoped task executor (M6c) and `open(...)`
-//! (#1374, D109-D113).
+//! (#1374, D109-D113, D115).
 //!
 //! A file item is desugared here, once, so every later stage sees only
 //! the try/finally of 1b-4 (D110):
@@ -20,7 +20,7 @@ use super::{error, Parser};
 use crate::ast::{Block, Expr, ExprKind, Ident, Stmt, StmtKind, Target, TargetKind};
 use crate::diag::Result;
 use crate::span::Span;
-use crate::token::TokenKind;
+use crate::token::{Token, TokenKind};
 
 /// One `with` item: `value ['as' NAME]`, and the hidden temp of an
 /// `open(...)` item, numbered left to right.
@@ -50,7 +50,7 @@ impl Parser<'_> {
     /// `value ['as' NAME]`: only `open(...)` may omit the name (D112).
     fn with_item(&mut self) -> Result<Item> {
         let value = self.expr()?;
-        let temp = is_open(&value).then(|| {
+        let temp = (!self.user_open && is_open(&value)).then(|| {
             self.withs += 1;
             format!("with#{}", self.withs - 1)
         });
@@ -129,6 +129,14 @@ fn with_one(item: Item, body: Block, start: Span, span: Span) -> Vec<Stmt> {
         span,
     });
     stmts
+}
+
+/// Whether the program has a `def open` anywhere: a `def` replaces the
+/// builtin in the whole module, before or after its `with` (D115).
+pub(super) fn defines_open(tokens: &[Token]) -> bool {
+    tokens.windows(2).any(|w| {
+        w[0].kind == TokenKind::Def && matches!(&w[1].kind, TokenKind::Name(n) if n == "open")
+    })
 }
 
 /// A direct call of `open` (D109).

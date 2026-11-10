@@ -73,6 +73,9 @@ struct Parser<'a> {
     pauses: Vec<Pause>,
     /// File `with` items desugared so far: numbers their hidden temps.
     withs: usize,
+    /// The program defines its own `open`, so `with open(...)` is an
+    /// executor item (D115).
+    user_open: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -101,6 +104,7 @@ impl<'a> Parser<'a> {
             stubs: Vec::new(),
             pauses: Vec::new(),
             withs: 0,
+            user_open: with::defines_open(tokens),
         })
     }
 

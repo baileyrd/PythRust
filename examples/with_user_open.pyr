@@ -1,0 +1,21 @@
+# deviation: an executor is named only by the `with` that makes it (M6c, Nano 2026-11-01); a program's own `open` replaces the builtin (D115), so its `with` is an executor's, and CPython runs it.
+# expect-exit: 1
+# expect-error: an executor is used only as `with concurrent.futures.ThreadPoolExecutor() as ex:`
+import concurrent.futures
+
+
+def square(x: int) -> int:
+    return x * x
+
+
+def main() -> None:
+    with open("pool") as ex:
+        print(ex.submit(square, 7).result())
+
+
+def open(name):
+    print("open", name)
+    return concurrent.futures.ThreadPoolExecutor()
+
+
+main()

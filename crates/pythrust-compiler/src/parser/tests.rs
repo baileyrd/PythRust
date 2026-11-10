@@ -1882,3 +1882,22 @@ fn with_open_is_try_finally_on_a_hidden_file() {
         "expected `:`, found `[`"
     );
 }
+
+/// A program's own `def open`, before or after the `with`, makes an
+/// `open(...)` item an ordinary executor item, as CPython calls it (D115).
+#[test]
+fn with_over_a_user_open_is_an_executor_item() {
+    let body = ": NL INDENT y NL DEDENT";
+    let def = "def open ( n ) : NL INDENT return n NL DEDENT";
+    let item = "(with (call open p) e (y))";
+    let before = ok(&format!("{def} with open ( p ) as e {body}"));
+    assert!(before.ends_with(item), "{before}");
+    let after = ok(&format!("with open ( p ) as e {body} {def}"));
+    assert!(after.starts_with(item), "{after}");
+    let tempered = ok(&format!("temper {def} with open ( p ) as e {body}"));
+    assert!(tempered.ends_with(item), "{tempered}");
+    assert_eq!(
+        err(&format!("{def} with open ( p ) {body}")),
+        "`with` needs a name: write `with value as name:`"
+    );
+}
