@@ -1,0 +1,49 @@
+# An executor's block inside a `try` with `finally`: leaving the block
+# any way waits for its tasks before the `finally` block runs, as Python
+# leaves a `with` before the `try` around it (D75). Each task prints, so
+# its line comes before the `finally` block's.
+import concurrent.futures
+
+
+def noisy(n: int) -> int:
+    print("task", n)
+    return n
+
+
+def leave(how: str) -> int:
+    for i in range(3):
+        try:
+            with concurrent.futures.ThreadPoolExecutor() as ex:
+                f = ex.submit(noisy, i)
+                if how == "break" and i == 1:
+                    break
+                if how == "continue" and i == 1:
+                    continue
+                if how == "return" and i == 1:
+                    return f.result()
+                if how == "raise" and i == 1:
+                    raise ValueError("raised in the block")
+        finally:
+            print(how, "finally", i)
+    return -1
+
+
+def submits_in_finally() -> int:
+    try:
+        print("body")
+    finally:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            f = ex.submit(noisy, 9)
+            print("finally got", f.result())
+    return 0
+
+
+print(leave("end"))
+print(leave("break"))
+print(leave("continue"))
+print(leave("return"))
+try:
+    leave("raise")
+except ValueError as e:
+    print("caught", e)
+print(submits_in_finally())

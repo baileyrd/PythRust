@@ -1,0 +1,7 @@
+# deviation: D75: a fatal fault stops the program without running `finally` blocks; CPython promotes to a bigint.
+# expect-exit: 1
+x = 9223372036854775807
+try:
+    print(x + 1)
+finally:
+    print("CPython runs this; Pythrust stops at the fault")
