@@ -432,6 +432,7 @@ const NATIVE: &[&str] = &[
     "listcomp_tempered",
     "dictcomp",
     "dictcomp_tempered",
+    "comp_expected",
     "open_text_mode",
     "with_open_read",
     "unicode_error",

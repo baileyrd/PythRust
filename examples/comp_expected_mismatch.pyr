@@ -1,0 +1,6 @@
+# deviation: static typing rejects a comprehension whose elements do not fit its annotation (one fixed type per variable); CPython does not check annotations.
+# expect-exit: 1
+# expect-error: element does not match the annotation
+xs = [1, 2]
+ok: list[int | None] = [None for x in xs]
+bad: list[int] = [None for x in xs]

@@ -1,0 +1,42 @@
+# A comprehension takes the type expected where it goes (D117), as a
+# display does: annotation, argument, return and reassignment.
+
+xs = [1, 2, 3]
+opt: list[int | None] = [None for x in xs]
+print(opt)
+opt = [x for x in xs if x > 1]
+print(opt)
+vals: dict[str, int | None] = {k: None for k in "äb"}
+vals["ä"] = 4
+print(vals)
+seen: set[int | None] = {None for x in xs}
+seen.add(7)
+print(len(seen), None in seen, 7 in seen)
+maybe: list[int] | None = [x * 2 for x in xs]
+if maybe is not None:
+    print(maybe)
+nested: list[list[int | None]] = [[None for y in xs] for x in "ab"]
+nested[0][0] = 5
+print(nested)
+pairs: dict[str, list[int | None]] = {w: [None for c in w] for w in ["hé", "ü"]}
+print(pairs)
+
+
+def total(items: list[int | None]) -> int:
+    n = 0
+    for i in items:
+        if i is not None:
+            n += i
+    return n
+
+
+print(total([x for x in xs]))
+
+
+def blanks(n: int) -> dict[int, str | None]:
+    return {i: None for i in range(n)}
+
+
+b = blanks(2)
+b[1] = "zwölf"
+print(b)

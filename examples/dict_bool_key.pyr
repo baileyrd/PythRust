@@ -30,3 +30,8 @@ def concrete(x: int) -> dict[int, int]:
     print(t)
     return e
 print(concrete(3))
+# A comprehension takes the expected key type as a display does (D117).
+made: dict[int, str] = {k: "c" for k in [True, False]}
+print(made)
+flags: set[int] = {f for f in [True, False]}
+print(flags)
