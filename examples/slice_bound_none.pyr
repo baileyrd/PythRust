@@ -1,0 +1,6 @@
+# deviation: `None` and `int | None` slice bounds are not supported yet (D72); CPython accepts them as omitted bounds.
+# expect-exit: 1
+# expect-error: slice bounds must be integers: expected int, found None
+
+xs = [1, 2, 3]
+print(xs[None:2])
