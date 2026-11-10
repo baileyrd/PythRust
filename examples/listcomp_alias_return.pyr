@@ -1,0 +1,8 @@
+# deviation: a tempered function may not return a value sharing a list with a parameter (D3), a comprehension's included (D85); CPython returns the shared rows.
+# expect-error: tempered `same` returns a value sharing a list with its parameter `xs`
+# expect-exit: 1
+temper def same(xs: list[list[int]]) -> list[list[int]]:
+    return [x for x in xs]
+
+
+print(same([[1]]))

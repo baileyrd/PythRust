@@ -1,0 +1,8 @@
+# deviation: undeclared escapes are a compile error (D8), from a comprehension's element too (D85); CPython has no `raises`.
+# expect-error: tempered `parse` can raise ValueError here, so it must declare it
+# expect-exit: 1
+temper def parse(xs: list[str]) -> list[int]:
+    return [int(s) for s in xs]
+
+
+print(parse(["1"]))

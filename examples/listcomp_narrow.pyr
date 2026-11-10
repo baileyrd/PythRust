@@ -1,0 +1,6 @@
+# A filter that proves a name is not None narrows it for the element.
+maybe: list[int | None] = [1, None, 3]
+print([m + 1 for m in maybe if m is not None])
+print([m for m in maybe if m is not None if m > 1])
+names: list[str | None] = ["ä", None]
+print([n.upper() for n in names if n is not None])

@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: a comprehension target other than a name or a tuple of names is not supported yet
+# deviation: static subset rejects this form before execution.
+xs = [0]
+print([1 for xs[0] in range(3)])
+print(xs)

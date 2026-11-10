@@ -11,9 +11,9 @@
 //! keyword argument.
 
 use crate::ast::{
-    Arg, BinOp, Binding, Block, Branch, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp,
-    Mode, Module, Param, ParamMode, Pause, Stmt, StmtKind, StubDef, Target, TargetKind, TypeExpr,
-    UnaryOp,
+    Arg, BinOp, Binding, Block, Branch, CmpOp, CompFor, Expr, ExprKind, FuncDef, Handler, Ident,
+    LogicalOp, Mode, Module, Param, ParamMode, Pause, Stmt, StmtKind, StubDef, Target, TargetKind,
+    TypeExpr, UnaryOp,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
@@ -40,6 +40,7 @@ pub fn parse_stub(tokens: &[Token], name: &str) -> Result<Binding> {
     Parser::new(tokens, &[])?.stub(name)
 }
 
+mod comp;
 mod depth;
 use depth::bounded;
 
@@ -949,6 +950,7 @@ impl<'a> Parser<'a> {
             None
         };
         let value = self.expr()?;
+        self.no_comp("generator expressions")?;
         Ok(Arg {
             name,
             value,
@@ -1059,6 +1061,7 @@ impl<'a> Parser<'a> {
             });
         }
         let inner = self.expr_list()?;
+        self.no_comp("generator expressions")?;
         self.expect(&TokenKind::RParen)?;
         let span = self.span_from(start);
         self.widen_pauses(inner.span, span);
@@ -1075,16 +1078,67 @@ impl<'a> Parser<'a> {
         covering.for_each(|p| p.covers = outer);
     }
 
+    /// A list display, or a comprehension when `for` follows the first
+    /// item.
     fn list(&mut self) -> Result<Expr> {
         let start = self.bump().span;
         let items = if self.at(&TokenKind::RBracket) {
             Vec::new()
         } else {
-            self.comma_list(Self::expr)?.0
+            let first = self.expr()?;
+            if self.at(&TokenKind::For) {
+                return self.list_comp(first, start);
+            }
+            self.rest_of_list(first)?
         };
         self.expect(&TokenKind::RBracket)?;
         bounded(Expr {
             kind: ExprKind::List(items),
+            span: self.span_from(start),
+        })
+    }
+
+    /// The named error for a comprehension form not supported yet (D87),
+    /// at its `for`.
+    fn no_comp(&self, forms: &str) -> Result<()> {
+        if !self.at(&TokenKind::For) {
+            return Ok(());
+        }
+        let msg = format!("{forms} are not supported yet");
+        Err(error(self.tok(0).span, msg))
+    }
+
+    /// `comp_for+ ']'`, after `'[' elt`.
+    fn list_comp(&mut self, mut elt: Expr, start: Span) -> Result<Expr> {
+        let mut clauses = Vec::new();
+        while self.at(&TokenKind::For) {
+            clauses.push(self.comp_for()?);
+        }
+        self.expect(&TokenKind::RBracket)?;
+        comp::own_names(&mut elt, &mut clauses, start.start)?;
+        bounded(Expr {
+            kind: ExprKind::ListComp {
+                elt: Box::new(elt),
+                clauses,
+            },
+            span: self.span_from(start),
+        })
+    }
+
+    /// `'for' target_list 'in' or_expr ('if' or_expr)*`
+    fn comp_for(&mut self) -> Result<CompFor> {
+        let start = self.bump().span;
+        let target = self.for_target()?;
+        self.expect(&TokenKind::In)?;
+        let iter = self.nested(Self::or_expr)?;
+        let mut ifs = Vec::new();
+        while self.eat(&TokenKind::If) {
+            ifs.push(self.nested(Self::or_expr)?);
+        }
+        Ok(CompFor {
+            target,
+            iter,
+            ifs,
             span: self.span_from(start),
         })
     }
@@ -1097,6 +1151,7 @@ impl<'a> Parser<'a> {
             ExprKind::Dict(Vec::new())
         } else {
             let first = self.expr()?;
+            self.no_comp("set comprehensions")?;
             match self.at(&TokenKind::Colon) {
                 true => ExprKind::Dict(self.dict_items(first)?),
                 false => ExprKind::Set(self.rest_of_list(first)?),
@@ -1116,6 +1171,7 @@ impl<'a> Parser<'a> {
         loop {
             self.expect(&TokenKind::Colon)?;
             items.push((key, self.expr()?));
+            self.no_comp("dict comprehensions")?;
             if !self.eat(&TokenKind::Comma) || !starts_expr(self.peek()) {
                 return Ok(items);
             }
@@ -1351,6 +1407,7 @@ fn expr_noun(kind: &ExprKind) -> &'static str {
         | ExprKind::None => "a literal",
         ExprKind::Tuple(_) => "an empty tuple",
         ExprKind::List(_) => "a list",
+        ExprKind::ListComp { .. } => "a list comprehension",
         ExprKind::Dict(_) => "a dict display",
         ExprKind::Set(_) => "a set display",
         ExprKind::Call { .. } => "a function call",

@@ -1,0 +1,4 @@
+# deviation: generator expressions are a named parse error until #1210 (D87); CPython runs them.
+# expect-exit: 1
+# expect-error: generator expressions are not supported yet
+print(sum(x * x for x in [1, 2]))

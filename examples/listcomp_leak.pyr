@@ -1,0 +1,4 @@
+# expect-exit: 1
+# expect-error: name `x` is not defined
+ys = [x for x in range(3)]
+print(x)
