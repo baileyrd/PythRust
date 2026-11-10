@@ -185,6 +185,9 @@ struct Checker {
     /// The `enumerate(...)` or `zip(...)` call being checked where it is
     /// consumed directly (D51): anywhere else it is not a value yet.
     consumed: Option<Span>,
+    /// The generator expression being checked as a reducer's argument
+    /// (D119): anywhere else it is not a value yet (D121).
+    reduced: Option<Span>,
 }
 
 impl Checker {

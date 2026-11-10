@@ -3,7 +3,7 @@
 //! and the builtin exception classes (D6, B4), which build an `Exception`
 //! when called.
 
-use crate::ast::{Arg, Expr, ExprKind};
+use crate::ast::{Arg, Expr, ExprKind, Gather, UnaryOp};
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::span::Span;
@@ -82,7 +82,10 @@ impl Checker {
             }
             "list" => self.copy_list(args, span),
             "set" => self.new_set(args, span),
-            "sorted" => self.sorted(args, span),
+            "sorted" => {
+                plain_beside_gen("sorted", "reverse", args)?;
+                self.sorted(args, span)
+            }
             "range" => self.range(args, span),
             "str" | "bool" => {
                 self.positional(name, args, 0, 1, span)?;
@@ -102,7 +105,10 @@ impl Checker {
             }
             "ord" => self.ord(args, span),
             "chr" => self.chr(args, span),
-            "sum" => self.sum(args, span),
+            "sum" => {
+                plain_beside_gen("sum", "start", args)?;
+                self.sum(args, span)
+            }
             "min" | "max" => self.extreme(name, args, span),
             "any" | "all" => {
                 let (iterable, _) = self.one(name, args, span)?;
@@ -509,9 +515,12 @@ impl Checker {
         }
         let mut found = Vec::new();
         for (k, a) in args.iter().enumerate() {
-            let t = match consumes(name, args.len(), k) {
-                true => self.consumed(&a.value)?,
-                false => self.expr(&a.value)?,
+            let t = if reduces(name, args.len(), k) {
+                self.reduced(&a.value)?
+            } else if consumes(name, args.len(), k) {
+                self.consumed(&a.value)?
+            } else {
+                self.expr(&a.value)?
             };
             found.push((t, a.value.span));
         }
@@ -524,6 +533,15 @@ impl Checker {
         let outer = self.consumed.replace(e.span);
         let t = self.expr(e);
         self.consumed = outer;
+        t
+    }
+
+    /// `e`, the argument a reducer takes its items from: consumed
+    /// directly, and a generator expression there is allowed (D119).
+    pub(super) fn reduced(&mut self, e: &Expr) -> Result<Type> {
+        let outer = self.reduced.replace(e.span);
+        let t = self.consumed(e);
+        self.reduced = outer;
         t
     }
 
@@ -587,6 +605,60 @@ fn consumes(name: &str, n: usize, k: usize) -> bool {
         "zip" => true,
         "sum" | "enumerate" => k == 0,
         "list" | "sorted" | "set" | "min" | "max" | "any" | "all" => n == 1,
+        _ => false,
+    }
+}
+
+/// Beside a generator expression, `name`'s other argument (`what`) is
+/// a literal or a name (D123): read before the loops start, it cannot
+/// show that it ran after the first iterable, as CPython runs it.
+fn plain_beside_gen(name: &str, what: &str, args: &[Arg]) -> Result<()> {
+    let Some((first, rest)) = args.split_first() else {
+        return Ok(());
+    };
+    let ExprKind::Comp {
+        gather: Gather::Gen(_),
+        ..
+    } = &first.value.kind
+    else {
+        return Ok(());
+    };
+    let Some(computed) = rest.iter().find(|a| !effect_free(&a.value)) else {
+        return Ok(());
+    };
+    let msg = format!(
+        "a computed `{what}` of `{name}` with a generator expression is not supported yet; \
+         assign it to a name first"
+    );
+    Err(error(computed.value.span, msg))
+}
+
+/// A name, or an int, float or bool literal with an optional sign.
+fn effect_free(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Name(_) => true,
+        ExprKind::Unary {
+            op: UnaryOp::Neg | UnaryOp::Pos,
+            operand,
+        } => literal(operand),
+        _ => literal(e),
+    }
+}
+
+fn literal(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_)
+    )
+}
+
+/// Whether builtin `name` given `n` positional arguments reduces its
+/// `k`th, so a generator expression may be it (D119): the iterable of
+/// `sum` and `sorted`, or the one argument of the others.
+fn reduces(name: &str, n: usize, k: usize) -> bool {
+    match name {
+        "sum" | "sorted" => k == 0,
+        "list" | "set" | "min" | "max" | "any" | "all" => n == 1,
         _ => false,
     }
 }

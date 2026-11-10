@@ -1,0 +1,4 @@
+# expect-exit: 1
+# expect-error: generator expression must be parenthesized
+print(sum((x for x in [1, 2]), 3))
+print(sum(x for x in [1, 2], 3))

@@ -10,6 +10,7 @@ use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty,
 use crate::span::Span;
 use crate::stdlib::StdFn;
 
+use super::comp::Sink;
 use super::table::Part;
 use super::{unsupported, FnBuilder, Loop};
 
@@ -31,7 +32,7 @@ pub(super) enum Looped<'s> {
         ifs: &'s [Expr],
         gather: &'s Gather,
         rest: &'s [CompFor],
-        out: LocalId,
+        sink: Sink,
         takes: Option<Span>,
     },
     /// `ex.map(f, xs)` (M6c): runs the task `f` on the item and appends
@@ -662,14 +663,14 @@ impl FnBuilder<'_, '_> {
                 ifs,
                 gather,
                 rest,
-                out,
+                sink,
                 takes,
             } => {
                 if let Some(at) = takes {
                     self.took_result(*at)?;
                 }
                 self.bind_iteration(target, next)?;
-                self.comp_body(ifs, gather, rest, *out, latch)
+                self.comp_body(ifs, gather, rest, *sink, (latch, end))
             }
             Looped::Map { f, out, exec, span } => {
                 self.pooled_stmt(|b| {

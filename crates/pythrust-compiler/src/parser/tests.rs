@@ -379,6 +379,7 @@ fn sx(e: &Expr) -> String {
                 Gather::List(e) => format!("listcomp {}", sx(e)),
                 Gather::Set(e) => format!("setcomp {}", sx(e)),
                 Gather::Dict(k, v) => format!("dictcomp {} {}", sx(k), sx(v)),
+                Gather::Gen(e) => format!("genexp {}", sx(e)),
             };
             format!("({head}{})", clauses.collect::<String>())
         }
@@ -529,10 +530,31 @@ fn comprehension_forms_not_supported_yet_are_named() {
         err("[ 1 for f ( ) in xs ] NL"),
         "cannot assign to a function call"
     );
-    let gen = "generator expressions are not supported yet";
-    assert_eq!(err("( x for x in xs ) NL"), gen);
-    assert_eq!(err("f ( x for x in xs ) NL"), gen);
-    assert_eq!(err("f ( 1 , x for x in xs ) NL"), gen);
+}
+
+/// A generator expression (D119) is parsed in parentheses or as a call's
+/// only argument, with a list comprehension's own scope; next to another
+/// argument it must be parenthesized, as in CPython.
+#[test]
+fn generator_expressions() {
+    assert_eq!(
+        ok("s = sum ( x for x in xs if x ) NL"),
+        "(= s (call sum (genexp x@10 (for x@10 xs (if x@10)))))"
+    );
+    assert_eq!(
+        ok("g = ( x for x in xs ) NL"),
+        "(= g (genexp x@4 (for x@4 xs)))"
+    );
+    assert_eq!(
+        ok("s = sum ( ( x for x in xs ) , 1 ) NL"),
+        "(= s (call sum (genexp x@10 (for x@10 xs)) 1))"
+    );
+    let parens = "generator expression must be parenthesized";
+    assert_eq!(err("f ( 1 , x for x in xs ) NL"), parens);
+    assert_eq!(err("f ( x for x in xs , 1 ) NL"), parens);
+    assert_eq!(err("f ( x for x in xs , ) NL"), parens);
+    assert_eq!(err("f ( a = x for x in xs ) NL"), parens);
+    assert_eq!(err("( a , b for x in xs ) NL"), parens);
 }
 
 /// `{e for ...}` is a set comprehension and `{k: v for ...}` a dict one

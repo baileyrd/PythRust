@@ -1,0 +1,6 @@
+# deviation: a generator expression is not a value until generators land (D121); CPython makes a lazy generator object.
+# expect-exit: 1
+# expect-error: a generator expression is not a value yet; use a list comprehension `[...]`
+print(sum(x * x for x in [1, 2]))
+squares = (x * x for x in [1, 2])
+print(sum(squares))

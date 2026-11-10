@@ -450,7 +450,8 @@ impl<'m> Interp<'m, '_> {
                 }
             }
             s.comp(rest, out)?;
-            Ok(None)
+            // A decided `any`/`all` ends every loop (D119).
+            Ok(out.decided().then_some(Flow::Next))
         })?;
         Ok(())
     }
@@ -468,6 +469,13 @@ impl<'m> Interp<'m, '_> {
                 let key = self.eval(k)?;
                 let value = self.eval(v)?;
                 dict.insert(Key::of(&key, k.span)?, key, value);
+            }
+            Gathered::Sum(e, total, span) => {
+                let x = self.eval(e)?.int().unwrap_or(0);
+                *total = total.checked_add(x).ok_or_else(|| ops::overflow(*span))?;
+            }
+            Gathered::Truth(e, any, decided) => {
+                *decided = self.eval(e)?.truthy() == *any;
             }
         }
         Ok(())
@@ -765,6 +773,9 @@ impl<'m> Interp<'m, '_> {
         if let Some(out) = self.reduce_lazy(&callee, args, span)? {
             return Ok(out);
         }
+        if let Some(out) = self.reduce_gen(&callee, args, span)? {
+            return Ok(out);
+        }
         let mut evaluated = Args {
             positional: Vec::new(),
             keywords: Vec::new(),
@@ -824,6 +835,42 @@ impl<'m> Interp<'m, '_> {
             (Value::Int(n), Some(Type::Float)) => Value::Float(n as f64),
             (v, _) => v,
         }
+    }
+
+    /// `any`, `all` or an int `sum` of a generator expression (D119),
+    /// run as its loop: `sum` adds each item as it comes, from a `start`
+    /// read first (D123), and `any`/`all` stop at the item that decides.
+    /// `None` for any other call, whose generator expression gathers a
+    /// list.
+    fn reduce_gen(
+        &mut self,
+        callee: &Value<'m>,
+        args: &'m [Arg],
+        span: Span,
+    ) -> Exec<'m, Option<Value<'m>>> {
+        let (Value::Builtin(b), Some((arg, rest))) = (callee, args.split_first()) else {
+            return Ok(None);
+        };
+        let ExprKind::Comp {
+            gather: Gather::Gen(e),
+            clauses,
+        } = &arg.value.kind
+        else {
+            return Ok(None);
+        };
+        let mut out = match (b, rest) {
+            (Builtin::Any | Builtin::All, []) => Gathered::Truth(e, *b == Builtin::Any, false),
+            (Builtin::Sum, [] | [_]) if self.types.at(span) == Some(&Type::Int) => {
+                let start = match rest.first() {
+                    Some(a) => self.eval(&a.value)?.int().unwrap_or(0),
+                    None => 0,
+                };
+                Gathered::Sum(e, start, span)
+            }
+            _ => return Ok(None),
+        };
+        self.comp(clauses, &mut out)?;
+        Ok(Some(out.into_value()))
     }
 
     /// `any`, `all`, `min`, `max` or `set` of an `enumerate(...)` or
@@ -1075,13 +1122,19 @@ enum Gathered<'m> {
     List(&'m Expr, Vec<Value<'m>>),
     Set(&'m Expr, Table<'m>),
     Dict(&'m Expr, &'m Expr, Table<'m>),
+    /// `sum`'s int total of a generator expression (D119), checked as
+    /// each item comes, at the call's span.
+    Sum(&'m Expr, i64, Span),
+    /// `any` (true) or `all` of a generator expression, and whether an
+    /// item has decided it.
+    Truth(&'m Expr, bool, bool),
 }
 
 impl<'m> Gathered<'m> {
     /// Empty, for `gather`; a table bool key becomes its int when `int_keyed`.
     fn new(gather: &'m Gather, int_keyed: bool) -> Self {
         match gather {
-            Gather::List(e) => Gathered::List(e, Vec::new()),
+            Gather::List(e) | Gather::Gen(e) => Gathered::List(e, Vec::new()),
             Gather::Set(e) => Gathered::Set(e, Table::keyed(int_keyed)),
             Gather::Dict(k, v) => Gathered::Dict(k, v, Table::keyed(int_keyed)),
         }
@@ -1092,7 +1145,14 @@ impl<'m> Gathered<'m> {
             Gathered::List(_, items) => Value::list(items),
             Gathered::Set(_, set) => Value::set(set),
             Gathered::Dict(_, _, dict) => Value::dict(dict),
+            Gathered::Sum(_, total, _) => Value::Int(total),
+            Gathered::Truth(_, any, decided) => Value::Bool(any == decided),
         }
+    }
+
+    /// Whether an `any`/`all` has its answer, so no loop goes on.
+    fn decided(&self) -> bool {
+        matches!(self, Gathered::Truth(_, _, true))
     }
 }
 

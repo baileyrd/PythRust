@@ -17,6 +17,10 @@ use super::{builtins, error, Checker, Func, TruthUse};
 pub(super) const CLASS_NOT_A_VALUE: &str = "exception classes can't be held in variables; \
      name them where they are used, as in `except (ValueError, IndexError):`";
 
+/// D121: a generator expression anywhere but a reducer's argument.
+const NOT_VALUE: &str =
+    "a generator expression is not a value yet; use a list comprehension `[...]`";
+
 /// How `checked` matches a part of a display against its slot: a dict
 /// key or set element as a key (a `bool` fits an `int` key), anything
 /// else as a value.
@@ -127,6 +131,10 @@ impl Checker {
                 let msg = format!("methods can only be called: `.{}(...)`", attr.name);
                 Err(error(attr.span, msg))
             }
+            ExprKind::Comp {
+                gather: Gather::Gen(_),
+                ..
+            } if self.reduced != Some(e.span) => Err(error(e.span, NOT_VALUE.to_string())),
             ExprKind::Comp { gather, clauses } => {
                 let g = Gathering {
                     gather,
@@ -189,9 +197,11 @@ impl Checker {
 
     /// What `gather` makes with nothing expected: a list, a set of one
     /// hashable type, or a dict with hashable keys.
+    /// A generator expression is typed as the list comprehension in its
+    /// slot (D122).
     fn inferred(&mut self, gather: &Gather, span: Span) -> Result<Type> {
         match gather {
-            Gather::List(e) => Ok(Type::List(Box::new(self.expr(e)?))),
+            Gather::List(e) | Gather::Gen(e) => Ok(Type::List(Box::new(self.expr(e)?))),
             Gather::Set(e) => self.set(std::slice::from_ref(e), span),
             Gather::Dict(k, v) => {
                 let key = self.expr(k)?;
@@ -519,7 +529,7 @@ impl Checker {
             (ExprKind::List(_) | ExprKind::Tuple(_), Type::Optional(inner))
             | (ExprKind::Dict(_) | ExprKind::Set(_), Type::Optional(inner))
             | (ExprKind::Comp { .. }, Type::Optional(inner)) => return self.checked(e, inner),
-            (ExprKind::Comp { gather, clauses }, _) => {
+            (ExprKind::Comp { gather, clauses }, _) if !matches!(gather, Gather::Gen(_)) => {
                 let g = Gathering {
                     gather,
                     expected: Some(&resolved),

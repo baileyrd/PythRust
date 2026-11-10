@@ -1,0 +1,6 @@
+# deviation: beside a generator expression, `sum`'s `start` and `sorted`'s `reverse=` must be a literal or a name (D123); CPython takes any expression.
+# expect-exit: 1
+# expect-error: a computed `start` of `sum` with a generator expression is not supported yet
+base = 10
+print(sum((x for x in [1, 2]), base), sum((x for x in [1]), start=-1))
+print(sum((x for x in [1, 2]), base + 1))

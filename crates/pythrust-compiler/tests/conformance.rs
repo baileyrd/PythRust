@@ -433,6 +433,8 @@ const NATIVE: &[&str] = &[
     "dictcomp",
     "dictcomp_tempered",
     "comp_expected",
+    "genexp",
+    "genexp_sum_overflow",
     "open_text_mode",
     "with_open_read",
     "unicode_error",
