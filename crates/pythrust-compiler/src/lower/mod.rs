@@ -614,10 +614,26 @@ struct Loop {
 /// The handlers of the innermost `try` whose body is being lowered.
 #[derive(Clone, Copy)]
 struct Try {
-    /// Tests the pending exception against each handler in turn.
+    /// Tests the pending exception against each handler in turn, or runs
+    /// the `finally` block of a `try` without handlers left.
     dispatch: BlockId,
     /// How many statement pools were open outside the body: raising in
     /// it releases the ones above.
+    pools: usize,
+    /// How many exceptions were stashed outside the body: raising in it
+    /// drops the ones above.
+    stashes: usize,
+}
+
+/// A `finally` block whose `try` is being lowered: a `return`, `break`
+/// or `continue` leaving the `try` lowers a copy of it on the way out.
+#[derive(Clone)]
+struct Fin {
+    body: crate::ast::Block,
+    /// How many loops, `try` bodies and statement pools were open
+    /// outside the `try`.
+    loops: usize,
+    tries: usize,
     pools: usize,
 }
 
@@ -688,6 +704,12 @@ struct FnBuilder<'c, 'a> {
     pools: Vec<Vec<LocalId>>,
     /// Enclosing `try` bodies, innermost last.
     tries: Vec<Try>,
+    /// The `finally` blocks of the enclosing `try` statements, innermost
+    /// last; not those being lowered themselves.
+    finallys: Vec<Fin>,
+    /// Pending exceptions stashed while a `finally` block runs on their
+    /// way out ([`Inst::Stash`]).
+    stashes: usize,
     /// Enclosing handlers that bind a name, innermost last.
     unbinds: Vec<Unbind>,
     /// Names some handler of this body binds, and so unbinds: never
@@ -735,6 +757,8 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             exit: BlockId(1),
             pools: vec![Vec::new()],
             tries: Vec::new(),
+            finallys: Vec::new(),
+            stashes: 0,
             unbinds: Vec::new(),
             caught: BTreeSet::new(),
             unwind: None,

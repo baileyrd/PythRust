@@ -125,10 +125,13 @@ pub enum StmtKind {
         value: Expr,
         index: Expr,
     },
-    /// `'try' ':' block handler+`. `handlers` is never empty.
+    /// `'try' ':' block (handler+ [finally] | finally)`, where
+    /// `finally = 'finally' ':' block`. `handlers` is empty only when
+    /// `finally` is present.
     Try {
         body: Block,
         handlers: Vec<Handler>,
+        finally: Option<Block>,
     },
     /// `'with' expr 'as' NAME ':' block` (M6c): `value` is an executor,
     /// whose tasks all end before the block is left.

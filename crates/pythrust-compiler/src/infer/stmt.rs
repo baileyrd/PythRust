@@ -98,9 +98,14 @@ impl Checker {
                 self.block(orelse)
             }
             StmtKind::Raise(value) => self.raise(value),
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 self.block(body)?;
-                handlers.iter().try_for_each(|h| self.handler(h))
+                handlers.iter().try_for_each(|h| self.handler(h))?;
+                finally.iter().try_for_each(|f| self.block(f))
             }
             StmtKind::With {
                 value,

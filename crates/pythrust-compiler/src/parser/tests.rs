@@ -42,6 +42,7 @@ fn kind_of(word: &str) -> TokenKind {
         "temper" => T::Temper,
         "try" => T::Try,
         "except" => T::Except,
+        "finally" => T::Finally,
         "raise" => T::Raise,
         "del" => T::Del,
         "as" => T::As,
@@ -201,9 +202,21 @@ fn sx_stmt(s: &Stmt) -> String {
         ),
         StmtKind::Raise(e) => format!("(raise {})", sx(e)),
         StmtKind::Del { value, index } => format!("(del {} {})", sx(value), sx(index)),
-        StmtKind::Try { body, handlers } => {
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => {
             let handlers = handlers.iter().map(sx_handler);
-            format!("(try {}{})", sx_block(body), handlers.collect::<String>())
+            let finally = finally
+                .as_ref()
+                .map(|f| format!(" (finally {})", sx_block(f)));
+            format!(
+                "(try {}{}{})",
+                sx_block(body),
+                handlers.collect::<String>(),
+                finally.unwrap_or_default()
+            )
         }
         StmtKind::With {
             value,
@@ -871,6 +884,63 @@ fn try_except() {
 }
 
 #[test]
+fn try_finally() {
+    let body = "try : NL INDENT x NL DEDENT";
+    let fin = "finally : NL INDENT z NL DEDENT";
+    assert_eq!(
+        ok(&format!("{body} {fin} w NL")),
+        "(try (x) (finally (z))) w"
+    );
+    assert_eq!(
+        ok(&format!(
+            "{body} except ValueError : NL INDENT y NL DEDENT {fin}"
+        )),
+        "(try (x) (except ValueError (y)) (finally (z)))"
+    );
+    let src = format!("{body} {fin}");
+    let stmt = &parse_src(&src).body[0];
+    assert_eq!(
+        text(&src, stmt.span),
+        &src[..src.len() - " NL DEDENT".len()]
+    );
+    // `finally` ends the statement: no handler may follow it.
+    assert_eq!(
+        err(&format!(
+            "{body} {fin} except ValueError : NL INDENT y NL DEDENT"
+        )),
+        "expected an expression, found `except`"
+    );
+    assert_eq!(
+        err(&format!("{body} finally NL")),
+        "expected `:`, found newline"
+    );
+    // No jump may leave a `finally` block (D76); one inside a loop the
+    // block holds stays legal.
+    let def = "def f ( ) : NL INDENT";
+    assert_eq!(
+        err(&format!(
+            "{def} {body} finally : NL INDENT return NL DEDENT DEDENT"
+        )),
+        "`return` inside `finally` is not supported"
+    );
+    let looped = "while x : NL INDENT";
+    for word in ["break", "continue"] {
+        assert_eq!(
+            err(&format!(
+                "{looped} {body} finally : NL INDENT {word} NL DEDENT DEDENT"
+            )),
+            format!("`{word}` inside `finally` is not supported")
+        );
+        let inner =
+            format!("{body} finally : NL INDENT while y : NL INDENT {word} NL DEDENT DEDENT");
+        assert_eq!(
+            ok(&inner),
+            format!("(try (x) (finally ((while y ({word})))))")
+        );
+    }
+}
+
+#[test]
 fn try_spans_cover_every_handler() {
     let src = "try : NL INDENT x NL DEDENT except ValueError as e : NL INDENT y NL DEDENT";
     let stmt = &parse_src(src).body[0];
@@ -907,7 +977,7 @@ fn try_except_errors() {
     let body = "try : NL INDENT x NL DEDENT";
     assert_eq!(
         err(&format!("{body} y NL")),
-        "expected `except`, found name `y`"
+        "expected `except` or `finally`, found name `y`"
     );
     assert!(err(&format!("{body} except : NL INDENT y NL DEDENT"))
         .starts_with("bare `except:` is not supported yet"));

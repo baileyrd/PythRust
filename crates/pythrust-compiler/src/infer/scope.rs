@@ -82,8 +82,13 @@ fn bodies(s: &Stmt) -> Vec<(&[Stmt], bool)> {
             .map(|b| (b.body.as_slice(), false))
             .chain([(orelse.as_slice(), false)])
             .collect(),
-        StmtKind::Try { body, handlers } => std::iter::once((body.as_slice(), false))
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => std::iter::once((body.as_slice(), false))
             .chain(handlers.iter().map(|h| (h.body.as_slice(), false)))
+            .chain(finally.iter().map(|f| (f.as_slice(), false)))
             .collect(),
         StmtKind::With { body, .. } => vec![(body, false)],
         _ => Vec::new(),
@@ -431,7 +436,11 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             target_exprs(target).into_iter().for_each(e);
             body.iter().chain(orelse).for_each(|s| stmt_names(s, out));
         }
-        StmtKind::Try { body, handlers } => {
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => {
             // A handler's name is read too: a `def` that shadows it must be
             // inferred first, so the handler sees the shadowing.
             out.extend(
@@ -441,7 +450,11 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
                     .map(|c| (c.name.as_str(), c.span)),
             );
             let bodies = handlers.iter().flat_map(|h| &h.body);
-            body.iter().chain(bodies).for_each(|s| stmt_names(s, out));
+            let finally = finally.iter().flatten();
+            body.iter()
+                .chain(bodies)
+                .chain(finally)
+                .for_each(|s| stmt_names(s, out));
         }
         StmtKind::With { value, body, .. } => {
             e(value);
@@ -691,8 +704,13 @@ fn exits(block: &[Stmt], jumps: bool) -> bool {
     block.iter().any(|s| match &s.kind {
         StmtKind::Return(_) | StmtKind::Raise(_) => true,
         StmtKind::Break | StmtKind::Continue => jumps,
-        StmtKind::Try { body, handlers } => {
-            exits(body, jumps) && handlers.iter().all(|h| exits(&h.body, jumps))
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => {
+            let handled = exits(body, jumps) && handlers.iter().all(|h| exits(&h.body, jumps));
+            handled || finally.as_deref().is_some_and(|f| exits(f, jumps))
         }
         StmtKind::With { body, .. } => exits(body, jumps),
         StmtKind::If {
@@ -727,7 +745,8 @@ fn breaks(stmt: &Stmt) -> bool {
             let bodies = std::iter::once(branch).chain(elifs).flat_map(|b| &b.body);
             bodies.chain(orelse).any(breaks)
         }
-        StmtKind::Try { body, handlers } => {
+        StmtKind::Try { body, handlers, .. } => {
+            // No `break` leaves a `finally` block (D76).
             let bodies = handlers.iter().flat_map(|h| &h.body);
             body.iter().chain(bodies).any(breaks)
         }

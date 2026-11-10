@@ -426,6 +426,7 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 
 /// Programs the native backend must compile; it grows with the subset.
 const NATIVE: &[&str] = &[
+    "raises_finally",
     "slice_list",
     "slice_bound_generic",
     "slice_bound_unproduced",
@@ -457,6 +458,11 @@ const NATIVE: &[&str] = &[
     "builtin_abs_overflow",
     "builtin_sum_empty_float",
     "enumerate_zip",
+    "tasks_try_finally",
+    "try_finally",
+    "try_finally_fault",
+    "try_finally_replaced_uncaught",
+    "try_finally_uncaught",
     "zip_changed_size",
     "zip_sources",
     "enumerate_overflow",

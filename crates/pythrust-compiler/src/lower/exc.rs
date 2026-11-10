@@ -8,10 +8,11 @@
 use crate::ast::{Block, Expr, ExprKind, Handler};
 use crate::diag::Result;
 use crate::exc::ExcKind;
+use crate::ir::Rvalue::Unstash;
 use crate::ir::{Inst, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
-use super::{internal, FnBuilder, Try, Unbind};
+use super::{internal, Fin, FnBuilder, Try, Unbind};
 
 impl FnBuilder<'_, '_> {
     /// `raise value`; `raise ValueError` raises a new one without an
@@ -29,12 +30,87 @@ impl FnBuilder<'_, '_> {
         self.raise_path()
     }
 
+    /// `try`, its handlers and its `finally` block. The block is lowered
+    /// once per way out: falling off the end, an exception on its way out
+    /// (stashed while the block runs, then raised again as it was), and
+    /// each `return`, `break` or `continue` leaving the `try`.
+    pub(super) fn try_stmt(
+        &mut self,
+        body: &Block,
+        handlers: &[Handler],
+        finally: Option<&Block>,
+    ) -> Result<()> {
+        let Some(fin) = finally else {
+            return self.try_except(body, handlers);
+        };
+        let (dispatch, end) = (self.new_block(), self.new_block());
+        let (pools, stashes) = (self.pools.len(), self.stashes);
+        self.finallys.push(Fin {
+            body: fin.clone(),
+            loops: self.loops.len(),
+            tries: self.tries.len(),
+            pools,
+        });
+        self.tries.push(Try {
+            dispatch,
+            pools,
+            stashes,
+        });
+        let lowered = match handlers {
+            [] => self.block(body),
+            _ => self.try_except(body, handlers),
+        };
+        self.tries.pop();
+        self.finallys.pop();
+        lowered?;
+        self.block(fin)?;
+        self.terminate(Term::Goto(end));
+        self.switch_to(dispatch);
+        self.emit(Inst::Stash);
+        self.stashes += 1;
+        let lowered = self.block(fin);
+        self.stashes -= 1;
+        lowered?;
+        self.emit(Inst::Restore);
+        self.raise_path()?;
+        self.switch_to(end);
+        Ok(())
+    }
+
+    /// On the way out of the `try` statements of `self.finallys[from..]`,
+    /// innermost first: each one's statements end, then its `finally`
+    /// block runs where the `try` is, outside its body.
+    pub(super) fn leave_finallys(&mut self, from: usize) -> Result<()> {
+        for i in (from..self.finallys.len()).rev() {
+            let fin = self.finallys[i].clone();
+            let left: Vec<LocalId> = self.pools[fin.pools..].concat();
+            left.into_iter().for_each(|t| self.emit(Inst::Release(t)));
+            let loops = self.loops.split_off(fin.loops);
+            let tries = self.tries.split_off(fin.tries);
+            let finallys = self.finallys.split_off(i);
+            let lowered = self.block(&fin.body);
+            self.loops.truncate(fin.loops);
+            self.tries.truncate(fin.tries);
+            self.finallys.truncate(i);
+            self.loops.extend(loops);
+            self.tries.extend(tries);
+            self.finallys.extend(finallys);
+            lowered?;
+        }
+        Ok(())
+    }
+
     /// `try` and its handlers. The body raises into a dispatch that runs
     /// the first handler naming the pending exception's kind.
-    pub(super) fn try_stmt(&mut self, body: &Block, handlers: &[Handler]) -> Result<()> {
+    fn try_except(&mut self, body: &Block, handlers: &[Handler]) -> Result<()> {
         let (dispatch, end) = (self.new_block(), self.new_block());
         let pools = self.pools.len();
-        self.tries.push(Try { dispatch, pools });
+        let stashes = self.stashes;
+        self.tries.push(Try {
+            dispatch,
+            pools,
+            stashes,
+        });
         let lowered = self.block(body);
         self.tries.pop();
         lowered?;
@@ -112,16 +188,30 @@ impl FnBuilder<'_, '_> {
     /// exit releases everything (or the program ends).
     pub(super) fn raise_path(&mut self) -> Result<()> {
         let Some(t) = self.tries.last().copied() else {
+            self.drop_stashes(0);
             let unwind = self.unwind_block();
             self.jump_away(Term::Goto(unwind));
             return Ok(());
         };
+        self.drop_stashes(t.stashes);
         let left: Vec<LocalId> = self.pools[t.pools..].concat();
         left.into_iter().for_each(|l| self.emit(Inst::Release(l)));
         let depth = self.tries.len();
         self.unbind_left(|u| u.tries >= depth)?;
         self.jump_away(Term::Goto(t.dispatch));
         Ok(())
+    }
+
+    /// Drops the exceptions stashed above the first `kept`: an exception
+    /// raised in a `finally` block replaces the one it was running for
+    /// (D75).
+    fn drop_stashes(&mut self, kept: usize) {
+        for _ in kept..self.stashes {
+            let span = Span { start: 0, end: 0 };
+            if let Operand::Local(e) = self.temp(Ty::Exc, Unstash, span) {
+                self.emit(Inst::Release(e));
+            }
+        }
     }
 
     /// Unbinds the names of the handlers being left: those `left` picks.

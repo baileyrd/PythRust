@@ -66,6 +66,7 @@ impl FnBuilder<'_, '_> {
         for (i, s) in block.iter().enumerate() {
             let (pools, loops) = (self.pools.len(), self.loops.len());
             let (tries, unbinds) = (self.tries.len(), self.unbinds.len());
+            let (finallys, stashes) = (self.finallys.len(), self.stashes);
             match self.pooled_stmt(|b| b.stmt(s)) {
                 Err(_) if self.stuck || self.diverged => {
                     let diverged = self.diverged;
@@ -75,6 +76,8 @@ impl FnBuilder<'_, '_> {
                     self.loops.truncate(loops);
                     self.tries.truncate(tries);
                     self.unbinds.truncate(unbinds);
+                    self.finallys.truncate(finallys);
+                    self.stashes = stashes;
                     self.jump_away(Term::Unreachable);
                     // What follows in this block is never reached.
                     if diverged {
@@ -118,7 +121,11 @@ impl FnBuilder<'_, '_> {
                 orelse,
             } => self.for_stmt(target, iter, body, orelse),
             StmtKind::Raise(value) => self.raise_stmt(value, s.span),
-            StmtKind::Try { body, handlers } => self.try_stmt(body, handlers),
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => self.try_stmt(body, handlers, finally.as_ref()),
             StmtKind::With { binding, body, .. } => self.with_stmt(binding, body, s.span),
         }
     }
@@ -236,7 +243,18 @@ impl FnBuilder<'_, '_> {
             ));
         }
         let slot = self.return_slot();
-        self.move_into(slot, v, span);
+        if self.finallys.is_empty() {
+            self.move_into(slot, v, span);
+            self.jump_away(Term::Goto(self.exit));
+            return Ok(());
+        }
+        // The value is evaluated first, then every `finally` block left
+        // runs (D75). Leaving the function unbinds its handlers' names.
+        let keep = self.new_local(self.ret);
+        self.move_into(keep, v, span);
+        self.unbind_left(|_| true)?;
+        self.leave_finallys(0)?;
+        self.move_into(slot, Operand::Local(keep), span);
         self.jump_away(Term::Goto(self.exit));
         Ok(())
     }
@@ -308,12 +326,15 @@ impl FnBuilder<'_, '_> {
                 "`break` or `continue` outside a loop",
             ));
         };
+        let depth = self.loops.len();
+        self.unbind_left(|u| u.loops >= depth)?;
+        // The `finally` blocks of the `try` statements left run first.
+        let inside = self.finallys.iter().position(|f| f.loops >= depth);
+        self.leave_finallys(inside.unwrap_or(self.finallys.len()))?;
         // The statements being left end here: release their temporaries.
         // From a nested loop's `else`, that includes its snapshot.
         let left: Vec<LocalId> = self.pools[l.pools..].concat();
         left.into_iter().for_each(|t| self.emit(Inst::Release(t)));
-        let depth = self.loops.len();
-        self.unbind_left(|u| u.loops >= depth)?;
         self.jump_away(Term::Goto(to(l)));
         Ok(())
     }

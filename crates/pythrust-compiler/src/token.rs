@@ -47,6 +47,8 @@ pub enum TokenKind {
     Is,
     Try,
     Except,
+    /// `finally`, only ending a `try` (step 1b).
+    Finally,
     Raise,
     /// `del`, only as `del x[i]` (step 1b).
     Del,

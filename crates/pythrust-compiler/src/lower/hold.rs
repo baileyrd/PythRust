@@ -89,7 +89,9 @@ impl FnBuilder<'_, '_> {
             | Inst::Forget(_)
             | Inst::SetGlobal { .. }
             | Inst::DropGlobal(_)
-            | Inst::Raise { .. } => false,
+            | Inst::Raise { .. }
+            | Inst::Stash
+            | Inst::Restore => false,
         }
     }
 }
@@ -139,6 +141,7 @@ fn runs_unseen(value: &Rvalue) -> bool {
         | Rvalue::Raised
         | Rvalue::PendingIs(_)
         | Rvalue::Catch
+        | Rvalue::Unstash
         | Rvalue::Hold(_) => false,
     }
 }
