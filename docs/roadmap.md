@@ -235,3 +235,12 @@ support retaining this bounded variant for independent review and required CI:
 loaded-SHA medians fall 25–28% and full large-file fclone medians 20–30% on warm
 synthetic tmpfs fixtures on one host. This is not an OpenSSL parity or general I/O
 claim, nor completion of #810/#811, a language milestone or #396/PR119.
+
+## Post-M6 step 3: multi-file modules
+
+Nano's post-M6 order (2026-11-03), step 3 (D75), designed in [research/modules.md](research/modules.md) (D76-D84). Module- and project-level tempering stay open (Q19). One PR each, in order:
+
+- [ ] *Design note (#1216):* the note, the grammar entries, these items, D75-D84 and Q19.
+- [ ] *Sources for modules (#1218, D82):* M6b's `Sources` moves out of `bindings.rs` and gives any number of files a base offset; `Span` and every existing diagnostic are unchanged. Exit: a unit test with two module sources renders each span with its own file.
+- [ ] *`import mymod` (#1220):* the module graph from the project root, each file parsed once and run depth-first in import order; stdlib, local, binding resolution and its named errors (D81, D78); qualified names through `infer`, `own` and `lower`, one executable (D76, D77); `__name__` (D83). Exit: CPython-checked corpus directories with two and three files (diamond imports, top-level effects in order, a tempered function in a module, a module importing a binding), and the circular-import, stdlib-shadow, binding-shadow, `__init__.pyr` and file-beside-directory errors with accepted neighbours; `run` and `build` agree.
+- [ ] *`from`, dotted and `as` (#1222):* the remaining forms for local and stdlib modules (D83, D84); `import *` and relative imports refused (D79, D78); a missing name a compile error. Exit: CPython-checked corpus programs for each form, aliasing and lists shared through `from`, the named errors with accepted neighbours; grammar.md's omissions list drops the three forms.
