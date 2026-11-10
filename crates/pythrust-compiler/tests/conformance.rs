@@ -434,6 +434,7 @@ const NATIVE: &[&str] = &[
     "dictcomp_tempered",
     "comp_expected",
     "genexp",
+    "genexp_sum_generic",
     "genexp_sum_overflow",
     "open_text_mode",
     "with_open_read",
@@ -663,6 +664,11 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "builtin_sum_empty_float_generic",
         "a generic function's `sum` of floats with no `start`: `run` gives an empty one \
          as the int `0`, so `build` refuses rather than differ",
+    ),
+    (
+        "genexp_generic_float",
+        "a float `sum` of a comprehension or generator expression in a generic \
+         function: its gathered list takes another element type than the items",
     ),
     (
         "list_index_mixed_number",

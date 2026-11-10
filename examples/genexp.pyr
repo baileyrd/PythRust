@@ -41,3 +41,14 @@ def total(rows: list[list[int]]) -> int:
 
 
 print(total(grid))
+
+
+def loose(xs):
+    return sum(seen(x) for x in xs)
+
+
+def loose_from(xs, start):
+    return sum((x for x in xs), start)
+
+
+print(loose([1, 2]), loose_from([1, 2], 3), loose_from(range(4), -1))

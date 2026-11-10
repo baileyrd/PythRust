@@ -471,8 +471,8 @@ impl<'m> Interp<'m, '_> {
                 dict.insert(Key::of(&key, k.span)?, key, value);
             }
             Gathered::Sum(e, total, span) => {
-                let x = self.eval(e)?.int().unwrap_or(0);
-                *total = total.checked_add(x).ok_or_else(|| ops::overflow(*span))?;
+                let x = self.eval(e)?;
+                total.add(x, *span)?;
             }
             Gathered::Truth(e, any, decided) => {
                 *decided = self.eval(e)?.truthy() == *any;
@@ -860,12 +860,18 @@ impl<'m> Interp<'m, '_> {
         };
         let mut out = match (b, rest) {
             (Builtin::Any | Builtin::All, []) => Gathered::Truth(e, *b == Builtin::Any, false),
-            (Builtin::Sum, [] | [_]) if self.types.at(span) == Some(&Type::Int) => {
+            // An int `sum` streams; in an unannotated function its type is
+            // open, so the items decide, as `build` decides per instantiation.
+            (Builtin::Sum, [] | [_]) if self.types.at(span) != Some(&Type::Float) => {
                 let start = match rest.first() {
-                    Some(a) => self.eval(&a.value)?.int().unwrap_or(0),
-                    None => 0,
+                    Some(a) => self.eval(&a.value)?,
+                    None => Value::Int(0),
                 };
-                Gathered::Sum(e, start, span)
+                let total = match start {
+                    Value::Float(f) => Total::Floats(f, Vec::new()),
+                    v => Total::Int(v.int().unwrap_or(0)),
+                };
+                Gathered::Sum(e, total, span)
             }
             _ => return Ok(None),
         };
@@ -1122,9 +1128,9 @@ enum Gathered<'m> {
     List(&'m Expr, Vec<Value<'m>>),
     Set(&'m Expr, Table<'m>),
     Dict(&'m Expr, &'m Expr, Table<'m>),
-    /// `sum`'s int total of a generator expression (D119), checked as
-    /// each item comes, at the call's span.
-    Sum(&'m Expr, i64, Span),
+    /// `sum` of a generator expression (D119), added as each item comes;
+    /// an int overflow faults at the call's span.
+    Sum(&'m Expr, Total<'m>, Span),
     /// `any` (true) or `all` of a generator expression, and whether an
     /// item has decided it.
     Truth(&'m Expr, bool, bool),
@@ -1145,7 +1151,7 @@ impl<'m> Gathered<'m> {
             Gathered::List(_, items) => Value::list(items),
             Gathered::Set(_, set) => Value::set(set),
             Gathered::Dict(_, _, dict) => Value::dict(dict),
-            Gathered::Sum(_, total, _) => Value::Int(total),
+            Gathered::Sum(_, total, _) => total.into_value(),
             Gathered::Truth(_, any, decided) => Value::Bool(any == decided),
         }
     }
@@ -1153,6 +1159,39 @@ impl<'m> Gathered<'m> {
     /// Whether an `any`/`all` has its answer, so no loop goes on.
     fn decided(&self) -> bool {
         matches!(self, Gathered::Truth(_, _, true))
+    }
+}
+
+/// A streamed `sum`'s total: a checked int until a float item or start
+/// turns it float, which then takes CPython's compensated sum of the rest
+/// (D57). A list is homogeneous, so a float comes first or never.
+enum Total<'m> {
+    Int(i64),
+    Floats(f64, Vec<Value<'m>>),
+}
+
+impl<'m> Total<'m> {
+    fn add(&mut self, x: Value<'m>, span: Span) -> Exec<'m, ()> {
+        match (&mut *self, x) {
+            (Total::Floats(_, items), x) => items.push(x),
+            (Total::Int(t), Value::Float(f)) => {
+                *self = Total::Floats(*t as f64, vec![Value::Float(f)])
+            }
+            (Total::Int(t), x) => {
+                let x = x.int().unwrap_or(0);
+                *t = t.checked_add(x).ok_or_else(|| ops::overflow(span))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn into_value(self) -> Value<'m> {
+        match self {
+            Total::Int(t) => Value::Int(t),
+            Total::Floats(start, items) => {
+                Value::Float(builtins::float_sum(start, items.into_iter()))
+            }
+        }
     }
 }
 

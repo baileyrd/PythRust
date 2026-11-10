@@ -1,0 +1,20 @@
+# A float `sum` of a generator expression or list comprehension in an
+# unannotated function: `run` turns the total float at the first float
+# item and takes CPython's compensated sum, as `sum` of a list does.
+
+
+def seen(x):
+    print("see", x)
+    return x
+
+
+def loose(xs, start):
+    return sum((seen(x) for x in xs), start)
+
+
+def listed(xs, start):
+    return sum([x for x in xs], start)
+
+
+print(loose([0.1] * 10, 0.0), loose([1, 2], 3))
+print(listed([0.5, 0.25], 0.125), listed([1, 2], 0))
