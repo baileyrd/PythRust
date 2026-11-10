@@ -1,6 +1,6 @@
 # Post-M6 step 3: multi-file modules
 
-**Status: decided 2026-11-10, except module-level tempering (open, Q19).** Nano chose the import rules on 2026-11-03 (D75); the expert settled the rest as [default] rows D76-D84. Code follows in the [PR order](#pr-order) below.
+**Status: decided 2026-11-10.** Nano chose the import rules on 2026-11-03 (D75) and left module- and project-level tempering for later (D108); the expert settled the rest as [default] rows D76-D84. Code follows in the [PR order](#pr-order) below.
 
 ## Objective
 
@@ -85,9 +85,9 @@ The compiler loads the whole module graph and analyzes it as one program. `own` 
 
 A multi-file corpus program is a directory holding the main file and its modules. The oracle runs CPython with the root on `sys.path` (D78), so the same tree runs under both. Programs that import a Rust binding still have no CPython oracle (M6b).
 
-## Open
+## Later
 
-- **Module- and project-level tempering (Q19, escalated to Nano).** Step 3 adds none: only function-level `temper def` exists, in any module. design.md says tempering "cascades upward to module and project", and grammar.md says it "comes later". Until Nano answers, nothing about it is decided.
+- **Module- and project-level tempering (D108).** Step 3 adds none: only function-level `temper def` exists, in any module, and D5's "temper `f` first" applies across modules (D76). Nano left it for later (Q19): it is revisited when a real program (the second app, M6e) wants a whole module tempered or is refused by D5 across modules.
 
 ## PR order
 
