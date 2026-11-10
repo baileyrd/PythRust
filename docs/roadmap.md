@@ -191,6 +191,14 @@ The rest of Nano's step 1, one PR each, in order (D67): `try`/`finally` comes be
 - [ ] *Text-mode `open` with writing.*
 - [ ] *`with open`.*
 
+## Post-M6 step 2: comprehensions
+
+Nano's post-M6 order (2026-11-03), step 2: the parser gives a comprehension's names their own scope and `lower` desugars it to the loop it stands for, so the loop checks run on it unchanged (D85). One PR each, in order:
+
+- [x] *List comprehensions (#1202, D85-D87):* `[elt for t in it if c ...]` with any number of `for` and `if` clauses, in `run` and `build`. Names a comprehension binds are its own (CPython 3 scoping); filters narrow as `if` tests do; iterables are what `for` iterates, `enumerate`/`zip` and `map`'s results included. Corpus `listcomp`, `listcomp_narrow`, `listcomp_tempered`, `listcomp_tasks` (all in `NATIVE`), checked against CPython with non-ASCII text; diagnostics `listcomp_leak`, `listcomp_one_type`, `listcomp_mixed`, `listcomp_subscript_target` (D86), `listcomp_pause_unmarked`, `listcomp_raises_undeclared`, `listcomp_modes_unwritten`, `listcomp_alias_return`, `listcomp_sort_in_loop`; the forms still to come are named parse errors (D87): `dictcomp_unsupported`, `setcomp_unsupported`, `genexp_unsupported`.
+- [ ] *Dict and set comprehensions (#1206).*
+- [ ] *Generator expressions, only as a reducer's argument (#1210).*
+
 ### Diagnostic follow-up #804
 
 D3 still rejects returned parameter aliases, including nested containers and
