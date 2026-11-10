@@ -1,0 +1,6304 @@
+{
+  "schema": 1,
+  "runs": 41,
+  "warmups": 2,
+  "seed": 1811,
+  "identities": {
+    "before": {
+      "commit": "bfaa9fed9a0899ddcbfd7f68af693c6e449a6be9",
+      "tree": "a7346701613c3c11071092326278ff37d6f76abd",
+      "source_diff": "",
+      "compiler": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/pythrust",
+        "sha256": "35908d40b46bae7794155b2cc6fb7b17699180d63ed16fbf282d768df0a4bbb7"
+      },
+      "archive": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/libpythrust_rt.a",
+        "sha256": "ba0e5e18e179c4b751f3ba809da4f8cf0cbf54f5bfe00e5d64beadf18aa4ccc0"
+      },
+      "cases": {
+        "tasks_alloc_serial": {
+          "source": "# Control for tasks_alloc.pyr: the same eight builds, called in turn.\ndef build(seed: int) -> int:\n    n = 0\n    for i in range(400000):\n        n += len(str(seed * 1000000 + i))\n    return n\n\n\ndef main() -> None:\n    total = 0\n    for seed in range(8):\n        total += build(seed)\n    print(total)\n\n\nmain()\n",
+          "source_sha256": "f60eabc2c3a534425154db2894241b2970a12896864c6d13a9e1d3e4d9d312a5",
+          "stdout": "21888890\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/tasks_alloc_serial",
+            "sha256": "89c59c3324e6c8a03fc6cec3d86e3cd208d2fe2d1dddd6f8e84a10efb6350f29"
+          }
+        },
+        "tasks_alloc": {
+          "source": "# Allocating tasks (M6c step 4c): eight tasks through `ex.map`, each\n# making and dropping 400,000 strings with `str()`. Each task makes its\n# own values, so nothing is marked, but every string is a malloc and a\n# free from several threads at once. tasks_alloc_serial.pyr runs the\n# same work in turn.\nimport concurrent.futures\n\n\ndef build(seed: int) -> int:\n    n = 0\n    for i in range(400000):\n        n += len(str(seed * 1000000 + i))\n    return n\n\n\ndef main() -> None:\n    total = 0\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        for t in ex.map(build, range(8)):\n            total += t\n    print(total)\n\n\nmain()\n",
+          "source_sha256": "68a6f1e7a033bcb67a7554a9ceb944b7e09744366012faf81a89dbe897fb725b",
+          "stdout": "21888890\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/tasks_alloc",
+            "sha256": "740baf031f113d95e709b3de8257a547a71cc9a8f54037178dc7b3ef6d7975ca"
+          }
+        },
+        "strings": {
+          "source": "# String building: a small string per iteration, and one growing line.\ntotal = 0\nline = \"\"\nfor i in range(1000000):\n    key = \"k\" + str(i) + \":\" + str(i % 97)\n    total += len(key)\n    if i % 50 == 0:\n        line += key[0]\nprint(total, len(line))\n",
+          "source_sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381",
+          "stdout": "9785790 20000\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/strings",
+            "sha256": "9026ce2e5b39bf9892a787830c39f030b462710a617379faa2eb7f42b1302f46"
+          }
+        },
+        "int_format": {
+          "source": "# Focused mixed-width signed conversion control (#811); both i64 extremes.\ndef conversions() -> int:\n    values = [0, 1, -1, 9, -9, 10, -10, 99, -99, 100, -100, 999999999, -999999999, 1000000000000000000, -1000000000000000000, 9223372036854775807, -9223372036854775808]\n    total = 0\n    for i in range(200000):\n        for n in values:\n            total += len(str(n))\n    return total\n\nprint(conversions())\n",
+          "source_sha256": "4bdd5bdf7ca883c8c0b68a665a58e841d6fabc15e9250abac8c89c4c288a5699",
+          "stdout": "24200000\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/before/int_format",
+            "sha256": "504275d93b56dcdfdb663cca89dbc40a41868a53f0a54a64bfee00cb241e7c35"
+          }
+        }
+      }
+    },
+    "after": {
+      "commit": "2ce557923665d868a4c791f745f0591fc6377f8c",
+      "tree": "833fa528d67253c4c8ca4abad79272b588006474",
+      "source_diff": "",
+      "compiler": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/pythrust",
+        "sha256": "dda98c547c550c55630913db6ec0fae2a4bf4c0f6af99aed925a94138bc4ddea"
+      },
+      "archive": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/libpythrust_rt.a",
+        "sha256": "b9ca7723d54e9be36d92de67bab3c8f6acade2124cff44e3a56b1a15e5f9adfb"
+      },
+      "cases": {
+        "tasks_alloc_serial": {
+          "source": "# Control for tasks_alloc.pyr: the same eight builds, called in turn.\ndef build(seed: int) -> int:\n    n = 0\n    for i in range(400000):\n        n += len(str(seed * 1000000 + i))\n    return n\n\n\ndef main() -> None:\n    total = 0\n    for seed in range(8):\n        total += build(seed)\n    print(total)\n\n\nmain()\n",
+          "source_sha256": "f60eabc2c3a534425154db2894241b2970a12896864c6d13a9e1d3e4d9d312a5",
+          "stdout": "21888890\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/tasks_alloc_serial",
+            "sha256": "9bb3b00fc2412f705f677c61c4824ebcedb6e924d8987c5db69251c1ddfbe6c8"
+          }
+        },
+        "tasks_alloc": {
+          "source": "# Allocating tasks (M6c step 4c): eight tasks through `ex.map`, each\n# making and dropping 400,000 strings with `str()`. Each task makes its\n# own values, so nothing is marked, but every string is a malloc and a\n# free from several threads at once. tasks_alloc_serial.pyr runs the\n# same work in turn.\nimport concurrent.futures\n\n\ndef build(seed: int) -> int:\n    n = 0\n    for i in range(400000):\n        n += len(str(seed * 1000000 + i))\n    return n\n\n\ndef main() -> None:\n    total = 0\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        for t in ex.map(build, range(8)):\n            total += t\n    print(total)\n\n\nmain()\n",
+          "source_sha256": "68a6f1e7a033bcb67a7554a9ceb944b7e09744366012faf81a89dbe897fb725b",
+          "stdout": "21888890\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/tasks_alloc",
+            "sha256": "4dce98183c33144a8db9be52ee974e0f13970c77e358e7780396b76b78225f6e"
+          }
+        },
+        "strings": {
+          "source": "# String building: a small string per iteration, and one growing line.\ntotal = 0\nline = \"\"\nfor i in range(1000000):\n    key = \"k\" + str(i) + \":\" + str(i % 97)\n    total += len(key)\n    if i % 50 == 0:\n        line += key[0]\nprint(total, len(line))\n",
+          "source_sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381",
+          "stdout": "9785790 20000\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/strings",
+            "sha256": "7e7bb48aa171145edc330a6f4e7d8572dc06dc3e63a80d8eb3233798ae06cd63"
+          }
+        },
+        "int_format": {
+          "source": "# Focused mixed-width signed conversion control (#811); both i64 extremes.\ndef conversions() -> int:\n    values = [0, 1, -1, 9, -9, 10, -10, 99, -99, 100, -100, 999999999, -999999999, 1000000000000000000, -1000000000000000000, 9223372036854775807, -9223372036854775808]\n    total = 0\n    for i in range(200000):\n        for n in values:\n            total += len(str(n))\n    return total\n\nprint(conversions())\n",
+          "source_sha256": "4bdd5bdf7ca883c8c0b68a665a58e841d6fabc15e9250abac8c89c4c288a5699",
+          "stdout": "24200000\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/after/int_format",
+            "sha256": "156c17f10a721125f2a7f4b946df4c064e03a39542bfe179b11023965975b73d"
+          }
+        }
+      }
+    }
+  },
+  "environment": {
+    "utc": "2026-11-08T06:36:18.601017+00:00",
+    "python": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+    "allowed_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "cpuinfo": "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.086\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 0\ncpu cores\t: 9\napicid\t\t: 0\ninitial apicid\t: 0\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.17\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:",
+    "before": {
+      "loadavg": [
+        1.03271484375,
+        1.48193359375,
+        1.09521484375
+      ],
+      "visible_processes": "codex\nbash\npython3.13\nps\n",
+      "limitation": "Process namespaces can hide host activity; no hardware exclusivity claim."
+    },
+    "after": {
+      "loadavg": [
+        1.25732421875,
+        1.47265625,
+        1.13134765625
+      ],
+      "visible_processes": "codex\nbash\npython3.13\nps\n",
+      "limitation": "Process namespaces can hide host activity; no hardware exclusivity claim."
+    }
+  },
+  "cases": {
+    "tasks_alloc_serial/4": {
+      "affinity": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "stdout": "21888890\n",
+      "order": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.13153900000000007,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13826400000000005,
+            "system": 0.0,
+            "voluntary": 2,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13341200000000009,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.14986999999999995,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13700999999999985,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.14458899999999986,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13815100000000013,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13334899999999994,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13367700000000005,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13956299999999988,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1528100000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.14612300000000022,
+            "system": 0.004417000000000001,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.12897300000000023,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.12783099999999958,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.12707899999999972,
+            "system": 0.004085999999999999,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1276849999999996,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.12787900000000008,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1419119999999996,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.132085,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13099499999999953,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13679799999999975,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.14239400000000035,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13648799999999994,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13027299999999986,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13262200000000046,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.14446599999999954,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1447630000000002,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1307230000000006,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1474719999999996,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13200399999999934,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13642299999999974,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13650800000000096,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13281799999999855,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13039799999999957,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1333070000000003,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13275099999999895,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.14009999999999856,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13055199999999978,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13851700000000022,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13551799999999936,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.14477600000000024,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          }
+        ],
+        "after": [
+          {
+            "user": 0.11151899999999992,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10302800000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.11351900000000004,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10546999999999995,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10782500000000006,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.11264000000000007,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.11067600000000022,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.10557799999999995,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.11053299999999977,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10540800000000017,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10923300000000014,
+            "system": 0.004283000000000002,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10409799999999958,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.09993199999999991,
+            "system": 0.004092999999999999,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10263900000000037,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.11035000000000039,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.12850300000000026,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.10144500000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.10070599999999974,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10617900000000091,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10416399999999992,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.09919000000000011,
+            "system": 0.007851999999999998,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.11015200000000025,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10649799999999932,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10200100000000045,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.11066999999999982,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10838899999999985,
+            "system": 0.0,
+            "voluntary": 0,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10712600000000005,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.11086099999999988,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10684300000000047,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.11039699999999986,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.09885900000000003,
+            "system": 0.004011000000000001,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10421399999999892,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1038710000000016,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10356800000000099,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10702500000000015,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.10408699999999982,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1050910000000016,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.10419900000000126,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1029529999999994,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.11326800000000148,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.10524199999999873,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.1318850419993396,
+          0.14486274100272567,
+          0.1337936540003284,
+          0.150197790000675,
+          0.13735561100111227,
+          0.14509847600129433,
+          0.13849030900018988,
+          0.13391429599869298,
+          0.1340541249992384,
+          0.14004261799709639,
+          0.15329508600189,
+          0.15106158500202582,
+          0.12928269799886039,
+          0.12820330899921828,
+          0.13148660400111112,
+          0.12806178699975135,
+          0.12818189699828508,
+          0.1425163630010502,
+          0.1328618869993079,
+          0.13146589299867628,
+          0.137205320999783,
+          0.14277112100171507,
+          0.13682220199916628,
+          0.1306013060020632,
+          0.13296584300042014,
+          0.14495520000127726,
+          0.14507229200171423,
+          0.13105909200021415,
+          0.1478245309990598,
+          0.1323129529992002,
+          0.13674677400194923,
+          0.1368835389985179,
+          0.13307981400066637,
+          0.1306946760014398,
+          0.1338548929998069,
+          0.13716627099711332,
+          0.1408191269983945,
+          0.13080553200052236,
+          0.1388003709980694,
+          0.13583572700008517,
+          0.1450244779989589
+        ],
+        "median": 0.13674677400194923,
+        "minimum": 0.12806178699975135,
+        "maximum": 0.15329508600189,
+        "mad": 0.005260170000838116
+      },
+      "after": {
+        "samples": [
+          0.111984303999634,
+          0.10336719000042649,
+          0.11446406599861803,
+          0.10593165799946291,
+          0.1081508710012713,
+          0.11295861899998272,
+          0.11125778200221248,
+          0.1060481480017188,
+          0.11106288799783215,
+          0.10573597999973572,
+          0.11814086199956364,
+          0.10451422699770774,
+          0.10447165300138295,
+          0.10313748099724762,
+          0.11101012000290211,
+          0.12938946799840778,
+          0.10212492199934786,
+          0.10107524799968814,
+          0.10651257900099154,
+          0.10456587899898295,
+          0.11210011399816722,
+          0.11058870700071566,
+          0.1075469659990631,
+          0.10241866300202673,
+          0.11123565800153301,
+          0.1086475709998922,
+          0.10744315499687218,
+          0.11118516300120973,
+          0.1072354030002316,
+          0.11074111199923209,
+          0.10322971899950062,
+          0.10458721599934506,
+          0.10419863299830467,
+          0.10381725099796313,
+          0.1073259879995021,
+          0.10436767300052452,
+          0.10540894500081777,
+          0.10446506000153022,
+          0.10319901199909509,
+          0.11361349900107598,
+          0.10549479299879749
+        ],
+        "median": 0.10651257900099154,
+        "minimum": 0.10107524799968814,
+        "maximum": 0.12938946799840778,
+        "mad": 0.0031453890005650464
+      }
+    },
+    "tasks_alloc/1": {
+      "affinity": [
+        0
+      ],
+      "stdout": "21888890\n",
+      "order": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.13220900000000135,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 35
+          },
+          {
+            "user": 0.13714900000000085,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 39
+          },
+          {
+            "user": 0.12924700000000122,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 37
+          },
+          {
+            "user": 0.13246000000000002,
+            "system": 0.004050999999999999,
+            "voluntary": 14,
+            "involuntary": 39
+          },
+          {
+            "user": 0.13207399999999936,
+            "system": 0.004137000000000002,
+            "voluntary": 11,
+            "involuntary": 38
+          },
+          {
+            "user": 0.14277300000000004,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 40
+          },
+          {
+            "user": 0.1386889999999994,
+            "system": 0.0,
+            "voluntary": 16,
+            "involuntary": 40
+          },
+          {
+            "user": 0.1367040000000017,
+            "system": 0.00390299999999999,
+            "voluntary": 10,
+            "involuntary": 38
+          },
+          {
+            "user": 0.13984300000000083,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 35
+          },
+          {
+            "user": 0.13825100000000035,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 38
+          },
+          {
+            "user": 0.14094099999999976,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 38
+          },
+          {
+            "user": 0.1367130000000003,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 37
+          },
+          {
+            "user": 0.15582799999999963,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 41
+          },
+          {
+            "user": 0.13807599999999987,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 38
+          },
+          {
+            "user": 0.13928399999999996,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 39
+          },
+          {
+            "user": 0.13457599999999914,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 38
+          },
+          {
+            "user": 0.1307109999999998,
+            "system": 0.004066,
+            "voluntary": 13,
+            "involuntary": 40
+          },
+          {
+            "user": 0.1343709999999998,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 37
+          },
+          {
+            "user": 0.13513599999999926,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 38
+          },
+          {
+            "user": 0.13857100000000067,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 35
+          },
+          {
+            "user": 0.13372200000000056,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 38
+          },
+          {
+            "user": 0.13836400000000282,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 38
+          },
+          {
+            "user": 0.1277089999999994,
+            "system": 0.004064999999999999,
+            "voluntary": 11,
+            "involuntary": 39
+          },
+          {
+            "user": 0.13992199999999855,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 33
+          },
+          {
+            "user": 0.1290230000000001,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 37
+          },
+          {
+            "user": 0.1274550000000012,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 36
+          },
+          {
+            "user": 0.12939400000000134,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 37
+          },
+          {
+            "user": 0.13257700000000128,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 37
+          },
+          {
+            "user": 0.13097000000000136,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 39
+          },
+          {
+            "user": 0.13535200000000103,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 39
+          },
+          {
+            "user": 0.13769200000000126,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 39
+          },
+          {
+            "user": 0.13795100000000105,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 38
+          },
+          {
+            "user": 0.1357520000000001,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 40
+          },
+          {
+            "user": 0.13491599999999693,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 37
+          },
+          {
+            "user": 0.134208000000001,
+            "system": 0.003958000000000017,
+            "voluntary": 13,
+            "involuntary": 40
+          },
+          {
+            "user": 0.13583399999999912,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 39
+          },
+          {
+            "user": 0.13205699999999965,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 37
+          },
+          {
+            "user": 0.13386299999999807,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 36
+          },
+          {
+            "user": 0.13399799999999829,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 37
+          },
+          {
+            "user": 0.13346900000000161,
+            "system": 0.003823999999999994,
+            "voluntary": 13,
+            "involuntary": 36
+          },
+          {
+            "user": 0.1306510000000003,
+            "system": 0.0038710000000000133,
+            "voluntary": 11,
+            "involuntary": 36
+          }
+        ],
+        "after": [
+          {
+            "user": 0.09579999999999878,
+            "system": 0.004024,
+            "voluntary": 13,
+            "involuntary": 29
+          },
+          {
+            "user": 0.09900799999999954,
+            "system": 0.0,
+            "voluntary": 17,
+            "involuntary": 33
+          },
+          {
+            "user": 0.0925969999999996,
+            "system": 0.007670999999999997,
+            "voluntary": 19,
+            "involuntary": 35
+          },
+          {
+            "user": 0.10465899999999984,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 30
+          },
+          {
+            "user": 0.10053800000000024,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 28
+          },
+          {
+            "user": 0.10007700000000064,
+            "system": 0.008304000000000006,
+            "voluntary": 10,
+            "involuntary": 29
+          },
+          {
+            "user": 0.10453299999999999,
+            "system": 0.004026000000000002,
+            "voluntary": 11,
+            "involuntary": 30
+          },
+          {
+            "user": 0.11016199999999898,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 27
+          },
+          {
+            "user": 0.10963599999999829,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 28
+          },
+          {
+            "user": 0.10640800000000006,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 27
+          },
+          {
+            "user": 0.10424599999999984,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 30
+          },
+          {
+            "user": 0.10302599999999984,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 29
+          },
+          {
+            "user": 0.10584300000000013,
+            "system": 0.0,
+            "voluntary": 14,
+            "involuntary": 32
+          },
+          {
+            "user": 0.10297300000000043,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 29
+          },
+          {
+            "user": 0.10160600000000031,
+            "system": 0.004127000000000006,
+            "voluntary": 12,
+            "involuntary": 29
+          },
+          {
+            "user": 0.10474600000000045,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 31
+          },
+          {
+            "user": 0.106738,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 29
+          },
+          {
+            "user": 0.10512800000000055,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 31
+          },
+          {
+            "user": 0.10169100000000064,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 28
+          },
+          {
+            "user": 0.10708799999999918,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 28
+          },
+          {
+            "user": 0.10399699999999967,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 30
+          },
+          {
+            "user": 0.09896399999999872,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 32
+          },
+          {
+            "user": 0.10186399999999907,
+            "system": 0.0,
+            "voluntary": 14,
+            "involuntary": 31
+          },
+          {
+            "user": 0.10718400000000017,
+            "system": 0.002037999999999998,
+            "voluntary": 11,
+            "involuntary": 33
+          },
+          {
+            "user": 0.15107400000000126,
+            "system": 0.005861000000000005,
+            "voluntary": 16,
+            "involuntary": 43
+          },
+          {
+            "user": 0.09503999999999735,
+            "system": 0.003992000000000009,
+            "voluntary": 14,
+            "involuntary": 32
+          },
+          {
+            "user": 0.09952300000000136,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 29
+          },
+          {
+            "user": 0.10338299999999734,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 30
+          },
+          {
+            "user": 0.0990959999999994,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 32
+          },
+          {
+            "user": 0.10760399999999848,
+            "system": 0.0,
+            "voluntary": 9,
+            "involuntary": 26
+          },
+          {
+            "user": 0.10303099999999787,
+            "system": 0.0,
+            "voluntary": 12,
+            "involuntary": 29
+          },
+          {
+            "user": 0.1074300000000008,
+            "system": 0.0,
+            "voluntary": 13,
+            "involuntary": 31
+          },
+          {
+            "user": 0.1067619999999998,
+            "system": 0.0,
+            "voluntary": 15,
+            "involuntary": 33
+          },
+          {
+            "user": 0.10250500000000073,
+            "system": 0.0,
+            "voluntary": 15,
+            "involuntary": 32
+          },
+          {
+            "user": 0.09704299999999932,
+            "system": 0.0038639999999999786,
+            "voluntary": 17,
+            "involuntary": 34
+          },
+          {
+            "user": 0.10128500000000074,
+            "system": 0.00403199999999998,
+            "voluntary": 10,
+            "involuntary": 30
+          },
+          {
+            "user": 0.09889200000000287,
+            "system": 0.004088000000000008,
+            "voluntary": 12,
+            "involuntary": 28
+          },
+          {
+            "user": 0.10242900000000077,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 29
+          },
+          {
+            "user": 0.10115599999999958,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 29
+          },
+          {
+            "user": 0.10276500000000155,
+            "system": 0.0,
+            "voluntary": 11,
+            "involuntary": 30
+          },
+          {
+            "user": 0.10354299999999839,
+            "system": 0.0,
+            "voluntary": 10,
+            "involuntary": 30
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.1337811769990367,
+          0.13869973100008792,
+          0.13083108499995433,
+          0.13701349400071194,
+          0.13783889999831445,
+          0.14442857399990316,
+          0.1402181660014321,
+          0.142274609002925,
+          0.14042274299936253,
+          0.13981505199990352,
+          0.14245551000203704,
+          0.13722284599862178,
+          0.15739140100049553,
+          0.13966568499745335,
+          0.14100177900036215,
+          0.13565049200042267,
+          0.13638232899756986,
+          0.13593323600071017,
+          0.1367162010028551,
+          0.1391999660008878,
+          0.13527042099667597,
+          0.13995427699774154,
+          0.13339711200023885,
+          0.14048845800061827,
+          0.13059372499992605,
+          0.1290828489982232,
+          0.13103044800300268,
+          0.13420592900001793,
+          0.13260082300257636,
+          0.13701493899861816,
+          0.1398472459986806,
+          0.13953524899989134,
+          0.137369571999443,
+          0.1364893319987459,
+          0.13973296500262222,
+          0.13751239500197698,
+          0.1335922889993526,
+          0.1354518170010124,
+          0.1355758829995466,
+          0.13788882599692442,
+          0.1361064590018941
+        ],
+        "median": 0.13722284599862178,
+        "minimum": 0.1290828489982232,
+        "maximum": 0.15739140100049553,
+        "mad": 0.002510119004000444
+      },
+      "after": {
+        "samples": [
+          0.10039293500085478,
+          0.10059393700066721,
+          0.10184822700102814,
+          0.10634660100186011,
+          0.10211819200048922,
+          0.10997598199901404,
+          0.11019368800043594,
+          0.110663392002607,
+          0.11021446000086144,
+          0.10796724999818252,
+          0.10582833399894298,
+          0.10465915099848644,
+          0.1073525290012185,
+          0.10360189600032754,
+          0.1072757330002787,
+          0.10637810600019293,
+          0.10832331399797113,
+          0.10671654399993713,
+          0.10327882699857582,
+          0.10775240699877031,
+          0.10558803099775105,
+          0.10053308900023694,
+          0.10238106100223376,
+          0.1108734489971539,
+          0.15741883399823564,
+          0.1005779769984656,
+          0.10110425599850714,
+          0.10496175900334492,
+          0.10066056099822163,
+          0.10825327299971832,
+          0.10462879899932886,
+          0.10898291700141272,
+          0.10830976800207281,
+          0.10413140400123666,
+          0.10256199200011906,
+          0.10689580799953546,
+          0.10454284099978395,
+          0.1039865060010925,
+          0.10295996800050489,
+          0.10435261599923251,
+          0.10515247999865096
+        ],
+        "median": 0.10515247999865096,
+        "minimum": 0.10039293500085478,
+        "maximum": 0.15741883399823564,
+        "mad": 0.002599927000119351
+      }
+    },
+    "tasks_alloc/4": {
+      "affinity": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "stdout": "21888890\n",
+      "order": [
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.16185199999999966,
+            "system": 0.0,
+            "voluntary": 34,
+            "involuntary": 35
+          },
+          {
+            "user": 0.15760299999999816,
+            "system": 0.012114000000000014,
+            "voluntary": 32,
+            "involuntary": 38
+          },
+          {
+            "user": 0.23436299999999832,
+            "system": 0.0,
+            "voluntary": 31,
+            "involuntary": 42
+          },
+          {
+            "user": 0.20970100000000258,
+            "system": 0.0038479999999999903,
+            "voluntary": 35,
+            "involuntary": 48
+          },
+          {
+            "user": 0.207259999999998,
+            "system": 0.0,
+            "voluntary": 21,
+            "involuntary": 40
+          },
+          {
+            "user": 0.17433999999999727,
+            "system": 0.0004230000000000067,
+            "voluntary": 18,
+            "involuntary": 32
+          },
+          {
+            "user": 0.1583660000000009,
+            "system": 0.0,
+            "voluntary": 29,
+            "involuntary": 37
+          },
+          {
+            "user": 0.15298999999999907,
+            "system": 0.0,
+            "voluntary": 20,
+            "involuntary": 33
+          },
+          {
+            "user": 0.2440730000000002,
+            "system": 0.0,
+            "voluntary": 30,
+            "involuntary": 53
+          },
+          {
+            "user": 0.174392000000001,
+            "system": 0.0,
+            "voluntary": 28,
+            "involuntary": 35
+          },
+          {
+            "user": 0.19003299999999967,
+            "system": 0.004037000000000013,
+            "voluntary": 21,
+            "involuntary": 43
+          },
+          {
+            "user": 0.23931400000000025,
+            "system": 0.0,
+            "voluntary": 21,
+            "involuntary": 49
+          },
+          {
+            "user": 0.23312299999999908,
+            "system": 0.0040939999999999865,
+            "voluntary": 27,
+            "involuntary": 51
+          },
+          {
+            "user": 0.18981199999999987,
+            "system": 0.0,
+            "voluntary": 25,
+            "involuntary": 36
+          },
+          {
+            "user": 0.17451600000000056,
+            "system": 0.0,
+            "voluntary": 24,
+            "involuntary": 30
+          },
+          {
+            "user": 0.16810100000000006,
+            "system": 0.0,
+            "voluntary": 29,
+            "involuntary": 33
+          },
+          {
+            "user": 0.16040100000000024,
+            "system": 0.011752000000000012,
+            "voluntary": 44,
+            "involuntary": 39
+          },
+          {
+            "user": 0.16114999999999924,
+            "system": 0.0,
+            "voluntary": 27,
+            "involuntary": 31
+          },
+          {
+            "user": 0.16699700000000206,
+            "system": 0.015910000000000035,
+            "voluntary": 33,
+            "involuntary": 35
+          },
+          {
+            "user": 0.16283900000000173,
+            "system": 0.004911999999999972,
+            "voluntary": 18,
+            "involuntary": 30
+          },
+          {
+            "user": 0.17627399999999938,
+            "system": 0.0025100000000000122,
+            "voluntary": 26,
+            "involuntary": 23
+          },
+          {
+            "user": 0.14294800000000052,
+            "system": 0.0,
+            "voluntary": 33,
+            "involuntary": 30
+          },
+          {
+            "user": 0.1722929999999998,
+            "system": 0.0,
+            "voluntary": 34,
+            "involuntary": 29
+          },
+          {
+            "user": 0.11732899999999802,
+            "system": 0.016096999999999972,
+            "voluntary": 32,
+            "involuntary": 27
+          },
+          {
+            "user": 0.1341259999999984,
+            "system": 0.00437700000000002,
+            "voluntary": 29,
+            "involuntary": 30
+          },
+          {
+            "user": 0.1353340000000003,
+            "system": 0.004228999999999983,
+            "voluntary": 38,
+            "involuntary": 26
+          },
+          {
+            "user": 0.13525299999999874,
+            "system": 0.004178999999999988,
+            "voluntary": 25,
+            "involuntary": 29
+          },
+          {
+            "user": 0.13568700000000078,
+            "system": 0.0,
+            "voluntary": 31,
+            "involuntary": 25
+          },
+          {
+            "user": 0.14083499999999916,
+            "system": 0.0,
+            "voluntary": 30,
+            "involuntary": 31
+          },
+          {
+            "user": 0.14056299999999666,
+            "system": 0.0,
+            "voluntary": 25,
+            "involuntary": 28
+          },
+          {
+            "user": 0.1799480000000031,
+            "system": 0.0,
+            "voluntary": 31,
+            "involuntary": 42
+          },
+          {
+            "user": 0.1714090000000006,
+            "system": 0.0,
+            "voluntary": 35,
+            "involuntary": 35
+          },
+          {
+            "user": 0.13364200000000181,
+            "system": 0.0042240000000000055,
+            "voluntary": 31,
+            "involuntary": 24
+          },
+          {
+            "user": 0.1860939999999971,
+            "system": 0.0,
+            "voluntary": 35,
+            "involuntary": 35
+          },
+          {
+            "user": 0.21554100000000176,
+            "system": 0.0,
+            "voluntary": 31,
+            "involuntary": 40
+          },
+          {
+            "user": 0.14446300000000178,
+            "system": 0.0,
+            "voluntary": 28,
+            "involuntary": 26
+          },
+          {
+            "user": 0.19088700000000358,
+            "system": 0.0,
+            "voluntary": 33,
+            "involuntary": 33
+          },
+          {
+            "user": 0.15714899999999687,
+            "system": 0.0038739999999999886,
+            "voluntary": 31,
+            "involuntary": 34
+          },
+          {
+            "user": 0.1354389999999981,
+            "system": 0.0,
+            "voluntary": 29,
+            "involuntary": 23
+          },
+          {
+            "user": 0.13784900000000277,
+            "system": 0.0,
+            "voluntary": 24,
+            "involuntary": 29
+          },
+          {
+            "user": 0.16958999999999946,
+            "system": 0.0,
+            "voluntary": 21,
+            "involuntary": 38
+          }
+        ],
+        "after": [
+          {
+            "user": 0.10471899999999934,
+            "system": 0.0,
+            "voluntary": 29,
+            "involuntary": 24
+          },
+          {
+            "user": 0.13303000000000154,
+            "system": 0.0,
+            "voluntary": 37,
+            "involuntary": 26
+          },
+          {
+            "user": 0.14935700000000196,
+            "system": 0.0,
+            "voluntary": 34,
+            "involuntary": 35
+          },
+          {
+            "user": 0.17064999999999841,
+            "system": 0.005249000000000004,
+            "voluntary": 31,
+            "involuntary": 32
+          },
+          {
+            "user": 0.14113900000000257,
+            "system": 0.0,
+            "voluntary": 32,
+            "involuntary": 19
+          },
+          {
+            "user": 0.09589300000000023,
+            "system": 0.011470000000000008,
+            "voluntary": 28,
+            "involuntary": 26
+          },
+          {
+            "user": 0.11737400000000164,
+            "system": 0.0,
+            "voluntary": 30,
+            "involuntary": 23
+          },
+          {
+            "user": 0.13040200000000013,
+            "system": 0.0040879999999999805,
+            "voluntary": 26,
+            "involuntary": 28
+          },
+          {
+            "user": 0.15390899999999874,
+            "system": 0.004499000000000003,
+            "voluntary": 29,
+            "involuntary": 34
+          },
+          {
+            "user": 0.14787199999999956,
+            "system": 0.0041110000000000035,
+            "voluntary": 28,
+            "involuntary": 39
+          },
+          {
+            "user": 0.1643270000000001,
+            "system": 0.0,
+            "voluntary": 36,
+            "involuntary": 31
+          },
+          {
+            "user": 0.16466399999999837,
+            "system": 0.015339999999999993,
+            "voluntary": 33,
+            "involuntary": 32
+          },
+          {
+            "user": 0.18159800000000104,
+            "system": 0.0,
+            "voluntary": 32,
+            "involuntary": 27
+          },
+          {
+            "user": 0.11558600000000041,
+            "system": 0.0,
+            "voluntary": 18,
+            "involuntary": 23
+          },
+          {
+            "user": 0.16056400000000082,
+            "system": 0.007675000000000015,
+            "voluntary": 22,
+            "involuntary": 34
+          },
+          {
+            "user": 0.11326799999999793,
+            "system": 0.0,
+            "voluntary": 21,
+            "involuntary": 23
+          },
+          {
+            "user": 0.1391200000000019,
+            "system": 0.004121999999999959,
+            "voluntary": 21,
+            "involuntary": 27
+          },
+          {
+            "user": 0.13561400000000035,
+            "system": 0.0,
+            "voluntary": 29,
+            "involuntary": 24
+          },
+          {
+            "user": 0.1727559999999997,
+            "system": 0.0,
+            "voluntary": 33,
+            "involuntary": 27
+          },
+          {
+            "user": 0.16184699999999808,
+            "system": 0.0,
+            "voluntary": 21,
+            "involuntary": 24
+          },
+          {
+            "user": 0.11819399999999902,
+            "system": 0.0,
+            "voluntary": 30,
+            "involuntary": 27
+          },
+          {
+            "user": 0.10168900000000036,
+            "system": 0.0042400000000000215,
+            "voluntary": 28,
+            "involuntary": 20
+          },
+          {
+            "user": 0.14901000000000053,
+            "system": 0.0,
+            "voluntary": 27,
+            "involuntary": 33
+          },
+          {
+            "user": 0.096109000000002,
+            "system": 0.007925999999999989,
+            "voluntary": 35,
+            "involuntary": 21
+          },
+          {
+            "user": 0.1058179999999993,
+            "system": 0.0,
+            "voluntary": 22,
+            "involuntary": 24
+          },
+          {
+            "user": 0.1360360000000007,
+            "system": 0.0,
+            "voluntary": 35,
+            "involuntary": 19
+          },
+          {
+            "user": 0.10322400000000087,
+            "system": 0.0,
+            "voluntary": 30,
+            "involuntary": 18
+          },
+          {
+            "user": 0.10119800000000012,
+            "system": 0.0,
+            "voluntary": 41,
+            "involuntary": 24
+          },
+          {
+            "user": 0.10371699999999962,
+            "system": 0.0,
+            "voluntary": 34,
+            "involuntary": 18
+          },
+          {
+            "user": 0.10220600000000246,
+            "system": 0.003958000000000017,
+            "voluntary": 26,
+            "involuntary": 23
+          },
+          {
+            "user": 0.1409579999999977,
+            "system": 0.0,
+            "voluntary": 26,
+            "involuntary": 27
+          },
+          {
+            "user": 0.13382000000000005,
+            "system": 0.0,
+            "voluntary": 23,
+            "involuntary": 25
+          },
+          {
+            "user": 0.10894300000000001,
+            "system": 0.0,
+            "voluntary": 40,
+            "involuntary": 21
+          },
+          {
+            "user": 0.12761700000000076,
+            "system": 0.004029000000000005,
+            "voluntary": 37,
+            "involuntary": 23
+          },
+          {
+            "user": 0.13110099999999747,
+            "system": 0.004755000000000009,
+            "voluntary": 22,
+            "involuntary": 16
+          },
+          {
+            "user": 0.11518399999999929,
+            "system": 0.00833299999999998,
+            "voluntary": 29,
+            "involuntary": 25
+          },
+          {
+            "user": 0.16437499999999972,
+            "system": 0.004194000000000031,
+            "voluntary": 38,
+            "involuntary": 37
+          },
+          {
+            "user": 0.1027079999999998,
+            "system": 0.0,
+            "voluntary": 21,
+            "involuntary": 18
+          },
+          {
+            "user": 0.09595300000000151,
+            "system": 0.007259999999999989,
+            "voluntary": 23,
+            "involuntary": 22
+          },
+          {
+            "user": 0.16383400000000137,
+            "system": 0.0,
+            "voluntary": 28,
+            "involuntary": 31
+          },
+          {
+            "user": 0.13391299999999973,
+            "system": 0.0,
+            "voluntary": 25,
+            "involuntary": 23
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.05799200699766516,
+          0.05787995900027454,
+          0.06696637499771896,
+          0.06577305199971306,
+          0.06196206799722859,
+          0.0609017729984771,
+          0.04907963100049528,
+          0.049569213999347994,
+          0.06741650500043761,
+          0.053108608997717965,
+          0.06678190100137726,
+          0.06586672399862437,
+          0.06855914699917776,
+          0.06241976999808685,
+          0.049827197999547934,
+          0.05154588000004878,
+          0.053782741000759415,
+          0.044524494998768205,
+          0.057431989000178874,
+          0.047202352001477266,
+          0.054664052000589436,
+          0.042739958997117355,
+          0.0525600660002965,
+          0.039949108999280725,
+          0.04078454699993017,
+          0.04625708800085704,
+          0.040473159999237396,
+          0.045308150998607744,
+          0.04438108999966062,
+          0.041088037000008626,
+          0.06015454199950909,
+          0.05220246499811765,
+          0.04663993299982394,
+          0.060204942001291784,
+          0.06264610900325351,
+          0.04486172800170607,
+          0.054157516999111976,
+          0.04963939699882758,
+          0.043518577000213554,
+          0.041317159000755055,
+          0.052550974000041606
+        ],
+        "median": 0.052550974000041606,
+        "minimum": 0.039949108999280725,
+        "maximum": 0.06855914699917776,
+        "mad": 0.007653968001250178
+      },
+      "after": {
+        "samples": [
+          0.03536006400099723,
+          0.04305137900155387,
+          0.05102463000002899,
+          0.05160141099986504,
+          0.047345179998956155,
+          0.03407190699726925,
+          0.037004109002737096,
+          0.04301447400212055,
+          0.051432573000056436,
+          0.05008528599864803,
+          0.049737598001229344,
+          0.05041462400185992,
+          0.05654198900083429,
+          0.03600293999988935,
+          0.054627318000711966,
+          0.03280182500020601,
+          0.04763753400038695,
+          0.048565691999101546,
+          0.057672152997838566,
+          0.05014269199818955,
+          0.035184030999516835,
+          0.033641003999946406,
+          0.049921378998988075,
+          0.03526617099851137,
+          0.03304037700218032,
+          0.044551916002092184,
+          0.032366375999117736,
+          0.03248485899894149,
+          0.03941360099997837,
+          0.038363750998541946,
+          0.04644066400214797,
+          0.0417959990008967,
+          0.03389089800111833,
+          0.050069340999471024,
+          0.04047350999826449,
+          0.03678235900224536,
+          0.04806847600048059,
+          0.03252796399829094,
+          0.03153580599973793,
+          0.051787180000246735,
+          0.04293636799775413
+        ],
+        "median": 0.04301447400212055,
+        "minimum": 0.03153580599973793,
+        "maximum": 0.057672152997838566,
+        "mad": 0.007128217996068997
+      }
+    },
+    "tasks_alloc_serial/1": {
+      "affinity": [
+        0
+      ],
+      "stdout": "21888890\n",
+      "order": [
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.1410460000000029,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14063300000000112,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.20175299999999652,
+            "system": 0.013714999999999977,
+            "voluntary": 1,
+            "involuntary": 310
+          },
+          {
+            "user": 0.14684199999999947,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14015900000000414,
+            "system": 0.0037690000000000223,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.13492100000000562,
+            "system": 0.004147000000000012,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13845499999999333,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13679499999999933,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13655800000000085,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13552900000000534,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.14782799999999696,
+            "system": 0.007734000000000019,
+            "voluntary": 1,
+            "involuntary": 86
+          },
+          {
+            "user": 0.13350900000000365,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13421499999999753,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.1340720000000033,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13327100000000058,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13282600000000144,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13830899999999957,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13101300000000293,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13590099999999694,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.142516999999998,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 19
+          },
+          {
+            "user": 0.13144899999999637,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13275200000000353,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1350709999999964,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1348650000000049,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13363999999999976,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13083800000000423,
+            "system": 0.0041059999999999985,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.135354999999997,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1324030000000036,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1385970000000043,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1327750000000023,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.1643889999999999,
+            "system": 0.00778300000000004,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.12751200000000296,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13129400000000402,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.12991999999999848,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.14291800000000165,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14028400000000119,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1422409999999985,
+            "system": 0.004159999999999997,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.14290499999999895,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.14499800000000107,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13804200000000577,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.14019400000000104,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          }
+        ],
+        "after": [
+          {
+            "user": 0.10952600000000245,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.10879099999999653,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.1128970000000038,
+            "system": 0.00407200000000002,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.11240099999999842,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.1134879999999967,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10282399999999825,
+            "system": 0.004117999999999955,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10982800000000026,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10807900000000359,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.11433900000000108,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.11505899999999514,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.11384499999999775,
+            "system": 0.005145000000000011,
+            "voluntary": 1,
+            "involuntary": 45
+          },
+          {
+            "user": 0.10411799999999971,
+            "system": 0.003934999999999966,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.10092399999999913,
+            "system": 0.003715000000000024,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10411700000000224,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.10447099999999665,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1115130000000022,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.10139199999999704,
+            "system": 0.00389299999999998,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1022389999999973,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.10600800000000277,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10934200000000516,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1079819999999998,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10293300000000016,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10502999999999929,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10446400000000011,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10716999999999643,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.10636699999999877,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.11901699999999948,
+            "system": 0.004120999999999986,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.11472399999999539,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.10336099999999959,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.12027899999999647,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13640799999999587,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.09958499999999759,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.10062399999999627,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.09761100000000056,
+            "system": 0.00394899999999998,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1014330000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.10454500000000166,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.11801799999999929,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.11054700000000395,
+            "system": 0.003713000000000022,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.11101999999999634,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.11100799999999822,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.11289499999999464,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.14259008299995912,
+          0.14109669500248856,
+          0.272754662000807,
+          0.14835811600278248,
+          0.14441711100153043,
+          0.14058590899730916,
+          0.13892624299842282,
+          0.13827545800086227,
+          0.13795612000103574,
+          0.1370107119983004,
+          0.19802808399981586,
+          0.13505579300181125,
+          0.13570465600059833,
+          0.13561403999847244,
+          0.13479548300165334,
+          0.13433256999996956,
+          0.13877473599859513,
+          0.1325327960003051,
+          0.1859951349979383,
+          0.17366009699981078,
+          0.1329534220021742,
+          0.13316182400012622,
+          0.13656693099983386,
+          0.13635664499815903,
+          0.13541917000111425,
+          0.13534071200047038,
+          0.1369573260017205,
+          0.13394405800136155,
+          0.1392677719995845,
+          0.13425134900171543,
+          0.17365433200029656,
+          0.12895564000064041,
+          0.1327634080007556,
+          0.1314007360015239,
+          0.1444355369967525,
+          0.14173454899719218,
+          0.14690210499975365,
+          0.1434435500013933,
+          0.14650450900080614,
+          0.13961479000136023,
+          0.14170150900099543
+        ],
+        "median": 0.13827545800086227,
+        "minimum": 0.12895564000064041,
+        "maximum": 0.272754662000807,
+        "mad": 0.003942888000892708
+      },
+      "after": {
+        "samples": [
+          0.11104410299958545,
+          0.11039148499912699,
+          0.12471047100189026,
+          0.11390526999821304,
+          0.1149541019985918,
+          0.10841132800123887,
+          0.11128404299961403,
+          0.10963120599990361,
+          0.11581889799708733,
+          0.11652505600068253,
+          0.1521967879998556,
+          0.11430968599961489,
+          0.10610990000350284,
+          0.10558622499956982,
+          0.10593201300071087,
+          0.11302627799886977,
+          0.10679295299996738,
+          0.10373703400182421,
+          0.10755574699942372,
+          0.11606455400033155,
+          0.10993927900199196,
+          0.1044197319970408,
+          0.10648446299819625,
+          0.10597530399900279,
+          0.10775158799879136,
+          0.10785750200011535,
+          0.12383177299852832,
+          0.11623674300062703,
+          0.10482842900091782,
+          0.12176407800143352,
+          0.1369660290001775,
+          0.10102982399985194,
+          0.10209419000238995,
+          0.1030037029995583,
+          0.1030965930003731,
+          0.10601717499957886,
+          0.11950690999947255,
+          0.11578072799966321,
+          0.11263393999979598,
+          0.11250731100153644,
+          0.11515022300227429
+        ],
+        "median": 0.11039148499912699,
+        "minimum": 0.10102982399985194,
+        "maximum": 0.1521967879998556,
+        "mad": 0.004562616999464808
+      }
+    },
+    "strings/1": {
+      "affinity": [
+        0
+      ],
+      "stdout": "9785790 20000\n",
+      "order": [
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.27993400000000435,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.26067199999999957,
+            "system": 0.0029549999999999854,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.22627299999999906,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2226880000000051,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.22078599999999682,
+            "system": 0.003958000000000017,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.2495839999999987,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.22209300000000098,
+            "system": 0.003862000000000032,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.25898999999999717,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2710909999999984,
+            "system": 0.004823999999999995,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.2513020000000026,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.25573599999999885,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.22280900000000514,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.2552730000000025,
+            "system": 0.0043199999999999905,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2301299999999955,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21892199999999917,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21972599999999431,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.22361599999999981,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.2182640000000049,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.2124469999999974,
+            "system": 0.003964999999999996,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.21165099999999626,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21643200000000462,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2652350000000041,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.2286980000000014,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.22059100000000598,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2233489999999989,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21758699999999465,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.21643899999999405,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.21628199999999964,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.21938799999999503,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.22545900000000074,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.2192490000000049,
+            "system": 0.007935000000000025,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.23676299999999628,
+            "system": 0.004317000000000015,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2262100000000018,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2389440000000036,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 9
+          },
+          {
+            "user": 0.22593899999999678,
+            "system": 0.0042119999999999935,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.22326400000000035,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.2327499999999958,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.22749400000000009,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.22252399999999994,
+            "system": 0.004013999999999962,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.22282700000000233,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.24567299999999648,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          }
+        ],
+        "after": [
+          {
+            "user": 0.33937099999999987,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.24859599999999915,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.2453919999999954,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21843199999999996,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.2611880000000042,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.22962299999999658,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.22492400000000146,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.2555550000000011,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.22031900000000348,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.23801399999999973,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.223787999999999,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21007999999999782,
+            "system": 0.008231999999999962,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.21647999999999712,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.22876899999999978,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2143830000000051,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.21153000000000333,
+            "system": 0.004194000000000031,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21985200000000304,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.24757899999999466,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.20096300000000156,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.20366900000000498,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.20378799999999586,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.20389499999999572,
+            "system": 0.003960999999999992,
+            "voluntary": 1,
+            "involuntary": 16
+          },
+          {
+            "user": 0.22177399999999636,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.21069699999999614,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.20829599999999715,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.20748300000000341,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.20695300000000572,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1975920000000002,
+            "system": 0.004010999999999987,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.20094700000000643,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.21918699999999802,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.20792699999999797,
+            "system": 0.003904999999999992,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2252330000000029,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.2058189999999982,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.2070459999999983,
+            "system": 0.004130999999999996,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2214349999999996,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.21535599999999988,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2177910000000054,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.22149900000000144,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21744799999999742,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.20791499999999985,
+            "system": 0.00412200000000007,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.21339900000000256,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.3522572330002731,
+          0.26432612700227764,
+          0.2277417500008596,
+          0.22418611000102828,
+          0.2261916570023459,
+          0.25105850599720725,
+          0.22739837499830173,
+          0.2595543269999325,
+          0.27742205200047465,
+          0.2517429350009479,
+          0.2575044479999633,
+          0.22367509700052324,
+          0.25999446399873705,
+          0.23165582100045867,
+          0.22039546000087284,
+          0.22119351599758375,
+          0.2251184810011182,
+          0.22279448600238538,
+          0.21800195099785924,
+          0.2132085660014127,
+          0.21790359399892623,
+          0.26582849199985503,
+          0.23016465500040795,
+          0.22202865699728136,
+          0.22482625200063922,
+          0.21905058400079724,
+          0.21788611499869148,
+          0.21776042700003018,
+          0.22082569199847057,
+          0.22691840200059232,
+          0.22868113799995626,
+          0.24252702000012505,
+          0.22682215799795813,
+          0.2712524059970747,
+          0.23119074500209535,
+          0.22484828600136098,
+          0.23427218999859178,
+          0.22904312099853996,
+          0.2280078180010605,
+          0.2242994570005976,
+          0.247161376002623
+        ],
+        "median": 0.22739837499830173,
+        "minimum": 0.2132085660014127,
+        "maximum": 0.3522572330002731,
+        "mad": 0.006572682999831159
+      },
+      "after": {
+        "samples": [
+          0.3408432719988923,
+          0.25006619399937335,
+          0.24584954799865955,
+          0.219987548996869,
+          0.26269306399990455,
+          0.2311006499985524,
+          0.22640934199807816,
+          0.25723360600022716,
+          0.2218970009998884,
+          0.2394668009983434,
+          0.22527187000014237,
+          0.22296472100060782,
+          0.21798630699777277,
+          0.23028753499966115,
+          0.21589518700056942,
+          0.21724177199939732,
+          0.22121447800236638,
+          0.24903038300180924,
+          0.20249414200225146,
+          0.20424049000212108,
+          0.20522075000189943,
+          0.251678427997831,
+          0.2316505730013887,
+          0.2121519909997005,
+          0.20980234899980132,
+          0.20894872800272424,
+          0.20842480499777594,
+          0.20305221099988557,
+          0.2023998919976293,
+          0.22062245799679658,
+          0.213374784001644,
+          0.22672490200056927,
+          0.20742474800135824,
+          0.21269034699798794,
+          0.2219177769984526,
+          0.21684972900038701,
+          0.21816824299821747,
+          0.22296574999927543,
+          0.2188182140016579,
+          0.21350576100303442,
+          0.21485003800262348
+        ],
+        "median": 0.219987548996869,
+        "minimum": 0.2023998919976293,
+        "maximum": 0.3408432719988923,
+        "mad": 0.007835557997168507
+      }
+    },
+    "int_format/4": {
+      "affinity": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "stdout": "24200000\n",
+      "order": [
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.15995199999998988,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.16371700000000544,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1690359999999913,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.16280199999999923,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.16525899999999183,
+            "system": 0.004110000000000058,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.16120800000000202,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.15660199999999236,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.15686000000000888,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.20909199999999828,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.17400299999999902,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.1598329999999919,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1637670000000071,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1621499999999969,
+            "system": 0.004161999999999999,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.16098800000000324,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.15781900000000348,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1726639999999975,
+            "system": 0.0043360000000000065,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.16209899999999777,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.16944999999999766,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.16349300000000255,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.162005999999991,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.18010900000000163,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.2052850000000035,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.17402199999999368,
+            "system": 0.004161999999999999,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.17207000000000505,
+            "system": 0.008430000000000049,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.1683479999999946,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.18866400000000283,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1936630000000008,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1961119999999994,
+            "system": 0.004878999999999967,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.20883200000000102,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1627380000000045,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.17949500000000285,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.16224000000001126,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.17337399999999548,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.16537499999999739,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1732510000000076,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.17254800000000614,
+            "system": 0.004337999999999953,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1617040000000003,
+            "system": 0.004193000000000002,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.16213999999999373,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.20300799999999697,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.15907399999998972,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.16289299999999685,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          }
+        ],
+        "after": [
+          {
+            "user": 0.14145900000001177,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.14149600000000362,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14834100000000205,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13119600000000275,
+            "system": 0.004126999999999992,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1401000000000039,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13916500000000553,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.14264599999999916,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.1427759999999978,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13273499999999672,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1454829999999987,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13185800000000825,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.14021900000000187,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13097299999999734,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1758349999999922,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13351000000000113,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13199900000000753,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.14502500000000396,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1479309999999998,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.14322599999999852,
+            "system": 0.004185999999999912,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.1365600000000029,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.18673599999999624,
+            "system": 2.2999999999995246e-05,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.15795699999999613,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1452820000000088,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.17350700000000074,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.15347500000000025,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.14386799999999766,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.16276200000000074,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1557940000000002,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.15052099999999768,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1447469999999953,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13740300000000616,
+            "system": 0.00411499999999998,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.1357099999999889,
+            "system": 0.00404199999999999,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.1496659999999963,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.15237199999999973,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1548169999999942,
+            "system": 0.0042920000000000735,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.14128699999999128,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13343000000000416,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13171700000000897,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.13484200000000612,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1314660000000032,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1334460000000064,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.16033263100325712,
+          0.16406842099968344,
+          0.16938628999923822,
+          0.1634639940020861,
+          0.1697329369999352,
+          0.16175486100109993,
+          0.15801637899858179,
+          0.15718581900000572,
+          0.20958555700053694,
+          0.17544718600038323,
+          0.16020290999949793,
+          0.1641027639998356,
+          0.16774582500147517,
+          0.16145619099916075,
+          0.15821919899826753,
+          0.17734415299855755,
+          0.16241921099936008,
+          0.16997290099970996,
+          0.16412285799742676,
+          0.1638723719988775,
+          0.18043004799983464,
+          0.20588610699996934,
+          0.17865259099926334,
+          0.18197625300308573,
+          0.16867877500044415,
+          0.18899088900070637,
+          0.19995962000029976,
+          0.20173879899812164,
+          0.20928239500062773,
+          0.16347974900054396,
+          0.18101242799821193,
+          0.162549171000137,
+          0.17369943800076726,
+          0.16570448000129545,
+          0.17511534200093593,
+          0.18369401499876403,
+          0.16660800599856884,
+          0.1624898480004049,
+          0.20343659599893726,
+          0.1605090970006131,
+          0.1643440299994836
+        ],
+        "median": 0.16774582500147517,
+        "minimum": 0.15718581900000572,
+        "maximum": 0.20958555700053694,
+        "mad": 0.007236728000862058
+      },
+      "after": {
+        "samples": [
+          0.1432443970006716,
+          0.1433482329994149,
+          0.14867122299983748,
+          0.13602165699921898,
+          0.14042893200166873,
+          0.13977061299738125,
+          0.14409768900077324,
+          0.14325266100058798,
+          0.1330593049970048,
+          0.1460291719995439,
+          0.1321078420005506,
+          0.14060325999889756,
+          0.1313057840015972,
+          0.17624679100117646,
+          0.13384273500196286,
+          0.1323471409996273,
+          0.14545052899848088,
+          0.14830096199875697,
+          0.14795081600095727,
+          0.13801327900000615,
+          0.18719269600114785,
+          0.15846431200043298,
+          0.14561481100099627,
+          0.1739181369994185,
+          0.1549148009980854,
+          0.14419906100010849,
+          0.16476028399847564,
+          0.15614873100275872,
+          0.150851023998257,
+          0.14528322600017418,
+          0.1418919759998971,
+          0.1419682150008157,
+          0.1511156669985212,
+          0.15378964800038375,
+          0.1697543250011222,
+          0.14161916699958965,
+          0.1339217839995399,
+          0.13205294600265916,
+          0.13526322100005927,
+          0.13178907000110485,
+          0.13603477400101838
+        ],
+        "median": 0.1433482329994149,
+        "minimum": 0.1313057840015972,
+        "maximum": 0.18719269600114785,
+        "mad": 0.007326576000195928
+      }
+    },
+    "int_format/1": {
+      "affinity": [
+        0
+      ],
+      "stdout": "24200000\n",
+      "order": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.15725900000001047,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1612779999999958,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1601399999999984,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.17154999999999632,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.1676080000000013,
+            "system": 0.003958000000000017,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.17141399999999862,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1650369999999981,
+            "system": 0.0038650000000000073,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.1685680000000076,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.17698999999998932,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.16463199999999745,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.16283900000000529,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.1582119999999918,
+            "system": 0.004075000000000051,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.1595310000000012,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.159206999999995,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2319129999999916,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.18198399999999992,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.17259500000000116,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.16442599999999175,
+            "system": 0.0041840000000000765,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.17680500000000166,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.1608059999999938,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.15896700000000408,
+            "system": 0.004166999999999921,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.16057999999999595,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.15718100000000845,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.15417500000000928,
+            "system": 0.00404900000000008,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.16153500000000065,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.15797499999999332,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.15897200000000566,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.15886800000001244,
+            "system": 0.004040999999999961,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.15701500000000124,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.15424600000000055,
+            "system": 0.0038809999999999123,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1622380000000021,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.16660399999999242,
+            "system": 0.004319000000000073,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.15830300000000364,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.1605119999999971,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.15847599999999318,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.15416399999999442,
+            "system": 0.004055000000000031,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.16329100000000096,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1590060000000051,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.17108499999999083,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.16688000000000613,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.18895799999999952,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          }
+        ],
+        "after": [
+          {
+            "user": 0.15068499999999574,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13650700000000882,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13373599999999897,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.1308170000000075,
+            "system": 0.0039679999999999715,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1413919999999962,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.14880399999999838,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.15058399999999494,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13637900000000514,
+            "system": 0.0036889999999999423,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13885199999999998,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.14186300000000074,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14931900000000553,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.13914499999999919,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13699900000000298,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.12926099999999963,
+            "system": 0.003854999999999942,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13612500000000693,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.15004400000000828,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.1486850000000004,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.14875800000000083,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.13953800000000172,
+            "system": 0.004031000000000007,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.13216300000000558,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13301699999999528,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14479400000000453,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13519199999998932,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1440679999999901,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 148
+          },
+          {
+            "user": 0.13458700000001045,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.1365780000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.13279599999999903,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13738199999998812,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13251999999999953,
+            "system": 0.0040280000000000316,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13447699999998974,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.14803000000000566,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.14956300000000056,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.143297000000004,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.1337130000000002,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13756200000000263,
+            "system": 0.004054000000000002,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.13285600000000386,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13154099999999858,
+            "system": 0.0041959999999999775,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14954500000000337,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.13903299999999774,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14049300000000642,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.14175600000000088,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.15885612199781463,
+          0.16168256200035103,
+          0.16159482099828892,
+          0.17193967799903476,
+          0.17306193599870312,
+          0.17188241300027585,
+          0.16942348400334595,
+          0.1700466550028068,
+          0.17849905899856822,
+          0.16538909700102522,
+          0.1643185960019764,
+          0.16378373399857082,
+          0.16100031399764703,
+          0.1606867919981596,
+          0.2334844750002958,
+          0.18366586299816845,
+          0.17404405900015263,
+          0.17021431499961182,
+          0.17833076000169967,
+          0.16225479499917128,
+          0.1646295469981851,
+          0.16204011299851118,
+          0.1586346539988881,
+          0.1586501279998629,
+          0.16302221099977032,
+          0.15946919600173715,
+          0.16043410400016,
+          0.1646695430026739,
+          0.15848999700028799,
+          0.15964131399960024,
+          0.1637158970006567,
+          0.17241143099818146,
+          0.15879963600309566,
+          0.16203261100235977,
+          0.15996571199866594,
+          0.15968873200108646,
+          0.16475363800054765,
+          0.1605217440010165,
+          0.17257342300217715,
+          0.16861079099908238,
+          0.19087002099695383
+        ],
+        "median": 0.16378373399857082,
+        "minimum": 0.15848999700028799,
+        "maximum": 0.2334844750002958,
+        "mad": 0.004314537996833678
+      },
+      "after": {
+        "samples": [
+          0.15221848500004853,
+          0.13798020700050984,
+          0.13521276599931298,
+          0.13626190099967062,
+          0.14289592100249138,
+          0.15033506100007799,
+          0.15204993299994385,
+          0.14154508499996155,
+          0.14042460799828405,
+          0.14341930999944452,
+          0.14972751300228992,
+          0.14062984599877382,
+          0.13849138699879404,
+          0.13467600399962976,
+          0.13868620999710402,
+          0.15156726200075354,
+          0.1490819749997172,
+          0.1504749739979161,
+          0.145225328997185,
+          0.13363781699808897,
+          0.13449836800282355,
+          0.14627189900056692,
+          0.13665549399956944,
+          0.2048116830010258,
+          0.13927227000021958,
+          0.13703361100124312,
+          0.13425035599721014,
+          0.13887295000313316,
+          0.1380327490005584,
+          0.13490119199923356,
+          0.14953547999903094,
+          0.15110171400010586,
+          0.14476738200028194,
+          0.13517248000061954,
+          0.1430659480029135,
+          0.13431610600309796,
+          0.1371837789993151,
+          0.1510435169984703,
+          0.1405315830015752,
+          0.1419684979991871,
+          0.14331762099754997
+        ],
+        "median": 0.14062984599877382,
+        "minimum": 0.13363781699808897,
+        "maximum": 0.2048116830010258,
+        "mad": 0.004595482998411171
+      }
+    },
+    "strings/4": {
+      "affinity": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "stdout": "9785790 20000\n",
+      "order": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.22476699999999994,
+            "system": 0.003058000000000005,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.2613879999999966,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.23070599999999786,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.21797200000000316,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.22658099999999592,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.23566799999998977,
+            "system": 0.004054000000000002,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.25152200000000846,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.21906399999998882,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.23628099999999108,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.23828799999999717,
+            "system": 0.004205000000000014,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.25079100000000665,
+            "system": 0.004072999999999993,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.2467760000000112,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.2142860000000013,
+            "system": 0.00804399999999994,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.23453200000000152,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.21841999999999473,
+            "system": 0.00406200000000001,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.21895300000001328,
+            "system": 0.008103000000000082,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.2475029999999947,
+            "system": 0.004117999999999955,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.25000200000000916,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.22729499999999803,
+            "system": 0.004085000000000005,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.23820899999999767,
+            "system": 0.0038249999999999673,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.23396499999999776,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.23858800000000713,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.23786900000000344,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.24792300000000012,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.2259779999999978,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.21762999999999977,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.21639300000001072,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.24575799999999504,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.22466500000000167,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.2235639999999961,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.23241799999999557,
+            "system": 0.004248999999999947,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.22248799999999846,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.21537500000000875,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.2172470000000004,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.22003599999999324,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.2275589999999994,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.22014500000000226,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.22204299999999932,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21544099999999844,
+            "system": 0.004043000000000019,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.2192450000000008,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.26045399999999574,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          }
+        ],
+        "after": [
+          {
+            "user": 0.2137649999999951,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.21057400000000825,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.20766999999999314,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.2374070000000046,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.21030799999999772,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.2195960000000099,
+            "system": 0.0037319999999999576,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21940899999999885,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.2361140000000006,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.21788400000001218,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.2046710000000047,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.2065860000000015,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.21822599999998715,
+            "system": 0.008179000000000047,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.22925599999999235,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.21312000000000353,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.23011200000000542,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2351109999999892,
+            "system": 0.012557999999999958,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.20349799999999618,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.21042599999999823,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.20476499999999476,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2122360000000043,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.2236170000000044,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.21198099999999442,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.200579999999988,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.2450900000000047,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.22055100000000039,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.2259250000000037,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.2115089999999924,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.21809100000000115,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.20359700000000203,
+            "system": 0.004037000000000068,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.2171510000000012,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.213515000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.20659200000000055,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.2248259999999931,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.20812100000000555,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.20852700000000368,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.21881700000000137,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.2126699999999886,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.21670200000001216,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.21612899999999513,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.2202220000000068,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.24140699999999526,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.22815635599909,
+          0.26173972800097545,
+          0.23105192400180385,
+          0.2183176469989121,
+          0.22796951000054833,
+          0.24003709300086484,
+          0.2523022290006338,
+          0.21951398600140237,
+          0.23669069400057197,
+          0.24389011500170454,
+          0.2648940330000187,
+          0.24773014699894702,
+          0.2227724610020232,
+          0.23484772400115617,
+          0.22287411500292365,
+          0.23176652799884323,
+          0.252098658002069,
+          0.2502957479991892,
+          0.2317763589999231,
+          0.24739018299806048,
+          0.2342884249992494,
+          0.2399721830006456,
+          0.23816655500195338,
+          0.24822821800262318,
+          0.22641398199994,
+          0.22437485499904142,
+          0.21704015100112883,
+          0.2460747290024301,
+          0.22606901999824913,
+          0.2279763520018605,
+          0.2369719320013246,
+          0.22281965400179615,
+          0.21569468500092626,
+          0.21894644100029836,
+          0.2203285439973115,
+          0.2278879199984658,
+          0.22049274500022875,
+          0.22313662400119938,
+          0.21976837299735053,
+          0.2206406710029114,
+          0.26189243200133205
+        ],
+        "median": 0.23105192400180385,
+        "minimum": 0.21569468500092626,
+        "maximum": 0.2648940330000187,
+        "mad": 0.008985168999060988
+      },
+      "after": {
+        "samples": [
+          0.21407377800278482,
+          0.2109530529996846,
+          0.2079776850005146,
+          0.2378614799999923,
+          0.2117089509993093,
+          0.22479497600215836,
+          0.2197612529998878,
+          0.23645032400236232,
+          0.21926757199980784,
+          0.20498702600161778,
+          0.20687807699869154,
+          0.2309473599998455,
+          0.22955084600107512,
+          0.21354403799705324,
+          0.23156563700104016,
+          0.2599284939969948,
+          0.20412919099908322,
+          0.21329847000015434,
+          0.20614664000095217,
+          0.212590557999647,
+          0.22406731299997773,
+          0.21356413899775362,
+          0.20204760400156374,
+          0.24531275700064725,
+          0.22091004899994005,
+          0.22633948499787948,
+          0.21185603099729633,
+          0.21855790200061165,
+          0.20794836800268968,
+          0.21748656099953223,
+          0.21489824099990074,
+          0.2079819739992672,
+          0.22517440099909436,
+          0.20844849800050724,
+          0.20883092200165265,
+          0.2191761049980414,
+          0.21301147600024706,
+          0.21808919600152876,
+          0.21641190000082133,
+          0.22052479699777905,
+          0.24191151400009403
+        ],
+        "median": 0.21641190000082133,
+        "minimum": 0.20204760400156374,
+        "maximum": 0.2599284939969948,
+        "mad": 0.007655412999156397
+      }
+    }
+  }
+}

@@ -1,0 +1,300 @@
+{
+  "base": {
+    "numeric": {
+      "rebuilt_profile_command": [
+        "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+        "build",
+        "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/numeric.pyr"
+      ],
+      "profile": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/numeric.profile",
+        "sha256": "d1a7f4c1655936579152ab826081764f26da2142d472b9e2688038c8133d72e1"
+      },
+      "counts": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/numeric.counts",
+        "sha256": "bf99d83c03d802d3b9934b2be394618fdbe221cab81c5fff41d1dff6d51fd27d"
+      },
+      "pg_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/pg-linker/cc",
+        "sha256": "78fe89569349e9923086379acacaac71864843451fdf09be588e821343705370"
+      },
+      "counts_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/counts-linker/cc",
+        "sha256": "bca3f1c903b0bc9516b9f49f73254d8b683fdf7d8024f394eb387b902cd15e6b"
+      },
+      "pg_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['-pg', '-no-pie'])\nsys.exit(p.returncode)\n",
+      "counts_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/counts.o', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memcpy,--wrap=memmove,--wrap=pt_str_inc,--wrap=pt_str_dec,--wrap=pt_seq_inc,--wrap=pt_seq_dec,--wrap=pt_seq_get,--wrap=pt_seq_get_held,--wrap=pt_seq_item_held,--wrap=pt_seq_hold,--wrap=pt_submit'])\nsys.exit(p.returncode)\n",
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/numeric.pyr",
+        "sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97"
+      }
+    },
+    "sorting": {
+      "rebuilt_profile_command": [
+        "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+        "build",
+        "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/sorting.pyr"
+      ],
+      "profile": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/sorting.profile",
+        "sha256": "cc56f342a7219226624071551e4c44cf4bab2f1e6943f056191588664f19b486"
+      },
+      "counts": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/sorting.counts",
+        "sha256": "cd45cd4e8a7c652139be1c7eba8e48e9aa39f753ab3b0d314bd395fa325fe8c3"
+      },
+      "pg_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/pg-linker/cc",
+        "sha256": "78fe89569349e9923086379acacaac71864843451fdf09be588e821343705370"
+      },
+      "counts_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/counts-linker/cc",
+        "sha256": "ceb063c274809eb32adc22709d352dd3895ebce9ebf628f711e514844b9c3255"
+      },
+      "pg_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['-pg', '-no-pie'])\nsys.exit(p.returncode)\n",
+      "counts_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/counts.o', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memcpy,--wrap=memmove,--wrap=pt_str_inc,--wrap=pt_str_dec,--wrap=pt_seq_inc,--wrap=pt_seq_dec,--wrap=pt_seq_get,--wrap=pt_seq_get_held,--wrap=pt_seq_item_held,--wrap=pt_seq_hold,--wrap=pt_submit'])\nsys.exit(p.returncode)\n",
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/sorting.pyr",
+        "sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969"
+      }
+    },
+    "strings": {
+      "rebuilt_profile_command": [
+        "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+        "build",
+        "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/strings.pyr"
+      ],
+      "profile": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/strings.profile",
+        "sha256": "1273c22dd1ae8e3340170837fc2cee6219cb5f4c89d6215057786f7053d32e88"
+      },
+      "counts": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/strings.counts",
+        "sha256": "bef907428a474531620fd37ecebe572c7f88a6062bff94c143fb5adc2d0535e8"
+      },
+      "pg_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/pg-linker/cc",
+        "sha256": "78fe89569349e9923086379acacaac71864843451fdf09be588e821343705370"
+      },
+      "counts_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/counts-linker/cc",
+        "sha256": "75af47e6b6504a6b6aea7ec17174f6e844d18957e6caa6e141620fac6f98826b"
+      },
+      "pg_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['-pg', '-no-pie'])\nsys.exit(p.returncode)\n",
+      "counts_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/counts.o', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memcpy,--wrap=memmove,--wrap=pt_str_inc,--wrap=pt_str_dec,--wrap=pt_seq_inc,--wrap=pt_seq_dec,--wrap=pt_seq_get,--wrap=pt_seq_get_held,--wrap=pt_seq_item_held,--wrap=pt_seq_hold,--wrap=pt_submit'])\nsys.exit(p.returncode)\n",
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/strings.pyr",
+        "sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381"
+      }
+    },
+    "tuples": {
+      "rebuilt_profile_command": [
+        "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+        "build",
+        "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/tuples.pyr"
+      ],
+      "profile": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/tuples.profile",
+        "sha256": "5a709859ead33a6ed3140e2cc9f8b11e46083800d0dba34b16d39253068921c4"
+      },
+      "counts": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/tuples.counts",
+        "sha256": "cfca497753b04b2e841fc6e6a67f1a06ca6f56cb29634c9f0ea32b51aba7727f"
+      },
+      "pg_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/pg-linker/cc",
+        "sha256": "78fe89569349e9923086379acacaac71864843451fdf09be588e821343705370"
+      },
+      "counts_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/counts-linker/cc",
+        "sha256": "fc2345d917d8166336f13a947696dbc8d045e4cf72ebd4d5050bf0e188193821"
+      },
+      "pg_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['-pg', '-no-pie'])\nsys.exit(p.returncode)\n",
+      "counts_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/counts.o', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memcpy,--wrap=memmove,--wrap=pt_str_inc,--wrap=pt_str_dec,--wrap=pt_seq_inc,--wrap=pt_seq_dec,--wrap=pt_seq_get,--wrap=pt_seq_get_held,--wrap=pt_seq_item_held,--wrap=pt_seq_hold,--wrap=pt_submit'])\nsys.exit(p.returncode)\n",
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/tuples.pyr",
+        "sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1"
+      }
+    }
+  },
+  "candidate": {
+    "numeric": {
+      "rebuilt_profile_command": [
+        "/workspace/scratch/2ce9dd46a989/card814-target-candidate/release/pythrust",
+        "build",
+        "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/numeric/numeric.pyr"
+      ],
+      "profile": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/numeric/numeric.profile",
+        "sha256": "bdcbb32b28606d78b96a744a87f24afff3c22ae7f3fd2b7426d25377d938d301"
+      },
+      "counts": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/numeric/numeric.counts",
+        "sha256": "5cb5898b6b3330ab5d3a7e650c0208ce4eb6937334bc7e824d8359d58ccfb7c7"
+      },
+      "pg_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/numeric/pg-linker/cc",
+        "sha256": "78fe89569349e9923086379acacaac71864843451fdf09be588e821343705370"
+      },
+      "counts_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/numeric/counts-linker/cc",
+        "sha256": "f6a39f380562baaa2c0a9e2b28e5ca7cd8be8a3ca998920daa4de10a2e7dbe34"
+      },
+      "pg_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['-pg', '-no-pie'])\nsys.exit(p.returncode)\n",
+      "counts_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/numeric/counts.o', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memcpy,--wrap=memmove,--wrap=pt_str_inc,--wrap=pt_str_dec,--wrap=pt_seq_inc,--wrap=pt_seq_dec,--wrap=pt_seq_get,--wrap=pt_seq_get_held,--wrap=pt_seq_item_held,--wrap=pt_seq_hold,--wrap=pt_submit'])\nsys.exit(p.returncode)\n",
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/numeric/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/numeric/numeric.pyr",
+        "sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97"
+      }
+    },
+    "sorting": {
+      "rebuilt_profile_command": [
+        "/workspace/scratch/2ce9dd46a989/card814-target-candidate/release/pythrust",
+        "build",
+        "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/sorting/sorting.pyr"
+      ],
+      "profile": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/sorting/sorting.profile",
+        "sha256": "71aabe8932ca08b7bbd6c17f5a33872f8bbb1b2fd8ac201830bb447f9252f036"
+      },
+      "counts": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/sorting/sorting.counts",
+        "sha256": "0e0f7a08fb71512f03d464cd2389c3c4f5fbe066b4ad17cabe5753a7e13883f8"
+      },
+      "pg_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/sorting/pg-linker/cc",
+        "sha256": "78fe89569349e9923086379acacaac71864843451fdf09be588e821343705370"
+      },
+      "counts_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/sorting/counts-linker/cc",
+        "sha256": "d06c8bd074ef0a87eba35eb1b210c9ecf690a7a708e4432c679f118663d0ebed"
+      },
+      "pg_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['-pg', '-no-pie'])\nsys.exit(p.returncode)\n",
+      "counts_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/sorting/counts.o', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memcpy,--wrap=memmove,--wrap=pt_str_inc,--wrap=pt_str_dec,--wrap=pt_seq_inc,--wrap=pt_seq_dec,--wrap=pt_seq_get,--wrap=pt_seq_get_held,--wrap=pt_seq_item_held,--wrap=pt_seq_hold,--wrap=pt_submit'])\nsys.exit(p.returncode)\n",
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/sorting/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/sorting/sorting.pyr",
+        "sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969"
+      }
+    },
+    "strings": {
+      "rebuilt_profile_command": [
+        "/workspace/scratch/2ce9dd46a989/card814-target-candidate/release/pythrust",
+        "build",
+        "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/strings/strings.pyr"
+      ],
+      "profile": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/strings/strings.profile",
+        "sha256": "31aeabfa5bc496f390cfcbd49ef7176f5e603bf8c32e1fba0bdddad4169e5714"
+      },
+      "counts": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/strings/strings.counts",
+        "sha256": "6f6c1048fde6cafce7106005775a85ab8f9802f0f11ffb30fd6847b0a910425b"
+      },
+      "pg_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/strings/pg-linker/cc",
+        "sha256": "78fe89569349e9923086379acacaac71864843451fdf09be588e821343705370"
+      },
+      "counts_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/strings/counts-linker/cc",
+        "sha256": "d095b061b3d580905de36dba84cdc3a91dc50c2a7696da8474cb5f3478fdb0f1"
+      },
+      "pg_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['-pg', '-no-pie'])\nsys.exit(p.returncode)\n",
+      "counts_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/strings/counts.o', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memcpy,--wrap=memmove,--wrap=pt_str_inc,--wrap=pt_str_dec,--wrap=pt_seq_inc,--wrap=pt_seq_dec,--wrap=pt_seq_get,--wrap=pt_seq_get_held,--wrap=pt_seq_item_held,--wrap=pt_seq_hold,--wrap=pt_submit'])\nsys.exit(p.returncode)\n",
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/strings/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/strings/strings.pyr",
+        "sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381"
+      }
+    },
+    "tuples": {
+      "rebuilt_profile_command": [
+        "/workspace/scratch/2ce9dd46a989/card814-target-candidate/release/pythrust",
+        "build",
+        "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/tuples/tuples.pyr"
+      ],
+      "profile": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/tuples/tuples.profile",
+        "sha256": "a3bdd517e5334ae6839e5571b3b331b2ad5ea40fe973bd810baa85ca1a61fd22"
+      },
+      "counts": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/tuples/tuples.counts",
+        "sha256": "41dc5a43fdf8d23eba7cd5f19be1409ea7f97ab7ed8b30d66d4e484bc3551f69"
+      },
+      "pg_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/tuples/pg-linker/cc",
+        "sha256": "78fe89569349e9923086379acacaac71864843451fdf09be588e821343705370"
+      },
+      "counts_linker": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/tuples/counts-linker/cc",
+        "sha256": "1196c40e923c64e68f1a482a13119ddcf3bfb24180805684521a6b2d545f9b69"
+      },
+      "pg_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['-pg', '-no-pie'])\nsys.exit(p.returncode)\n",
+      "counts_linker_source": "#!/usr/bin/python3.13\nimport subprocess,sys,time\nstart=time.perf_counter()\np=subprocess.run(['/usr/bin/cc']+sys.argv[1:]+['/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/tuples/counts.o', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memcpy,--wrap=memmove,--wrap=pt_str_inc,--wrap=pt_str_dec,--wrap=pt_seq_inc,--wrap=pt_seq_dec,--wrap=pt_seq_get,--wrap=pt_seq_get_held,--wrap=pt_seq_item_held,--wrap=pt_seq_hold,--wrap=pt_submit'])\nsys.exit(p.returncode)\n",
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/tuples/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-candidate/tuples/tuples.pyr",
+        "sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1"
+      }
+    }
+  },
+  "tools": {
+    "cc": {
+      "identity": {
+        "path": "/usr/bin/x86_64-linux-gnu-gcc-14",
+        "sha256": "a23ecab8ff08f09ad8c80602c2c5df7f49e09c25905cb8975902e101bf72635f"
+      },
+      "version": "cc (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+    },
+    "ld": {
+      "identity": {
+        "path": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+        "sha256": "d2766988b6a1b1d1518cdc09242e726d1f24e151e16410ada3092b11ffd9081b"
+      },
+      "version": "GNU ld (GNU Binutils for Debian) 2.44\nCopyright (C) 2025 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+    },
+    "gprof": {
+      "identity": {
+        "path": "/usr/bin/x86_64-linux-gnu-gprof",
+        "sha256": "f1799215b58da41a43b3e76e9e2cbd79fbc41648ede95b6781eabf68d5871c2f"
+      },
+      "version": "GNU gprof (GNU Binutils for Debian) 2.44\nBased on BSD gprof, copyright 1983 Regents of the University of California.\nThis program is free software.  This program has absolutely no warranty.\n"
+    },
+    "objdump": {
+      "identity": {
+        "path": "/usr/bin/x86_64-linux-gnu-objdump",
+        "sha256": "96afb8521834982d0e711b5d6e9785252bf82129fb0106b93a6bd54d83fae11f"
+      },
+      "version": "GNU objdump (GNU Binutils for Debian) 2.44\nCopyright (C) 2025 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+    }
+  }
+}

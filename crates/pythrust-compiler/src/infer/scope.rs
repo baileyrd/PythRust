@@ -5,7 +5,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ast::{
-    Arg, Block, CmpOp, Expr, ExprKind, FuncDef, Ident, LogicalOp, Stmt, StmtKind, Target,
+    Arg, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Ident, LogicalOp, Stmt, StmtKind, Target,
     TargetKind, TypeExpr, UnaryOp,
 };
 use crate::span::Span;
@@ -29,6 +29,13 @@ pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
         }
         _ => {}
     });
+    for e in exprs(block) {
+        if let ExprKind::ListComp { clauses, .. } = &e.kind {
+            clauses
+                .iter()
+                .for_each(|c| target_names(&c.target, &mut out));
+        }
+    }
     out
 }
 
@@ -82,8 +89,13 @@ fn bodies(s: &Stmt) -> Vec<(&[Stmt], bool)> {
             .map(|b| (b.body.as_slice(), false))
             .chain([(orelse.as_slice(), false)])
             .collect(),
-        StmtKind::Try { body, handlers } => std::iter::once((body.as_slice(), false))
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => std::iter::once((body.as_slice(), false))
             .chain(handlers.iter().map(|h| (h.body.as_slice(), false)))
+            .chain(finally.iter().map(|f| (f.as_slice(), false)))
             .collect(),
         StmtKind::With { body, .. } => vec![(body, false)],
         _ => Vec::new(),
@@ -176,6 +188,7 @@ fn own_exprs(s: &Stmt) -> Vec<&Expr> {
         | StmtKind::Raise(value)
         | StmtKind::With { value, .. } => vec![value],
         StmtKind::Return(value) => value.iter().collect(),
+        StmtKind::Del { value, index } => vec![value, index],
         StmtKind::If { branch, elifs, .. } => std::iter::once(branch)
             .chain(elifs)
             .map(|b| &b.test)
@@ -220,7 +233,16 @@ fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
             .chain(args.iter().map(|a| &a.value))
             .collect(),
         ExprKind::Subscript { value, index } => vec![value, index],
+        ExprKind::Slice {
+            value,
+            start,
+            stop,
+            step,
+        } => std::iter::once(&**value)
+            .chain([start, stop, step].into_iter().filter_map(|x| x.as_deref()))
+            .collect(),
         ExprKind::Attr { value, .. } => vec![value],
+        ExprKind::ListComp { elt, clauses } => comp_parts(elt, clauses),
         ExprKind::Name(_)
         | ExprKind::Int(_)
         | ExprKind::Float(_)
@@ -229,6 +251,16 @@ fn subexprs<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
         | ExprKind::None => Vec::new(),
     };
     parts.into_iter().for_each(|p| subexprs(p, out));
+}
+
+/// A comprehension's expressions in the order they first run: each
+/// clause's iterable and filters, then the element.
+pub(crate) fn comp_parts<'a>(elt: &'a Expr, clauses: &'a [CompFor]) -> Vec<&'a Expr> {
+    clauses
+        .iter()
+        .flat_map(|c| std::iter::once(&c.iter).chain(&c.ifs))
+        .chain([elt])
+        .collect()
 }
 
 /// A `with` statement's parts (M6c).
@@ -271,7 +303,8 @@ pub(crate) fn withs(block: &[Stmt]) -> Vec<With<'_>> {
     out
 }
 
-/// The iterable of every `for` in `block`, nested ones included (M6c).
+/// The iterable of every `for` in `block`, nested ones and a
+/// comprehension's clauses included (M6c, D85).
 pub(crate) fn for_iters(block: &[Stmt]) -> Vec<&Expr> {
     let mut out = Vec::new();
     walk(block, &mut |s| {
@@ -279,6 +312,11 @@ pub(crate) fn for_iters(block: &[Stmt]) -> Vec<&Expr> {
             out.push(iter);
         }
     });
+    for e in exprs(block) {
+        if let ExprKind::ListComp { clauses, .. } = &e.kind {
+            out.extend(clauses.iter().map(|c| &c.iter));
+        }
+    }
     out
 }
 
@@ -317,7 +355,7 @@ pub(crate) fn task_call(e: &Expr) -> Option<(&str, &Ident, &[Arg])> {
     Some((name.as_str(), attr, &args[1..]))
 }
 
-fn target_names(target: &Target, out: &mut BTreeSet<String>) {
+pub(super) fn target_names(target: &Target, out: &mut BTreeSet<String>) {
     match &target.kind {
         TargetKind::Name(name) => {
             out.insert(name.clone());
@@ -393,6 +431,7 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             e(value)
         }
         StmtKind::Return(value) => value.iter().for_each(e),
+        StmtKind::Del { value, index } => [value, index].into_iter().for_each(e),
         StmtKind::If {
             branch,
             elifs,
@@ -421,7 +460,11 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             target_exprs(target).into_iter().for_each(e);
             body.iter().chain(orelse).for_each(|s| stmt_names(s, out));
         }
-        StmtKind::Try { body, handlers } => {
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => {
             // A handler's name is read too: a `def` that shadows it must be
             // inferred first, so the handler sees the shadowing.
             out.extend(
@@ -431,7 +474,11 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
                     .map(|c| (c.name.as_str(), c.span)),
             );
             let bodies = handlers.iter().flat_map(|h| &h.body);
-            body.iter().chain(bodies).for_each(|s| stmt_names(s, out));
+            let finally = finally.iter().flatten();
+            body.iter()
+                .chain(bodies)
+                .chain(finally)
+                .for_each(|s| stmt_names(s, out));
         }
         StmtKind::With { value, body, .. } => {
             e(value);
@@ -480,7 +527,22 @@ fn expr_names<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span)>) {
             expr_names(value, out);
             expr_names(index, out);
         }
+        ExprKind::Slice {
+            value,
+            start,
+            stop,
+            step,
+        } => {
+            expr_names(value, out);
+            [start, stop, step]
+                .into_iter()
+                .flatten()
+                .for_each(|x| expr_names(x, out));
+        }
         ExprKind::Attr { value, .. } => expr_names(value, out),
+        ExprKind::ListComp { elt, clauses } => comp_parts(elt, clauses)
+            .into_iter()
+            .for_each(|x| expr_names(x, out)),
         ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) => {}
         ExprKind::None => {}
     }
@@ -669,8 +731,13 @@ fn exits(block: &[Stmt], jumps: bool) -> bool {
     block.iter().any(|s| match &s.kind {
         StmtKind::Return(_) | StmtKind::Raise(_) => true,
         StmtKind::Break | StmtKind::Continue => jumps,
-        StmtKind::Try { body, handlers } => {
-            exits(body, jumps) && handlers.iter().all(|h| exits(&h.body, jumps))
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => {
+            let handled = exits(body, jumps) && handlers.iter().all(|h| exits(&h.body, jumps));
+            handled || finally.as_deref().is_some_and(|f| exits(f, jumps))
         }
         StmtKind::With { body, .. } => exits(body, jumps),
         StmtKind::If {
@@ -705,7 +772,8 @@ fn breaks(stmt: &Stmt) -> bool {
             let bodies = std::iter::once(branch).chain(elifs).flat_map(|b| &b.body);
             bodies.chain(orelse).any(breaks)
         }
-        StmtKind::Try { body, handlers } => {
+        StmtKind::Try { body, handlers, .. } => {
+            // No `break` leaves a `finally` block (D89).
             let bodies = handlers.iter().flat_map(|h| &h.body);
             body.iter().chain(bodies).any(breaks)
         }

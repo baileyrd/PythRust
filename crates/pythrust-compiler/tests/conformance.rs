@@ -68,6 +68,8 @@ use pythrust_compiler::own::{self, Precision};
 use pythrust_compiler::{infer, lexer, lower, parser, rc, TokenKind};
 
 mod common;
+#[path = "conformance/link.rs"]
+mod link;
 use common::Scratch;
 
 type Res<T> = std::result::Result<T, String>;
@@ -424,6 +426,32 @@ fn run_pythrust(source: &Path) -> Res<Run> {
 
 /// Programs the native backend must compile; it grows with the subset.
 const NATIVE: &[&str] = &[
+    "listcomp",
+    "listcomp_narrow",
+    "listcomp_tasks",
+    "listcomp_tempered",
+    "raises_finally",
+    "slice_list",
+    "slice_bound_generic",
+    "slice_bound_unproduced",
+    "slice_bound_unproduced_uncaught",
+    "slice_str",
+    "slice_tuple",
+    "slice_zero",
+    "slice_effects",
+    "slice_tempered",
+    "slice_tasks",
+    "slice_pause",
+    "slice_zero_uncaught",
+    "slice_zero_tuple_uncaught",
+    "signed_half",
+    "const_divisor",
+    "flat_expression_order",
+    "flat_expression_overflow",
+    "aliasing_join_disjoint",
+    "aliasing_flat_copy",
+    "aliasing_d4_copy",
+    "modes_callee_disjoint",
     "annotations",
     "arithmetic",
     "bools_as_ints",
@@ -434,6 +462,13 @@ const NATIVE: &[&str] = &[
     "builtin_abs_overflow",
     "builtin_sum_empty_float",
     "enumerate_zip",
+    "tasks_try_finally",
+    "try_finally",
+    "try_finally_fault",
+    "try_finally_handler_name",
+    "try_finally_replaced_uncaught",
+    "try_finally_return_again",
+    "try_finally_uncaught",
     "zip_changed_size",
     "zip_sources",
     "enumerate_overflow",
@@ -448,6 +483,14 @@ const NATIVE: &[&str] = &[
     "dict_view_changed_size",
     "dict_views",
     "dicts",
+    "dict_methods",
+    "dict_pop_uncaught",
+    "dict_del_changed_size",
+    "list_methods",
+    "list_method_faults",
+    "list_method_nan",
+    "list_pop_uncaught",
+    "list_del_uncaught",
     "fibonacci",
     "for_hold",
     "for_hold_aliases",
@@ -497,6 +540,7 @@ const NATIVE: &[&str] = &[
     "index_error",
     "index_error_negative",
     "int_control",
+    "int_list_access",
     "int_parse_overflow",
     "int_pow_negative",
     "key_error",
@@ -553,12 +597,18 @@ const NATIVE: &[&str] = &[
     "str_index_uncaught",
     "str_case_unicode_version",
     "strings",
+    "int_format",
+    "string_chain",
+    "string_chain_unbound",
+    "string_chain_uncaught_early",
+    "string_chain_uncaught_late",
     "sys_argv",
     "tasks_arguments",
     "tasks_executor_truthy",
     "tasks_generic",
     "tasks_generic_discarded",
     "tasks_globals",
+    "tasks_int_list_access",
     "tasks_leave_block",
     "tasks_map",
     "tasks_map_break",
@@ -569,11 +619,16 @@ const NATIVE: &[&str] = &[
     "tasks_result_marked",
     "tasks_result_released",
     "tasks_submit",
+    "tasks_string_chain",
     "tasks_unmarked",
     "tasks_unmarked_walk",
     "tasks_values",
     "tempered",
     "tuple_loops",
+    "tuple_ordering",
+    "tuple_scalar_return",
+    "tuple_scalar_uncaught",
+    "tuple_scalar_recursion",
     "tuples",
     "unbound_augassign",
     "unbound_local",
@@ -600,6 +655,11 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "builtin_sum_empty_float_generic",
         "a generic function's `sum` of floats with no `start`: `run` gives an empty one \
          as the int `0`, so `build` refuses rather than differ",
+    ),
+    (
+        "list_index_mixed_number",
+        "`list.index` of a number of another type than the list's items: `run` names \
+         the item as written in its `ValueError`, which native code cannot yet",
     ),
 ];
 
@@ -1340,7 +1400,10 @@ fn corpus_matches_native_preserves_pe_security() -> Res<()> {
     build_runtime()?;
     let dir = scratch("pe_security")?;
     let src = "import concurrent.futures\ngreeting = 'hello'\ndef work(n):\n    return greeting + str(n)\ndef start():\n    with concurrent.futures.ThreadPoolExecutor() as ex:\n        f = ex.submit(work, 42)\n        print(f.result())\nstart()\n";
-    let exe = native_case(&dir, "relocations", src)?;
+    // Exercise both the private scalar-return and ordinary constant-divisor
+    // clones added after the original target-coverage increment.
+    let src = format!("{src}def split(n: int, d: int) -> tuple[int, int]:\n    print(greeting)\n    return n // d, n % d\na, b = split(42, 10)\nprint(a, b)\nboxed = split(42, 10)\nprint(boxed)\n");
+    let exe = native_case(&dir, "relocations", &src)?;
     let bytes = fs::read(&exe).map_err(|e| e.to_string())?;
     let word = |i| u16::from_le_bytes(bytes[i..i + 2].try_into().unwrap());
     let dword = |i| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
@@ -1360,7 +1423,7 @@ fn corpus_matches_native_preserves_pe_security() -> Res<()> {
     assert!(dword(optional + 156) >= 8, "empty base relocation table");
     let got = run(&mut Command::new(&exe), TIMEOUT)?;
     assert_eq!(got.status, 0, "{:?}", got);
-    assert_eq!(got.stdout, "hello42\n");
+    assert_eq!(got.stdout, "hello42\nhello\n4 2\nhello\n(4, 2)\n");
     dir.pass();
     Ok(())
 }
@@ -1588,6 +1651,34 @@ fn os_matches_cpython_on_a_tree() -> Res<()> {
     assert_eq!(want.status, 0, "{}", want.stdout);
     assert!(want.stdout.contains("FileNotFoundError"), "{}", want.stdout);
     assert_eq!(run_pythrust(&source)?, want);
+    assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
+    dir.pass();
+    Ok(())
+}
+
+/// Both backends compile the same SHA source; exercise its padding and
+/// repeated calls through the actual bytes/hash ABI against CPython 3.13.
+#[test]
+fn sha256_patterns_match_cpython() -> Res<()> {
+    build_runtime()?;
+    let dir = scratch("sha256-patterns")?;
+    let mut source = String::from("import hashlib\n");
+    for n in [
+        0, 1, 55, 56, 63, 64, 65, 119, 120, 127, 128, 129, 1024, 65_537,
+    ] {
+        let data: Vec<u8> = (0..n).map(|i| ((i * 37 + 11) % 256) as u8).collect();
+        let path = dir.join(format!("pattern-{n}.bin"));
+        fs::write(&path, data).map_err(|e| e.to_string())?;
+        source.push_str(&format!(
+            "f = open({:?}, 'rb')\ndata = f.read()\nf.close()\nprint(len(data), hashlib.sha256(data).hexdigest())\nprint(hashlib.sha256(data).hexdigest())\n",
+            path.to_string_lossy()
+        ));
+    }
+    let exe = native_case(&dir, "sha256-patterns", &source)?;
+    let src = exe.with_extension("pyr");
+    let want = run_cpython(&src)?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert_eq!(run_pythrust(&src)?, want);
     assert_eq!(run(&mut Command::new(&exe), TIMEOUT)?, want);
     dir.pass();
     Ok(())
@@ -2390,4 +2481,94 @@ fn run_kills_on_timeout() {
     cmd.args(["-I", "-c", "while True: pass"]);
     let got = run(&mut cmd, Duration::from_millis(200));
     assert!(got.is_err_and(|e| e.contains("timed out")));
+}
+
+/// A `return` that a `finally` block cancels by raising releases its
+/// value where the raise is caught, as CPython and `run` do, so a
+/// returned file is closed then, not when the function ends (#143
+/// review). Under a 64-descriptor limit, 100 abandoned files would fail
+/// with `Too many open files`. The neighbour: a `finally` that catches
+/// its own exception keeps the return.
+#[cfg(unix)]
+#[test]
+fn a_cancelled_return_releases_its_value() -> Res<()> {
+    const CANCELLED: &str = r#"def caught(n):
+    try:
+        try:
+            return open("/dev/null", "rb")
+        finally:
+            raise ValueError("cancel")
+    except ValueError:
+        pass
+    if n > 0:
+        return caught(n - 1)
+    return open("/dev/null", "rb")
+
+
+def nested(n):
+    try:
+        try:
+            try:
+                return open("/dev/null", "rb")
+            finally:
+                k = n
+        finally:
+            raise ValueError("cancel")
+    except ValueError:
+        pass
+    if n > 0:
+        return nested(n - 1)
+    return open("/dev/null", "rb")
+
+
+def again(n):
+    i = 0
+    while True:
+        try:
+            try:
+                return open("/dev/null", "rb")
+            finally:
+                if i < n:
+                    raise ValueError("again")
+        except ValueError:
+            i += 1
+
+
+def kept():
+    try:
+        return open("/dev/null", "rb")
+    finally:
+        try:
+            raise ValueError("inside")
+        except ValueError:
+            pass
+
+
+print(caught(100).read(), nested(100).read(), again(100).read())
+for i in range(100):
+    f = kept()
+    print(f.read(), end="")
+    f.close()
+print("done")
+"#;
+    build_runtime()?;
+    let dir = scratch("cancelled_return")?;
+    let exe = native_case(&dir, "cancelled", CANCELLED)?;
+    let source = exe.with_extension("pyr");
+    let limited = |args: &[&std::ffi::OsStr]| -> Res<Run> {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "ulimit -n 64 && exec \"$@\"", "sh"])
+            .args(args);
+        run(&mut cmd, TIMEOUT)
+    };
+    let py = python();
+    let want = limited(&[py.as_ref(), "-I".as_ref(), source.as_os_str()])?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert!(want.stdout.ends_with("done\n"), "{}", want.stdout);
+    let bin = pythrust_bin()?;
+    let ran = limited(&[bin.as_os_str(), "run".as_ref(), source.as_os_str()])?;
+    assert_eq!(ran, want);
+    assert_eq!(limited(&[exe.as_os_str()])?, want);
+    dir.pass();
+    Ok(())
 }

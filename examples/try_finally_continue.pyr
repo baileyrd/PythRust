@@ -1,0 +1,8 @@
+# deviation: D89: `continue` leaving a `finally` block is an error; CPython 3.13 accepts it.
+# expect-error: `continue` inside `finally` is not supported
+# expect-exit: 1
+for i in range(3):
+    try:
+        print(i)
+    finally:
+        continue

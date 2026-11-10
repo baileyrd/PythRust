@@ -1,0 +1,12 @@
+finally sees é
+r
+break finally sees b0
+break finally sees b1
+2
+continue finally sees b0
+continue finally sees b1
+continue finally sees b2
+3
+inner finally 'outer' inner
+outer finally 'outer'
+done

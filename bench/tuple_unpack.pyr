@@ -1,0 +1,9 @@
+# #806 equivalent call-shape microbenchmark: one call and unpack per step.
+def pair(a: int, b: int) -> tuple[int, int]:
+    return a // b, a % b
+
+total = 0
+for i in range(4000000):
+    q, r = pair(i, 10)
+    total += q + r
+print(total)

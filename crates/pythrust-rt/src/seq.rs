@@ -990,6 +990,42 @@ pub unsafe extern "C" fn pt_list_set(s: *const PtSeq, i: i64, v: u64) -> u8 {
     0
 }
 
+/// Ordinary integer-list read, selected by the compiler's monomorphic type.
+/// Uses the same borrow and negative/bounds checks as [`pt_seq_get`].
+/// Integers own no reference, so retaining a slot does no work.
+///
+/// # Safety
+///
+/// `s` is a live `list[int]` (descriptor exactly `li`) and `status` points
+/// to a writable byte. This is an internal compiler/runtime contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_int_list_get(s: *const PtSeq, i: i64, status: *mut u8) -> u64 {
+    // SAFETY: guaranteed by the caller, as for pt_seq_get.
+    let s = unsafe { seq(s as u64) };
+    let Some((_, v)) = s.items.get(i, |_, _| {}) else {
+        // SAFETY: guaranteed by the caller.
+        unsafe { report(status, 1) };
+        return 0;
+    };
+    // SAFETY: guaranteed by the caller.
+    unsafe { report(status, 0) };
+    v
+}
+
+/// Ordinary integer-list store. A failed bounds check changes nothing.
+/// The same `Slot::replace` borrow/synchronization path is retained;
+/// integer slots need no retain, transitive marking or release.
+///
+/// # Safety
+///
+/// `s` is a live `list[int]` (descriptor exactly `li`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_int_list_set(s: *const PtSeq, i: i64, v: u64) -> u8 {
+    // SAFETY: guaranteed by the caller, as for pt_list_set.
+    let s = unsafe { seq(s as u64) };
+    u8::from(s.items.replace(i, v, |_| {}).is_none())
+}
+
 /// Adds a reference. Null is ignored.
 ///
 /// # Safety
@@ -1022,13 +1058,15 @@ pub unsafe extern "C" fn pt_seq_dec(s: *mut PtSeq) {
 }
 
 /// Sorts list `s` in place by `<`, stably, as `sorted` does in `run`:
-/// a merge sort that takes from the right only when strictly less.
+/// a merge sort that takes from the right only when it strictly beats
+/// the left, so descending when `reverse` is set (D70), equal items
+/// keeping their order either way.
 ///
 /// # Safety
 ///
 /// `s` is a live list.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq) {
+pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq, reverse: u8) {
     // SAFETY: guaranteed by the caller.
     let s = unsafe { seq(s as u64) };
     let desc = slot(s.desc, 0);
@@ -1036,7 +1074,7 @@ pub unsafe extern "C" fn pt_list_sort(s: *const PtSeq) {
     // out conflicts rather than seeing the list empty mid-sort.
     let mut items = s.items.borrow_mut();
     let taken = std::mem::take(&mut *items);
-    *items = merge_sort(desc, taken);
+    *items = merge_sort(desc, taken, reverse != 0);
 }
 
 /// Reverses list `s` in place: `map`'s results, made in order and taken
@@ -1062,16 +1100,18 @@ pub(crate) fn take_all(s: &PtSeq) -> Vec<u64> {
     std::mem::take(&mut *s.items.borrow_mut())
 }
 
-fn merge_sort(desc: &[u8], mut items: Vec<u64>) -> Vec<u64> {
+fn merge_sort(desc: &[u8], mut items: Vec<u64>, reverse: bool) -> Vec<u64> {
     if items.len() < 2 {
         return items;
     }
     let right = items.split_off(items.len() / 2);
-    let (left, right) = (merge_sort(desc, items), merge_sort(desc, right));
+    let left = merge_sort(desc, items, reverse);
+    let right = merge_sort(desc, right, reverse);
     let mut out = Vec::with_capacity(left.len() + right.len());
     let (mut left, mut right) = (left.into_iter().peekable(), right.into_iter().peekable());
     while let (Some(l), Some(r)) = (left.peek(), right.peek()) {
-        let next = match cmp(desc, *r, *l) {
+        let (a, b) = if reverse { (*l, *r) } else { (*r, *l) };
+        let next = match cmp(desc, a, b) {
             Some(Ordering::Less) => right.next(),
             _ => left.next(),
         };
@@ -1121,6 +1161,98 @@ pub unsafe extern "C" fn pt_list_contains(s: *const PtSeq, v: u64) -> u8 {
     let s = unsafe { seq(s as u64) };
     let desc = slot(s.desc, 0);
     u8::from(s.items.borrow().iter().any(|x| eq(desc, *x, v)))
+}
+
+/// `s.insert(i, v)` on a list: `i` counts from the end when negative,
+/// and one past either end clamps, as in CPython; `v` gains a reference.
+///
+/// # Safety
+///
+/// `s` is a live list and `v` a live value of its element type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_insert(s: *const PtSeq, i: i64, v: u64) {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let desc = slot(s.desc, 0);
+    mark_stored(s, desc, v);
+    inc(desc, v);
+    let mut items = s.items.borrow_mut();
+    let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
+    let at = if i < 0 { i.saturating_add(len) } else { i };
+    let at = usize::try_from(at.clamp(0, len)).unwrap_or(0);
+    items.insert(at, v);
+}
+
+/// Removes item `i` of list `s`, dropping its reference; lowering keeps
+/// `i` in range (an `i` out of range changes nothing).
+///
+/// # Safety
+///
+/// `s` is a live list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_remove(s: *const PtSeq, i: i64) {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let old = {
+        let mut items = s.items.borrow_mut();
+        position(i, items.len()).map(|k| items.remove(k))
+    };
+    // Dropped after the borrow ends: freeing may reach other sequences.
+    if let Some(old) = old {
+        dec(slot(s.desc, 0), old);
+    }
+}
+
+/// The first position of an item of list `s` `==` to `v`, or -1. With
+/// `raise` set, `s.index(v)`: a missing `v` raises CPython's `ValueError`
+/// naming it at the site instead (D71).
+///
+/// # Safety
+///
+/// `s` is a live list, `v` a live value of its element type, and the
+/// site's words as [`crate::os::site`] takes them.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // The site's four words, as `pt_str_find` takes them.
+pub unsafe extern "C" fn pt_list_index(
+    s: *const PtSeq,
+    v: u64,
+    raise: u8,
+    head: *const u8,
+    head_len: usize,
+    tail: *const u8,
+    tail_len: usize,
+) -> i64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let desc = slot(s.desc, 0);
+    let found = s.items.borrow().iter().position(|x| eq(desc, *x, v));
+    if let Some(at) = found {
+        return i64::try_from(at).unwrap_or(i64::MAX);
+    }
+    if raise != 0 {
+        // SAFETY: guaranteed by the caller.
+        let site = unsafe { crate::os::site(head, head_len, tail, tail_len) };
+        let mut shown = String::new();
+        if repr(desc, v, &mut shown).is_err() {
+            site.fail(crate::exc::TOO_DEEP);
+        }
+        site.raise_text(crate::exc::VALUE_ERROR, format!("{shown} is not in list"));
+    }
+    -1
+}
+
+/// `s.count(v)` on a list: how many items are `==` to `v`.
+///
+/// # Safety
+///
+/// `s` is a live list and `v` a live value of its element type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_count(s: *const PtSeq, v: u64) -> i64 {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let desc = slot(s.desc, 0);
+    let n = s.items.borrow().iter().filter(|x| eq(desc, **x, v)).count();
+    i64::try_from(n).unwrap_or(i64::MAX)
 }
 
 /// Python's `repr` of sequence (or range) `s`.
@@ -1179,6 +1311,40 @@ pub unsafe extern "C" fn pt_str_from_seq(s: *const PtSeq) -> *mut PtStr {
         Ok(text) => pstr::into_ptr(PtStr::new(text.into())),
         Err(TooDeep) => std::ptr::null_mut(),
     }
+}
+
+/// Fresh shallow list slice. Retain elements while the source is guarded.
+///
+/// # Safety
+/// `s` is a live list; `step` is nonzero (checked at the source site).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_list_slice(
+    s: *const PtSeq,
+    start: i64,
+    stop: i64,
+    step: i64,
+    present: i64,
+) -> *mut PtSeq {
+    // SAFETY: guaranteed by the caller, following pt_list_copy.
+    let s = unsafe { seq(s as u64) };
+    let items = s.items.borrow();
+    let indices = crate::slice::indices(
+        items.len(),
+        (present & 1 != 0).then_some(start),
+        (present & 2 != 0).then_some(stop),
+        step,
+    );
+    let desc = slot(s.desc, 0);
+    let selected = indices
+        .into_iter()
+        .flatten()
+        .map(|k| {
+            let v = items[k];
+            inc(desc, v);
+            v
+        })
+        .collect();
+    new_seq(s.desc, selected)
 }
 
 #[cfg(test)]
@@ -1273,6 +1439,71 @@ mod tests {
             pt_seq_dec(xs);
             assert_eq!(seq(inner as u64).rc.get(), 1);
             pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn insert_clamps_and_remove_drops_the_reference() {
+        let inner = make(b"li", &[1]);
+        let xs = make(b"lli", &[]);
+        // SAFETY: all live until dropped below, each once.
+        unsafe {
+            pt_list_insert(xs, 0, inner as u64);
+            pt_list_insert(xs, -100, inner as u64);
+            pt_list_insert(xs, 100, inner as u64);
+            assert_eq!(shown(xs), "[[1], [1], [1]]");
+            assert_eq!(seq(inner as u64).rc.get(), 4);
+            pt_list_remove(xs, 1);
+            pt_list_remove(xs, 7);
+            assert_eq!(shown(xs), "[[1], [1]]");
+            assert_eq!(seq(inner as u64).rc.get(), 3);
+            pt_seq_dec(xs);
+            assert_eq!(seq(inner as u64).rc.get(), 1);
+            pt_seq_dec(inner);
+        }
+        let ys = make(b"li", &[1, 2]);
+        // SAFETY: live until dropped, once.
+        unsafe {
+            pt_list_insert(ys, -1, 9);
+            assert_eq!(shown(ys), "[1, 9, 2]");
+            pt_seq_dec(ys);
+        }
+    }
+
+    #[test]
+    fn index_and_count_compare_by_value() {
+        let xs = make(
+            b"lf",
+            &[0.0f64.to_bits(), 2.0f64.to_bits(), (-0.0f64).to_bits()],
+        );
+        let nan = make(b"lf", &[f64::NAN.to_bits()]);
+        let none = std::ptr::null();
+        // SAFETY: live until dropped; no site is read without `raise`.
+        unsafe {
+            assert_eq!(
+                pt_list_index(xs, (-0.0f64).to_bits(), 0, none, 0, none, 0),
+                0
+            );
+            assert_eq!(pt_list_index(xs, 2.0f64.to_bits(), 0, none, 0, none, 0), 1);
+            assert_eq!(pt_list_index(xs, 5.0f64.to_bits(), 0, none, 0, none, 0), -1);
+            assert_eq!(pt_list_count(xs, 0.0f64.to_bits()), 2);
+            assert_eq!(pt_list_count(nan, f64::NAN.to_bits()), 0);
+            pt_seq_dec(xs);
+            pt_seq_dec(nan);
+        }
+    }
+
+    #[test]
+    fn sort_reversed_keeps_equal_items_in_order() {
+        let items = [0.0f64, -0.0, 1.0, 0.0].map(f64::to_bits);
+        let xs = make(b"lf", &items);
+        // SAFETY: live until dropped, once.
+        unsafe {
+            pt_list_sort(xs, 1);
+            assert_eq!(shown(xs), "[1.0, 0.0, -0.0, 0.0]");
+            pt_list_sort(xs, 0);
+            assert_eq!(shown(xs), "[0.0, -0.0, 0.0, 1.0]");
+            pt_seq_dec(xs);
         }
     }
 
@@ -1605,6 +1836,126 @@ mod tests {
         }
     }
 
+    /// Ordinary accesses keep Python bounds and overwrite stale status on
+    /// success/failure. Invalid stores leave the list untouched, even marked.
+    #[test]
+    fn integer_access_preserves_bounds_status_and_marked_stores() {
+        integer_bounds(pt_seq_get, pt_list_set);
+        integer_bounds(pt_int_list_get, pt_int_list_set);
+    }
+
+    fn integer_bounds(
+        get: unsafe extern "C" fn(*const PtSeq, i64, *mut u8) -> u64,
+        set: unsafe extern "C" fn(*const PtSeq, i64, u64) -> u8,
+    ) {
+        for marked in [false, true] {
+            for values in [&[][..], &[10, 20, 30][..]] {
+                let list = make(b"li", values);
+                if marked {
+                    mark(b"li", list as u64);
+                }
+                let mut status = 9;
+                // SAFETY: list and status stay live; integer slots own no refs.
+                unsafe {
+                    for i in [i64::MIN, -4, 3, i64::MAX] {
+                        assert_eq!(get(list, i, &mut status), 0);
+                        assert_eq!(status, 1);
+                        assert_eq!(set(list, i, 99), 1);
+                    }
+                    assert_eq!(&*seq(list as u64).items.borrow(), values);
+                    if values.is_empty() {
+                        for i in [-1, 0, 1] {
+                            assert_eq!(get(list, i, &mut status), 0);
+                            assert_eq!(status, 1);
+                            assert_eq!(set(list, i, 99), 1);
+                        }
+                    } else {
+                        assert_eq!(set(list, -3, u64::MAX), 0);
+                        assert_eq!(set(list, -1, 7), 0);
+                        assert_eq!(get(list, 0, &mut status), u64::MAX);
+                        assert_eq!(status, 0);
+                        seq(list as u64).rc.inc();
+                        let held = pt_seq_hold(list) as *mut PtSeq;
+                        // Ordinary reads still borrow under an existing hold.
+                        assert_eq!(get(list, -1, &mut status), 7);
+                        assert_eq!(status, 0);
+                        assert_eq!(pt_seq_get_held(held, -1, &mut status), 7);
+                        assert_eq!(pt_seq_item_held(held, -1, &mut status), 7);
+                        pt_seq_release_held(held);
+                    }
+                    assert!(seq(list as u64).items.is_free());
+                    pt_seq_dec(list);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn integer_access_leaves_owned_element_fallbacks_counted() {
+        for marked in [false, true] {
+            let a = make(b"li", &[1]);
+            let b = make(b"li", &[2]);
+            let outer = make(b"lli", &[a as u64]);
+            if marked {
+                mark(b"lli", outer as u64);
+            }
+            let mut status = 9;
+            // SAFETY: all sequences live; each read gives its own reference.
+            unsafe {
+                assert_eq!(pt_seq_get(outer, -1, &mut status), a as u64);
+                assert_eq!(status, 0);
+                assert_eq!(seq(a as u64).rc.get(), 3);
+                assert_eq!(pt_list_set(outer, 1, b as u64), 1);
+                assert_eq!(seq(b as u64).rc.get(), 1);
+                assert_eq!(pt_list_set(outer, 0, b as u64), 0);
+                assert_eq!(seq(a as u64).rc.get(), 2);
+                assert_eq!(seq(b as u64).rc.get(), 2);
+                assert_eq!(seq(b as u64).rc.is_marked(), marked);
+                pt_seq_dec(a); // read result
+                pt_seq_dec(outer);
+                assert_eq!(seq(b as u64).rc.get(), 1);
+                pt_seq_dec(a);
+                pt_seq_dec(b);
+            }
+        }
+    }
+
+    #[test]
+    fn integer_access_keeps_shared_reads_synchronized() {
+        integer_shared_reads(pt_seq_get);
+        integer_shared_reads(pt_int_list_get);
+    }
+
+    fn integer_shared_reads(get: unsafe extern "C" fn(*const PtSeq, i64, *mut u8) -> u64) {
+        let list = make(b"li", &[1, 2, 3]);
+        mark(b"li", list as u64);
+        let address = list as usize;
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let list = address as *const PtSeq;
+                    let mut status = 9;
+                    for i in 0..if cfg!(miri) { 8 } else { 10_000 } {
+                        // SAFETY: owner keeps list live until every reader joins.
+                        unsafe {
+                            assert_eq!(get(list, i % 3, &mut status), (i % 3 + 1) as u64);
+                            assert_eq!(status, 0);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            assert!(thread.join().is_ok());
+        }
+        // SAFETY: all readers joined; owner now gives up its sole reference.
+        unsafe {
+            assert!(seq(list as u64).items.is_free());
+            assert_eq!(seq(list as u64).rc.get(), 1);
+            pt_seq_dec(list);
+        }
+    }
+
     #[test]
     fn indexing_wraps_negatives_and_reports_range() {
         let s = make(b"li", &[10, 20, 30]);
@@ -1670,6 +2021,24 @@ mod tests {
             free_all(todo);
             assert_eq!(seq(inner as u64).rc.get(), 1);
             pt_seq_dec(inner);
+        }
+    }
+
+    #[test]
+    fn sliced_heap_elements_survive_source_destruction() {
+        let inner = make(b"li", &[7]);
+        let source = make(b"lli", &[inner as u64, inner as u64]);
+        // SAFETY: source and inner are live; slicing borrows source and
+        // adds owned references to each selected element before returning.
+        unsafe {
+            let selected = pt_list_slice(source, 0, 0, -1, 0);
+            pt_seq_dec(source);
+            pt_seq_dec(inner);
+            assert_eq!(shown(selected), "[[7], [7]]");
+            let nested = seq(selected as u64).items.borrow()[0];
+            pt_seq_push(nested as *const PtSeq, 9);
+            assert_eq!(shown(selected), "[[7, 9], [7, 9]]");
+            pt_seq_dec(selected);
         }
     }
 

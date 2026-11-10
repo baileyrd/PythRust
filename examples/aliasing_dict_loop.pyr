@@ -1,0 +1,9 @@
+# deviation: D4 rejects aliased mutation in tempered code; CPython keeps aliasing.
+# expect-error: changes a dict
+# expect-exit: 1
+temper def f(mut rows: list[dict[int, int]]) -> int:
+    for x in rows[0]:
+        rows[0][x + 1] = 3
+    return 0
+print("start")
+print(f([{1: 2}]))

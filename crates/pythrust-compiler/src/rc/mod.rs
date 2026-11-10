@@ -120,9 +120,13 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
         | Inst::SetGlobal { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
-        | Inst::Sort(_)
+        | Inst::Sort { .. }
+        | Inst::Insert { .. }
+        | Inst::Remove { .. }
         | Inst::Reverse(_)
-        | Inst::Raise { .. } => false,
+        | Inst::Raise { .. }
+        | Inst::Stash
+        | Inst::Restore => false,
     }
 }
 
@@ -154,6 +158,7 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::Contains { .. }
         | Rvalue::ToStr(_)
         | Rvalue::CopyList(_)
+        | Rvalue::Slice { .. }
         | Rvalue::NewSeq(_)
         | Rvalue::Field(..)
         | Rvalue::Global(_)
@@ -170,7 +175,8 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::NewExc(..)
         | Rvalue::Raised
         | Rvalue::PendingIs(_)
-        | Rvalue::Catch => false,
+        | Rvalue::Catch
+        | Rvalue::Unstash => false,
     }
 }
 
@@ -601,9 +607,13 @@ fn ends(inst: &Inst, l: LocalId) -> bool {
         | Inst::SetGlobal { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
-        | Inst::Sort(_)
+        | Inst::Sort { .. }
+        | Inst::Insert { .. }
+        | Inst::Remove { .. }
         | Inst::Reverse(_)
-        | Inst::Raise { .. } => false,
+        | Inst::Raise { .. }
+        | Inst::Stash
+        | Inst::Restore => false,
     }
 }
 

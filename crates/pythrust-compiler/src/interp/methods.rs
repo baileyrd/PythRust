@@ -1,14 +1,16 @@
 //! Methods: `str.split`, `.join`, `.strip`, `.lstrip`, `.rstrip`,
 //! `.replace`, `.startswith`, `.endswith`, `.find`, `.rfind`, `.index`,
-//! `.rindex`, `.count`, `.upper` and `.lower`, `list.append`, `set.add`, `dict.get`, `.keys`, `.values`,
-//! `.items`, and a file's `.read` and `.close`. `x.name` binds the
+//! `.rindex`, `.count`, `.upper` and `.lower`; `list.append`, `.pop`,
+//! `.extend`, `.insert`, `.remove`, `.index`, `.count` and `.sort`
+//! (D70); `set.add`; `dict.get`, `.pop`, `.setdefault`, `.update`,
+//! `.keys`, `.values` and `.items`; and a file's `.read` and `.close`. `x.name` binds the
 //! method to `x`; calling the bound method runs it.
 
 use std::rc::Rc;
 
-use super::builtins::Args;
+use super::builtins::{merge_sort, Args};
 use super::table::{Key, TableRef};
-use super::value::{File, ListRef, Value};
+use super::value::{eq, File, ListRef, Value};
 use super::{raised, rt_err, stdlib, text, Exec};
 use crate::ast::Ident;
 use crate::diag::Result;
@@ -35,8 +37,15 @@ pub(super) enum Name {
     Upper,
     Lower,
     Append,
+    Pop,
+    Extend,
+    Insert,
+    Remove,
+    Sort,
     Add,
     Get,
+    Setdefault,
+    Update,
     Keys,
     Values,
     Items,
@@ -63,8 +72,15 @@ impl Name {
             Name::Upper => "upper",
             Name::Lower => "lower",
             Name::Append => "append",
+            Name::Pop => "pop",
+            Name::Extend => "extend",
+            Name::Insert => "insert",
+            Name::Remove => "remove",
+            Name::Sort => "sort",
             Name::Add => "add",
             Name::Get => "get",
+            Name::Setdefault => "setdefault",
+            Name::Update => "update",
             Name::Keys => "keys",
             Name::Values => "values",
             Name::Items => "items",
@@ -80,13 +96,51 @@ impl Name {
         !matches!(
             self,
             Name::Append
+                | Name::Pop
+                | Name::Extend
+                | Name::Insert
+                | Name::Remove
+                | Name::Sort
                 | Name::Add
                 | Name::Get
+                | Name::Setdefault
+                | Name::Update
                 | Name::Keys
                 | Name::Values
                 | Name::Items
                 | Name::Read
                 | Name::Close
+        )
+    }
+}
+
+impl Name {
+    /// Whether a list has it.
+    fn on_list(self) -> bool {
+        matches!(
+            self,
+            Name::Append
+                | Name::Pop
+                | Name::Extend
+                | Name::Insert
+                | Name::Remove
+                | Name::Index
+                | Name::Count
+                | Name::Sort
+        )
+    }
+
+    /// Whether a dict has it.
+    fn on_dict(self) -> bool {
+        matches!(
+            self,
+            Name::Get
+                | Name::Pop
+                | Name::Setdefault
+                | Name::Update
+                | Name::Keys
+                | Name::Values
+                | Name::Items
         )
     }
 }
@@ -152,8 +206,15 @@ pub(super) fn bind<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
         "upper" => Some(Name::Upper),
         "lower" => Some(Name::Lower),
         "append" => Some(Name::Append),
+        "pop" => Some(Name::Pop),
+        "extend" => Some(Name::Extend),
+        "insert" => Some(Name::Insert),
+        "remove" => Some(Name::Remove),
+        "sort" => Some(Name::Sort),
         "add" => Some(Name::Add),
         "get" => Some(Name::Get),
+        "setdefault" => Some(Name::Setdefault),
+        "update" => Some(Name::Update),
         "keys" => Some(Name::Keys),
         "values" => Some(Name::Values),
         "items" => Some(Name::Items),
@@ -163,11 +224,9 @@ pub(super) fn bind<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
     };
     let method = match (name, &v) {
         (Some(n), Value::Str(s)) if n.on_str() => Some(Method::Str(n, Rc::clone(s))),
-        (Some(Name::Append), Value::List(l)) => Some(Method::List(Name::Append, Rc::clone(l))),
+        (Some(n), Value::List(l)) if n.on_list() => Some(Method::List(n, Rc::clone(l))),
         (Some(Name::Add), Value::Set(t)) => Some(Method::Table(Name::Add, v.clone(), Rc::clone(t))),
-        (Some(n @ (Name::Get | Name::Keys | Name::Values | Name::Items)), Value::Dict(t)) => {
-            Some(Method::Table(n, v.clone(), Rc::clone(t)))
-        }
+        (Some(n), Value::Dict(t)) if n.on_dict() => Some(Method::Table(n, v.clone(), Rc::clone(t))),
         (Some(n @ (Name::Read | Name::Close)), Value::File(f)) => {
             Some(Method::File(n, Rc::clone(f)))
         }
@@ -186,94 +245,253 @@ pub(super) fn bind<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
     }
 }
 
-/// Calls a bound method.
+/// Calls a bound method. Only `list.sort` takes a keyword, `reverse`.
 pub(super) fn call<'m>(m: &Method<'m>, args: Args<'m>) -> Exec<'m, Value<'m>> {
     let name = m.name().as_str();
-    if let Some((kw, _)) = args.keywords.first() {
-        let msg = format!("TypeError: {name}() takes no keyword arguments");
-        return Err(rt_err(kw.span, msg).into());
+    let mut reverse = false;
+    for (kw, v) in &args.keywords {
+        if m.name() != Name::Sort || kw.name != "reverse" {
+            let msg = format!("TypeError: {name}() takes no keyword arguments");
+            return Err(rt_err(kw.span, msg).into());
+        }
+        reverse = v.truthy();
     }
     let (pos, span) = (args.positional, args.span);
-    let (min, max) = match m.name() {
-        Name::Split | Name::Strip | Name::Lstrip | Name::Rstrip => (0, 1),
-        Name::Join | Name::Append | Name::Add => (1, 1),
-        Name::Startswith
-        | Name::Endswith
-        | Name::Find
-        | Name::Rfind
-        | Name::Index
-        | Name::Rindex
-        | Name::Count => (1, 1),
-        Name::Replace => (2, 2),
-        Name::Get => (1, 2),
-        Name::Keys
-        | Name::Values
-        | Name::Items
-        | Name::Read
-        | Name::Close
-        | Name::Upper
-        | Name::Lower => (0, 0),
-    };
+    let (min, max) = arity(m);
     if pos.len() < min || pos.len() > max {
-        let msg = match (min, max) {
-            (1, 1) => format!(
-                "TypeError: {name}() takes exactly one argument ({} given)",
-                pos.len()
-            ),
-            (0, 0) => format!(
-                "TypeError: {name}() takes no arguments ({} given)",
-                pos.len()
-            ),
-            _ if pos.len() < min => format!(
-                "TypeError: {name} expected at least {min} argument, got {}",
-                pos.len()
-            ),
-            _ => format!(
-                "TypeError: {name} expected at most {max} arguments, got {}",
-                pos.len()
-            ),
-        };
-        return Err(rt_err(span, msg).into());
+        return Err(rt_err(span, arity_message(name, min, max, pos.len())).into());
     }
-    let mut pos = pos.into_iter();
-    let mut arg = || pos.next().unwrap_or(Value::None);
     match m {
-        Method::Str(name, s) => str_call(*name, s, pos.collect(), span),
+        Method::Str(name, s) => str_call(*name, s, pos, span),
         Method::File(Name::Read, f) => stdlib::read(f, span),
         Method::File(_, f) => {
             f.file.borrow_mut().take();
             Ok(Value::None)
         }
-        Method::List(_, list) => {
-            list.borrow_mut().push(arg());
-            Ok(Value::None)
-        }
-        Method::Table(Name::Add, _, set) => {
-            let v = arg();
-            let key = Key::of(&v, span)?;
-            set.borrow_mut().insert(key, v, Value::None);
-            Ok(Value::None)
-        }
-        Method::Table(Name::Get, _, dict) => {
-            let key = Key::of(&arg(), span)?;
-            let default = arg();
-            Ok(dict.borrow().get(&key).cloned().unwrap_or(default))
-        }
-        Method::Table(name, _, dict) => {
-            let dict = dict.borrow();
-            let view = match name {
-                Name::Keys => View::Keys,
-                Name::Values => View::Values,
-                _ => View::Items,
+        Method::List(name, list) => list_call(*name, list, pos, reverse, span),
+        Method::Table(name, _, table) => table_call(*name, table, pos, span),
+    }
+}
+
+/// How many positional arguments `m` takes, as CPython counts them.
+fn arity(m: &Method) -> (usize, usize) {
+    match (m.name(), m) {
+        (Name::Pop, Method::List(..)) => (0, 1),
+        (Name::Pop | Name::Get | Name::Setdefault, _) => (1, 2),
+        (Name::Split | Name::Strip | Name::Lstrip | Name::Rstrip, _) => (0, 1),
+        (Name::Replace | Name::Insert, _) => (2, 2),
+        (
+            Name::Keys
+            | Name::Values
+            | Name::Items
+            | Name::Read
+            | Name::Close
+            | Name::Upper
+            | Name::Lower
+            | Name::Sort,
+            _,
+        ) => (0, 0),
+        _ => (1, 1),
+    }
+}
+
+/// CPython's `TypeError` for a call to `name` with `got` arguments.
+fn arity_message(name: &str, min: usize, max: usize, got: usize) -> String {
+    match (min, max) {
+        (1, 1) => format!("TypeError: {name}() takes exactly one argument ({got} given)"),
+        (0, 0) => format!("TypeError: {name}() takes no arguments ({got} given)"),
+        _ if got < min => format!("TypeError: {name} expected at least {min} argument, got {got}"),
+        _ => format!("TypeError: {name} expected at most {max} arguments, got {got}"),
+    }
+}
+
+/// A list method on `list` (D70). Inference typed the arguments.
+fn list_call<'m>(
+    name: Name,
+    list: &ListRef<'m>,
+    args: Vec<Value<'m>>,
+    reverse: bool,
+    span: Span,
+) -> Exec<'m, Value<'m>> {
+    let arg = args.first().cloned().unwrap_or(Value::None);
+    match name {
+        Name::Append => list.borrow_mut().push(arg),
+        Name::Pop => return pop(list, args.first(), span),
+        Name::Extend => {
+            // Read in full first, so `xs.extend(xs)` doubles `xs`.
+            let items: Vec<Value<'m>> = match &arg {
+                Value::List(other) => other.borrow().clone(),
+                other => other.iter(span)?.collect(),
             };
-            let items = dict.entries().iter().map(|(k, v)| match view {
-                View::Keys => k.clone(),
-                View::Values => v.clone(),
-                View::Items => Value::Tuple(Rc::from([k.clone(), v.clone()])),
-            });
-            Ok(Value::View(view, items.collect()))
+            list.borrow_mut().extend(items);
+        }
+        Name::Insert => {
+            let len = list.borrow().len();
+            let at = clamped(&arg, len, span)?;
+            let v = args.get(1).cloned().unwrap_or(Value::None);
+            list.borrow_mut().insert(at, v);
+        }
+        Name::Remove => {
+            let Some(i) = find(list, &arg, span)? else {
+                let msg = "list.remove(x): x not in list".to_string();
+                return Err(raised(ExcKind::Value, msg, span));
+            };
+            let removed = list.borrow_mut().remove(i);
+            drop(removed);
+        }
+        Name::Index => {
+            let Some(i) = find(list, &arg, span)? else {
+                let msg = format!("{} is not in list", arg.repr(span)?);
+                return Err(raised(ExcKind::Value, msg, span));
+            };
+            return int(i, span);
+        }
+        Name::Count => {
+            let items = list.borrow().clone();
+            let mut n = 0;
+            for x in &items {
+                n += usize::from(eq(x, &arg, span)?);
+            }
+            return int(n, span);
+        }
+        Name::Sort => {
+            // The list is empty while it sorts, as in CPython.
+            let items = std::mem::take(&mut *list.borrow_mut());
+            let sorted = merge_sort(items, reverse, span)?;
+            *list.borrow_mut() = sorted;
+        }
+        _ => return Err(rt_err(span, format!("`{}` is not a list method", name.as_str())).into()),
+    }
+    Ok(Value::None)
+}
+
+/// `xs.pop()` or `xs.pop(i)`: removes and gives the item, or raises
+/// CPython's `IndexError` (D71).
+fn pop<'m>(list: &ListRef<'m>, index: Option<&Value<'m>>, span: Span) -> Exec<'m, Value<'m>> {
+    let len = list.borrow().len();
+    if len == 0 {
+        return Err(raised(
+            ExcKind::Index,
+            "pop from empty list".to_string(),
+            span,
+        ));
+    }
+    let at = match index {
+        Some(i) => super::resolve(i, len, "list", span)?,
+        None => Some(len - 1),
+    };
+    let Some(at) = at else {
+        return Err(raised(
+            ExcKind::Index,
+            "pop index out of range".to_string(),
+            span,
+        ));
+    };
+    Ok(list.borrow_mut().remove(at))
+}
+
+/// `insert`'s index in `0..=len`: negative counts from the end, and one
+/// past either end clamps, as in CPython.
+fn clamped(index: &Value, len: usize, span: Span) -> Result<usize> {
+    let i = index.int().ok_or_else(|| {
+        let msg = format!(
+            "TypeError: '{}' object cannot be interpreted as an integer",
+            index.type_name()
+        );
+        rt_err(span, msg)
+    })?;
+    let len_i = i128::try_from(len).unwrap_or(i128::MAX);
+    let at = if i < 0 {
+        i128::from(i) + len_i
+    } else {
+        i128::from(i)
+    };
+    Ok(usize::try_from(at.clamp(0, len_i)).unwrap_or(len))
+}
+
+/// The first position of an item `==` to `x`, comparing a snapshot so a
+/// comparison never meets the list borrowed.
+fn find<'m>(list: &ListRef<'m>, x: &Value<'m>, span: Span) -> Result<Option<usize>> {
+    let items = list.borrow().clone();
+    for (i, item) in items.iter().enumerate() {
+        if eq(item, x, span)? {
+            return Ok(Some(i));
         }
     }
+    Ok(None)
+}
+
+/// A dict's or set's method (D70): `set.add`, `dict.get`, `.pop`,
+/// `.setdefault`, `.update` and the views.
+fn table_call<'m>(
+    name: Name,
+    table: &TableRef<'m>,
+    args: Vec<Value<'m>>,
+    span: Span,
+) -> Exec<'m, Value<'m>> {
+    let arg = args.first().cloned().unwrap_or(Value::None);
+    let default = args.get(1).cloned();
+    match name {
+        Name::Add => {
+            let key = Key::of(&arg, span)?;
+            table.borrow_mut().insert(key, arg, Value::None);
+            Ok(Value::None)
+        }
+        Name::Get => {
+            let key = Key::of(&arg, span)?;
+            Ok(table
+                .borrow()
+                .get(&key)
+                .cloned()
+                .or(default)
+                .unwrap_or(Value::None))
+        }
+        Name::Pop => {
+            let removed = table.borrow_mut().remove(&Key::of(&arg, span)?);
+            match (removed, default) {
+                (Some((_, v)), _) => Ok(v),
+                (None, Some(d)) => Ok(d),
+                (None, None) => Err(super::missing_key(&arg, span)),
+            }
+        }
+        Name::Setdefault => {
+            let key = Key::of(&arg, span)?;
+            if let Some(v) = table.borrow().get(&key) {
+                return Ok(v.clone());
+            }
+            let v = default.unwrap_or(Value::None);
+            table.borrow_mut().insert(key, arg, v.clone());
+            Ok(v)
+        }
+        Name::Update => {
+            let Value::Dict(other) = &arg else {
+                return Err(rt_err(span, "`update` needs a dict".to_string()).into());
+            };
+            let entries = other.borrow().entries().to_vec();
+            for (k, v) in entries {
+                let key = Key::of(&k, span)?;
+                table.borrow_mut().insert(key, k, v);
+            }
+            Ok(Value::None)
+        }
+        _ => Ok(view(name, table)),
+    }
+}
+
+/// `d.keys()`, `d.values()` or `d.items()`: a snapshot of the entries.
+fn view<'m>(name: Name, dict: &TableRef<'m>) -> Value<'m> {
+    let dict = dict.borrow();
+    let view = match name {
+        Name::Keys => View::Keys,
+        Name::Values => View::Values,
+        _ => View::Items,
+    };
+    let items = dict.entries().iter().map(|(k, v)| match view {
+        View::Keys => k.clone(),
+        View::Values => v.clone(),
+        View::Items => Value::Tuple(Rc::from([k.clone(), v.clone()])),
+    });
+    Value::View(view, items.collect())
 }
 
 /// A `str` method on `s`. Inference gave each its `str` arguments, and

@@ -1,0 +1,16 @@
+# deviation: tempered code marks each wait on a task with `pause` (M6c), a comprehension's steps included (D85); CPython has no markers.
+# expect-exit: 1
+# expect-error: each step of this loop waits on a task; tempered `squares` marks it: write `pause` before it, in parentheses
+import concurrent.futures
+
+
+temper def square(x: int) -> int:
+    return x * x
+
+
+temper def squares(xs: list[int]) -> list[int]:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        return [r for r in ex.map(square, xs)]
+
+
+print(squares([1, 2]))

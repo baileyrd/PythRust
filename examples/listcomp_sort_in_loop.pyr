@@ -1,0 +1,8 @@
+# deviation: sorting a list is a change (D4, D70), so a tempered comprehension over it may not sort it (D85); CPython sorts while iterating.
+# expect-exit: 1
+# expect-error: tempered `f` changes `xs` while a temporary value may still refer to the changed container
+temper def f(mut xs: list[int]) -> None:
+    done = [xs.sort() for x in xs]
+
+
+f([2, 1])

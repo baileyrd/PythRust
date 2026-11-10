@@ -1,0 +1,1347 @@
+{
+  "status": "complete",
+  "command": [
+    "bench/division_campaign.py",
+    "profiles",
+    "--baseline",
+    "/workspace/scratch/2ce9dd46a989/card814-base",
+    "--work",
+    "/workspace/scratch/2ce9dd46a989/card814-profiles-base",
+    "--output",
+    "/workspace/scratch/2ce9dd46a989/card814-profiles-base/results.json"
+  ],
+  "prepared": {
+    "schema": 2,
+    "status": "prepared",
+    "timestamp": "2026-11-08T17:14:15.090858+00:00",
+    "source": {
+      "head": "f3f93a31aad142d2498a5ea23da075a75ac59ee9",
+      "tree": "ada605b5799a28268ad36717e74f755265ce9473",
+      "tracked_diff": "diff --git a/bench/three_way.py b/bench/three_way.py\nindex 93d2e08..3c26005 100644\n--- a/bench/three_way.py\n+++ b/bench/three_way.py\n@@ -97,7 +97,9 @@ def source_record():\n     hashes = {p: digest((ROOT/p).read_bytes()) for p in names}\n     return dict(head=run(['git','rev-parse','HEAD']).stdout.decode().strip(),\n                 tree=run(['git','rev-parse','HEAD^{tree}']).stdout.decode().strip(),\n-                tracked_diff=run(['git','diff','HEAD']).stdout.decode(), build_inputs=hashes)\n+                tracked_diff=run(['git','diff','HEAD']).stdout.decode(), build_inputs=hashes,\n+                index_diff=run(['git','diff','--cached']).stdout.decode(),\n+                status=run(['git','status','--porcelain=v1','--untracked-files=all']).stdout.decode())\n \n \n def host():\n@@ -126,13 +128,18 @@ def prepare(args):\n     pin(args.cpu)\n     args.work.mkdir()  # Never overwrite an existing prepared condition.\n     env = dict(os.environ, PYTHRUST_RT=str(runtime))\n-    record = dict(schema=1, status='preparing', timestamp=datetime.now(timezone.utc).isoformat(),\n+    record = dict(schema=2, status='preparing', timestamp=datetime.now(timezone.utc).isoformat(),\n                   source=source_record(), host=original_host, cpu=args.cpu,\n                   compiler=identity(compiler), runtime=identity(runtime),\n                   rustc=run([rustc,'-Vv']).stdout.decode(), cargo=run(['cargo','-V']).stdout.decode(),\n                   cc=run(['cc','--version']).stdout.decode(), linker=run(['ld','--version']).stdout.decode(),\n                   rust_flags=FLAGS, command=sys.argv, conditions={}, builds={}, sources={},\n-                  harness=identity(Path(__file__).resolve()))\n+                  harness=identity(Path(__file__).resolve()),\n+                  environment={k:os.environ.get(k) for k in ('PATH','CARGO_TARGET_DIR','RUSTFLAGS',\n+                      'CARGO_ENCODED_RUSTFLAGS','PYTHRUST_RT','PYTHRUST_RT_SRC','LD_PRELOAD',\n+                      'LD_LIBRARY_PATH','PYTHONHASHSEED','PYTHONPATH','MALLOC_CONF','GLIBC_TUNABLES')},\n+                  tools={k:identity(Path(shutil.which(k)).resolve()) for k in ('cargo','cc','ld')},\n+                  rustc_identity=identity(rustc), domain=run([sys.executable,'-B',ROOT/'bench/check_three_way_domain.py']).stdout.decode())\n     manifest = args.work/'prepared.json'\n     try:\n         for name, expected in EXPECTED.items():\n@@ -216,7 +223,7 @@ def measure(args):\n         raise FileExistsError(args.output)\n     check_identities(prepared)\n     pin(prepared['cpu'])\n-    result=dict(schema=1,status='running',timestamp=datetime.now(timezone.utc).isoformat(),\n+    result=dict(schema=prepared['schema'],status='running',timestamp=datetime.now(timezone.utc).isoformat(),\n                 prepared=prepared,command=sys.argv,runs=args.runs,seed=args.seed,warmups=2,cases={})\n     env=dict(os.environ,PYTHRUST_RT=prepared['runtime']['path'])\n     try:\n@@ -227,10 +234,12 @@ def measure(args):\n             if name=='strings': passes.append(('materialized',['rust','rust_materialized'],args.runs))\n             for label,kinds,count in passes:\n                 key=name+'/'+label\n-                row=dict(order=order(kinds,count,args.seed+len(result['cases'])),samples=[],summary={})\n+                row=dict(order=order(kinds,count,args.seed+len(result['cases'])),warmup_samples=[],samples=[],summary={})\n                 result['cases'][key]=row\n                 for kind in kinds:\n-                    for _ in range(2): sample(cond[kind]['command'],expected,env=env)\n+                    for warmup in range(2):\n+                        row['warmup_samples'].append(dict(kind=kind,warmup=warmup,\n+                            **sample(cond[kind]['command'],expected,env=env)))\n                 for round_id, sequence in enumerate(row['order']):\n                     for kind in sequence:\n                         row['samples'].append(dict(round=round_id,kind=kind,\n@@ -241,6 +250,7 @@ def measure(args):\n                 print(key,row['summary'],flush=True)\n         check_identities(prepared)\n         result['status']='complete'; result['end_load']=os.getloadavg()\n+        result['post_identities']={k:identity(Path(prepared[k]['path'])) for k in ('compiler','runtime','harness')}\n     except BaseException as exc:\n         result['status']='failed'; result['error']=repr(exc)\n         raise\n@@ -249,7 +259,7 @@ def measure(args):\n \n \n def verify(data):\n-    if data['schema']!=1 or data['status']!='complete' or data['prepared']['status']!='prepared':\n+    if data['schema'] not in (1,2) or data['status']!='complete' or data['prepared']['status']!='prepared':\n         raise ValueError('incomplete bundle')\n     expected_keys={name+'/primary' for name in EXPECTED}\n     expected_keys.update(name+'/checked' for name in EXPECTED if name!='startup')\ndiff --git a/bench/verify_three_way.py b/bench/verify_three_way.py\nindex d7f2417..ab4d8b8 100644\n--- a/bench/verify_three_way.py\n+++ b/bench/verify_three_way.py\n@@ -47,8 +47,46 @@ def verify(record):\n     if any('1 passed; 0 failed' not in s for s in p['rust_tests'].values()):\n         raise ValueError('Rust boundary tests did not pass')\n     if record['warmups']!=2: raise ValueError('wrong warmup count')\n+    if record['schema']==2: verify_current(record)\n     return count\n \n \n+def verify_current(record):\n+    p=record['prepared']\n+    if record['warmups']!=2 or p['schema']!=2: raise ValueError('new protocol required')\n+    for key in ('compiler','runtime','harness'):\n+        if record['post_identities'][key]!=p[key]: raise ValueError('identity changed during timing')\n+    for key in ('status','index_diff','tracked_diff','build_inputs'):\n+        if key not in p['source']: raise ValueError('missing source state')\n+    if not p['source']['build_inputs']: raise ValueError('missing build inputs')\n+    for value in p['source']['build_inputs'].values():\n+        hash_record(dict(path='build input',sha256=value))\n+    for key in ('environment','tools','rustc_identity','domain'):\n+        if not p[key]: raise ValueError('missing environment/provenance')\n+    hash_record(p['rustc_identity'])\n+    for key in ('cargo','cc','ld'): hash_record(p['tools'][key])\n+    host=p['host']\n+    for key in ('platform','libc','python','python_executable_identity','load','files','caveats'):\n+        if not host[key]: raise ValueError('missing host resources')\n+    if type(p['cpu']) is not int or any(type(x) is not int or x<0 for x in host['permitted_affinity']):\n+        raise ValueError('invalid CPU IDs')\n+    for name,sources in p['sources'].items():\n+        original=(b.ROOT/'bench/rust'/(name+'.rs')).read_bytes()\n+        if b.digest(original)!=sources['rust']['sha256']: raise ValueError('Rust source differs from pinned workload')\n+        cond=p['conditions'][name]\n+        if cond['pythrust']['executable']['path']==cond['rust']['executable']['path']:\n+            raise ValueError('self comparison')\n+        if cond['cpython']['executable']!=host['python_executable_identity']:\n+            raise ValueError('unmatched CPython')\n+    for key,row in record['cases'].items():\n+        name,label=key.split('/')\n+        kinds=list(b.KINDS) if label=='primary' else ['rust','rust_'+label]\n+        wanted=[(kind,i) for kind in kinds for i in range(2)]\n+        if [(x['kind'],x['warmup']) for x in row['warmup_samples']]!=wanted: raise ValueError('missing warmups')\n+        for x in row['warmup_samples']:\n+            if x['returncode']!=0 or x['stderr'] or x['stdout']!=b.EXPECTED[name]: raise ValueError('warmup failed')\n+            b.stats([x['wall_seconds']])\n+\n+\n if __name__=='__main__':\n     print('Verified complete cases:',verify(json.loads(Path(sys.argv[1]).read_text())))\n",
+      "build_inputs": {
+        "Cargo.lock": "9966afc5992741f591f7a30c6d000fa890b7f7cca1e3dc707f70360ef45a07d3",
+        "Cargo.toml": "f6799354bfeeb4e12e96773d88a6cad89756de8ba462dc8b02ffe2a862255791",
+        "crates/pythrust-compiler/Cargo.toml": "c572cf177a45a3742915f817bca32b3ce6b64f7df06fb990f7a319acd28dd62a",
+        "crates/pythrust-compiler/src/ast.rs": "0da5d8188604e0e97cc4e4d8cd1323fce280803b031e733c9b7e9c0fe3f3722f",
+        "crates/pythrust-compiler/src/bindings.rs": "abf502c56f824a4b565d710b60d27d3c97d8edd12b4ceaed8d898be6df654df6",
+        "crates/pythrust-compiler/src/cargo.rs": "8d89e3264385b00aaa05081abe0a193ca7b79afc4a78a26dc9a8303c8967a66e",
+        "crates/pythrust-compiler/src/codegen/concat.rs": "392887f0373c7b23d5f9720a04a404ac802861d68c0975615a29bdd0f0ecc888",
+        "crates/pythrust-compiler/src/codegen/exc.rs": "8054dc3ba44bf05a6e363da3effa9ed4cb9cef8df8940bdf9b18d2a55bf0b16a",
+        "crates/pythrust-compiler/src/codegen/mod.rs": "cc9aea7b8092a74e651c88d9058620ce41ad8194eee42016c94d66f23bd24efa",
+        "crates/pythrust-compiler/src/codegen/num.rs": "8ded9df47765d22f4520f49ded86b3d4e40ffd53ae07a76d468a2e809eb5e6e2",
+        "crates/pythrust-compiler/src/codegen/opt.rs": "2d01c6289791b17e983328c1c235eb5c15a25cf35159f6e2ff29c55577e66e37",
+        "crates/pythrust-compiler/src/codegen/pair.rs": "d9c55b7601445d4e49c77d6e10711eeff2ddd33ec15b9d92a4cdc94928828156",
+        "crates/pythrust-compiler/src/codegen/seq.rs": "e4a11f853792e486f5c00cfc8925794d4f25102cd80d089b75f66ae16e7f2dfe",
+        "crates/pythrust-compiler/src/codegen/stdlib.rs": "357592beb2b07b6afbbb7624dc687dbfbd6694917f26a1e338e21424dde2d314",
+        "crates/pythrust-compiler/src/codegen/task.rs": "1ba03697c218c6dc7cca422b2417cac54f29cf523751d7b0c604908fdaf05c38",
+        "crates/pythrust-compiler/src/diag.rs": "e4d0bc021d46db9c0f3a337879ec0bab9a61fa6ce4dd4e1d01f5a2fbd1f9e936",
+        "crates/pythrust-compiler/src/exc.rs": "402a6c85a6f55b533709b441835ab746b0447ded27f78dc5a614f4b6e7f2668e",
+        "crates/pythrust-compiler/src/infer/builtins.rs": "cefd1c8671314f7d95b302694472d2ea7c85edc0dbe425d0b903dc77583a784d",
+        "crates/pythrust-compiler/src/infer/expr.rs": "d4cfeafd211860477ac15a5039807ebbdb14dd785e1e1f56afd0a45111095021",
+        "crates/pythrust-compiler/src/infer/methods.rs": "aef0fe9ac64a809fbec914b3bd2d65a7475204d0f33cf4343d11c85dd84aefaf",
+        "crates/pythrust-compiler/src/infer/mod.rs": "4136f5ff2024166fec9dfe747c28c9ea86f41fb2e95469d9b5258e773ed1d145",
+        "crates/pythrust-compiler/src/infer/pause.rs": "a8a934a258aaa13182c8d6f825bcc3752d9deac9a724ad76ecb66ac1d5cf4089",
+        "crates/pythrust-compiler/src/infer/raises.rs": "1d7eee0346228e3b70aa5400ea6b1c187420c54739db8b30dc94ba43483a2f4c",
+        "crates/pythrust-compiler/src/infer/scope.rs": "ed534dac92b5aa9a2fef4fea2d2dda51b2b76099870114ab5fa48acaa507c8bf",
+        "crates/pythrust-compiler/src/infer/solve.rs": "302caf76d8e75a16ed53ae20e2a3437c9db2ddbc354be558fb5d6ea3cdd28bcb",
+        "crates/pythrust-compiler/src/infer/stmt.rs": "e7909c58df467798f0f0c67ac66865ccb47ad2bc6a24d3dcf7d9272ba4e5ad6a",
+        "crates/pythrust-compiler/src/infer/subst.rs": "c54ed06f60899bf1d356b665e5ed2345e6110fe07186be7ade0952b496f34aa3",
+        "crates/pythrust-compiler/src/infer/tasks.rs": "0a031c29c69afbe67fe51f331482631dabcf7aed13b3813d0d087912eb1f4072",
+        "crates/pythrust-compiler/src/infer/temper.rs": "2f18eda4ed8bd3f0979ad4295629f00486b4d14b131cfa5afff832d6f2ad4176",
+        "crates/pythrust-compiler/src/infer/tests.rs": "98547dc3ca17b12fe570732600a3675e1afe57a8d8d8de02320866ce38c2be12",
+        "crates/pythrust-compiler/src/infer/ty.rs": "8d1e761a881fb7851fcde28aa76a67c4a66cb1ae648273cc105cbb57e64ccf61",
+        "crates/pythrust-compiler/src/interop/gen.rs": "1a5b0e8388783327828216de99c54c87bfb6e66eef8d5101a8cff40abcf156e4",
+        "crates/pythrust-compiler/src/interop/gen/tests.rs": "39bdfa39a44228950dab9386e17fd01cb8fce31755b6304d02943f32674b1017",
+        "crates/pythrust-compiler/src/interop/lock.rs": "5c0ad38c57b24286ccacd6176b730a51d7b3bcfae450de83e966f1816265b75c",
+        "crates/pythrust-compiler/src/interop/lock/tests.rs": "3a98b4b96e75b7bb65744c03d550fdf88f38da75c9185bac6373eaf879577be5",
+        "crates/pythrust-compiler/src/interop/mod.rs": "5776c30271962f91f2e1abf32fc6a32f0a058620cdb016a55e76f7bace5ef71c",
+        "crates/pythrust-compiler/src/interop/runtime.rs": "cd18a66a0739693524592814f2fc4b0151f291329246d1b142288ae356d3873c",
+        "crates/pythrust-compiler/src/interop/runtime/plain.rs": "c8b71f443d6b3f06502dd2c86cf2c05ce4283242dd9012844bf752945cc965e1",
+        "crates/pythrust-compiler/src/interop/runtime/tests.rs": "71896a15a5ce02f2dc936d7b36479ebf8c7722b162e4af162e3a23f899cd7dd4",
+        "crates/pythrust-compiler/src/interp/builtins.rs": "30947e1149f30b566625017a1b2105bed048f953a829296d8b46a8fc963bc851",
+        "crates/pythrust-compiler/src/interp/methods.rs": "86a28712ed1142ca491e44563fdeef5f31f214f82cf1af95a7784bdd770bd455",
+        "crates/pythrust-compiler/src/interp/mod.rs": "eab3867714008340bbea7c7dc096a06ca31c793e17eda9f111eb67d6a5b419d7",
+        "crates/pythrust-compiler/src/interp/ops.rs": "8a81d0b23e981c4cab48f081f99274d81b9b22563657f01b73659b192ac13bb1",
+        "crates/pythrust-compiler/src/interp/stdlib.rs": "985299e2a2d57c29f38a843fe6aa84c5173cfca1e0ddadf516547c740810273a",
+        "crates/pythrust-compiler/src/interp/table.rs": "96593ec45b690ae1259b2918ae8033cf11187d75d1637a424d0ab9b810fad0b2",
+        "crates/pythrust-compiler/src/interp/tasks.rs": "805dd9570becb33d8d2d06f146450ad07a2c135a7b9abe40203b11630201286b",
+        "crates/pythrust-compiler/src/interp/tests.rs": "f9ae8103df9240bbfffaa0afe0e5f73f9f8c951b2f26b2c97eb8caaf3cd78018",
+        "crates/pythrust-compiler/src/interp/value.rs": "6f3769fbec472382efecdec1ded15f4332606c406b7fc19f5063599516b48fa5",
+        "crates/pythrust-compiler/src/interp/zip.rs": "dd7463d6f1b1c9c146b3d30544bd2c3432b1a0d46dee67d10971702ad61934dd",
+        "crates/pythrust-compiler/src/ir.rs": "db1f444bf1195fa694580daac1b91d41a2d5caea84922130eb98ae000059338f",
+        "crates/pythrust-compiler/src/json.rs": "215ab7d143f412a3e09eb53a7494a9dd8cdbbf567da5acbabd7107a9ad359a74",
+        "crates/pythrust-compiler/src/lexer.rs": "a36e075048f5278fc6ed0a8e82de76799e1d901df49f8025e255933b83389570",
+        "crates/pythrust-compiler/src/lib.rs": "ce99cb08ba55a712f2b899b13aaa0554b4ad1840a93d814e60bad856a1dd97c0",
+        "crates/pythrust-compiler/src/lockfile.rs": "ba461b1d5ab337068b5186e522642d9514ee7d5deddf638e76ab2045ed47d92f",
+        "crates/pythrust-compiler/src/lower/exc.rs": "27eb979a2717c15f51f52f76828dda9b7dc70fba3f5da7e04ae72683500d6cdb",
+        "crates/pythrust-compiler/src/lower/expr.rs": "fde18846f2105911015efba7b51287052dcbd9768c893095eddfde28e3a690ea",
+        "crates/pythrust-compiler/src/lower/faults.rs": "a6a5ad0e6dffbb9d7e1c11b13d5172b43ca62bb01b02d37e091e9bab78b32595",
+        "crates/pythrust-compiler/src/lower/globals.rs": "e0f087ee681178c8d3820aa46b4ead54aab29adfaf73ff5458a7153084cb6ca8",
+        "crates/pythrust-compiler/src/lower/hold.rs": "61bf939f19082f5f70c6fdd7f6478935d65ca909a8aadaf89097aa6363f39d79",
+        "crates/pythrust-compiler/src/lower/mod.rs": "4c2253d52f8300f431e5c8f4dcf2f0f97b504df68e01dc71e0690615ca5e63ca",
+        "crates/pythrust-compiler/src/lower/opt.rs": "4f117c60c33db8f02393a1021a734459b9b02019dd5dd2f549657f9e03157c46",
+        "crates/pythrust-compiler/src/lower/reduce.rs": "01852a2e405ebf9fee82c24a21b6f79593604c277d447cad14731b477c95bab4",
+        "crates/pythrust-compiler/src/lower/seq.rs": "9c72911520fb68dcadf8d8d276d135f80b4093a7a0914c77a2b93be128a9a5aa",
+        "crates/pythrust-compiler/src/lower/stmt.rs": "69baaabec7dc4f49ae23d0c9f62dccc3fb2a8c93dcf29ed4869d8d22d6f85819",
+        "crates/pythrust-compiler/src/lower/table.rs": "0abadaa72d72031abe7502f551467421b3e4b54d79fde6e0eb16507be1b99323",
+        "crates/pythrust-compiler/src/lower/tasks.rs": "d142a88658093894238c0dd33ada25685bcec92e34caf2f28aeee773f9b3babe",
+        "crates/pythrust-compiler/src/lower/tests.rs": "694031bd54e768cb40d1a11a0e7bc64a1eea81c067965e57348782f6fd8adf84",
+        "crates/pythrust-compiler/src/lower/tuple.rs": "99a9df5e5bf2cdf027700d4b595c1016de9d94f241a781e570b26bec7ba9e57c",
+        "crates/pythrust-compiler/src/lower/types.rs": "4e322746d82d8fa3eb4c92ef1344532ec4345ab2e857782a259acadaaae5ba74",
+        "crates/pythrust-compiler/src/lower/vars.rs": "38eab6552cd224faa9048cca7317a3844d152351ae83b9f5285efc1567192172",
+        "crates/pythrust-compiler/src/lower/zip.rs": "23ab3ca6343b595b239875c448d5908575b3c6775444f533651665fdc9ad0acd",
+        "crates/pythrust-compiler/src/main.rs": "0966101b461c5be873349728bdde25df677db06b823a2c7e41253324bb189f42",
+        "crates/pythrust-compiler/src/manifest/mod.rs": "533992288e6945b4bd5645a98ab152b5e826a1da19b93a92c8f8f78f86177ca2",
+        "crates/pythrust-compiler/src/manifest/toml.rs": "b03d0f9657986a60d8c9cdc66cfadceabec8efe5ce4265b0b7a84826771dfbca",
+        "crates/pythrust-compiler/src/own/alias.rs": "379d9d1635e7f08b36342acd19f7400b54fa24d86e24aa74ea755e7e5770d18b",
+        "crates/pythrust-compiler/src/own/body.rs": "b8cdf47a06bd9a05d873966ad81b91693023c5f2952f5a050bd2faff7c960a18",
+        "crates/pythrust-compiler/src/own/calls.rs": "0951e12ede5e4f7344af69c6ce3e64a6f5b16e06e24203a9f986e2358d3b4251",
+        "crates/pythrust-compiler/src/own/mod.rs": "2561d3f8cce99aadd52a4593e5273690062bf3b69f4b3f5f0cafa9ec12c52ab3",
+        "crates/pythrust-compiler/src/own/modes.rs": "2b1c0eea74c378556101ba04e09ea56e239a893298613a5fa436869d3ec5e388",
+        "crates/pythrust-compiler/src/own/strs.rs": "82d43f2a1d2b4829fb74ef8758b2a31288465b3ee5a61f110ecf0e7980e0aa8a",
+        "crates/pythrust-compiler/src/own/tasks.rs": "4960136a0960dbb03e39706832ed4d584bacc2c13b6394494e573cb0f67217c6",
+        "crates/pythrust-compiler/src/own/tests.rs": "7000fa7b1485b062e0f15ff3cd75d5f907b6f2bdc17bac155359d112bce44f4d",
+        "crates/pythrust-compiler/src/parser.rs": "f7a13347f861a8f14af8f6e2cb9e8b6f77ca7b3b8f22de7b22f3cbac1a974cb7",
+        "crates/pythrust-compiler/src/parser/depth.rs": "815ef0fedcc95f49f1e5ab4000764307520316fd214eeb6d62cc8c36f2d311e6",
+        "crates/pythrust-compiler/src/parser/imports.rs": "28807378f91cc29e9c8c94945b4ee5194c174f66433a2dec77d6be7de74346a8",
+        "crates/pythrust-compiler/src/parser/stubs.rs": "894b3079667517ba209cee39f25b18bb5d3a70e7f8cb6521e4bc62ff288175f6",
+        "crates/pythrust-compiler/src/parser/tests.rs": "99468162edae3c1c8732979483ed9c864455c1abd585e7749325e12236839d7a",
+        "crates/pythrust-compiler/src/project.rs": "8b02c9363bd826220d62ceee32f0103b9c75675bf5a5d36d0a243ea2e5d033ac",
+        "crates/pythrust-compiler/src/rc/mod.rs": "45226a123b8a9b965e514c9ef431d94f372d7b50d2e1a28e8b1fd087682ac296",
+        "crates/pythrust-compiler/src/rc/tests.rs": "b27520487e27dbf9c84f0ac1b7726e92b19102ee77a97669bce3804109130bf3",
+        "crates/pythrust-compiler/src/rt.rs": "d216bdc20dddfc19dd86e08c6bb12ab72c12c212c2e4e109e4c45788306f4766",
+        "crates/pythrust-compiler/src/span.rs": "6bcfc306da9675967a0adb9890a2947268bfad6a257765f8d8b3ea699782c4a4",
+        "crates/pythrust-compiler/src/stdlib.rs": "96524e20a22ce67d26e87a78b800f6b3d3af7206a450834f41c3cab83bacf393",
+        "crates/pythrust-compiler/src/token.rs": "90919ba07acf10a93e6ad8393e831ece15c0e7250fcb202238ab82808665a926",
+        "crates/pythrust-compiler/tests/cli.rs": "4730cdd52c9552c30357769f80cc2cb758e001eeac449c3f4289118af3675f7a",
+        "crates/pythrust-compiler/tests/common/mod.rs": "8dd78aa45bfe31c746dbb477abf02311308171da33bc26ac01600392c52f72f2",
+        "crates/pythrust-compiler/tests/conformance.rs": "e41c25e3767fa9c34e2a3273905b01dcb4d3c6d95e1180b0fa8c779bf62d0191",
+        "crates/pythrust-compiler/tests/conformance/link.rs": "9d07e0327eda2b048a93a80820abb0167e38560712a0b5eb6929b759b41e6142",
+        "crates/pythrust-compiler/tests/expression_limits.rs": "2f7a1b6c219efaf6797780b434ced4949582bdc55da049a95f58c533f02b6f8c",
+        "crates/pythrust-compiler/tests/interop.rs": "5fe81de3db2a57d6e4f1917b3526b5d93f37c62c29328bd9c775b04617685c17",
+        "crates/pythrust-compiler/tests/manifest.rs": "a23da7c2d6330ffe8942ab1069301822874110cb97b2ba65f360865a6b003b26",
+        "crates/pythrust-compiler/tests/rust/probe/Cargo.lock": "c83baabdf746acedd3db3e26234835c85f84ca3ae312eb2c564568c9e753c846",
+        "crates/pythrust-compiler/tests/rust/probe/Cargo.toml": "6383fe119ae384df5fa69ab9ebcc8734fc54ea0948e689955bd9725a4bc308fa",
+        "crates/pythrust-compiler/tests/rust/probe/probe.pyr": "ed5959154c3bd210f7073e7518a2fc7ba6a46d81965df43459981fd804800a86",
+        "crates/pythrust-compiler/tests/rust/probe/src/lib.rs": "6b4d88bad21a4092a18487474b813cfc32c8bab9344db3d81b4f2136cd5836c3",
+        "crates/pythrust-compiler/tests/scalar_pair.rs": "0cce22bbd5baac4c46b24e8f88ae7744ebf5ac684aca4ade345ee52e229d688a",
+        "crates/pythrust-compiler/tests/string_chain.rs": "1b8cfe93561d7a1988e3ce706da03d74f053956790e9130400a2e03a8a5a8159",
+        "crates/pythrust-compiler/tests/vocabulary.rs": "875be7a46d3b2cd0db1d28b43c02d786d6e7d746e2eb8e7fec86fdd1fb5a7778",
+        "crates/pythrust-rt/Cargo.toml": "3703891e9a6164d3776921e7b9b55c8ca2401b984dac0dd9c4202af18cf4a2ad",
+        "crates/pythrust-rt/src/abi.rs": "d7bdafa34384e90f3a6152a977de78ca1069be8f3e55226e9ea48bffa526d9b0",
+        "crates/pythrust-rt/src/exc.rs": "b130e3da8cb013bcb1a1a1c3124ec3078c71bfc4666f456133c346a5ec335bba",
+        "crates/pythrust-rt/src/fsum.rs": "990ac79c187e51e506cf34b88a94b27ce94e2f92cf5dfeaa9abdccfbedf6e834",
+        "crates/pythrust-rt/src/lib.rs": "4196bf26bf0028ae797303b71f24c44fd2111d85229f3061013ad2c447748e1d",
+        "crates/pythrust-rt/src/num.rs": "f8af6203f4e983e2754ec6c0fcd35de2f7c0326429a6cf49d10cfaa72df01181",
+        "crates/pythrust-rt/src/obj.rs": "517a056fa0717845304435c1a68afbeaad5676f8b01664e45fa67b6ec56bbfdf",
+        "crates/pythrust-rt/src/os.rs": "c6fe66fd42ea2ef5672d944492170f6ac5cb1c94d6eee630fc923bbd874fafe5",
+        "crates/pythrust-rt/src/range.rs": "c885bb460465259b93a84cc13d7735742a398595f3c5cba928033b45846473d6",
+        "crates/pythrust-rt/src/seq.rs": "b7fc565e669e85a4581a53953184ab7623bfa75aefb7fda7e5e998f9658201cf",
+        "crates/pythrust-rt/src/sha256.rs": "6839797aa1035aafc6adf6b382a8469a8d6e3f9eec6960691ebcdbb13240449d",
+        "crates/pythrust-rt/src/str.rs": "437e1b89bae6e433f4ec3c1317c747cdcea8b69d94afe9e1ecbf3d9b26877da9",
+        "crates/pythrust-rt/src/sync.rs": "7eea1161c6e9f75edf9df177e9166dcc199732f89c55864e99dd507be26f0d09",
+        "crates/pythrust-rt/src/sys.rs": "fabc7a58cc7fe6061d06287f52048b4c1b41a030081dfa468078daf014617ca3",
+        "crates/pythrust-rt/src/table.rs": "f61148bb60bf0da2432205dec6263978a159efc8824e93d10ca4041e5368a885",
+        "crates/pythrust-rt/src/task.rs": "874089f2b7077f453b2994743288927a5dd4f239ab9e16b6f846c5640ec78f33",
+        "crates/pythrust-rt/src/text.rs": "3eb3472d0d58bd98e4392bca12f197d70dfa0b9d7645d89facce375fdbae1e95"
+      },
+      "index_diff": "",
+      "status": " M bench/three_way.py\n M bench/verify_three_way.py\n"
+    },
+    "host": {
+      "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+      "libc": [
+        "glibc",
+        "2.41"
+      ],
+      "python": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+      "python_executable": "/usr/bin/python3.13",
+      "python_executable_identity": {
+        "path": "/usr/bin/python3.13",
+        "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+      },
+      "gil_enabled": true,
+      "load": [
+        1.29931640625,
+        0.5380859375,
+        0.1923828125
+      ],
+      "permitted_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "files": {
+        "/proc/cpuinfo": "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 0\ncpu cores\t: 9\napicid\t\t: 0\ninitial apicid\t: 0\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 1\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 1\ncpu cores\t: 9\napicid\t\t: 1\ninitial apicid\t: 1\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 2\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 2\ncpu cores\t: 9\napicid\t\t: 2\ninitial apicid\t: 2\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 3\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 3\ncpu cores\t: 9\napicid\t\t: 3\ninitial apicid\t: 3\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 4\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 4\ncpu cores\t: 9\napicid\t\t: 4\ninitial apicid\t: 4\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 5\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 5\ncpu cores\t: 9\napicid\t\t: 5\ninitial apicid\t: 5\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 6\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 6\ncpu cores\t: 9\napicid\t\t: 6\ninitial apicid\t: 6\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 7\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 7\ncpu cores\t: 9\napicid\t\t: 7\ninitial apicid\t: 7\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 8\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 8\ncpu cores\t: 9\napicid\t\t: 8\ninitial apicid\t: 8\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\n",
+        "/proc/self/cgroup": "0::/\n",
+        "/proc/self/mountinfo": "407 278 0:34 /newroot / rw,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000\n466 407 0:27 /usr /usr ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n467 407 0:27 /opt /opt ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n468 407 0:27 /etc /etc ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n469 407 0:35 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n470 407 0:36 / /dev rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n471 470 0:31 /null /dev/null rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n472 470 0:31 /zero /dev/zero rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n473 470 0:31 /full /dev/full rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n474 470 0:31 /random /dev/random rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n475 470 0:31 /urandom /dev/urandom rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n476 470 0:31 /tty /dev/tty rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n477 470 0:37 / /dev/pts rw,nosuid,nodev,noexec,relatime - devpts devpts rw,mode=620,ptmxmode=666\n478 470 0:38 / /dev/shm rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n479 407 0:39 / /tmp rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n480 479 0:27 /tmp/sites-preview-relay /tmp/sites-preview-relay ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n481 407 0:40 / /run rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n482 407 0:41 / /home/agent rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n483 482 0:42 / /home/agent/.codex ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n484 483 0:27 /home/agent/.codex/config.toml /home/agent/.codex/config.toml ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n485 483 0:27 /home/agent/.codex/skills /home/agent/.codex/skills ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n486 485 0:27 /home/agent/.codex/skills/remote-skills /home/agent/.codex/skills/remote-skills rw,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n487 483 0:27 /home/agent/.codex/plugins /home/agent/.codex/plugins ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n488 483 0:27 /home/agent/.codex/auth.json /home/agent/.codex/auth.json ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n489 483 0:27 /home/agent/.codex/.arcade-git/aggregate-skills /home/agent/.codex/.arcade-git/aggregate-skills rw,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n490 483 0:43 / /home/agent/.codex/tmp rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n491 407 0:27 /workspace /workspace rw,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n492 470 0:100 / /dev rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n493 492 0:31 /null /dev/null rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n494 492 0:31 /zero /dev/zero rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n495 492 0:31 /full /dev/full rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n496 492 0:31 /random /dev/random rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n497 492 0:31 /urandom /dev/urandom rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n498 492 0:31 /tty /dev/tty rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n499 492 0:101 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,mode=620,ptmxmode=666\n500 492 0:38 / /dev/shm rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n501 479 0:102 / /tmp/codex-daemon-1000 ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=000,uid=1000,gid=1000\n502 479 0:39 /codex-bwrap-synthetic-mount-targets-1000 /tmp/codex-bwrap-synthetic-mount-targets-1000 ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n503 483 0:103 / /home/agent/.codex/sessions ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=000,uid=1000,gid=1000\n504 469 0:104 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n",
+        "/sys/fs/cgroup/cpu.max": "unavailable: [Errno 2] No such file or directory: '/sys/fs/cgroup/cpu.max'",
+        "/sys/fs/cgroup/cpuset.cpus.effective": "unavailable: [Errno 2] No such file or directory: '/sys/fs/cgroup/cpuset.cpus.effective'"
+      },
+      "caveats": "shared host; no exclusive CPU/frequency control; warm source/binary caches; quota unknown if unavailable"
+    },
+    "cpu": 0,
+    "compiler": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+      "sha256": "e274bb52c3daf72e883bc574fb68f5df5e135a19ce44cb6dcd56147ca6e43c0b"
+    },
+    "runtime": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-target-base/release/libpythrust_rt.a",
+      "sha256": "b9ca7723d54e9be36d92de67bab3c8f6acade2124cff44e3a56b1a15e5f9adfb"
+    },
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)\n",
+    "cc": "cc (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+    "linker": "GNU ld (GNU Binutils for Debian) 2.44\nCopyright (C) 2025 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n",
+    "rust_flags": [
+      "--edition=2021",
+      "-C",
+      "opt-level=3",
+      "-C",
+      "overflow-checks=off",
+      "-C",
+      "codegen-units=1",
+      "-C",
+      "target-cpu=generic"
+    ],
+    "command": [
+      "bench/three_way.py",
+      "--prepare",
+      "--work",
+      "/workspace/scratch/2ce9dd46a989/card814-base",
+      "--compiler",
+      "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+      "--rustc",
+      "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+      "--cpu",
+      "0"
+    ],
+    "conditions": {
+      "numeric": {
+        "pythrust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/numeric"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric",
+            "sha256": "c6069af0ded0853e365db8b64b1912533801310475723797a148be132da5a60e"
+          }
+        },
+        "cpython": {
+          "command": [
+            "/usr/bin/python3.13",
+            "-B",
+            "/workspace/scratch/2ce9dd46a989/card814-base/numeric.pyr"
+          ],
+          "executable": {
+            "path": "/usr/bin/python3.13",
+            "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+          }
+        },
+        "rust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust",
+            "sha256": "0b0497eec715de057cc3a918f8c64d2a9c055606e998e33eee816d78594de3e6"
+          }
+        },
+        "rust_checked": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust-checked"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust-checked",
+            "sha256": "b242ef6fb94e2a26f356bbd14d00444840d3fcde9a66e16a843ae70871961fa9"
+          }
+        }
+      },
+      "sorting": {
+        "pythrust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/sorting"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting",
+            "sha256": "6b21095c908f500d60f820feee23a3a2937a56ebe152215c74e9d3b541fea945"
+          }
+        },
+        "cpython": {
+          "command": [
+            "/usr/bin/python3.13",
+            "-B",
+            "/workspace/scratch/2ce9dd46a989/card814-base/sorting.pyr"
+          ],
+          "executable": {
+            "path": "/usr/bin/python3.13",
+            "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+          }
+        },
+        "rust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust",
+            "sha256": "1ed4598a979b5c95649709a8bebdfe7ea0667782e34d46606158f1ee06375b04"
+          }
+        },
+        "rust_checked": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust-checked"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust-checked",
+            "sha256": "f6c4e943a7bd750078ad5f67747db91df4fe0c55f4ef527dffb107c7da2c25cb"
+          }
+        }
+      },
+      "strings": {
+        "pythrust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/strings"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings",
+            "sha256": "9e3caea79cfe515a2aa0fa00d2a75e58a6134717213fdea81752fe4ea9608ad1"
+          }
+        },
+        "cpython": {
+          "command": [
+            "/usr/bin/python3.13",
+            "-B",
+            "/workspace/scratch/2ce9dd46a989/card814-base/strings.pyr"
+          ],
+          "executable": {
+            "path": "/usr/bin/python3.13",
+            "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+          }
+        },
+        "rust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust",
+            "sha256": "ea9ca43035f88c9a172f2b30cd4ff7baff4270466bd4d6a6d8f21a6d384dd7d1"
+          }
+        },
+        "rust_checked": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust-checked"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust-checked",
+            "sha256": "fec3682d0f6b9dea8e93b1e3b1a480032be20eff0b0281c21bc2c585d28faf52"
+          }
+        },
+        "rust_materialized": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust-materialized"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust-materialized",
+            "sha256": "a4cee1276b4a346f447432041f4bf610c781d5b2a7b2bb38272d5a6079784f29"
+          }
+        }
+      },
+      "tuples": {
+        "pythrust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/tuples"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples",
+            "sha256": "34dc85ed330c8bca3cb3d23d7abfe900728f8921a0843431b7a6636aa6e8c167"
+          }
+        },
+        "cpython": {
+          "command": [
+            "/usr/bin/python3.13",
+            "-B",
+            "/workspace/scratch/2ce9dd46a989/card814-base/tuples.pyr"
+          ],
+          "executable": {
+            "path": "/usr/bin/python3.13",
+            "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+          }
+        },
+        "rust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust",
+            "sha256": "9d4ab29ca72a3f5cf75f135b1fb0d27a22b18ae855d4754c1ead591f81506e48"
+          }
+        },
+        "rust_checked": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust-checked"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust-checked",
+            "sha256": "b1b3bd2859459bb81838c028fae6da4195b6deee98a54510828cedca03e2128f"
+          }
+        }
+      },
+      "startup": {
+        "pythrust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/startup"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup",
+            "sha256": "8e10fde66db7f3604347a59a7849758096e4f35cae08ebc1fd849398a8314173"
+          }
+        },
+        "cpython": {
+          "command": [
+            "/usr/bin/python3.13",
+            "-B",
+            "/workspace/scratch/2ce9dd46a989/card814-base/startup.pyr"
+          ],
+          "executable": {
+            "path": "/usr/bin/python3.13",
+            "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+          }
+        },
+        "rust": {
+          "command": [
+            "/workspace/scratch/2ce9dd46a989/card814-base/startup-rust"
+          ],
+          "executable": {
+            "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup-rust",
+            "sha256": "cdea893501b5b5243fda8c5b558dc482406fc424e6b02962888b8bdc4d63caae"
+          }
+        }
+      }
+    },
+    "builds": {
+      "numeric/pythrust": {
+        "command": [
+          "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+          "build",
+          "/workspace/scratch/2ce9dd46a989/card814-base/numeric.pyr"
+        ],
+        "samples": [
+          0.058824045,
+          0.062967179,
+          0.066403758,
+          0.070308202,
+          0.05886782,
+          0.056096984,
+          0.052587641
+        ],
+        "median": 0.05886782,
+        "mad": 0.004099358999999997,
+        "minimum": 0.052587641,
+        "maximum": 0.070308202
+      },
+      "numeric/rust": {
+        "command": [
+          "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+          "--edition=2021",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "overflow-checks=off",
+          "-C",
+          "codegen-units=1",
+          "-C",
+          "target-cpu=generic",
+          "/workspace/scratch/2ce9dd46a989/card814-base/numeric.rs",
+          "-o",
+          "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust"
+        ],
+        "samples": [
+          0.072330747,
+          0.054836171,
+          0.054380013,
+          0.05389977,
+          0.0545056,
+          0.053147593,
+          0.052218623
+        ],
+        "median": 0.054380013,
+        "mad": 0.00048024299999999825,
+        "minimum": 0.052218623,
+        "maximum": 0.072330747
+      },
+      "sorting/pythrust": {
+        "command": [
+          "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+          "build",
+          "/workspace/scratch/2ce9dd46a989/card814-base/sorting.pyr"
+        ],
+        "samples": [
+          0.079689505,
+          0.074935343,
+          0.069071797,
+          0.074924974,
+          0.078069974,
+          0.072765727,
+          0.073517528
+        ],
+        "median": 0.074924974,
+        "mad": 0.002159247000000003,
+        "minimum": 0.069071797,
+        "maximum": 0.079689505
+      },
+      "sorting/rust": {
+        "command": [
+          "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+          "--edition=2021",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "overflow-checks=off",
+          "-C",
+          "codegen-units=1",
+          "-C",
+          "target-cpu=generic",
+          "/workspace/scratch/2ce9dd46a989/card814-base/sorting.rs",
+          "-o",
+          "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust"
+        ],
+        "samples": [
+          0.087996094,
+          0.089424205,
+          0.083317606,
+          0.094701978,
+          0.096424786,
+          0.121090329,
+          0.091707696
+        ],
+        "median": 0.091707696,
+        "mad": 0.0037116020000000083,
+        "minimum": 0.083317606,
+        "maximum": 0.121090329
+      },
+      "strings/pythrust": {
+        "command": [
+          "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+          "build",
+          "/workspace/scratch/2ce9dd46a989/card814-base/strings.pyr"
+        ],
+        "samples": [
+          0.064359939,
+          0.069384416,
+          0.068301693,
+          0.069821655,
+          0.065941363,
+          0.061216767,
+          0.062520623
+        ],
+        "median": 0.065941363,
+        "mad": 0.0034207400000000054,
+        "minimum": 0.061216767,
+        "maximum": 0.069821655
+      },
+      "strings/rust": {
+        "command": [
+          "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+          "--edition=2021",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "overflow-checks=off",
+          "-C",
+          "codegen-units=1",
+          "-C",
+          "target-cpu=generic",
+          "/workspace/scratch/2ce9dd46a989/card814-base/strings.rs",
+          "-o",
+          "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust"
+        ],
+        "samples": [
+          0.10234724,
+          0.088472642,
+          0.105675357,
+          0.089790489,
+          0.101420665,
+          0.099931528,
+          0.09622843
+        ],
+        "median": 0.099931528,
+        "mad": 0.003703098000000002,
+        "minimum": 0.088472642,
+        "maximum": 0.105675357
+      },
+      "tuples/pythrust": {
+        "command": [
+          "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+          "build",
+          "/workspace/scratch/2ce9dd46a989/card814-base/tuples.pyr"
+        ],
+        "samples": [
+          0.075434179,
+          0.064499361,
+          0.061890478,
+          0.068477519,
+          0.064829923,
+          0.060716805,
+          0.07528956
+        ],
+        "median": 0.064829923,
+        "mad": 0.003647596000000003,
+        "minimum": 0.060716805,
+        "maximum": 0.075434179
+      },
+      "tuples/rust": {
+        "command": [
+          "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+          "--edition=2021",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "overflow-checks=off",
+          "-C",
+          "codegen-units=1",
+          "-C",
+          "target-cpu=generic",
+          "/workspace/scratch/2ce9dd46a989/card814-base/tuples.rs",
+          "-o",
+          "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust"
+        ],
+        "samples": [
+          0.058934838,
+          0.069837334,
+          0.073400499,
+          0.066642735,
+          0.067644146,
+          0.065398722,
+          0.062433103
+        ],
+        "median": 0.066642735,
+        "mad": 0.0031945990000000063,
+        "minimum": 0.058934838,
+        "maximum": 0.073400499
+      },
+      "startup/pythrust": {
+        "command": [
+          "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+          "build",
+          "/workspace/scratch/2ce9dd46a989/card814-base/startup.pyr"
+        ],
+        "samples": [
+          0.052118264,
+          0.051377905,
+          0.050173837,
+          0.070872208,
+          0.063457662,
+          0.060259002,
+          0.061831467
+        ],
+        "median": 0.060259002,
+        "mad": 0.008140738000000002,
+        "minimum": 0.050173837,
+        "maximum": 0.070872208
+      },
+      "startup/rust": {
+        "command": [
+          "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+          "--edition=2021",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "overflow-checks=off",
+          "-C",
+          "codegen-units=1",
+          "-C",
+          "target-cpu=generic",
+          "/workspace/scratch/2ce9dd46a989/card814-base/startup.rs",
+          "-o",
+          "/workspace/scratch/2ce9dd46a989/card814-base/startup-rust"
+        ],
+        "samples": [
+          0.055451763,
+          0.056916374,
+          0.052338221,
+          0.049505994,
+          0.047337134,
+          0.052146616,
+          0.047323543
+        ],
+        "median": 0.052146616,
+        "mad": 0.0033051470000000013,
+        "minimum": 0.047323543,
+        "maximum": 0.056916374
+      }
+    },
+    "sources": {
+      "numeric": {
+        "pythrust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric.pyr",
+          "sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97"
+        },
+        "rust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric.rs",
+          "sha256": "312c145dde279cca247daf95f8be5add4818e0c357255b494fe728ce1d00f1f2"
+        },
+        "pythrust_source": "# Numeric loop: Collatz step counts, int arithmetic and branches only.\ndef steps(n: int) -> int:\n    count = 0\n    while n != 1:\n        if n % 2 == 0:\n            n = n // 2\n        else:\n            n = 3 * n + 1\n        count += 1\n    return count\n\n\ntotal = 0\nlongest = 0\nfor i in range(1, 1000000):\n    s = steps(i)\n    total += s\n    if s > longest:\n        longest = s\nprint(total, longest)\n",
+        "rust_source": "#![forbid(unsafe_code)]\nfn steps(mut n: i64) -> i64 {\n    let mut count = 0;\n    while n != 1 {\n        if n % 2 == 0 {\n            n /= 2;\n        } else {\n            n = 3 * n + 1;\n        }\n        count += 1;\n    }\n    count\n}\nfn main() {\n    let mut total = 0_i64;\n    let mut longest = 0_i64;\n    for i in 1..1_000_000 {\n        let s = steps(i);\n        total += s;\n        if s > longest {\n            longest = s;\n        }\n    }\n    println!(\"{total} {longest}\");\n}\n#[test]\nfn known_steps() {\n    for (n, expected) in [(1, 0), (2, 1), (3, 7), (27, 111)] {\n        assert_eq!(steps(n), expected);\n    }\n}\n"
+      },
+      "sorting": {
+        "pythrust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting.pyr",
+          "sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969"
+        },
+        "rust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting.rs",
+          "sha256": "e040ab8666e1e5ea13813e494c05340bb9e551702e96317feb702e6a8f376388"
+        },
+        "pythrust_source": "# List sorting: in-place quicksort of pseudo-random ints.\ndef quicksort(xs: list[int], lo: int, hi: int) -> None:\n    while lo < hi:\n        pivot = xs[(lo + hi) // 2]\n        i = lo\n        j = hi\n        while i <= j:\n            while xs[i] < pivot:\n                i += 1\n            while xs[j] > pivot:\n                j -= 1\n            if i <= j:\n                t = xs[i]\n                xs[i] = xs[j]\n                xs[j] = t\n                i += 1\n                j -= 1\n        if j - lo < hi - i:\n            quicksort(xs, lo, j)\n            lo = i\n        else:\n            quicksort(xs, i, hi)\n            hi = j\n\n\nxs = []\nseed = 12345\nfor _ in range(300000):\n    seed = (seed * 1103515245 + 12345) % 2147483648\n    xs.append(seed % 1000000)\nquicksort(xs, 0, len(xs) - 1)\nok = True\nfor k in range(1, len(xs)):\n    if xs[k - 1] > xs[k]:\n        ok = False\nprint(ok, xs[0], xs[len(xs) // 2], xs[len(xs) - 1])\n",
+        "rust_source": "#![forbid(unsafe_code)]\nfn quicksort(xs: &mut [i64], mut lo: i64, mut hi: i64) {\n    while lo < hi {\n        let pivot = xs[((lo + hi) / 2) as usize];\n        let mut i = lo;\n        let mut j = hi;\n        while i <= j {\n            while xs[i as usize] < pivot {\n                i += 1;\n            }\n            while xs[j as usize] > pivot {\n                j -= 1;\n            }\n            if i <= j {\n                let t = xs[i as usize];\n                xs[i as usize] = xs[j as usize];\n                xs[j as usize] = t;\n                i += 1;\n                j -= 1;\n            }\n        }\n        if j - lo < hi - i {\n            quicksort(xs, lo, j);\n            lo = i;\n        } else {\n            quicksort(xs, i, hi);\n            hi = j;\n        }\n    }\n}\nfn generate(count: usize) -> Vec<i64> {\n    let mut xs = Vec::new();\n    let mut seed = 12345_i64;\n    for _ in 0..count {\n        seed = (seed * 1103515245 + 12345) % 2147483648;\n        xs.push(seed % 1000000);\n    }\n    xs\n}\nfn main() {\n    let mut xs = generate(300000);\n    let hi = xs.len() as i64 - 1;\n    quicksort(&mut xs, 0, hi);\n    let mut ok = true;\n    for k in 1..xs.len() {\n        if xs[k - 1] > xs[k] {\n            ok = false;\n        }\n    }\n    println!(\n        \"{} {} {} {}\",\n        if ok { \"True\" } else { \"False\" },\n        xs[0],\n        xs[xs.len() / 2],\n        xs[xs.len() - 1]\n    );\n}\n#[test]\nfn boundary_vectors() {\n    for mut xs in [\n        vec![],\n        vec![1],\n        vec![2, 1],\n        vec![1, 1, 1],\n        vec![-3, 0, -1, 7],\n        vec![5, 4, 3, 2, 1],\n        vec![1, 2, 3, 4, 5],\n        generate(300000),\n    ] {\n        let mut expected = xs.clone();\n        expected.sort();\n        let hi = xs.len() as i64 - 1;\n        quicksort(&mut xs, 0, hi);\n        assert_eq!(xs, expected);\n    }\n    assert_eq!(generate(5), vec![932606, 583775, 466924, 283573, 335178]);\n}\n"
+      },
+      "strings": {
+        "pythrust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings.pyr",
+          "sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381"
+        },
+        "rust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings.rs",
+          "sha256": "ecd5f086114d417593727f1b89e4028745800b4c8e0ee84f2d071d7068da1a14"
+        },
+        "pythrust_source": "# String building: a small string per iteration, and one growing line.\ntotal = 0\nline = \"\"\nfor i in range(1000000):\n    key = \"k\" + str(i) + \":\" + str(i % 97)\n    total += len(key)\n    if i % 50 == 0:\n        line += key[0]\nprint(total, len(line))\n",
+        "rust_source": "#![forbid(unsafe_code)]\nfn work(limit: i64) -> (i64, usize) {\n    let mut total = 0_i64;\n    let mut line = String::new();\n    for i in 0..limit {\n        let key = String::from(\"k\") + &i.to_string() + \":\" + &(i % 97).to_string();\n        #[cfg(materialize)]\n        std::hint::black_box(&key);\n        total += key.len() as i64;\n        if i % 50 == 0 {\n            line += &key[0..1];\n        }\n    }\n    #[cfg(materialize)]\n    std::hint::black_box(&line);\n    (total, line.len())\n}\nfn main() {\n    let (total, len) = work(1000000);\n    println!(\"{total} {len}\");\n}\n#[test]\nfn boundary_strings() {\n    for n in [0_i64, 1, 49, 50, 51, 96, 97, 98, 101] {\n        let expected: i64 = (0..n)\n            .map(|i| format!(\"k{}:{}\", i, i % 97).len() as i64)\n            .sum();\n        assert_eq!(work(n), (expected, ((n + 49) / 50) as usize));\n    }\n    assert_eq!(i64::MIN.to_string(), \"-9223372036854775808\");\n    assert_eq!(i64::MAX.to_string(), \"9223372036854775807\");\n    assert_eq!(\"\u00e9\ud83d\ude00\".chars().count(), 2);\n}\n"
+      },
+      "tuples": {
+        "pythrust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples.pyr",
+          "sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1"
+        },
+        "rust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples.rs",
+          "sha256": "21f9c88eb6def52a193595947d7b6c8ddb6d0e5573d0a1e56c950a5256f84e13"
+        },
+        "pythrust_source": "# Multiple return plus unpacking: exercises the internal scalar pair fast path.\ndef div_mod(a: int, b: int) -> tuple[int, int]:\n    return (a // b, a % b)\n\n\ndef digits(n: int) -> tuple[int, int]:\n    count = 0\n    total = 0\n    while n > 0:\n        n, d = div_mod(n, 10)\n        count += 1\n        total += d\n    return (count, total)\n\n\nall_count = 0\nall_total = 0\nfor i in range(1000000):\n    c, t = digits(i)\n    all_count += c\n    all_total += t\nprint(all_count, all_total)\n",
+        "rust_source": "#![forbid(unsafe_code)]\nfn div_mod(a: i64, b: i64) -> (i64, i64) {\n    (a / b, a % b)\n}\nfn digits(mut n: i64) -> (i64, i64) {\n    let mut count = 0;\n    let mut total = 0;\n    while n > 0 {\n        let (next, d) = div_mod(n, 10);\n        n = next;\n        count += 1;\n        total += d;\n    }\n    (count, total)\n}\nfn main() {\n    let mut all_count = 0_i64;\n    let mut all_total = 0_i64;\n    for i in 0..1000000 {\n        let (c, t) = digits(i);\n        all_count += c;\n        all_total += t;\n    }\n    println!(\"{all_count} {all_total}\");\n}\n#[test]\nfn digit_boundaries() {\n    for (n, c, t) in [\n        (0, 0, 0),\n        (1, 1, 1),\n        (9, 1, 9),\n        (10, 2, 1),\n        (99, 2, 18),\n        (100, 3, 1),\n        (999999, 6, 54),\n    ] {\n        assert_eq!(digits(n), (c, t));\n    }\n    assert_eq!(div_mod(99, 10), (9, 9));\n}\n"
+      },
+      "startup": {
+        "pythrust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup.pyr",
+          "sha256": "9f56e761d79bfdb34304a012586cb04d16b435ef6130091a97702e559260a2f2"
+        },
+        "rust": {
+          "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup.rs",
+          "sha256": "d6fb56acedd3afb2e7d6f6758766fb32ec3aa54ab70091dc529cc9582f1affd1"
+        },
+        "pythrust_source": "pass\n",
+        "rust_source": "#![forbid(unsafe_code)]\nfn main() {}\n"
+      }
+    },
+    "harness": {
+      "path": "/workspace/scratch/2ce9dd46a989/pythrust-card814-work/bench/three_way.py",
+      "sha256": "44652ab9f8ed71e4b7eb8f5adb93f642bed0a5c7c9d25bab0ca867f74de6c41b"
+    },
+    "environment": {
+      "PATH": "/home/agent/.cargo/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/override:/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin:/opt/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/fallback",
+      "CARGO_TARGET_DIR": null,
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null,
+      "PYTHRUST_RT": null,
+      "PYTHRUST_RT_SRC": null,
+      "LD_PRELOAD": null,
+      "LD_LIBRARY_PATH": null,
+      "PYTHONHASHSEED": null,
+      "PYTHONPATH": null,
+      "MALLOC_CONF": null,
+      "GLIBC_TUNABLES": null
+    },
+    "tools": {
+      "cargo": {
+        "path": "/home/agent/.cargo/bin/rustup",
+        "sha256": "b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55"
+      },
+      "cc": {
+        "path": "/usr/bin/x86_64-linux-gnu-gcc-14",
+        "sha256": "a23ecab8ff08f09ad8c80602c2c5df7f49e09c25905cb8975902e101bf72635f"
+      },
+      "ld": {
+        "path": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+        "sha256": "d2766988b6a1b1d1518cdc09242e726d1f24e151e16410ada3092b11ffd9081b"
+      }
+    },
+    "rustc_identity": {
+      "path": "/home/agent/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "b53b780f77f952062f8ca8a3b70aef2390b1e45ad91939be94afdc9543026853"
+    },
+    "domain": "{\n  \"kind\": \"untimed independent oracle; no performance data\",\n  \"collatz\": {\n    \"total\": 131434272,\n    \"longest\": 524,\n    \"maximum_value\": 56991483520,\n    \"cache_entries\": 2168611\n  },\n  \"sorting\": {\n    \"count\": 300000,\n    \"maximum_lcg_product\": 2369763582350864175,\n    \"input_sha256\": \"f28a8ef6d5ecacf7f2e8a2c1c3342f3ba746864deb197d766962af885b7e19e2\",\n    \"sorted_sha256\": \"239cd51d274e9c08c3b40609d846b9676f7cf19acbd4459ead3e38ff734e8e5b\",\n    \"encoding\": \"ASCII decimal integer plus LF per element\"\n  },\n  \"integer_domain\": \"All timed positive arithmetic within signed i64; checked Rust full runs additionally validate executed arithmetic\"\n}\n",
+    "rust_tests": {
+      "numeric": "\nrunning 1 test\ntest known_steps ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+      "sorting": "\nrunning 1 test\ntest boundary_vectors ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n",
+      "strings": "\nrunning 1 test\ntest boundary_strings ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+      "tuples": "\nrunning 1 test\ntest digit_boundaries ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+    },
+    "interpreter_checks": {
+      "numeric": {
+        "source": "# Numeric loop: Collatz step counts, int arithmetic and branches only.\ndef steps(n: int) -> int:\n    count = 0\n    while n != 1:\n        if n % 2 == 0:\n            n = n // 2\n        else:\n            n = 3 * n + 1\n        count += 1\n    return count\n\n\ntotal = 0\nlongest = 0\nfor i in range(1, 1000):\n    s = steps(i)\n    total += s\n    if s > longest:\n        longest = s\nprint(total, longest)\n",
+        "stdout": "59431 178\n"
+      },
+      "sorting": {
+        "source": "# List sorting: in-place quicksort of pseudo-random ints.\ndef quicksort(xs: list[int], lo: int, hi: int) -> None:\n    while lo < hi:\n        pivot = xs[(lo + hi) // 2]\n        i = lo\n        j = hi\n        while i <= j:\n            while xs[i] < pivot:\n                i += 1\n            while xs[j] > pivot:\n                j -= 1\n            if i <= j:\n                t = xs[i]\n                xs[i] = xs[j]\n                xs[j] = t\n                i += 1\n                j -= 1\n        if j - lo < hi - i:\n            quicksort(xs, lo, j)\n            lo = i\n        else:\n            quicksort(xs, i, hi)\n            hi = j\n\n\nxs = []\nseed = 12345\nfor _ in range(100):\n    seed = (seed * 1103515245 + 12345) % 2147483648\n    xs.append(seed % 1000)\nquicksort(xs, 0, len(xs) - 1)\nok = True\nfor k in range(1, len(xs)):\n    if xs[k - 1] > xs[k]:\n        ok = False\nprint(ok, xs[0], xs[len(xs) // 2], xs[len(xs) - 1])\n",
+        "stdout": "True 0 457 995\n"
+      },
+      "strings": {
+        "source": "# String building: a small string per iteration, and one growing line.\ntotal = 0\nline = \"\"\nfor i in range(1000):\n    key = \"k\" + str(i) + \":\" + str(i % 97)\n    total += len(key)\n    if i % 50 == 0:\n        line += key[0]\nprint(total, len(line))\n",
+        "stdout": "6780 20\n"
+      },
+      "tuples": {
+        "source": "# Multiple return plus unpacking: exercises the internal scalar pair fast path.\ndef div_mod(a: int, b: int) -> tuple[int, int]:\n    return (a // b, a % b)\n\n\ndef digits(n: int) -> tuple[int, int]:\n    count = 0\n    total = 0\n    while n > 0:\n        n, d = div_mod(n, 10)\n        count += 1\n        total += d\n    return (count, total)\n\n\nall_count = 0\nall_total = 0\nfor i in range(1000):\n    c, t = digits(i)\n    all_count += c\n    all_total += t\nprint(all_count, all_total)\n",
+        "stdout": "2889 13500\n"
+      }
+    }
+  },
+  "host": {
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "libc": [
+      "glibc",
+      "2.41"
+    ],
+    "python": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+    "python_executable": "/usr/bin/python3.13",
+    "python_executable_identity": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "gil_enabled": true,
+    "load": [
+      1.1083984375,
+      0.853515625,
+      0.451171875
+    ],
+    "permitted_affinity": [
+      0
+    ],
+    "files": {
+      "/proc/cpuinfo": "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 0\ncpu cores\t: 9\napicid\t\t: 0\ninitial apicid\t: 0\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 1\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 1\ncpu cores\t: 9\napicid\t\t: 1\ninitial apicid\t: 1\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 2\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 2\ncpu cores\t: 9\napicid\t\t: 2\ninitial apicid\t: 2\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 3\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 3\ncpu cores\t: 9\napicid\t\t: 3\ninitial apicid\t: 3\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 4\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 4\ncpu cores\t: 9\napicid\t\t: 4\ninitial apicid\t: 4\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 5\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 5\ncpu cores\t: 9\napicid\t\t: 5\ninitial apicid\t: 5\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 6\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 6\ncpu cores\t: 9\napicid\t\t: 6\ninitial apicid\t: 6\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 7\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 7\ncpu cores\t: 9\napicid\t\t: 7\ninitial apicid\t: 7\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\nprocessor\t: 8\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.140\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 8\ncpu cores\t: 9\napicid\t\t: 8\ninitial apicid\t: 8\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext cpuid_fault vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.28\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:\n\n",
+      "/proc/self/cgroup": "0::/\n",
+      "/proc/self/mountinfo": "407 278 0:34 /newroot / rw,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000\n466 407 0:27 /usr /usr ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n467 407 0:27 /opt /opt ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n468 407 0:27 /etc /etc ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n469 407 0:35 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n470 407 0:36 / /dev rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n471 470 0:31 /null /dev/null rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n472 470 0:31 /zero /dev/zero rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n473 470 0:31 /full /dev/full rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n474 470 0:31 /random /dev/random rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n475 470 0:31 /urandom /dev/urandom rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n476 470 0:31 /tty /dev/tty rw,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755\n477 470 0:37 / /dev/pts rw,nosuid,nodev,noexec,relatime - devpts devpts rw,mode=620,ptmxmode=666\n478 470 0:38 / /dev/shm rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n479 407 0:39 / /tmp rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n480 479 0:27 /tmp/sites-preview-relay /tmp/sites-preview-relay ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n481 407 0:40 / /run rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n482 407 0:41 / /home/agent rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n483 482 0:42 / /home/agent/.codex ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n484 483 0:27 /home/agent/.codex/config.toml /home/agent/.codex/config.toml ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n485 483 0:27 /home/agent/.codex/skills /home/agent/.codex/skills ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n486 485 0:27 /home/agent/.codex/skills/remote-skills /home/agent/.codex/skills/remote-skills rw,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n487 483 0:27 /home/agent/.codex/plugins /home/agent/.codex/plugins ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n488 483 0:27 /home/agent/.codex/auth.json /home/agent/.codex/auth.json ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n489 483 0:27 /home/agent/.codex/.arcade-git/aggregate-skills /home/agent/.codex/.arcade-git/aggregate-skills rw,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n490 483 0:43 / /home/agent/.codex/tmp rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n491 407 0:27 /workspace /workspace rw,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/lower-0,upperdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/upper,workdir=/run/kata-containers/erofs-multi-layer/a09f51718eb64539bb1356d274c2bc83/upper/work,index=off,metacopy=off\n492 470 0:100 / /dev rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n493 492 0:31 /null /dev/null rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n494 492 0:31 /zero /dev/zero rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n495 492 0:31 /full /dev/full rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n496 492 0:31 /random /dev/random rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n497 492 0:31 /urandom /dev/urandom rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n498 492 0:31 /tty /dev/tty rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755\n499 492 0:101 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,mode=620,ptmxmode=666\n500 492 0:38 / /dev/shm rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n501 479 0:102 / /tmp/codex-daemon-1000 ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=000,uid=1000,gid=1000\n502 479 0:39 /codex-bwrap-synthetic-mount-targets-1000 /tmp/codex-bwrap-synthetic-mount-targets-1000 ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000\n503 483 0:103 / /home/agent/.codex/sessions ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=000,uid=1000,gid=1000\n504 469 0:104 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n",
+      "/sys/fs/cgroup/cpu.max": "unavailable: [Errno 2] No such file or directory: '/sys/fs/cgroup/cpu.max'",
+      "/sys/fs/cgroup/cpuset.cpus.effective": "unavailable: [Errno 2] No such file or directory: '/sys/fs/cgroup/cpuset.cpus.effective'"
+    },
+    "caveats": "shared host; no exclusive CPU/frequency control; warm source/binary caches; quota unknown if unavailable"
+  },
+  "harness": {
+    "path": "/workspace/scratch/2ce9dd46a989/pythrust-card814-work/bench/division_campaign.py",
+    "sha256": "ef46fc6bf370ed3dc80933870bb2d26d6cf2c66bec66169615ee5edb2fac175c"
+  },
+  "probe": {
+    "path": "/workspace/scratch/2ce9dd46a989/pythrust-card814-work/bench/profile_counts.c",
+    "sha256": "2ac4c5d05c5f2bd9ad69797930943a218f95c0eee7f48846a22f89febea146d1"
+  },
+  "before": {
+    "compiler": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+      "sha256": "e274bb52c3daf72e883bc574fb68f5df5e135a19ce44cb6dcd56147ca6e43c0b"
+    },
+    "runtime": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-target-base/release/libpythrust_rt.a",
+      "sha256": "b9ca7723d54e9be36d92de67bab3c8f6acade2124cff44e3a56b1a15e5f9adfb"
+    },
+    "harness": {
+      "path": "/workspace/scratch/2ce9dd46a989/pythrust-card814-work/bench/three_way.py",
+      "sha256": "44652ab9f8ed71e4b7eb8f5adb93f642bed0a5c7c9d25bab0ca867f74de6c41b"
+    },
+    "numeric/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric",
+      "sha256": "c6069af0ded0853e365db8b64b1912533801310475723797a148be132da5a60e"
+    },
+    "numeric/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "numeric/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust",
+      "sha256": "0b0497eec715de057cc3a918f8c64d2a9c055606e998e33eee816d78594de3e6"
+    },
+    "numeric/rust_checked": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust-checked",
+      "sha256": "b242ef6fb94e2a26f356bbd14d00444840d3fcde9a66e16a843ae70871961fa9"
+    },
+    "sorting/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting",
+      "sha256": "6b21095c908f500d60f820feee23a3a2937a56ebe152215c74e9d3b541fea945"
+    },
+    "sorting/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "sorting/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust",
+      "sha256": "1ed4598a979b5c95649709a8bebdfe7ea0667782e34d46606158f1ee06375b04"
+    },
+    "sorting/rust_checked": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust-checked",
+      "sha256": "f6c4e943a7bd750078ad5f67747db91df4fe0c55f4ef527dffb107c7da2c25cb"
+    },
+    "strings/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings",
+      "sha256": "9e3caea79cfe515a2aa0fa00d2a75e58a6134717213fdea81752fe4ea9608ad1"
+    },
+    "strings/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "strings/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust",
+      "sha256": "ea9ca43035f88c9a172f2b30cd4ff7baff4270466bd4d6a6d8f21a6d384dd7d1"
+    },
+    "strings/rust_checked": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust-checked",
+      "sha256": "fec3682d0f6b9dea8e93b1e3b1a480032be20eff0b0281c21bc2c585d28faf52"
+    },
+    "strings/rust_materialized": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust-materialized",
+      "sha256": "a4cee1276b4a346f447432041f4bf610c781d5b2a7b2bb38272d5a6079784f29"
+    },
+    "tuples/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples",
+      "sha256": "34dc85ed330c8bca3cb3d23d7abfe900728f8921a0843431b7a6636aa6e8c167"
+    },
+    "tuples/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "tuples/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust",
+      "sha256": "9d4ab29ca72a3f5cf75f135b1fb0d27a22b18ae855d4754c1ead591f81506e48"
+    },
+    "tuples/rust_checked": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust-checked",
+      "sha256": "b1b3bd2859459bb81838c028fae6da4195b6deee98a54510828cedca03e2128f"
+    },
+    "startup/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup",
+      "sha256": "8e10fde66db7f3604347a59a7849758096e4f35cae08ebc1fd849398a8314173"
+    },
+    "startup/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "startup/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup-rust",
+      "sha256": "cdea893501b5b5243fda8c5b558dc482406fc424e6b02962888b8bdc4d63caae"
+    },
+    "numeric/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric.pyr",
+      "sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97"
+    },
+    "numeric/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric.rs",
+      "sha256": "312c145dde279cca247daf95f8be5add4818e0c357255b494fe728ce1d00f1f2"
+    },
+    "sorting/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting.pyr",
+      "sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969"
+    },
+    "sorting/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting.rs",
+      "sha256": "e040ab8666e1e5ea13813e494c05340bb9e551702e96317feb702e6a8f376388"
+    },
+    "strings/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings.pyr",
+      "sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381"
+    },
+    "strings/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings.rs",
+      "sha256": "ecd5f086114d417593727f1b89e4028745800b4c8e0ee84f2d071d7068da1a14"
+    },
+    "tuples/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples.pyr",
+      "sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1"
+    },
+    "tuples/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples.rs",
+      "sha256": "21f9c88eb6def52a193595947d7b6c8ddb6d0e5573d0a1e56c950a5256f84e13"
+    },
+    "startup/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup.pyr",
+      "sha256": "9f56e761d79bfdb34304a012586cb04d16b435ef6130091a97702e559260a2f2"
+    },
+    "startup/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup.rs",
+      "sha256": "d6fb56acedd3afb2e7d6f6758766fb32ec3aa54ab70091dc529cc9582f1affd1"
+    }
+  },
+  "cases": {
+    "numeric": {
+      "profile_binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/numeric",
+        "sha256": "d1a7f4c1655936579152ab826081764f26da2142d472b9e2688038c8133d72e1"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/numeric.pyr",
+        "sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97"
+      },
+      "profile": {
+        "flat_profile": "Flat profile:\n\nEach sample counts as 0.01 seconds.\n  %   cumulative   self              self     total           \n time   seconds   seconds    calls  Ts/call  Ts/call  name    \n 99.33      2.97     2.97                             py1_steps\n  0.67      2.99     0.02                             pythrust_main\n",
+        "wall": {
+          "samples": [
+            0.4910805089984933,
+            0.47988664699914807,
+            0.47663326099973347,
+            0.4665133700000297,
+            0.45919095299905166,
+            0.453738661000898,
+            0.46706062899829703
+          ],
+          "median": 0.46706062899829703,
+          "minimum": 0.453738661000898,
+          "maximum": 0.4910805089984933,
+          "mad": 0.009572632001436432
+        },
+        "method": "GNU gprof -pg link-only PC histogram, ~100Hz; single-thread; excludes shared-library PCs; no call-graph counts"
+      },
+      "assembly": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/generated.s",
+        "sha256": "ccc12cad32236d13eaaa973b98e6ee9d0d56081a043f9156538033e64ff204cc"
+      },
+      "count_binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/numeric",
+        "sha256": "bf99d83c03d802d3b9934b2be394618fdbe221cab81c5fff41d1dff6d51fd27d"
+      },
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/numeric/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "counts": {
+        "heap_allocations": 5,
+        "heap_reallocations": 1,
+        "requested_bytes": 1103,
+        "copy_bytes": 26,
+        "str_inc": 0,
+        "str_dec": 0,
+        "seq_inc": 0,
+        "seq_dec": 0,
+        "seq_get": 0,
+        "seq_get_held": 0,
+        "seq_item_held": 0,
+        "seq_hold": 0,
+        "submit": 0
+      },
+      "count_returncode": 0,
+      "count_stdout": "131434272 524\n",
+      "raw_counts": "heap_allocations=5\nheap_reallocations=1\nrequested_bytes=1103\ncopy_bytes=26\nstr_inc=0\nstr_dec=0\nseq_inc=0\nseq_dec=0\nseq_get=0\nseq_get_held=0\nseq_item_held=0\nseq_hold=0\nsubmit=0\n"
+    },
+    "sorting": {
+      "profile_binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/sorting",
+        "sha256": "cc56f342a7219226624071551e4c44cf4bab2f1e6943f056191588664f19b486"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/sorting.pyr",
+        "sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969"
+      },
+      "profile": {
+        "flat_profile": "Flat profile:\n\nEach sample counts as 0.01 seconds.\n  %   cumulative   self              self     total           \n time   seconds   seconds    calls  Ts/call  Ts/call  name    \n 32.84      0.22     0.22                             pt_list_set\n 22.39      0.37     0.15                             pythrust_rt::seq::slot\n 14.93      0.47     0.10                             py1_quicksort\n 10.45      0.54     0.07                             pythrust_rt::seq::inc\n  8.96      0.60     0.06                             pt_seq_get\n  7.46      0.65     0.05                             pythrust_rt::seq::dec_into\n  1.49      0.66     0.01                             pythrust_rt::seq::dec\n  1.49      0.67     0.01                             pt_seq_dec\n",
+        "wall": {
+          "samples": [
+            0.12443909899957362,
+            0.11356576400066842,
+            0.11480289099927177,
+            0.1298479609995411,
+            0.11217349599974114,
+            0.12550053499944624,
+            0.12766554900008487
+          ],
+          "median": 0.12443909899957362,
+          "minimum": 0.11217349599974114,
+          "maximum": 0.1298479609995411,
+          "mad": 0.005408861999967485
+        },
+        "method": "GNU gprof -pg link-only PC histogram, ~100Hz; single-thread; excludes shared-library PCs; no call-graph counts"
+      },
+      "assembly": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/generated.s",
+        "sha256": "3f0a7f38aa656641f1417e54ad4bad5b95c5628691adf698cb47fe01a5665f6c"
+      },
+      "count_binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/sorting",
+        "sha256": "cd45cd4e8a7c652139be1c7eba8e48e9aa39f753ab3b0d314bd395fa325fe8c3"
+      },
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/sorting/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "counts": {
+        "heap_allocations": 8,
+        "heap_reallocations": 19,
+        "requested_bytes": 8389806,
+        "copy_bytes": 34,
+        "str_inc": 0,
+        "str_dec": 0,
+        "seq_inc": 0,
+        "seq_dec": 1,
+        "seq_get": 10852716,
+        "seq_get_held": 0,
+        "seq_item_held": 0,
+        "seq_hold": 0,
+        "submit": 0
+      },
+      "count_returncode": 0,
+      "count_stdout": "True 6 499909 999999\n",
+      "raw_counts": "heap_allocations=8\nheap_reallocations=19\nrequested_bytes=8389806\ncopy_bytes=34\nstr_inc=0\nstr_dec=0\nseq_inc=0\nseq_dec=1\nseq_get=10852716\nseq_get_held=0\nseq_item_held=0\nseq_hold=0\nsubmit=0\n"
+    },
+    "strings": {
+      "profile_binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/strings",
+        "sha256": "1273c22dd1ae8e3340170837fc2cee6219cb5f4c89d6215057786f7053d32e88"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/strings.pyr",
+        "sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381"
+      },
+      "profile": {
+        "flat_profile": "Flat profile:\n\nEach sample counts as 0.01 seconds.\n  %   cumulative   self              self     total           \n time   seconds   seconds    calls  Ts/call  Ts/call  name    \n 37.33      0.28     0.28                             alloc::str::join_generic_copy::<str, u8, &str>\n 17.33      0.41     0.13                             pt_str_concat\n  6.67      0.46     0.05                             pt_str_from_int\n  5.33      0.50     0.04                             core::str::converts::from_utf8\n  5.33      0.54     0.04                             pythrust_main\n  4.00      0.57     0.03                             core::str::count::char_count_general_case\n  3.33      0.60     0.03                             pt_str_dec\n  2.67      0.62     0.02                             __rustc::__rdl_alloc\n  2.67      0.64     0.02                             <core::str::lossy::Utf8Chunks as core::iter::traits::iterator::Iterator>::next\n  2.67      0.66     0.02                             pt_str_new\n  2.00      0.67     0.02                             <std::sys::personality::gcc::find_eh_action::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}\n  2.00      0.69     0.02                             __rustc::__rust_alloc_zeroed\n  2.00      0.70     0.02                             __rustc::__rust_no_alloc_shim_is_unstable_v2\n  1.33      0.71     0.01                             __rustc::__rust_alloc\n  1.33      0.72     0.01                             <alloc::string::String>::try_reserve\n  1.33      0.73     0.01                             <&str as core::fmt::Display>::fmt\n  1.33      0.74     0.01                             <&str as core::fmt::Display>::fmt\n  0.67      0.75     0.01                             __rustc::__rdl_dealloc\n  0.67      0.75     0.01                             pythrust_rt::text::repr\n",
+        "wall": {
+          "samples": [
+            0.23021586300092167,
+            0.22054246500010777,
+            0.22241075800047838,
+            0.23104418799994164,
+            0.22003073499945458,
+            0.21685450800032413,
+            0.23189894700044533
+          ],
+          "median": 0.22241075800047838,
+          "minimum": 0.21685450800032413,
+          "maximum": 0.23189894700044533,
+          "mad": 0.00555625000015425
+        },
+        "method": "GNU gprof -pg link-only PC histogram, ~100Hz; single-thread; excludes shared-library PCs; no call-graph counts"
+      },
+      "assembly": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/generated.s",
+        "sha256": "dd81508535b648f7414bb3beac083f1d0e54b5e07fced384efff0737a1938c39"
+      },
+      "count_binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/strings",
+        "sha256": "bef907428a474531620fd37ecebe572c7f88a6062bff94c143fb5adc2d0535e8"
+      },
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/strings/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "counts": {
+        "heap_allocations": 14080006,
+        "heap_reallocations": 1,
+        "requested_bytes": 459660492,
+        "copy_bytes": 234379386,
+        "str_inc": 0,
+        "str_dec": 7040002,
+        "seq_inc": 0,
+        "seq_dec": 0,
+        "seq_get": 0,
+        "seq_get_held": 0,
+        "seq_item_held": 0,
+        "seq_hold": 0,
+        "submit": 0
+      },
+      "count_returncode": 0,
+      "count_stdout": "9785790 20000\n",
+      "raw_counts": "heap_allocations=14080006\nheap_reallocations=1\nrequested_bytes=459660492\ncopy_bytes=234379386\nstr_inc=0\nstr_dec=7040002\nseq_inc=0\nseq_dec=0\nseq_get=0\nseq_get_held=0\nseq_item_held=0\nseq_hold=0\nsubmit=0\n"
+    },
+    "tuples": {
+      "profile_binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/tuples",
+        "sha256": "5a709859ead33a6ed3140e2cc9f8b11e46083800d0dba34b16d39253068921c4"
+      },
+      "source": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/tuples.pyr",
+        "sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1"
+      },
+      "profile": {
+        "flat_profile": "Flat profile:\n\nEach sample counts as 0.01 seconds.\n  %   cumulative   self              self     total           \n time   seconds   seconds    calls  Ts/call  Ts/call  name    \n 84.00      0.21     0.21                             pt_scalar_pair_2\n 12.00      0.24     0.03                             pt_scalar_pair_1\n  4.00      0.25     0.01                             pythrust_main\n",
+        "wall": {
+          "samples": [
+            0.05252916600147728,
+            0.050105636999433045,
+            0.0512602019989572,
+            0.05095608000010543,
+            0.053450964000148815,
+            0.05293530400012969,
+            0.04914016399925458
+          ],
+          "median": 0.0512602019989572,
+          "minimum": 0.04914016399925458,
+          "maximum": 0.053450964000148815,
+          "mad": 0.0012689640025200788
+        },
+        "method": "GNU gprof -pg link-only PC histogram, ~100Hz; single-thread; excludes shared-library PCs; no call-graph counts"
+      },
+      "assembly": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/generated.s",
+        "sha256": "791a406fa7651cadf04b3160facebb21d880fad94174781652aa40829f9d9baf"
+      },
+      "count_binary": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/tuples",
+        "sha256": "cfca497753b04b2e841fc6e6a67f1a06ca6f56cb29634c9f0ea32b51aba7727f"
+      },
+      "count_object": {
+        "path": "/workspace/scratch/2ce9dd46a989/card814-profiles-base/tuples/counts.o",
+        "sha256": "23bb675ec571891da780433fb2f15699bcc78b215911932d7e2c7397c23e092a"
+      },
+      "counts": {
+        "heap_allocations": 5,
+        "heap_reallocations": 2,
+        "requested_bytes": 1135,
+        "copy_bytes": 32,
+        "str_inc": 0,
+        "str_dec": 0,
+        "seq_inc": 0,
+        "seq_dec": 0,
+        "seq_get": 0,
+        "seq_get_held": 0,
+        "seq_item_held": 0,
+        "seq_hold": 0,
+        "submit": 0
+      },
+      "count_returncode": 0,
+      "count_stdout": "5888889 27000000\n",
+      "raw_counts": "heap_allocations=5\nheap_reallocations=2\nrequested_bytes=1135\ncopy_bytes=32\nstr_inc=0\nstr_dec=0\nseq_inc=0\nseq_dec=0\nseq_get=0\nseq_get_held=0\nseq_item_held=0\nseq_hold=0\nsubmit=0\n"
+    }
+  },
+  "after": {
+    "compiler": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-target-base/release/pythrust",
+      "sha256": "e274bb52c3daf72e883bc574fb68f5df5e135a19ce44cb6dcd56147ca6e43c0b"
+    },
+    "runtime": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-target-base/release/libpythrust_rt.a",
+      "sha256": "b9ca7723d54e9be36d92de67bab3c8f6acade2124cff44e3a56b1a15e5f9adfb"
+    },
+    "harness": {
+      "path": "/workspace/scratch/2ce9dd46a989/pythrust-card814-work/bench/three_way.py",
+      "sha256": "44652ab9f8ed71e4b7eb8f5adb93f642bed0a5c7c9d25bab0ca867f74de6c41b"
+    },
+    "numeric/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric",
+      "sha256": "c6069af0ded0853e365db8b64b1912533801310475723797a148be132da5a60e"
+    },
+    "numeric/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "numeric/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust",
+      "sha256": "0b0497eec715de057cc3a918f8c64d2a9c055606e998e33eee816d78594de3e6"
+    },
+    "numeric/rust_checked": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric-rust-checked",
+      "sha256": "b242ef6fb94e2a26f356bbd14d00444840d3fcde9a66e16a843ae70871961fa9"
+    },
+    "sorting/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting",
+      "sha256": "6b21095c908f500d60f820feee23a3a2937a56ebe152215c74e9d3b541fea945"
+    },
+    "sorting/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "sorting/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust",
+      "sha256": "1ed4598a979b5c95649709a8bebdfe7ea0667782e34d46606158f1ee06375b04"
+    },
+    "sorting/rust_checked": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting-rust-checked",
+      "sha256": "f6c4e943a7bd750078ad5f67747db91df4fe0c55f4ef527dffb107c7da2c25cb"
+    },
+    "strings/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings",
+      "sha256": "9e3caea79cfe515a2aa0fa00d2a75e58a6134717213fdea81752fe4ea9608ad1"
+    },
+    "strings/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "strings/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust",
+      "sha256": "ea9ca43035f88c9a172f2b30cd4ff7baff4270466bd4d6a6d8f21a6d384dd7d1"
+    },
+    "strings/rust_checked": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust-checked",
+      "sha256": "fec3682d0f6b9dea8e93b1e3b1a480032be20eff0b0281c21bc2c585d28faf52"
+    },
+    "strings/rust_materialized": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings-rust-materialized",
+      "sha256": "a4cee1276b4a346f447432041f4bf610c781d5b2a7b2bb38272d5a6079784f29"
+    },
+    "tuples/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples",
+      "sha256": "34dc85ed330c8bca3cb3d23d7abfe900728f8921a0843431b7a6636aa6e8c167"
+    },
+    "tuples/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "tuples/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust",
+      "sha256": "9d4ab29ca72a3f5cf75f135b1fb0d27a22b18ae855d4754c1ead591f81506e48"
+    },
+    "tuples/rust_checked": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples-rust-checked",
+      "sha256": "b1b3bd2859459bb81838c028fae6da4195b6deee98a54510828cedca03e2128f"
+    },
+    "startup/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup",
+      "sha256": "8e10fde66db7f3604347a59a7849758096e4f35cae08ebc1fd849398a8314173"
+    },
+    "startup/cpython": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9"
+    },
+    "startup/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup-rust",
+      "sha256": "cdea893501b5b5243fda8c5b558dc482406fc424e6b02962888b8bdc4d63caae"
+    },
+    "numeric/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric.pyr",
+      "sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97"
+    },
+    "numeric/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/numeric.rs",
+      "sha256": "312c145dde279cca247daf95f8be5add4818e0c357255b494fe728ce1d00f1f2"
+    },
+    "sorting/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting.pyr",
+      "sha256": "59002a9199a1e2a098d65340a84ba3e7216d05e5525fe262791fb8fac39e5969"
+    },
+    "sorting/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/sorting.rs",
+      "sha256": "e040ab8666e1e5ea13813e494c05340bb9e551702e96317feb702e6a8f376388"
+    },
+    "strings/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings.pyr",
+      "sha256": "a0b923620761d138f66acc92ff4e344827cac2b8c94183131fa5320fa5e38381"
+    },
+    "strings/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/strings.rs",
+      "sha256": "ecd5f086114d417593727f1b89e4028745800b4c8e0ee84f2d071d7068da1a14"
+    },
+    "tuples/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples.pyr",
+      "sha256": "2fbca60f4f894848d9bbe74a515d85442e54370e5eebf21a4443e81f5a6640d1"
+    },
+    "tuples/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/tuples.rs",
+      "sha256": "21f9c88eb6def52a193595947d7b6c8ddb6d0e5573d0a1e56c950a5256f84e13"
+    },
+    "startup/source/pythrust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup.pyr",
+      "sha256": "9f56e761d79bfdb34304a012586cb04d16b435ef6130091a97702e559260a2f2"
+    },
+    "startup/source/rust": {
+      "path": "/workspace/scratch/2ce9dd46a989/card814-base/startup.rs",
+      "sha256": "d6fb56acedd3afb2e7d6f6758766fb32ec3aa54ab70091dc529cc9582f1affd1"
+    }
+  }
+}

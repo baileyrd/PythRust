@@ -11,17 +11,17 @@
 //! keyword argument.
 
 use crate::ast::{
-    Arg, BinOp, Binding, Block, Branch, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp,
-    Mode, Module, Param, ParamMode, Pause, Stmt, StmtKind, StubDef, Target, TargetKind, TypeExpr,
-    UnaryOp,
+    Arg, BinOp, Binding, Block, Branch, CmpOp, CompFor, Expr, ExprKind, FuncDef, Handler, Ident,
+    LogicalOp, Mode, Module, Param, ParamMode, Pause, Stmt, StmtKind, StubDef, Target, TargetKind,
+    TypeExpr, UnaryOp,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 use crate::stdlib::ModuleDef;
 use crate::token::{Token, TokenKind};
 
-/// Nesting limit for blocks, parentheses and unary chains. Hostile input
-/// gets a diagnostic instead of a stack overflow.
+/// Limit both recursive grammar calls and constructed expression height.
+/// Iterative folds must not bypass the bound protecting later passes and drop.
 const MAX_DEPTH: usize = 100;
 
 /// Parses a token stream that ends in exactly one `EndMarker`.
@@ -40,6 +40,10 @@ pub fn parse_stub(tokens: &[Token], name: &str) -> Result<Binding> {
     Parser::new(tokens, &[])?.stub(name)
 }
 
+mod comp;
+mod depth;
+use depth::bounded;
+
 type Rule<'a, T> = fn(&mut Parser<'a>) -> Result<T>;
 
 struct Parser<'a> {
@@ -52,6 +56,12 @@ struct Parser<'a> {
     depth: usize,
     in_func: bool,
     in_loop: bool,
+    /// Inside a `finally` block of this function (or the module's code):
+    /// `return` would leave it (D89).
+    in_finally: bool,
+    /// Inside a `finally` block entered since the innermost loop:
+    /// `break` and `continue` would leave it (D89).
+    jump_leaves_finally: bool,
     /// Modules imported so far.
     modules: Vec<&'static ModuleDef>,
     /// The Rust bindings `import` may name, and those it has.
@@ -81,6 +91,8 @@ impl<'a> Parser<'a> {
             depth: 0,
             in_func: false,
             in_loop: false,
+            in_finally: false,
+            jump_leaves_finally: false,
             modules: Vec::new(),
             bindings,
             imported_bindings: Vec::new(),
@@ -185,10 +197,20 @@ impl<'a> Parser<'a> {
     }
 
     fn looping<T>(&mut self, rule: Rule<'a, T>) -> Result<T> {
-        let outer = self.in_loop;
-        self.in_loop = true;
+        let outer = (self.in_loop, self.jump_leaves_finally);
+        (self.in_loop, self.jump_leaves_finally) = (true, false);
         let out = rule(self);
-        self.in_loop = outer;
+        (self.in_loop, self.jump_leaves_finally) = outer;
+        out
+    }
+
+    /// A `finally` block: no `return`, `break` or `continue` may leave it
+    /// (D89).
+    fn finally_block(&mut self) -> Result<Block> {
+        let outer = (self.in_finally, self.jump_leaves_finally);
+        (self.in_finally, self.jump_leaves_finally) = (true, true);
+        let out = self.block();
+        (self.in_finally, self.jump_leaves_finally) = outer;
         out
     }
 
@@ -274,6 +296,7 @@ impl<'a> Parser<'a> {
         let kind = match self.peek() {
             TokenKind::Return => self.return_stmt()?,
             TokenKind::Raise => self.raise_stmt()?,
+            TokenKind::Del => self.del_stmt()?,
             TokenKind::Break => self.loop_jump(StmtKind::Break, "break")?,
             TokenKind::Continue => self.loop_jump(StmtKind::Continue, "continue")?,
             TokenKind::Pass => {
@@ -293,6 +316,9 @@ impl<'a> Parser<'a> {
         if !self.in_func {
             return Err(error(span, "`return` outside function"));
         }
+        if self.in_finally {
+            return Err(error(span, leaves_finally("return")));
+        }
         if !starts_expr(self.peek()) {
             return Ok(StmtKind::Return(None));
         }
@@ -310,10 +336,33 @@ impl<'a> Parser<'a> {
         Ok(StmtKind::Raise(self.expr()?))
     }
 
+    /// `'del' target`: only one subscript, `xs[i]` or `d[k]`, for now.
+    fn del_stmt(&mut self) -> Result<StmtKind> {
+        self.bump();
+        let target = self.expr_list()?;
+        let what = match target.kind {
+            ExprKind::Subscript { value, index } => {
+                return Ok(StmtKind::Del {
+                    value: *value,
+                    index: *index,
+                })
+            }
+            ExprKind::Slice { .. } => "`del` of a slice is not supported yet",
+            ExprKind::Name(_) => "`del` of a name is not supported yet",
+            ExprKind::Tuple(_) => "`del` of several targets is not supported yet",
+            ExprKind::Attr { .. } => "`del` of an attribute is not supported yet",
+            _ => "cannot delete this; `del` takes an item, as in `del xs[i]` or `del d[k]`",
+        };
+        Err(error(target.span, what))
+    }
+
     fn loop_jump(&mut self, kind: StmtKind, word: &str) -> Result<StmtKind> {
         let span = self.bump().span;
         if !self.in_loop {
             return Err(error(span, format!("`{word}` outside loop")));
+        }
+        if self.jump_leaves_finally {
+            return Err(error(span, leaves_finally(word)));
         }
         Ok(kind)
     }
@@ -522,21 +571,36 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `'try' ':' block handler+`. `else` and `finally` clauses are later.
+    /// `'try' ':' block (handler+ [finally] | finally)`. An `else`
+    /// clause is later.
     fn try_stmt(&mut self) -> Result<Stmt> {
         let start = self.bump().span;
         self.expect(&TokenKind::Colon)?;
         let body = self.block()?;
-        let mut handlers = vec![self.handler()?];
+        let mut handlers = Vec::new();
         while self.at(&TokenKind::Except) {
             handlers.push(self.handler()?);
         }
-        if self.at(&TokenKind::Else) {
+        if self.at(&TokenKind::Else) && !handlers.is_empty() {
             let span = self.tok(0).span;
             return Err(error(span, "`else` on `try` is not supported yet"));
         }
+        let finally = match self.eat(&TokenKind::Finally) {
+            true => {
+                self.expect(&TokenKind::Colon)?;
+                Some(self.finally_block()?)
+            }
+            false if handlers.is_empty() => {
+                return Err(self.unexpected("`except` or `finally`"));
+            }
+            false => None,
+        };
         Ok(Stmt {
-            kind: StmtKind::Try { body, handlers },
+            kind: StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            },
             span: self.span_from(start),
         })
     }
@@ -628,7 +692,7 @@ impl<'a> Parser<'a> {
     fn for_target(&mut self) -> Result<Target> {
         let start = self.tok(0).span;
         let (items, comma) = self.comma_list(Self::postfix)?;
-        to_target(self.tuple_or_single(items, comma, start))
+        to_target(self.tuple_or_single(items, comma, start)?)
     }
 
     /// `('if' | 'elif' | 'while') expr ':' block`. The caller has seen the
@@ -709,19 +773,19 @@ impl<'a> Parser<'a> {
     fn expr_list(&mut self) -> Result<Expr> {
         let start = self.tok(0).span;
         let (items, comma) = self.comma_list(Self::expr)?;
-        Ok(self.tuple_or_single(items, comma, start))
+        self.tuple_or_single(items, comma, start)
     }
 
-    fn tuple_or_single(&self, items: Vec<Expr>, comma: bool, start: Span) -> Expr {
+    fn tuple_or_single(&self, items: Vec<Expr>, comma: bool, start: Span) -> Result<Expr> {
         let items = match <[Expr; 1]>::try_from(items) {
-            Ok([single]) if !comma => return single,
+            Ok([single]) if !comma => return Ok(single),
             Ok(one) => Vec::from(one),
             Err(many) => many,
         };
-        Expr {
+        bounded(Expr {
             kind: ExprKind::Tuple(items),
             span: self.span_from(start),
-        }
+        })
     }
 
     fn expr(&mut self) -> Result<Expr> {
@@ -758,7 +822,7 @@ impl<'a> Parser<'a> {
             body: Box::new(body),
             orelse: Box::new(orelse),
         };
-        Ok(Expr { kind, span })
+        bounded(Expr { kind, span })
     }
 
     fn or_expr(&mut self) -> Result<Expr> {
@@ -775,7 +839,7 @@ impl<'a> Parser<'a> {
         }
         let start = self.bump().span;
         let operand = self.nested(Self::not_expr)?;
-        Ok(unary(UnaryOp::Not, start, operand))
+        unary(UnaryOp::Not, start, operand)
     }
 
     fn comparison(&mut self) -> Result<Expr> {
@@ -792,7 +856,7 @@ impl<'a> Parser<'a> {
             left: Box::new(left),
             rest,
         };
-        Ok(Expr { kind, span })
+        bounded(Expr { kind, span })
     }
 
     /// Consumes a `comp_op`, including the two-token `not in` and `is not`.
@@ -824,13 +888,13 @@ impl<'a> Parser<'a> {
         &mut self,
         operand: Rule<'a, Expr>,
         op_of: fn(&TokenKind) -> Option<Op>,
-        build: fn(Op, Expr, Expr) -> Expr,
+        build: fn(Op, Expr, Expr) -> Result<Expr>,
     ) -> Result<Expr> {
         let mut left = operand(self)?;
         while let Some(op) = op_of(self.peek()) {
             self.bump();
             let right = operand(self)?;
-            left = build(op, left, right);
+            left = build(op, left, right)?;
         }
         Ok(left)
     }
@@ -848,7 +912,7 @@ impl<'a> Parser<'a> {
         }
         let start = self.bump().span;
         let operand = self.nested(Self::factor)?;
-        Ok(unary(op, start, operand))
+        unary(op, start, operand)
     }
 
     /// `'-' INT` with nothing binding tighter after it, folded to one
@@ -879,7 +943,7 @@ impl<'a> Parser<'a> {
             return Ok(base);
         }
         let exponent = self.nested(Self::factor)?;
-        Ok(binary(BinOp::Pow, base, exponent))
+        binary(BinOp::Pow, base, exponent)
     }
 
     fn postfix(&mut self) -> Result<Expr> {
@@ -903,7 +967,7 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::RParen)?;
         check_args(&args)?;
-        Ok(Expr {
+        bounded(Expr {
             span: self.span_from(func.span),
             kind: ExprKind::Call {
                 func: Box::new(func),
@@ -925,6 +989,7 @@ impl<'a> Parser<'a> {
             None
         };
         let value = self.expr()?;
+        self.no_comp("generator expressions")?;
         Ok(Arg {
             name,
             value,
@@ -934,21 +999,49 @@ impl<'a> Parser<'a> {
 
     fn subscript(&mut self, value: Expr) -> Result<Expr> {
         self.bump();
-        let index = self.expr()?;
+        let first = self.slice_component()?;
+        if self.eat(&TokenKind::Colon) {
+            let stop = self.slice_component()?;
+            let step = if self.eat(&TokenKind::Colon) {
+                self.slice_component()?
+            } else {
+                None
+            };
+            self.expect(&TokenKind::RBracket)?;
+            return bounded(Expr {
+                span: self.span_from(value.span),
+                kind: ExprKind::Slice {
+                    value: Box::new(value),
+                    start: first,
+                    stop,
+                    step,
+                },
+            });
+        }
+        let Some(index) = first else {
+            return Err(error(self.tok(0).span, "expected an expression, found `]`"));
+        };
         self.expect(&TokenKind::RBracket)?;
-        Ok(Expr {
+        bounded(Expr {
             span: self.span_from(value.span),
             kind: ExprKind::Subscript {
                 value: Box::new(value),
-                index: Box::new(index),
+                index,
             },
         })
+    }
+
+    fn slice_component(&mut self) -> Result<Option<Box<Expr>>> {
+        if self.at(&TokenKind::Colon) || self.at(&TokenKind::RBracket) {
+            return Ok(None);
+        }
+        self.expr().map(|e| Some(Box::new(e)))
     }
 
     fn attr(&mut self, value: Expr) -> Result<Expr> {
         self.bump();
         let attr = self.expect_name("an attribute name")?;
-        Ok(Expr {
+        bounded(Expr {
             span: value.span.merge(attr.span),
             kind: ExprKind::Attr {
                 value: Box::new(value),
@@ -990,7 +1083,7 @@ impl<'a> Parser<'a> {
             _ => return Err(self.unexpected("an expression")),
         };
         self.bump();
-        Ok(Expr {
+        bounded(Expr {
             kind,
             span: tok.span,
         })
@@ -1001,16 +1094,17 @@ impl<'a> Parser<'a> {
     fn paren(&mut self) -> Result<Expr> {
         let start = self.bump().span;
         if self.eat(&TokenKind::RParen) {
-            return Ok(Expr {
+            return bounded(Expr {
                 kind: ExprKind::Tuple(Vec::new()),
                 span: self.span_from(start),
             });
         }
         let inner = self.expr_list()?;
+        self.no_comp("generator expressions")?;
         self.expect(&TokenKind::RParen)?;
         let span = self.span_from(start);
         self.widen_pauses(inner.span, span);
-        Ok(Expr {
+        bounded(Expr {
             kind: inner.kind,
             span,
         })
@@ -1023,16 +1117,67 @@ impl<'a> Parser<'a> {
         covering.for_each(|p| p.covers = outer);
     }
 
+    /// A list display, or a comprehension when `for` follows the first
+    /// item.
     fn list(&mut self) -> Result<Expr> {
         let start = self.bump().span;
         let items = if self.at(&TokenKind::RBracket) {
             Vec::new()
         } else {
-            self.comma_list(Self::expr)?.0
+            let first = self.expr()?;
+            if self.at(&TokenKind::For) {
+                return self.list_comp(first, start);
+            }
+            self.rest_of_list(first)?
         };
         self.expect(&TokenKind::RBracket)?;
-        Ok(Expr {
+        bounded(Expr {
             kind: ExprKind::List(items),
+            span: self.span_from(start),
+        })
+    }
+
+    /// The named error for a comprehension form not supported yet (D87),
+    /// at its `for`.
+    fn no_comp(&self, forms: &str) -> Result<()> {
+        if !self.at(&TokenKind::For) {
+            return Ok(());
+        }
+        let msg = format!("{forms} are not supported yet");
+        Err(error(self.tok(0).span, msg))
+    }
+
+    /// `comp_for+ ']'`, after `'[' elt`.
+    fn list_comp(&mut self, mut elt: Expr, start: Span) -> Result<Expr> {
+        let mut clauses = Vec::new();
+        while self.at(&TokenKind::For) {
+            clauses.push(self.comp_for()?);
+        }
+        self.expect(&TokenKind::RBracket)?;
+        comp::own_names(&mut elt, &mut clauses, start.start)?;
+        bounded(Expr {
+            kind: ExprKind::ListComp {
+                elt: Box::new(elt),
+                clauses,
+            },
+            span: self.span_from(start),
+        })
+    }
+
+    /// `'for' target_list 'in' or_expr ('if' or_expr)*`
+    fn comp_for(&mut self) -> Result<CompFor> {
+        let start = self.bump().span;
+        let target = self.for_target()?;
+        self.expect(&TokenKind::In)?;
+        let iter = self.nested(Self::or_expr)?;
+        let mut ifs = Vec::new();
+        while self.eat(&TokenKind::If) {
+            ifs.push(self.nested(Self::or_expr)?);
+        }
+        Ok(CompFor {
+            target,
+            iter,
+            ifs,
             span: self.span_from(start),
         })
     }
@@ -1045,13 +1190,14 @@ impl<'a> Parser<'a> {
             ExprKind::Dict(Vec::new())
         } else {
             let first = self.expr()?;
+            self.no_comp("set comprehensions")?;
             match self.at(&TokenKind::Colon) {
                 true => ExprKind::Dict(self.dict_items(first)?),
                 false => ExprKind::Set(self.rest_of_list(first)?),
             }
         };
         self.expect(&TokenKind::RBrace)?;
-        Ok(Expr {
+        bounded(Expr {
             kind,
             span: self.span_from(start),
         })
@@ -1064,6 +1210,7 @@ impl<'a> Parser<'a> {
         loop {
             self.expect(&TokenKind::Colon)?;
             items.push((key, self.expr()?));
+            self.no_comp("dict comprehensions")?;
             if !self.eat(&TokenKind::Comma) || !starts_expr(self.peek()) {
                 return Ok(items);
             }
@@ -1093,6 +1240,7 @@ fn to_target(expr: Expr) -> Result<Target> {
             TargetKind::Name(name)
         }
         ExprKind::Subscript { value, index } => TargetKind::Subscript { value, index },
+        ExprKind::Slice { .. } => return Err(error(span, "slice assignment is not supported yet")),
         ExprKind::Tuple(items) if !items.is_empty() => {
             let targets = items.into_iter().map(to_target);
             TargetKind::Tuple(targets.collect::<Result<_>>()?)
@@ -1157,36 +1305,36 @@ fn int_literal(value: u64, span: Span) -> Result<i64> {
 
 // Node builders.
 
-fn unary(op: UnaryOp, start: Span, operand: Expr) -> Expr {
-    Expr {
+fn unary(op: UnaryOp, start: Span, operand: Expr) -> Result<Expr> {
+    bounded(Expr {
         span: start.merge(operand.span),
         kind: ExprKind::Unary {
             op,
             operand: Box::new(operand),
         },
-    }
+    })
 }
 
-fn binary(op: BinOp, left: Expr, right: Expr) -> Expr {
-    Expr {
+fn binary(op: BinOp, left: Expr, right: Expr) -> Result<Expr> {
+    bounded(Expr {
         span: left.span.merge(right.span),
         kind: ExprKind::Binary {
             op,
             left: Box::new(left),
             right: Box::new(right),
         },
-    }
+    })
 }
 
-fn logical(op: LogicalOp, left: Expr, right: Expr) -> Expr {
-    Expr {
+fn logical(op: LogicalOp, left: Expr, right: Expr) -> Result<Expr> {
+    bounded(Expr {
         span: left.span.merge(right.span),
         kind: ExprKind::Logical {
             op,
             left: Box::new(left),
             right: Box::new(right),
         },
-    }
+    })
 }
 
 fn error(span: Span, message: impl Into<String>) -> Diagnostic {
@@ -1298,6 +1446,7 @@ fn expr_noun(kind: &ExprKind) -> &'static str {
         | ExprKind::None => "a literal",
         ExprKind::Tuple(_) => "an empty tuple",
         ExprKind::List(_) => "a list",
+        ExprKind::ListComp { .. } => "a list comprehension",
         ExprKind::Dict(_) => "a dict display",
         ExprKind::Set(_) => "a set display",
         ExprKind::Call { .. } => "a function call",
@@ -1306,7 +1455,10 @@ fn expr_noun(kind: &ExprKind) -> &'static str {
         ExprKind::Unary { .. } | ExprKind::Binary { .. } | ExprKind::Logical { .. } => {
             "an operator expression"
         }
-        ExprKind::Name(_) | ExprKind::Subscript { .. } | ExprKind::Attr { .. } => "this expression",
+        ExprKind::Name(_)
+        | ExprKind::Subscript { .. }
+        | ExprKind::Slice { .. }
+        | ExprKind::Attr { .. } => "this expression",
     }
 }
 
@@ -1342,7 +1494,9 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Is => "is",
         TokenKind::Try => "try",
         TokenKind::Except => "except",
+        TokenKind::Finally => "finally",
         TokenKind::Raise => "raise",
+        TokenKind::Del => "del",
         TokenKind::Import => "import",
         TokenKind::As => "as",
         TokenKind::With => "with",
@@ -1404,3 +1558,9 @@ pub(crate) fn test_binding(name: &str, src: &str) -> Binding {
 
 #[cfg(test)]
 mod tests;
+
+/// Why `word` may not leave a `finally` block (D89; CPython 3.13 allows
+/// it, swallowing a pending exception).
+fn leaves_finally(word: &str) -> String {
+    format!("`{word}` inside `finally` is not supported")
+}

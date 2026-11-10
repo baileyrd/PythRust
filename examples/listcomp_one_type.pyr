@@ -1,0 +1,4 @@
+# expect-exit: 1
+# expect-error: expected int, found str
+# deviation: static subset rejects this form before execution.
+print([x for x in [1, 2] for x in ["a"]])

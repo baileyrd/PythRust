@@ -1,0 +1,10 @@
+# Focused mixed-width signed conversion control (#811); both i64 extremes.
+def conversions() -> int:
+    values = [0, 1, -1, 9, -9, 10, -10, 99, -99, 100, -100, 999999999, -999999999, 1000000000000000000, -1000000000000000000, 9223372036854775807, -9223372036854775808]
+    total = 0
+    for i in range(200000):
+        for n in values:
+            total += len(str(n))
+    return total
+
+print(conversions())

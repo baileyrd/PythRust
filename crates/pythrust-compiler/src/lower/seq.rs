@@ -148,13 +148,13 @@ impl FnBuilder<'_, '_> {
     }
 
     /// Field `k` of tuple `t`, a new temporary.
-    fn field(&mut self, t: Operand, k: usize, span: Span) -> Result<Operand> {
+    pub(super) fn field(&mut self, t: Operand, k: usize, span: Span) -> Result<Operand> {
         let ty = self.slot_ty(self.ty(t), k, span)?;
         Ok(self.temp(ty, Rvalue::Field(t, k), span))
     }
 
-    /// `list.append(v)`, a dict's or set's method, a file's `read` or
-    /// `close`, or a `str` method.
+    /// A list's method (`append` here), a dict's or set's, a file's
+    /// `read` or `close`, or a `str` method.
     pub(super) fn method(
         &mut self,
         value: &Expr,
@@ -173,8 +173,11 @@ impl FnBuilder<'_, '_> {
         if let (Ty::Str, Some(f)) = (ty, StdFn::str_method(attr)) {
             return self.str_method(f, list, args, span);
         }
-        let ([arg], "append", Ty::List(_)) = (args, attr, ty) else {
-            return Err(unsupported(span, "methods other than `list.append(x)`"));
+        let Ty::List(_) = ty else {
+            return Err(unsupported(span, &format!("the method `{attr}` here")));
+        };
+        let ([arg], "append") = (args, attr) else {
+            return self.list_method(list, attr, args, span);
         };
         if arg.name.is_some() {
             return Err(unsupported(span, "keyword arguments"));

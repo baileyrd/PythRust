@@ -1,0 +1,74 @@
+# List methods (D70): pop, extend, insert, remove, index, count and sort,
+# and `del` of an item, on lists of ints, floats, strings and lists.
+
+
+temper def drain(mut xs: list[str]) -> list[str] raises IndexError:
+    out: list[str] = []
+    while len(xs) > 0:
+        out.append(xs.pop())
+    return out
+
+
+temper def tidy(mut xs: list[float]) -> int:
+    xs.sort(reverse=True)
+    del xs[-1]
+    return xs.count(0.0)
+
+
+def main() -> None:
+    xs = [3, 1, 2]
+    print(xs.pop(), xs.pop(0), xs.pop(-1), xs)
+    xs.extend([7, 8])
+    xs.extend(xs)
+    xs.extend(range(2))
+    xs.extend({9})
+    print(xs)
+    xs.insert(-100, 5)
+    xs.insert(100, 6)
+    xs.insert(1, 4)
+    xs.insert(-1, 0)
+    print(xs)
+    xs.remove(7)
+    xs.remove(True)
+    print(xs, xs.index(8), xs.count(8), xs.count(42), xs.index(0))
+    xs.sort()
+    print(xs)
+    xs.sort(reverse=True)
+    print(xs)
+    del xs[0]
+    del xs[-1]
+    print(xs)
+
+    fs = [0.0, -0.0, 2.5, 0.0]
+    print(tidy(fs), fs, fs.index(2.5), fs.count(False))
+    print(sorted([0.0, -0.0, 1.0], reverse=True), sorted([3, 1, 2], reverse=0))
+
+    names = ["éclair", "zèbre", "äpfel", "Zoo"]
+    names.sort()
+    print(names, names.index("zèbre"))
+    names.extend("ñu")
+    print(names)
+    print(drain(names), names)
+
+    grid = [[2], [1, 1], []]
+    grid.sort()
+    grid.insert(1, [0])
+    print(grid, grid.pop(2), grid.index([2]), grid.count([]))
+    grid.remove([])
+    print(grid)
+
+    words = {"b": 1, "a": 2}
+    ks: list[str] = []
+    ks.extend(words)
+    ks.extend(words.keys())
+    print(ks)
+
+    seen = [1, 2, 3, 4]
+    for x in seen:
+        if x == 2:
+            seen.remove(x)
+        print(x)
+    print(seen)
+
+
+main()

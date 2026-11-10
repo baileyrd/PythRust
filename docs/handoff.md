@@ -6,14 +6,21 @@ Read first, in order: `README.md`, `docs/design.md`, `docs/grammar.md`, `docs/ro
 
 ## State
 
-- Done: design sketch, roadmap, loose-syntax grammar (functions, ints, floats, strings, lists, tuples, control flow, optional annotations).
-- Exists in code: an empty `crates/pythrust-compiler` lib crate (`forbid(unsafe_code)`). Nothing else.
-- Decided: ints are `i64` with checked overflow; tempering is `temper def f(...)`; tuples are fixed-length, immutable, positionally typed.
-- Open: pause marker (`pause f(x)`?), shared-lock keyword (`shared`?), LLVM vs Cranelift. Do not decide these silently; propose and ask.
+Current implementation checkpoint: main `a6d8ca9485d01302b2130df82ba12b3ea8454c20` (PR #125 / Mill Board #804). The [roadmap](roadmap.md) remains the implementation inventory; [grammar.md](grammar.md) owns the language contract and CPython differences.
+
+- M0–M3 (contract, interpreter/checker and syntax), M4 (native backend) and M5 (tempering/ownership) are implemented. M6a–M6d deliver stdlib, Rust bindings, tasks/`pause`, manifest/lockfile, embedded binding-runtime source and the external-copy fclone-lite driver. This does not complete the full phase-5 vision: M6e waits for a second app; `shared[T]`, channels and other explicitly parked items retain their roadmap triggers.
+- #812 corrects the remaining issue #73 D4 container/context wording and Optional/temporary copy advice. Named flat-list receivers copy their current value before mutation; unproved rewrites use prose. Source-span loop facts only select wording: target binding/body establish active iteration; pending iterable evaluation and completed-loop else do not. Active outer loops retain their context while an inner iterable is evaluated. Alias analysis and rejection are unchanged. Regression coverage includes all original issue73 cases and applied D3/D4 fixes; independent review and hosted CI remain required.
+- Post-M6 step 1's string methods and builtins are implemented. #806 prototypes a bounded internal two-int return/unpack fast path, with allocation and release timing evidence in [benchmarks.md](benchmarks.md#internal-two-int-returnunpack-806); independent review and hosted CI remain required. #807 prototypes strict adjacent string-chain fusion (D64), with measured allocation/copy reduction on the isolated case and no gain on the existing string workload; independent review and hosted CI remain required. Later language work remains planned. #808 supplies a measurement-only [current baseline and ranked experiments](benchmarks/card808.md), pending independent review and hosted CI; it implements no recommendations. #767's phase/milestone mapping is unchanged.
+- #809's bounded safe scalar SHA-256 prototype retains shared-source interpreter/native behavior, D22, dependencies and ABIs. [Fresh same-host evidence](benchmarks/card809.md) shows loaded-SHA and full large-file fclone gains; independent review and hosted CI are pending. #811 remains queued, and this does not reopen #566/PR69 or held #396.
+- #799 preserves an existing executable on link failure; #800 propagates loose-callee stores into ownership checks; #801 checks every possible computed alias source; #802 fixes tuple ordering across lengths and numeric fields; #803 bounds expression trees; #804 limits copy suggestions to safe flat-list fixes. Issue #73 remains open pending review and merge of #812 plus independent confirmation of all four original findings.
+- Native corpus validation covers x86-64/AArch64 Linux, AArch64 macOS and x86-64 Windows (MSVC). #396 / PR #119 was explicitly resumed on 2026-11-10. Its prior head `8ddfb76` passed x86-64 macOS and AArch64 Windows full/debug/release checks (CI run 42421234961); the update against current main still requires fresh exact-head CI and independent review before merge. See [native coverage and gaps](native.md#known-gaps) and [runtime resolution](native.md#runtime-resolution).
+- Cranelift, `pause <expr>`, `shared[T]` syntax and `.pyr` are decided. `shared[T]` is not implemented. [DECISIONS](handoff/DECISIONS.md), [QA](handoff/QA.md), [SPEC](handoff/SPEC.md) and [open questions](handoff/OPEN_QUESTIONS.md) preserve the rationale and deferrals.
+
+The Step-0 plan, parallel-thread notes, milestone definitions and first actions below are historical bootstrap instructions, not a current queue. Keep them for context; resume from the roadmap and current board state.
 
 ## Engineering rules
 
-- Small, terse, modular, pragmatic. Modular monolith: one crate, clear modules. No abstraction before two real call sites.
+- Small, terse, modular, pragmatic. Modular monolith: compiler and runtime crates, clear stage modules. No abstraction before two real call sites.
 - Explicit over implicit. Types everywhere. Flat control flow: guard clauses, early returns, at most 3 levels of nesting. Short single-purpose functions.
 - `Result` and `?`, never `unwrap()`/`expect()` outside tests. Never swallow errors; propagate with context.
 - Domain logic free of I/O. Immutable data; make illegal states unrepresentable.
@@ -21,6 +28,30 @@ Read first, in order: `README.md`, `docs/design.md`, `docs/grammar.md`, `docs/ro
 - Tests for all non-trivial logic: happy path plus failure and boundary cases.
 - Ask before large or hard-to-reverse changes (public API, dependency bumps, deletions). Keep diffs focused. State the why for non-obvious choices.
 - One branch and one PR per thread. Commit small.
+
+## Integer-list experiment #810
+
+The [exact-descriptor dispatch pilot](benchmarks/card810.md) is rejected under
+its no-material-regressions gate: sorting improves about 41%, but a matched
+float-list access fallback slows 8.2% then 4.9% in repeated same-host trials.
+The evidence PR retains the reproducible candidate patch, raw timing/counts and
+CPython/runtime safety regressions; production access is unchanged from main
+`4da6b73`. Independent review and required CI remain pending. #811 stays queued;
+#396/PR119 and D29 C stay held; issue73 is not closed by this card.
+
+## Integer formatting experiment #811
+
+The [private decimal formatter](benchmarks/card811.md) retains exact-sized owned
+strings, local ASCII/code-point proof and current failure/cleanup behavior.
+Repeated same-host ordinary measurements improve serial/task conversion controls
+about 18–23%, mixed-width conversion about 14–15%, and the string workload about
+3–7%; the unrelated numeric control stays within observed noise. Raw identities,
+resources, copy/allocation/realloc counts and forced buffer/object failure evidence
+are retained. Full CPython 3.13/native/ownership/string-chain regressions passed;
+independent exact-head review and hosted CI remain required before merge/Done.
+#810 production access remains unchanged; #396/PR119 and D29 C remain held, and
+issue73 stays open. The measured source snapshot is preserved in branch history.
+
 
 ## Step 0 (serial, do first): the contract
 
@@ -80,7 +111,7 @@ Each milestone ends in something runnable.
 
 **M4. Native code (phase 3).** Backend chosen per G.1 and G.4. Compile the subset to a native binary. Exit: benchmark against CPython on 4 programs (a numeric loop, string building, list sorting, and multiple return plus tuple unpacking, which Nano added to measure boxed tuples); report the real speedup honestly, including where it is small. **Done 2026-10-26**; see [roadmap.md](roadmap.md#phase-3-native-status-m4-done) for the evidence and follow-ups.
 
-**M5. Tempering and ownership (phase 4).** `temper def` enforced: required annotations, explicit error types, borrow by default with inferred ownership, exception-to-Result lowering. Exit: a tempered function rejects what a loose one accepts, with diagnostics a Python programmer can act on, and no leaked Rust borrow-checker vocabulary. **Done 2026-10-30**; see [roadmap.md](roadmap.md#phase-4-m5-plan) for the evidence and the open D7 revisit.
+**M5. Tempering and ownership (phase 4).** `temper def` enforced: required annotations, explicit error types, borrow by default with inferred ownership, exception-to-Result lowering. Exit: a tempered function rejects what a loose one accepts, with diagnostics a Python programmer can act on, and no leaked Rust borrow-checker vocabulary. **Done 2026-10-30**; see [roadmap.md](roadmap.md#phase-4-m5-plan) for the evidence and the completed catchable-fault follow-up.
 
 **M6. Interop and ecosystem (phase 5).** Python typed bridge (dynamic import, stubs, runtime check at the crossing), Rust binary-level interop, one tool with one manifest and one lockfile for all three dependency kinds, uncolored concurrency with channels and the shared-lock wrapper. Exit: a real script that imports a Python package, calls a Rust crate, and runs tasks concurrently. Driven first by fclone-lite, a duplicate-file finder; order and stdlib direction in [roadmap.md](roadmap.md#phase-5-m6-plan) (Nano, 2026-10-31).
 
@@ -94,3 +125,40 @@ Estimates (gut, not a plan): M0 to M3 a few weeks; M4 about a month; M5 several 
 4. Report back with: what merged, what diverged from the grammar, and any decision you need from Nano.
 
 Design decisions and rationale are also in the remind-me memory store, tagged `language-design` and `pythrust`.
+
+
+## Signed half campaign #814
+
+[Fresh evidence](benchmarks/card814.md) supports a bounded native signed-i64
+positive-literal-2 shift/mask experiment, preserving generic/fault paths and Python
+negative/boundary behavior. Full local checks pass; independent exact-head review
+and required CI remain pending. Repeated numeric gains are about 49–50%, sorting
+4–5%; string-control limits and identical-byte checks are recorded. #815/#817
+remain separate evidence-ordered follow-ups, and #816 retains a distinct residual
+helper lead supported by an explicitly nonproduction source-inline diagnostic.
+This does not restore rejected #810 accessors or reopen #396/PR119, D29 C or #563.
+
+## Compiler-selected integer-list experiment #815
+
+One bounded compiler/runtime interface experiment (D66) routes only proven
+ordinary `list[int]` reads/stores to typed helpers, retaining Slot safeguards
+and existing float/generic/held paths. [Fresh same-host evidence](benchmarks/card815.md)
+shows repeatable sorting/integer gains and records the small noisy controls,
+separate profiles/counts and all validation. This candidate awaits independent
+exact-head review and required hosted CI; #815 is unfinished. #810's rejected
+shared-accessor optimization, #396/PR119, D29 C, deferred #563 and later #817/#816
+work are unchanged.
+
+
+## Residual string profiling #817
+
+The [scoped evidence-only study](benchmarks/card817.md) on main `02c7816` after
+#815 reproduces historical allocation/copy totals and newly assigns traffic to
+intermediate key results and repeated growing-line prefixes. Every observed
+binary concat copies its exact-sized result once; repeated results remain a
+possible future analysis subject. No production candidate was attempted or
+retained, and optional binary-dispatch savings remain untested. The report
+retains fresh release self-controls, scoped counts, separate PC sampling,
+immutable source/tool/artifact linkage and full local validation. Independent
+exact-head review and hosted CI remain coordinator gates. D64 scope, #816,
+held #396/PR119, D29 C and deferred #563 remain unchanged.

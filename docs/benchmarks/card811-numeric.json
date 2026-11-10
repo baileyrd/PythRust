@@ -1,0 +1,1636 @@
+{
+  "schema": 1,
+  "runs": 41,
+  "warmups": 2,
+  "seed": 2811,
+  "workloads": [
+    "numeric"
+  ],
+  "identities": {
+    "before": {
+      "commit": "bfaa9fed9a0899ddcbfd7f68af693c6e449a6be9",
+      "tree": "a7346701613c3c11071092326278ff37d6f76abd",
+      "source_diff": "",
+      "compiler": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/numeric-control/before/pythrust",
+        "sha256": "35908d40b46bae7794155b2cc6fb7b17699180d63ed16fbf282d768df0a4bbb7"
+      },
+      "archive": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/numeric-control/before/libpythrust_rt.a",
+        "sha256": "ba0e5e18e179c4b751f3ba809da4f8cf0cbf54f5bfe00e5d64beadf18aa4ccc0"
+      },
+      "cases": {
+        "numeric": {
+          "source": "# Numeric loop: Collatz step counts, int arithmetic and branches only.\ndef steps(n: int) -> int:\n    count = 0\n    while n != 1:\n        if n % 2 == 0:\n            n = n // 2\n        else:\n            n = 3 * n + 1\n        count += 1\n    return count\n\n\ntotal = 0\nlongest = 0\nfor i in range(1, 1000000):\n    s = steps(i)\n    total += s\n    if s > longest:\n        longest = s\nprint(total, longest)\n",
+          "source_sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97",
+          "stdout": "131434272 524\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/numeric-control/before/numeric",
+            "sha256": "e3449e0b1c45d6a3adbc40bc83461bd6cf3c6f65b1a40c8e10b724191063cf96"
+          }
+        }
+      }
+    },
+    "after": {
+      "commit": "2ce557923665d868a4c791f745f0591fc6377f8c",
+      "tree": "833fa528d67253c4c8ca4abad79272b588006474",
+      "source_diff": "",
+      "compiler": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/numeric-control/after/pythrust",
+        "sha256": "dda98c547c550c55630913db6ec0fae2a4bf4c0f6af99aed925a94138bc4ddea"
+      },
+      "archive": {
+        "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/numeric-control/after/libpythrust_rt.a",
+        "sha256": "b9ca7723d54e9be36d92de67bab3c8f6acade2124cff44e3a56b1a15e5f9adfb"
+      },
+      "cases": {
+        "numeric": {
+          "source": "# Numeric loop: Collatz step counts, int arithmetic and branches only.\ndef steps(n: int) -> int:\n    count = 0\n    while n != 1:\n        if n % 2 == 0:\n            n = n // 2\n        else:\n            n = 3 * n + 1\n        count += 1\n    return count\n\n\ntotal = 0\nlongest = 0\nfor i in range(1, 1000000):\n    s = steps(i)\n    total += s\n    if s > longest:\n        longest = s\nprint(total, longest)\n",
+          "source_sha256": "0e0c00db73adeb4076c9af8a4be855ebb68f50d717a74e45c99b053730f0be97",
+          "stdout": "131434272 524\n",
+          "binary": {
+            "path": "/workspace/scratch/2ce9dd46a989/card811-evidence/numeric-control/after/numeric",
+            "sha256": "8344865601d3571fae0534219fc4fbaeb40a6ea16e07b5301066cb180ce1bda9"
+          }
+        }
+      }
+    }
+  },
+  "environment": {
+    "utc": "2026-11-08T06:39:40.967987+00:00",
+    "python": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+    "allowed_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "cpuinfo": "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nmodel name\t: AMD EPYC 9V74 80-Core Processor\nstepping\t: 1\nmicrocode\t: 0x1000065\ncpu MHz\t\t: 2596.086\ncache size\t: 1024 KB\nphysical id\t: 0\nsiblings\t: 9\ncore id\t\t: 0\ncpu cores\t: 9\napicid\t\t: 0\ninitial apicid\t: 0\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 28\nwp\t\t: yes\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nbugs\t\t: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso spectre_v2_user tsa\nbogomips\t: 5192.17\nTLB size\t: 3584 4K pages\nclflush size\t: 64\ncache_alignment\t: 64\naddress sizes\t: 46 bits physical, 48 bits virtual\npower management:",
+    "before": {
+      "loadavg": [
+        0.38916015625,
+        1.08251953125,
+        1.021484375
+      ],
+      "visible_processes": "codex\nbash\npython3.13\nps\n",
+      "limitation": "Process namespaces can hide host activity; no hardware exclusivity claim."
+    },
+    "after": {
+      "loadavg": [
+        0.888671875,
+        1.07421875,
+        1.01904296875
+      ],
+      "visible_processes": "codex\nbash\npython3.13\nps\n",
+      "limitation": "Process namespaces can hide host activity; no hardware exclusivity claim."
+    }
+  },
+  "cases": {
+    "numeric/4": {
+      "affinity": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "stdout": "131434272 524\n",
+      "order": [
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.4566649999999999,
+            "system": 0.004133999999999999,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.4837600000000002,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4483889999999997,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.45245099999999994,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.44794299999999954,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.46098699999999937,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 70
+          },
+          {
+            "user": 0.44259500000000074,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 8
+          },
+          {
+            "user": 0.45016199999999884,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4564590000000006,
+            "system": 0.008285,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4468350000000001,
+            "system": 0.004138999999999997,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4751840000000005,
+            "system": 0.0042179999999999995,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.45489099999999993,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.5641539999999985,
+            "system": 0.005098000000000005,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.49756,
+            "system": 0.004295999999999994,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4746110000000012,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4714380000000027,
+            "system": 0.007550000000000001,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4784150000000018,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.5020610000000012,
+            "system": 0.013213000000000003,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4561320000000002,
+            "system": 0.0042149999999999965,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.5240050000000025,
+            "system": 0.0047780000000000045,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.46677399999999736,
+            "system": 0.004034999999999997,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.4465360000000018,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.4559100000000029,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.4534969999999987,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.5523779999999974,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4649610000000024,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.47316900000000217,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.49390499999999804,
+            "system": 0.004198000000000007,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.5175780000000003,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.47237499999999955,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.4529939999999968,
+            "system": 0.0040929999999999855,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.46329000000000065,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.45836599999999805,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.45942700000000514,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4606950000000012,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.4628659999999982,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.4516310000000061,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.4626400000000004,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4598219999999955,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4818349999999967,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4751769999999951,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          }
+        ],
+        "after": [
+          {
+            "user": 0.4567570000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.44675699999999985,
+            "system": 0.004118000000000004,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4896989999999999,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.4424050000000008,
+            "system": 0.004053000000000001,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4481080000000004,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.4447920000000005,
+            "system": 0.004119999999999999,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4626039999999998,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4460230000000003,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.5098599999999998,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4652259999999995,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.4562539999999995,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.456963,
+            "system": 0.004108999999999995,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.510409000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.5041920000000015,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.47319199999999917,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.4390389999999975,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.49756799999999757,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.5261689999999994,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.472845999999997,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4512520000000002,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.42875000000000085,
+            "system": 0.008055000000000007,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4654539999999976,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.5138679999999987,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.47562300000000235,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.4780540000000002,
+            "system": 0.003959999999999991,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.494100999999997,
+            "system": 0.004191,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.4752539999999996,
+            "system": 0.003270000000000009,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.584188000000001,
+            "system": 0.0023289999999999977,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.4912139999999994,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.460994000000003,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.4653240000000025,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.4650449999999964,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4874630000000053,
+            "system": 0.004459999999999992,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4541679999999957,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4467209999999966,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.49296199999999857,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.45781499999999653,
+            "system": 0.004178000000000015,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4667340000000024,
+            "system": 0.003946000000000005,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.45551000000000386,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 0
+          },
+          {
+            "user": 0.46607099999999946,
+            "system": 0.0043159999999999865,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.4764030000000048,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.46479878299942357,
+          0.48520483299944317,
+          0.4526418269997521,
+          0.45304074800151284,
+          0.44906658599938964,
+          0.4939988260011887,
+          0.44309975400028634,
+          0.45551875499950256,
+          0.4663694459995895,
+          0.4513745199983532,
+          0.47970901200096705,
+          0.45516489500005264,
+          0.5744172499980778,
+          0.5021576870021818,
+          0.47932751300322707,
+          0.4792619639993063,
+          0.4788383880004403,
+          0.5281273380023777,
+          0.46068608700079494,
+          0.5290993309972691,
+          0.47126605099765584,
+          0.4469544510029664,
+          0.4562666839992744,
+          0.4538270850025583,
+          0.5527184979982849,
+          0.46534444200005964,
+          0.47350765699957265,
+          0.49837351799942553,
+          0.5179381669986469,
+          0.472690873000829,
+          0.4575428389980516,
+          0.4636691189989506,
+          0.45870457400087616,
+          0.45981965100145317,
+          0.46106230200166465,
+          0.4632245629982208,
+          0.45195506399977603,
+          0.4642778459965484,
+          0.4601593010011129,
+          0.4832542209987878,
+          0.4789891699983855
+        ],
+        "median": 0.46479878299942357,
+        "minimum": 0.44309975400028634,
+        "maximum": 0.5744172499980778,
+        "mad": 0.012156955999671482
+      },
+      "after": {
+        "samples": [
+          0.45756929100025445,
+          0.451814503998321,
+          0.49280056600036914,
+          0.44735202999800094,
+          0.4507377269983408,
+          0.4515409039995575,
+          0.4635961249987304,
+          0.44835446900106035,
+          0.5117962969998189,
+          0.470814607997454,
+          0.4569079419998161,
+          0.4614205199977732,
+          0.510696013996494,
+          0.5044687879999401,
+          0.47345140099787386,
+          0.4394690100016305,
+          0.49785086200063233,
+          0.5264607990029617,
+          0.48098548400230356,
+          0.45156207699983497,
+          0.4373345159983728,
+          0.46578674200281966,
+          0.5143815520023054,
+          0.47612657499848865,
+          0.48232974400161766,
+          0.49873802900037845,
+          0.48326571000143304,
+          0.5868215160007821,
+          0.49151706399788964,
+          0.46129085600114195,
+          0.4657047410000814,
+          0.46540635299970745,
+          0.49224539100032416,
+          0.4545513349985413,
+          0.44712843900197186,
+          0.4933824609979638,
+          0.46343374099888024,
+          0.47211072299978696,
+          0.45587082199926954,
+          0.4719103340030415,
+          0.4857291090011131
+        ],
+        "median": 0.470814607997454,
+        "minimum": 0.4373345159983728,
+        "maximum": 0.5868215160007821,
+        "mad": 0.01900010399913299
+      }
+    },
+    "numeric/1": {
+      "affinity": [
+        0
+      ],
+      "stdout": "131434272 524\n",
+      "order": [
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "before",
+          "after"
+        ],
+        [
+          "after",
+          "before"
+        ],
+        [
+          "after",
+          "before"
+        ]
+      ],
+      "resources": {
+        "before": [
+          {
+            "user": 0.48232200000000347,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 8
+          },
+          {
+            "user": 0.4570579999999964,
+            "system": 0.004038999999999987,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4567620000000048,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4440869999999961,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4427610000000044,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.43986400000000003,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4766119999999958,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.49491700000000094,
+            "system": 0.004351999999999995,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4601019999999991,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.46874799999999794,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.4460150000000027,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4460149999999956,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.44078300000000326,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.48076400000000064,
+            "system": 0.0043440000000000145,
+            "voluntary": 1,
+            "involuntary": 1
+          },
+          {
+            "user": 0.48226999999999975,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.49008899999999755,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.48236700000000354,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.49030900000000344,
+            "system": 0.003966999999999998,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4798509999999965,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.47372900000000584,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.5182830000000038,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4571380000000005,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4462910000000022,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.4738760000000042,
+            "system": 0.004254999999999981,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4710850000000022,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.47197599999999795,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4630239999999901,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4821969999999993,
+            "system": 0.004372000000000015,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.5141020000000083,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.5202069999999992,
+            "system": 0.016648999999999997,
+            "voluntary": 1,
+            "involuntary": 384
+          },
+          {
+            "user": 0.48453099999998983,
+            "system": 0.012386000000000008,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.49115799999999865,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.4954529999999977,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.45340799999999604,
+            "system": 0.0036239999999999883,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4799589999999938,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.438674000000006,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.449261000000007,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4440129999999982,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.44829099999999755,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.488821999999999,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4750700000000023,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          }
+        ],
+        "after": [
+          {
+            "user": 0.48276999999999504,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4592659999999995,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4856539999999967,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4365330000000043,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.43743599999999816,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.44593400000000116,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4596689999999981,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.49871399999999966,
+            "system": 0.004249000000000003,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.46572600000000364,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.4494940000000014,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.44273199999999946,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.45136200000000315,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4441229999999976,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.49023899999999543,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.4735940000000056,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 7
+          },
+          {
+            "user": 0.48201699999999903,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4537339999999972,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.468119999999999,
+            "system": 0.0029710000000000014,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.49607199999999807,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4914089999999973,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4934549999999973,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          },
+          {
+            "user": 0.4485479999999953,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4599099999999936,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.45525700000000313,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 2
+          },
+          {
+            "user": 0.48488899999999546,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4680150000000083,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.4750930000000011,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.473078000000001,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 3
+          },
+          {
+            "user": 0.48555999999999244,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.4789120000000082,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.47727700000000084,
+            "system": 0.004270999999999997,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.469294000000005,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 8
+          },
+          {
+            "user": 0.5186199999999985,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 25
+          },
+          {
+            "user": 0.4567970000000088,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.48777200000000676,
+            "system": 0.004414000000000001,
+            "voluntary": 1,
+            "involuntary": 9
+          },
+          {
+            "user": 0.456711999999996,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.443097999999992,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.44633699999999976,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.49387800000000937,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 4
+          },
+          {
+            "user": 0.5227499999999878,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 5
+          },
+          {
+            "user": 0.49556600000001083,
+            "system": 0.0,
+            "voluntary": 1,
+            "involuntary": 6
+          }
+        ]
+      },
+      "before": {
+        "samples": [
+          0.4838870849998784,
+          0.462638197997876,
+          0.491618878000736,
+          0.44557926099878387,
+          0.4442153239979234,
+          0.44136692300162395,
+          0.4781746050030051,
+          0.500777001001552,
+          0.460635759998695,
+          0.4702604820013221,
+          0.447459944000002,
+          0.4475065189981251,
+          0.44227500700071687,
+          0.4855189030022302,
+          0.48388786900250125,
+          0.4906411659976584,
+          0.48294338900086586,
+          0.4958619239987456,
+          0.48137476299962145,
+          0.4752727250015596,
+          0.5198889649982448,
+          0.45759712400104036,
+          0.4477918829979899,
+          0.4796579430003476,
+          0.47257850499954657,
+          0.4724910379991343,
+          0.4635215730013442,
+          0.488039496998681,
+          0.5145824999999604,
+          0.634854494001047,
+          0.5036591080024664,
+          0.4916224059998058,
+          0.5015328959998442,
+          0.4575253050024912,
+          0.5191185060029966,
+          0.44014385500122444,
+          0.4507991470018169,
+          0.44549588799782214,
+          0.44977357999960077,
+          0.4903464220005844,
+          0.47550049599885824
+        ],
+        "median": 0.47550049599885824,
+        "minimum": 0.44014385500122444,
+        "maximum": 0.634854494001047,
+        "mad": 0.017903371997817885
+      },
+      "after": {
+        "samples": [
+          0.4835156820008706,
+          0.46074108900211286,
+          0.48736511999959475,
+          0.43798187100037467,
+          0.43896322500222595,
+          0.44740467600058764,
+          0.46114033900084905,
+          0.5044554649975908,
+          0.46616024499962805,
+          0.4509516040016024,
+          0.4442363160014793,
+          0.45289483799933805,
+          0.44465032699736184,
+          0.4917760639982589,
+          0.4751441270018404,
+          0.48356300800151075,
+          0.4552766770029848,
+          0.472570836001978,
+          0.49756267399789067,
+          0.4928982729979907,
+          0.49498127100014244,
+          0.4490159980014141,
+          0.4615301699996053,
+          0.4556968590004544,
+          0.48637814199901186,
+          0.4695008179987781,
+          0.4765598410012899,
+          0.47362731600151164,
+          0.48621172300045146,
+          0.4805040499995812,
+          0.48353175900047063,
+          0.47121159200105467,
+          0.5857984999965993,
+          0.45723251500021433,
+          0.4938627900010033,
+          0.4582011469974532,
+          0.4446012080006767,
+          0.4478454199997941,
+          0.49433807199966395,
+          0.5232793060022232,
+          0.497068988999672
+        ],
+        "median": 0.472570836001978,
+        "minimum": 0.43798187100037467,
+        "maximum": 0.5857984999965993,
+        "mad": 0.017294158998993225
+      }
+    }
+  }
+}

@@ -1,8 +1,8 @@
 //! Dicts and sets: insertion-ordered hash tables over hashable values.
 //!
-//! A set is a table whose values are all `None`. Entries are only ever
-//! added or replaced (nothing removes one yet), so an entry's position
-//! never changes and iteration reads by index.
+//! A set is a table whose values are all `None`. Iteration reads by
+//! index; removing an entry (`d.pop`, `del d[k]`) shifts the later ones
+//! down, and a `for` over the table sees the size change (D20).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -104,6 +104,17 @@ impl<'m> Table<'m> {
     pub fn get(&self, key: &Key) -> Option<&Value<'m>> {
         let i = *self.index.get(key)?;
         self.entries.get(i).map(|(_, v)| v)
+    }
+
+    /// Removes `key`'s entry, giving it; later entries keep their order.
+    pub fn remove(&mut self, key: &Key) -> Option<(Value<'m>, Value<'m>)> {
+        let i = self.index.remove(key)?;
+        for at in self.index.values_mut() {
+            if *at > i {
+                *at -= 1;
+            }
+        }
+        (i < self.entries.len()).then(|| self.entries.remove(i))
     }
 
     pub fn contains(&self, key: &Key) -> bool {

@@ -1,0 +1,9 @@
+# `list.index` of a number of another type than the list's items: `run`
+# shows the item as written in the error, `2 is not in list`; native code
+# does not support it yet.
+xs = [1.5]
+try:
+    print(xs.index(2))
+except ValueError as e:
+    print(e)
+print([1.0, 2.0].index(True))

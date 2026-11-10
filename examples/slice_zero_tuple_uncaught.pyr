@@ -1,0 +1,4 @@
+# expect-exit: 1
+print("before")
+print((1, "a")[::0])
+print("unreachable")

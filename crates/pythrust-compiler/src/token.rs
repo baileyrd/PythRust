@@ -47,7 +47,11 @@ pub enum TokenKind {
     Is,
     Try,
     Except,
+    /// `finally`, only ending a `try` (step 1b).
+    Finally,
     Raise,
+    /// `del`, only as `del x[i]` (step 1b).
+    Del,
     /// `as`, only in `except Name as e` and `with value as name`.
     As,
     /// `import`, only at module top level (M6a).

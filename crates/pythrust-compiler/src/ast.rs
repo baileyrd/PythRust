@@ -120,10 +120,18 @@ pub enum StmtKind {
     },
     /// `'raise' expr`
     Raise(Expr),
-    /// `'try' ':' block handler+`. `handlers` is never empty.
+    /// `'del' expr '[' expr ']'`: removes a list's item or a dict's key.
+    Del {
+        value: Expr,
+        index: Expr,
+    },
+    /// `'try' ':' block (handler+ [finally] | finally)`, where
+    /// `finally = 'finally' ':' block`. `handlers` is empty only when
+    /// `finally` is present.
     Try {
         body: Block,
         handlers: Vec<Handler>,
+        finally: Option<Block>,
     },
     /// `'with' expr 'as' NAME ':' block` (M6c): `value` is an executor,
     /// whose tasks all end before the block is left.
@@ -286,10 +294,52 @@ pub enum ExprKind {
         value: Box<Expr>,
         index: Box<Expr>,
     },
+    /// A slice read; absent components keep their distinct Python defaults.
+    Slice {
+        value: Box<Expr>,
+        start: Option<Box<Expr>>,
+        stop: Option<Box<Expr>>,
+        step: Option<Box<Expr>>,
+    },
     Attr {
         value: Box<Expr>,
         attr: Ident,
     },
+    /// `'[' expr comp_for+ ']'`: a list comprehension. `clauses` is never
+    /// empty. The names its targets bind are its own ([`comp_name`]).
+    ListComp {
+        elt: Box<Expr>,
+        clauses: Vec<CompFor>,
+    },
+}
+
+/// `'for' target_list 'in' or_expr ('if' or_expr)*` in a comprehension.
+/// `target` is a name or a tuple of them. The first clause's `iter` runs
+/// in the enclosing scope; everything else in the comprehension sees its
+/// targets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompFor {
+    pub target: Target,
+    pub iter: Expr,
+    pub ifs: Vec<Expr>,
+    pub span: Span,
+}
+
+/// Marks a comprehension's own name: the parser renames `x` bound by the
+/// comprehension at offset `n` to `x@n`, a name no source can spell, so
+/// each later stage sees an ordinary variable of one type that neither
+/// leaks nor shadows (CPython 3 scoping).
+pub const COMP_MARK: char = '@';
+
+/// The name `x` a comprehension starting at `offset` binds.
+pub fn comp_name(name: &str, offset: usize) -> String {
+    format!("{name}{COMP_MARK}{offset}")
+}
+
+/// A name as its source spells it: a comprehension's own name loses its
+/// mark.
+pub fn source_name(name: &str) -> &str {
+    name.split_once(COMP_MARK).map_or(name, |(n, _)| n)
 }
 
 /// `[NAME '='] expr`

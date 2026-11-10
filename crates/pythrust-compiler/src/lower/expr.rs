@@ -33,7 +33,18 @@ impl<'a> FnBuilder<'_, 'a> {
             ExprKind::Dict(items) => self.dict_display(items, e.span),
             ExprKind::Set(items) => self.set_display(items, e.span),
             ExprKind::Subscript { value, index } => self.subscript(value, index, e.span),
+            ExprKind::Slice {
+                value,
+                start,
+                stop,
+                step,
+            } => self.slice_read(
+                value,
+                [start.as_deref(), stop.as_deref(), step.as_deref()],
+                e.span,
+            ),
             ExprKind::Attr { .. } => Err(unsupported(e.span, "attributes other than methods")),
+            ExprKind::ListComp { elt, clauses } => self.list_comp(elt, clauses, e.span),
         }
     }
 
@@ -362,6 +373,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 op,
                 CmpOp::Eq | CmpOp::Le | CmpOp::Ge
             ))),
+            (Ty::Tuple(_), Ty::Tuple(_)) if lt != rt => self.tuple_cmp(op, l, r, span),
             _ if lt != rt => Err(unsupported(span, "comparing values of different types")),
             _ => Ok(self.temp(Ty::Bool, Rvalue::Cmp(op, l, r), span)),
         }
@@ -654,7 +666,12 @@ impl<'a> FnBuilder<'_, 'a> {
         match name {
             "list" => Ok(ops[k]),
             "sorted" => {
-                self.emit(Inst::Sort(ops[k]));
+                let (_, reverse) = self.sort_args(args, &ops, span)?;
+                self.emit(Inst::Sort {
+                    list: ops[k],
+                    reverse,
+                    span,
+                });
                 Ok(ops[k])
             }
             _ => self.builtin(name, args, ops, span),
@@ -824,7 +841,11 @@ impl<'a> FnBuilder<'_, 'a> {
         let positional = StdFn::from_name(name).and_then(StdFn::keyword);
         let keyword = |a: &Arg| {
             a.name.as_ref().is_some_and(|k| {
-                Some(k.name.as_str()) != positional && (name, k.name.as_str()) != ("sum", "start")
+                let allowed = matches!(
+                    (name, k.name.as_str()),
+                    ("sum", "start") | ("sorted", "reverse")
+                );
+                Some(k.name.as_str()) != positional && !allowed
             })
         };
         if args.iter().any(keyword) {
@@ -835,7 +856,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.unary_builtin(name, &ops, span)
             }
             "set" => self.new_set(&ops, span),
-            "sorted" => self.sorted(&ops, span),
+            "sorted" => self.sorted(args, &ops, span),
             "abs" => match ops.as_slice() {
                 [x] => self.abs(*x, span),
                 _ => Err(unsupported(span, "`abs` of other than one argument")),

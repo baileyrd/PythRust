@@ -1,0 +1,26 @@
+# Independent receivers retain Python evaluation order and short-circuiting.
+temper def grow(mut xs: list[int]) -> None:
+    xs.append(9)
+
+temper def f(c: bool) -> None:
+    a = [1]
+    b = [2]
+    (a if c else b).append(3)
+    (a or b).append(4)
+    (a and b)[0] += 5
+    grow((a if c else b) or a)
+    print(a, b)
+    (a if c else a).append(6)
+    print(a)
+
+f(True)
+f(False)
+
+def mark(xs):
+    print(xs)
+    return xs
+
+# Skipped branches must stay skipped, operands evaluate once.
+print(mark([1]) or mark([2]))
+print(mark([]) and mark([3]))
+print(mark([4]) if True else mark([5]))

@@ -1,0 +1,7 @@
+# deviation: `del` of a name, of several targets or of an attribute is not supported yet (D70); CPython accepts them.
+# expect-exit: 1
+# expect-error: `del` of a name is not supported yet
+
+x = 1
+del x
+print("deleted")

@@ -1,4 +1,4 @@
-# Multiple return plus unpacking: every call allocates a tuple.
+# Multiple return plus unpacking: exercises the internal scalar pair fast path.
 def div_mod(a: int, b: int) -> tuple[int, int]:
     return (a // b, a % b)
 

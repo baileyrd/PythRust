@@ -1,0 +1,111 @@
+test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) ... 
+  test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) (mutation='remove_input') ... FAIL
+  test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) (mutation='add_input') ... FAIL
+  test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) (mutation='clear_tools') ... FAIL
+  test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) (mutation='source_digest') ... FAIL
+test_identical_path_control_rejects_relabelled_or_incomplete_data (test_int_list_campaign.CampaignEvidence.test_identical_path_control_rejects_relabelled_or_incomplete_data) ... ok
+test_matched_controls_and_monorphic_generic_inputs (test_int_list_campaign.CampaignEvidence.test_matched_controls_and_monorphic_generic_inputs) ... ok
+test_probes_reject_count_and_provenance_corruption (test_int_list_campaign.CampaignEvidence.test_probes_reject_count_and_provenance_corruption) ... ok
+test_saved_evidence_and_corruptions (test_int_list_campaign.CampaignEvidence.test_saved_evidence_and_corruptions) ... ok
+test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) ... 
+  test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='no_profile_digest') ... FAIL
+  test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='empty_gmon_digests') ... FAIL
+  test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='compiler_substitution') ... FAIL
+  test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='remove_profile_flags') ... FAIL
+  test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='remove_wraps') ... FAIL
+  test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='missing_probe_tools') ... FAIL
+
+======================================================================
+FAIL: test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) (mutation='remove_input')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 83, in test_complete_source_and_tool_inventory_review_mutations
+    with self.assertRaises(ValueError):c.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) (mutation='add_input')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 83, in test_complete_source_and_tool_inventory_review_mutations
+    with self.assertRaises(ValueError):c.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) (mutation='clear_tools')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 83, in test_complete_source_and_tool_inventory_review_mutations
+    with self.assertRaises(ValueError):c.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_complete_source_and_tool_inventory_review_mutations (test_int_list_campaign.CampaignEvidence.test_complete_source_and_tool_inventory_review_mutations) (mutation='source_digest')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 83, in test_complete_source_and_tool_inventory_review_mutations
+    with self.assertRaises(ValueError):c.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='no_profile_digest')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 106, in test_supporting_probe_review_mutations
+    with self.assertRaises(ValueError):probes.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='empty_gmon_digests')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 106, in test_supporting_probe_review_mutations
+    with self.assertRaises(ValueError):probes.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='compiler_substitution')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 106, in test_supporting_probe_review_mutations
+    with self.assertRaises(ValueError):probes.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='remove_profile_flags')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 106, in test_supporting_probe_review_mutations
+    with self.assertRaises(ValueError):probes.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='remove_wraps')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 106, in test_supporting_probe_review_mutations
+    with self.assertRaises(ValueError):probes.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_supporting_probe_review_mutations (test_int_list_campaign.CampaignEvidence.test_supporting_probe_review_mutations) (mutation='missing_probe_tools')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/card815/bench/test_int_list_campaign.py", line 106, in test_supporting_probe_review_mutations
+    with self.assertRaises(ValueError):probes.verify(bad)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.201s
+
+FAILED (failures=10)

@@ -121,7 +121,9 @@ impl<'a> Held<'a> {
     fn flow_inst(&mut self, inst: &Inst) -> bool {
         match inst {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
-            Inst::Append { list, value, .. } | Inst::SetItem { list, value, .. } => {
+            Inst::Append { list, value, .. }
+            | Inst::SetItem { list, value, .. }
+            | Inst::Insert { list, value, .. } => {
                 let mut value = self.holdings(*value);
                 // A dict keeps its key too.
                 if let Inst::SetItem { index, .. } = inst {
@@ -156,7 +158,10 @@ impl<'a> Held<'a> {
                 let held = items.iter().flat_map(|a| self.holdings(*a)).collect();
                 return self.store_fresh(dest, &held);
             }
-            Rvalue::CopyList(a) | Rvalue::View(a) => {
+            // String slices are independent; list slices retain their
+            // elements. Keep CopyList/View's existing holdings unchanged.
+            Rvalue::Slice { .. } if !self.is_list(dest) => return false,
+            Rvalue::CopyList(a) | Rvalue::View(a) | Rvalue::Slice { source: a, .. } => {
                 let held = self.holdings(*a);
                 return self.store_fresh(dest, &held);
             }

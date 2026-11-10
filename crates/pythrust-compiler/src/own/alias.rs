@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::body::{self, Age, Flow, Obj, Objs};
 use super::{holds_list, Mode, Summary};
-use crate::ast::{Mode as Temper, Module, StmtKind};
+use crate::ast::{Block, Expr, ExprKind, Mode as Temper, Module, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::ir::{
     BlockId, Compound, Func, FuncId, GlobalId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty,
@@ -56,7 +56,13 @@ struct Val {
 }
 
 /// Per local, what it may be.
-type State = Vec<Val>;
+#[derive(Debug, Clone, PartialEq)]
+struct State {
+    values: Vec<Val>,
+    /// A temporary's possible source names, each with its own value.
+    /// None preserves alternatives made by calls or fresh expressions.
+    origins: Vec<BTreeMap<Option<Key>, Val>>,
+}
 
 /// Something the body may use later: a local, or a module variable
 /// it, or a function it calls, reads.
@@ -71,11 +77,11 @@ type Live = BTreeSet<Key>;
 /// Who changes a list.
 #[derive(Debug, Clone, Copy)]
 enum Writer {
-    /// The body, through a local.
-    Local(LocalId),
+    /// The body, through a local and one possible source identity.
+    Local(LocalId, Option<Key>),
     /// A callee, in a module variable's list: through that variable,
     /// if one.
-    Callee(FuncId, Option<GlobalId>),
+    Callee(FuncId, Option<GlobalId>, Ty),
 }
 
 /// A change a function makes, itself or through a callee, to a list of
@@ -109,21 +115,26 @@ pub(super) fn tempered(
     program: &Program,
     summaries: &[Summary],
 ) -> BTreeMap<String, Diagnostic> {
-    let names: BTreeSet<&str> = module
+    let bodies: BTreeMap<&str, &Block> = module
         .body
         .iter()
         .filter_map(|s| match &s.kind {
-            StmtKind::FuncDef(f) if f.mode == Temper::Tempered => Some(f.name.name.as_str()),
+            StmtKind::FuncDef(f) if f.mode == Temper::Tempered => {
+                Some((f.name.name.as_str(), &f.body))
+            }
             _ => None,
         })
         .collect();
     let effects = effects(program, summaries);
     let mut out = BTreeMap::new();
     for func in &program.funcs {
-        if !names.contains(func.name.as_str()) || out.contains_key(&func.name) {
+        let Some(source) = bodies.get(func.name.as_str()) else {
+            continue;
+        };
+        if out.contains_key(&func.name) {
             continue;
         }
-        if let Err(d) = check(program, func, summaries, &effects) {
+        if let Err(d) = check(program, func, summaries, &effects, source) {
             out.insert(func.name.clone(), d);
         }
     }
@@ -204,8 +215,15 @@ fn reads(program: &Program) -> Vec<BTreeSet<GlobalId>> {
 }
 
 /// Checks tempered `func`'s body.
-fn check(program: &Program, func: &Func, summaries: &[Summary], effects: &Effects) -> Result<()> {
-    let body = Body::new(program, func, summaries, effects);
+fn check(
+    program: &Program,
+    func: &Func,
+    summaries: &[Summary],
+    effects: &Effects,
+    source: &Block,
+) -> Result<()> {
+    let mut body = Body::new(program, func, summaries, effects);
+    (body.loops, body.copy_sites) = source_facts(program, func, source);
     let entries = body.entries();
     let live = body.live_out();
     for (b, entry) in entries.iter().enumerate() {
@@ -215,18 +233,40 @@ fn check(program: &Program, func: &Func, summaries: &[Summary], effects: &Effect
     Ok(())
 }
 
+/// A source loop input, with the source regions where its iteration is
+/// active. Evaluating the iterable (including nested zip/enumerate inputs)
+/// precedes both target binding and the body; its `else` follows iteration.
+#[derive(Clone)]
+struct LoopInput {
+    source: Span,
+    name: Option<String>,
+    active: Vec<Span>,
+}
+
+impl LoopInput {
+    fn running_at(&self, span: Span) -> bool {
+        self.active
+            .iter()
+            .any(|s| s.start <= span.start && span.end <= s.end)
+    }
+}
+
 struct Body<'a> {
     program: &'a Program,
     func: &'a Func,
     summaries: &'a [Summary],
     flow: Flow<'a>,
     effects: &'a Effects,
-    /// Per local, the variables it was read from: itself for a variable,
-    /// for a temporary the variables or module variables its value
-    /// comes from.
+    /// Flow-insensitive source names, only for module write summaries.
+    /// Mutation checks use the per-alternative origins in State.
     roots: Vec<Live>,
     /// The locals `return` assigns.
     results: BTreeSet<LocalId>,
+    /// Only locals read by the lowering of a source `for` iterable.
+    /// Ordinary call-argument temporaries are not loop references.
+    loops: BTreeMap<LocalId, LoopInput>,
+    /// Standalone mutations whose arguments cannot create new aliases.
+    copy_sites: Vec<Span>,
     /// The lists this body allocates that it may store in the module's
     /// values, so that [`Obj::World`] may be them.
     held: Objs,
@@ -251,6 +291,8 @@ impl<'a> Body<'a> {
             effects,
             roots: Vec::new(),
             results: results.collect(),
+            loops: BTreeMap::new(),
+            copy_sites: Vec::new(),
             held: Objs::new(),
         };
         body.roots = body.roots();
@@ -303,11 +345,15 @@ impl<'a> Body<'a> {
 
     /// Each block's entry state, `None` if unreachable.
     fn entries(&self) -> Vec<Option<State>> {
-        let mut start: State = vec![Val::default(); self.func.locals.len()];
+        let mut start = State {
+            values: vec![Val::default(); self.func.locals.len()],
+            origins: vec![BTreeMap::new(); self.func.locals.len()],
+        };
         for (i, p) in self.func.params.iter().enumerate() {
             if self.lists(*p) {
                 let ty = self.ty(*p);
-                start[p.0].locs.insert(root(Obj::Param(i), ty));
+                start.values[p.0].locs.insert(root(Obj::Param(i), ty));
+                start.origins[p.0].insert(Some(Key::Local(*p)), start.values[p.0].clone());
             }
         }
         let mut entries: Vec<Option<State>> = vec![None; self.func.blocks.len()];
@@ -338,6 +384,7 @@ impl<'a> Body<'a> {
                     value,
                     Rvalue::NewSeq(_)
                         | Rvalue::CopyList(_)
+                        | Rvalue::Slice { .. }
                         | Rvalue::View(_)
                         | Rvalue::Call(..)
                         | Rvalue::Std(..)
@@ -345,11 +392,51 @@ impl<'a> Body<'a> {
                 ) {
                     age(state, *dest);
                 }
-                state[dest.0] = self.value(*dest, value, state);
+                let val = self.value(*dest, value, state);
+                let origins = self.origins(*dest, value, &val, state);
+                state.values[dest.0] = val;
+                state.origins[dest.0] = origins;
             }
-            Inst::Release(l) | Inst::Forget(l) => state[l.0] = Val::default(),
+            Inst::Release(l) | Inst::Forget(l) => {
+                state.values[l.0] = Val::default();
+                state.origins[l.0].clear();
+            }
             _ => {}
         }
+    }
+
+    /// Keep each alternative's source through copies, projections and CFG
+    /// joins. A named assignment starts a new identity, even for an alias.
+    fn origins(
+        &self,
+        dest: LocalId,
+        rv: &Rvalue,
+        value: &Val,
+        state: &State,
+    ) -> BTreeMap<Option<Key>, Val> {
+        if self.named(dest) {
+            return BTreeMap::from([(Some(Key::Local(dest)), value.clone())]);
+        }
+        if let Rvalue::Global(g) = rv {
+            return BTreeMap::from([(Some(Key::Global(*g)), value.clone())]);
+        }
+        let Some(Operand::Local(src)) = projected(rv) else {
+            return BTreeMap::from([(None, value.clone())]);
+        };
+        state.origins[src.0]
+            .iter()
+            .map(|(key, v)| {
+                let projected = match rv {
+                    Rvalue::Field(_, k) => self.field(v, *k, self.ty(dest)),
+                    Rvalue::Index(..) | Rvalue::Entry(..) => Val {
+                        locs: self.step(&v.locs, self.ty(dest)),
+                        fields: None,
+                    },
+                    _ => v.clone(),
+                };
+                (*key, projected)
+            })
+            .collect()
     }
 
     /// What `rv` may give `dest`.
@@ -369,6 +456,7 @@ impl<'a> Body<'a> {
             Rvalue::Index(a, _) | Rvalue::Entry(a, ..) => self.step(&of(state, *a), ty),
             Rvalue::NewSeq(_)
             | Rvalue::CopyList(_)
+            | Rvalue::Slice { .. }
             | Rvalue::View(_)
             | Rvalue::Std(..)
             | Rvalue::Rust(..) => fresh,
@@ -528,7 +616,7 @@ impl<'a> Body<'a> {
     /// The lists `key` may be.
     fn locs(&self, key: Key, state: &State) -> Locs {
         match key {
-            Key::Local(l) => state[l.0].locs.clone(),
+            Key::Local(l) => state.values[l.0].locs.clone(),
             Key::Global(g) => {
                 let ty = self.program.globals[g.0];
                 let ty = match self.program.compound(ty) {
@@ -561,7 +649,7 @@ impl<'a> Body<'a> {
         } = inst
         {
             if self.results.contains(dest) {
-                self.returned(&self.value(*dest, value, state).locs, *span)?;
+                self.returned(&self.value(*dest, value, state).locs, *dest, value, *span)?;
             }
         }
         let Some(span) = inst_span(inst) else {
@@ -571,7 +659,16 @@ impl<'a> Body<'a> {
             let Operand::Local(w) = op else {
                 continue;
             };
-            self.change(Writer::Local(w), &state[w.0].locs, how, state, live, span)?;
+            for (origin, value) in &state.origins[w.0] {
+                self.change(
+                    Writer::Local(w, *origin),
+                    &value.locs,
+                    how,
+                    state,
+                    live,
+                    span,
+                )?;
+            }
         }
         let Inst::Assign {
             value: Rvalue::Call(f, _),
@@ -582,7 +679,7 @@ impl<'a> Body<'a> {
         };
         for w in &self.effects.writes[f.0] {
             let changed = Locs::from([root(Obj::World, w.ty)]);
-            let writer = Writer::Callee(*f, w.global);
+            let writer = Writer::Callee(*f, w.global, w.ty);
             self.change(writer, &changed, w.how, state, live, span)?;
         }
         Ok(())
@@ -594,7 +691,10 @@ impl<'a> Body<'a> {
             Inst::Append { list, .. }
             | Inst::SetItem { list, .. }
             | Inst::Extend { list, .. }
-            | Inst::Scale { list, .. } => vec![(*list, Change::List)],
+            | Inst::Scale { list, .. }
+            | Inst::Insert { list, .. }
+            | Inst::Remove { list, .. }
+            | Inst::Sort { list, .. } => vec![(*list, Change::List)],
             Inst::Assign {
                 value: Rvalue::Call(f, args),
                 ..
@@ -644,82 +744,142 @@ impl<'a> Body<'a> {
         live: &Live,
         span: Span,
     ) -> Result<()> {
-        let (itself, roots) = match writer {
-            Writer::Local(w) => (Some(Key::Local(w)), self.roots[w.0].clone()),
-            Writer::Callee(_, g) => (None, g.map(Key::Global).into_iter().collect()),
+        let (itself, origin) = match writer {
+            Writer::Local(w, origin) => (Some(Key::Local(w)), origin),
+            Writer::Callee(_, g, _) => (None, g.map(Key::Global)),
         };
         let clash =
             |k: &&Key| Some(**k) != itself && self.overlaps(&self.locs(**k, state), changed, how);
-        let (named, loops): (Vec<&Key>, Vec<&Key>) =
+        let (named, temporaries): (Vec<&Key>, Vec<&Key>) =
             live.iter().filter(clash).partition(|k| match k {
                 Key::Local(l) => self.named(*l),
                 Key::Global(_) => true,
             });
-        let other = named.into_iter().find(|k| !roots.contains(k));
-        let message = match (other, loops.first()) {
-            (Some(a), _) => self.aliased(writer, *a),
-            (None, Some(_)) => format!(
-                "tempered `{}` changes {} while a `for` loop over it is running; loop over a copy, which costs one: `for ... in list({})`",
-                self.func.name,
-                self.subject(writer),
-                self.writer_name(writer).unwrap_or("...")
-            ),
+        let other = named.into_iter().find(|k| Some(**k) != origin);
+        let message = match (other, temporaries.first()) {
+            (Some(a), _) => self.aliased(writer, *a, span),
+            (None, Some(_)) => {
+                let looped = temporaries.iter().find_map(|k| match k {
+                    Key::Local(l) => self
+                        .loops
+                        .get(l)
+                        .filter(|input| input.running_at(span))
+                        .map(|input| (*l, input)),
+                    Key::Global(_) => None,
+                });
+                let (context, hint) = match looped {
+                    Some((l, input)) => {
+                        let hint = if temporaries.len() == 1 {
+                            self.loop_hint(l, input.name.as_deref())
+                        } else {
+                            "make independent values for the loop and any other live references before changing the container".into()
+                        };
+                        ("a `for` loop over it is running", hint)
+                    },
+                    None => ("a temporary value may still refer to the changed container and is used later", "finish using that value before changing the container, or make an independent value before sharing it".into()),
+                };
+                format!(
+                    "tempered `{}` changes {} while {context}; {hint}",
+                    self.func.name,
+                    self.subject(writer)
+                )
+            }
             (None, None) => return Ok(()),
         };
         Err(error(span, message))
     }
 
-    /// What `writer` changes, for a message: `` `b` ``, or a list.
+    /// Name the receiver's actual container type, without mistaking the
+    /// outer source of a projection for the projected container.
+    fn container(&self, ty: Ty) -> &'static str {
+        match self.program.compound(ty) {
+            Some(Compound::List(_)) => "list",
+            Some(Compound::Set(_)) => "set",
+            Some(Compound::Dict(..)) => "dict",
+            Some(Compound::Opt(t)) => self.container(*t),
+            _ => "mutable container",
+        }
+    }
+
     fn subject(&self, writer: Writer) -> String {
         match writer {
-            Writer::Local(_) => self
-                .writer_name(writer)
-                .map_or("a list".into(), |b| format!("`{b}`")),
-            Writer::Callee(f, _) => format!("a list through `{}`", self.program.funcs[f.0].name),
+            Writer::Local(w, _) => self.func.names.get(&w).map_or_else(
+                || format!("a {}", self.container(self.ty(w))),
+                |name| format!("`{name}`"),
+            ),
+            Writer::Callee(f, _, ty) => format!(
+                "a {} through `{}`",
+                self.container(ty),
+                self.program.funcs[f.0].name
+            ),
         }
     }
 
-    /// The variable `writer` changes through, if it is one.
-    fn writer_name(&self, writer: Writer) -> Option<&str> {
-        match writer {
-            Writer::Local(w) => self.func.names.get(&w).map(String::as_str),
-            Writer::Callee(..) => None,
+    /// Copying a loop's outer container separates its iteration only when
+    /// none of the elements can still carry the changed mutable value.
+    fn loop_hint(&self, local: LocalId, name: Option<&str>) -> String {
+        if let Some(name) = name.filter(|_| self.flat_container(self.func.locals[local.0])) {
+            return format!(
+                "loop over a copy, which costs one: replace the iterated `{name}` with `list({name})`"
+            );
+        }
+        "iterate over an independent snapshot of the container before changing it; a shallow copy may still share nested lists, dicts or sets".into()
+    }
+
+    fn flat_container(&self, ty: Ty) -> bool {
+        match self.program.compound(ty) {
+            Some(Compound::List(t) | Compound::Set(t)) => self.copy_separates(*t),
+            Some(Compound::Dict(k, v)) => self.copy_separates(*k) && self.copy_separates(*v),
+            _ => false,
         }
     }
 
-    fn aliased(&self, writer: Writer, other: Key) -> String {
-        let f = &self.func.name;
-        let what = self.subject(writer);
-        let a = match other {
-            Key::Local(l) => self.name(l),
-            Key::Global(g) => {
-                let g = self
-                    .program
-                    .global_names
-                    .get(&g)
-                    .map_or("?", String::as_str);
+    /// Copy the current receiver immediately before mutation, not an
+    /// earlier alias source: later aliases can invalidate a binding rewrite.
+    /// A parameter must still communicate its mutation to the caller.
+    fn alias_hint(&self, writer: Writer, span: Span) -> String {
+        if let Writer::Local(w, _) = writer {
+            let ty = self.func.locals[w.0];
+            if self.copy_sites.contains(&span)
+                && self.named(w)
+                && !self.func.params.contains(&w)
+                && matches!(ty, Ty::List(_))
+                && self.flat_container(ty)
+            {
+                let name = self.name(w);
                 return format!(
-                    "tempered `{f}` changes {what} while module variable `{g}` may be the same list and is used later; pass a copy instead, such as `list({g})`"
+                    "copy the current value before this change: `{name} = list({name})`"
                 );
             }
-        };
-        // A parameter is the caller's list: copy the other name instead.
-        let copied = match writer {
-            Writer::Local(w) if !self.func.params.contains(&w) => self.func.names.get(&w),
-            _ => None,
-        };
-        match copied {
-            Some(b) => format!(
-                "tempered `{f}` changes {what} while `{a}` may be the same list and is used later; copy instead of sharing it: `{b} = list({a})`"
-            ),
-            None => format!(
-                "tempered `{f}` changes {what} while `{a}` may be the same list and is used later; copy instead of sharing it: `{a} = list(...)`"
-            ),
         }
+        "make independent values before sharing them; a shallow copy may still share nested lists, dicts or sets".into()
+    }
+
+    fn aliased(&self, writer: Writer, other: Key, span: Span) -> String {
+        let (name, ty) = match other {
+            Key::Local(l) => (format!("`{}`", self.name(l)), self.func.locals[l.0]),
+            Key::Global(g) => (
+                format!(
+                    "module variable `{}`",
+                    self.program
+                        .global_names
+                        .get(&g)
+                        .map_or("?", String::as_str)
+                ),
+                self.program.globals[g.0],
+            ),
+        };
+        format!(
+            "tempered `{}` changes {} while {name} may be the same {} and is used later; {}",
+            self.func.name,
+            self.subject(writer),
+            self.container(ty),
+            self.alias_hint(writer, span)
+        )
     }
 
     /// D3: a result sharing a list with a parameter.
-    fn returned(&self, value: &Locs, span: Span) -> Result<()> {
+    fn returned(&self, value: &Locs, dest: LocalId, expression: &Rvalue, span: Span) -> Result<()> {
         let objs: Objs = value.iter().map(|l| l.obj).collect();
         let reached = self.flow.reachable(&objs);
         let f = &self.func.name;
@@ -727,21 +887,52 @@ impl<'a> Body<'a> {
             let region = self.flow.region(Obj::Param(i));
             let xs = self.name(*p);
             let message = if value.contains(&root(Obj::Param(i), self.ty(*p))) {
-                format!("tempered `{f}` returns its parameter `{xs}`; return a copy: `return list({xs})`")
+                format!("tempered `{f}` returns its parameter `{xs}`")
             } else if reached.iter().any(|o| region.contains(o)) {
-                format!(
-                    "tempered `{f}` returns a value sharing a list with its parameter `{xs}`; return a copy made with `list(...)`"
-                )
+                format!("tempered `{f}` returns a value sharing a list with its parameter `{xs}`")
             } else if self.lists(*p) && self.global_in(value, self.ty(*p)) {
                 format!(
-                    "tempered `{f}` returns a list a global holds, which its parameter `{xs}` may hold too; return a copy made with `list(...)`"
+                    "tempered `{f}` returns a list a global holds, which its parameter `{xs}` may hold too"
                 )
             } else {
                 continue;
             };
-            return Err(error(span, message));
+            return Err(error(
+                span,
+                format!("{message}; {}", self.return_hint(dest, expression)),
+            ));
         }
         Ok(())
+    }
+
+    /// A shallow copy fixes D3 only for a list with no mutable containers
+    /// in its elements. Name the returned local, never a possible alias source.
+    fn return_hint(&self, dest: LocalId, expression: &Rvalue) -> String {
+        let Some(Compound::List(element)) = self.program.compound(self.func.locals[dest.0]) else {
+            return "return an independent value that shares no lists, dicts or sets with the parameter".into();
+        };
+        if !self.copy_separates(*element) {
+            return "return an independent value; a shallow copy still shares nested lists, dicts or sets".into();
+        }
+        if let Rvalue::Use(Operand::Local(local)) = expression {
+            if let Some(name) = self.func.names.get(local) {
+                return format!("return a copy: `return list({name})`");
+            }
+        }
+        "return a copy made with `list(...)`".into()
+    }
+
+    /// Only immutable element shapes prove that copying the outer list
+    /// separates it. An exception, for example, may carry a mutable value.
+    fn copy_separates(&self, ty: Ty) -> bool {
+        match self.program.compound(ty) {
+            Some(Compound::Tuple(fields)) => fields.iter().all(|t| self.copy_separates(*t)),
+            Some(Compound::Opt(t)) => self.copy_separates(*t),
+            _ => matches!(
+                ty,
+                Ty::Int | Ty::Float | Ty::Bool | Ty::None | Ty::Str | Ty::Bytes | Ty::Range
+            ),
+        }
     }
 
     /// Whether `value` may hold a global's list, or one the body stored
@@ -812,7 +1003,7 @@ impl<'a> Body<'a> {
         let params = (0..self.func.params.len()).map(Obj::Param);
         match obj {
             Obj::Param(_) => Objs::from([obj, Obj::World]),
-            Obj::World => params.chain([Obj::World]).collect(),
+            Obj::World | Obj::Global(_) => params.chain([Obj::World]).collect(),
             Obj::Fresh(..) => Objs::from([obj]),
         }
     }
@@ -827,6 +1018,151 @@ impl<'a> Body<'a> {
 
     fn name(&self, l: LocalId) -> &str {
         self.func.names.get(&l).map_or("?", String::as_str)
+    }
+}
+
+/// Recover the loop reference from the existing source-span contract:
+/// lowering emits `Len(iterable)` at the source iterable's span. Names
+/// are advice only; membership never changes the alias rejection.
+fn source_facts(
+    program: &Program,
+    func: &Func,
+    source: &Block,
+) -> (BTreeMap<LocalId, LoopInput>, Vec<Span>) {
+    let mut expressions = Vec::new();
+    let mut copies = Vec::new();
+    for_iterables(program, source, &mut expressions, &mut copies);
+    let loops = func
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter_map(|i| {
+            let Inst::Assign {
+                value: Rvalue::Len(Operand::Local(l)),
+                span,
+                ..
+            } = i
+            else {
+                return None;
+            };
+            let input = expressions.iter().find(|input| input.source == *span)?;
+            Some((*l, input.clone()))
+        })
+        .collect();
+    (loops, copies)
+}
+
+/// `zip` and `enumerate` keep references to their input iterables.
+/// Other calls evaluate their arguments before the loop starts.
+fn iterable_sources(program: &Program, expr: &Expr, active: &[Span], out: &mut Vec<LoopInput>) {
+    let name = match &expr.kind {
+        ExprKind::Name(name) => Some(name.clone()),
+        _ => None,
+    };
+    out.push(LoopInput {
+        source: expr.span,
+        name,
+        active: active.to_vec(),
+    });
+    let ExprKind::Call { func, args } = &expr.kind else {
+        return;
+    };
+    let ExprKind::Name(name) = &func.kind else {
+        return;
+    };
+    if !matches!(name.as_str(), "zip" | "enumerate")
+        || program.funcs.iter().any(|f| f.name == *name)
+    {
+        return;
+    }
+    let count = if name == "enumerate" { 1 } else { args.len() };
+    for arg in args.iter().take(count) {
+        iterable_sources(program, &arg.value, active, out);
+    }
+}
+
+/// A copy before an enclosing call can still alias an earlier argument;
+/// an effectful argument can also share the new copy again. Only offer a
+/// statement insertion for standalone append with an already simple value.
+fn plain_append(stmt: &crate::ast::Stmt) -> Option<Span> {
+    let StmtKind::Expr(expr) = &stmt.kind else {
+        return None;
+    };
+    let ExprKind::Call { func, args } = &expr.kind else {
+        return None;
+    };
+    let ExprKind::Attr { value, attr } = &func.kind else {
+        return None;
+    };
+    let [arg] = args.as_slice() else { return None };
+    let simple = matches!(
+        arg.value.kind,
+        ExprKind::Name(_)
+            | ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Str(_)
+            | ExprKind::Bool(_)
+            | ExprKind::None
+    );
+    (attr.name == "append" && matches!(value.kind, ExprKind::Name(_)) && simple)
+        .then_some(expr.span)
+}
+
+fn for_iterables(
+    program: &Program,
+    block: &Block,
+    out: &mut Vec<LoopInput>,
+    copies: &mut Vec<Span>,
+) {
+    for stmt in block {
+        if let Some(span) = plain_append(stmt) {
+            copies.push(span);
+        }
+        match &stmt.kind {
+            StmtKind::For {
+                target,
+                iter,
+                body,
+                orelse,
+            } => {
+                let active: Vec<Span> = std::iter::once(target.span)
+                    .chain(body.iter().map(|s| s.span))
+                    .collect();
+                iterable_sources(program, iter, &active, out);
+                for_iterables(program, body, out, copies);
+                for_iterables(program, orelse, out, copies);
+            }
+            StmtKind::If {
+                branch,
+                elifs,
+                orelse,
+            } => {
+                for_iterables(program, &branch.body, out, copies);
+                for branch in elifs {
+                    for_iterables(program, &branch.body, out, copies);
+                }
+                for_iterables(program, orelse, out, copies);
+            }
+            StmtKind::While { branch, orelse } => {
+                for_iterables(program, &branch.body, out, copies);
+                for_iterables(program, orelse, out, copies);
+            }
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
+                for_iterables(program, body, out, copies);
+                for handler in handlers {
+                    for_iterables(program, &handler.body, out, copies);
+                }
+                if let Some(f) = finally {
+                    for_iterables(program, f, out, copies);
+                }
+            }
+            StmtKind::With { body, .. } => for_iterables(program, body, out, copies),
+            _ => {}
+        }
     }
 }
 
@@ -868,7 +1204,11 @@ fn age(state: &mut State, dest: LocalId) {
         });
         *locs = aged.collect();
     };
-    for v in state.iter_mut() {
+    for v in state
+        .values
+        .iter_mut()
+        .chain(state.origins.iter_mut().flat_map(|o| o.values_mut()))
+    {
         age_all(&mut v.locs);
         v.fields.iter_mut().flatten().for_each(age_all);
     }
@@ -881,10 +1221,18 @@ fn join(into: &mut Option<State>, state: &State) -> bool {
         return true;
     };
     let mut grew = false;
-    for (a, b) in into.iter_mut().zip(state) {
+    for (a, b) in into.values.iter_mut().zip(&state.values) {
         let joined = join_val(a, b);
         grew |= joined != *a;
         *a = joined;
+    }
+    for (a, b) in into.origins.iter_mut().zip(&state.origins) {
+        for (key, value) in b {
+            let old = a.entry(*key).or_default();
+            let joined = join_val(old, value);
+            grew |= joined != *old;
+            *old = joined;
+        }
     }
     grew
 }
@@ -911,7 +1259,7 @@ fn join_val(a: &Val, b: &Val) -> Val {
 
 fn val(state: &State, op: Operand) -> Val {
     match op {
-        Operand::Local(l) => state[l.0].clone(),
+        Operand::Local(l) => state.values[l.0].clone(),
         _ => Val::default(),
     }
 }
@@ -961,7 +1309,13 @@ pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
         Inst::SetItem {
             list, index, value, ..
         } => vec![*list, *index, *value],
-        Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => vec![*exc],
+        Inst::Raise { exc, .. } | Inst::Reverse(exc) => vec![*exc],
+        Inst::Stash | Inst::Restore => vec![],
+        Inst::Sort { list, reverse, .. } => vec![*list, *reverse],
+        Inst::Insert {
+            list, index, value, ..
+        } => vec![*list, *index, *value],
+        Inst::Remove { list, index, .. } => vec![*list, *index],
         Inst::Retain(_) | Inst::Release(_) | Inst::Forget(_) | Inst::DropGlobal(_) => Vec::new(),
     }
 }
@@ -981,6 +1335,9 @@ pub(super) fn inst_span(inst: &Inst) -> Option<Span> {
         | Inst::SetItem { span, .. }
         | Inst::Extend { span, .. }
         | Inst::Scale { span, .. }
+        | Inst::Insert { span, .. }
+        | Inst::Remove { span, .. }
+        | Inst::Sort { span, .. }
         | Inst::Assign { span, .. } => Some(*span),
         _ => None,
     }

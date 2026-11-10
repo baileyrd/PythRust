@@ -1,0 +1,58 @@
+# The faults of list methods and `del` (D71): `pop` raises IndexError,
+# `remove` and `index` ValueError naming the item as written, and
+# `del xs[i]` out of range IndexError. Each is caught here.
+
+
+temper def last(mut xs: list[int]) -> int raises IndexError:
+    return xs.pop()
+
+
+temper def where(xs: list[str], s: str) -> int raises ValueError:
+    return xs.index(s)
+
+
+def main() -> None:
+    xs = [1, 2]
+    empty: list[int] = []
+    try:
+        empty.pop()
+    except IndexError as e:
+        print("pop:", e)
+    for i in [2, -3, 1]:
+        try:
+            print(xs.pop(i))
+        except IndexError as e:
+            print("pop", i, e)
+    try:
+        xs.remove(9)
+    except ValueError as e:
+        print("remove:", e)
+    try:
+        print(where(["α"], "β"))
+    except ValueError as e:
+        print("index:", e)
+    try:
+        print([(1, "x")].index((2, "ü")))
+    except ValueError as e:
+        print("index:", e)
+    try:
+        print([1.5].index(-0.25))
+    except ValueError as e:
+        print("index:", e)
+    try:
+        print([[1]].index([]))
+    except ValueError as e:
+        print("index:", e)
+    for i in [1, -2, 0]:
+        try:
+            del xs[i]
+            print("deleted", i, xs)
+        except IndexError as e:
+            print("del", i, e)
+    try:
+        print(last(xs))
+    except IndexError as e:
+        print("last:", e)
+
+
+main()

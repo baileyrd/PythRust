@@ -1,7 +1,8 @@
 //! Which functions may return with a catchable fault pending: a division
 //! by zero, an index out of range, a wrong unpacking arity
 //! (docs/research/faults.md), a read of a closed file, a NUL in the
-//! path given to `open`, or an empty separator given to `split` (D53). Such a fault is never in a `raises` set,
+//! path given to `open`, an empty separator given to `split` (D53), or
+//! a `del` of a missing item (D71). Such a fault is never in a `raises` set,
 //! so lowering tests the pending flag after a call to one of these as it
 //! does after a call whose set is not empty.
 //!
@@ -78,6 +79,11 @@ impl<'a> Sites<'a> {
                 self.expr(value);
             }
             StmtKind::Return(value) => value.iter().for_each(|v| self.expr(v)),
+            StmtKind::Del { value, index } => {
+                self.expr(value);
+                self.expr(index);
+                self.faults = true;
+            }
             StmtKind::If {
                 branch,
                 elifs,
@@ -105,9 +111,14 @@ impl<'a> Sites<'a> {
                 self.block(body);
                 self.block(orelse);
             }
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 self.block(body);
                 handlers.iter().for_each(|h| self.block(&h.body));
+                finally.iter().for_each(|f| self.block(f));
             }
             StmtKind::With { value, body, .. } => {
                 self.expr(value);
@@ -165,6 +176,19 @@ impl<'a> Sites<'a> {
                 self.expr(value);
                 self.expr(index);
             }
+            ExprKind::Slice {
+                value,
+                start,
+                stop,
+                step,
+            } => {
+                self.faults = true;
+                self.expr(value);
+                [start, stop, step]
+                    .into_iter()
+                    .flatten()
+                    .for_each(|x| self.expr(x));
+            }
             ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
                 items.iter().for_each(|x| self.expr(x))
             }
@@ -185,6 +209,15 @@ impl<'a> Sites<'a> {
                 [test, body, orelse].into_iter().for_each(|x| self.expr(x));
             }
             ExprKind::Attr { value, .. } => self.expr(value),
+            // As the loop it stands for (D85).
+            ExprKind::ListComp { elt, clauses } => {
+                for c in clauses {
+                    self.expr(&c.iter);
+                    self.target(&c.target, None);
+                    c.ifs.iter().for_each(|x| self.expr(x));
+                }
+                self.expr(elt);
+            }
             ExprKind::Name(_)
             | ExprKind::Int(_)
             | ExprKind::Float(_)

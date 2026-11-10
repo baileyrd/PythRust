@@ -1,0 +1,14 @@
+....................
+----------------------------------------------------------------------
+Ran 20 tests in 0.037s
+
+OK
+cannot read: duplicate key 'race'
+  in "<unicode string>", line 19, column 3:
+      check:
+      ^
+/tmp/tmpi524khjq/ci-jobs.yml: `pull_request` is filtered by ['paths']; it must run on every PR
+cannot read: mapping values are not allowed here
+  in "<unicode string>", line 3, column 19:
+        - run: a -- b:: c
+                      ^

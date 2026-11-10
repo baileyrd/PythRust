@@ -1,0 +1,8 @@
+# expect-exit: 1
+# An exception raised in a `finally` block replaces the one it was
+# running for (D88): the program ends with the second.
+try:
+    raise ValueError("first")
+finally:
+    print("finally")
+    raise IndexError("second")

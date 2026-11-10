@@ -1691,3 +1691,21 @@ fn a_task_exception_waits_for_result() {
     assert_eq!(out, "submitted\n2\nat result: neg\n");
     assert_eq!(err.as_deref(), Some("ValueError: neg"));
 }
+
+#[test]
+fn slice_reads_code_points_and_signed_bounds() {
+    let src = "xs = [0, 1, 2, 3, 4]\nprint(xs[:], xs[::-1], xs[:-1:-1], xs[-100:100:2])\nprint(\"aé🙂é\"[::-1])\nprint((1, \"a\", True)[::-1], (1, \"a\")[1:2], (1,)[1:])\n";
+    assert_eq!(
+        ok_src(src),
+        "[0, 1, 2, 3, 4] [4, 3, 2, 1, 0] [] [0, 2, 4]\ńe🙂éa\n(True, 'a', 1) ('a',) ()\n"
+    );
+}
+
+#[test]
+fn slice_zero_is_catchable_after_operands() {
+    let src = "def bound(n):\n    print(n)\n    return n\ntry:\n    print([1, 2][bound(0):bound(2):bound(0)])\nexcept ValueError as e:\n    print(e)\ntry:\n    print(\"abc\"[::0])\nexcept ValueError as e:\n    print(e)\n";
+    assert_eq!(
+        ok_src(src),
+        "0\n2\n0\nslice step cannot be zero\nslice step cannot be zero\n"
+    );
+}

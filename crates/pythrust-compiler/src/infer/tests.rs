@@ -445,9 +445,9 @@ fn unknown_method_is_an_error() {
     let b = B::default();
     let msg = err(vec![
         b.assign("xs", b.list(vec![])),
-        b.ex(b.method(b.n("xs"), "pop", vec![])),
+        b.ex(b.method(b.n("xs"), "shuffle", vec![])),
     ]);
-    assert!(msg.starts_with("unknown method `.pop`"), "{msg}");
+    assert!(msg.starts_with("unknown method `.shuffle`"), "{msg}");
 }
 
 #[test]
@@ -2080,7 +2080,7 @@ fn dict_and_set_misuse_is_an_error() {
             "d = {1: 2}\nd.get(1, \"a\")\n",
             "the default of `get` must match",
         ),
-        ("d = {1: 2}\nd.pop(1)\n", "unknown method `.pop`"),
+        ("d = {1: 2}\nd.clear()\n", "unknown method `.clear`"),
         ("print({1: 2} < {1: 2})\n", "cannot order dict[int, int]"),
         (
             "print({1} == [1])\n",
@@ -2125,8 +2125,8 @@ fn dict_and_set_misuse_is_an_error() {
             "cannot order set[int] against set[int]",
         ),
         (
-            "print(sorted([1], reverse=True))\n",
-            "`sorted` takes no keyword arguments",
+            "print(sorted([1], key=len))\n",
+            "`key=` of `sorted` is not supported yet",
         ),
         (
             "d = {1: \"a\"}\nprint(d.get(\"x\"))\n",
@@ -2576,4 +2576,235 @@ fn enumerate_and_zip_refuse_other_places() {
         let got = src_err(src);
         assert!(got.contains(want), "{src:?}: {got}");
     }
+}
+
+#[test]
+fn list_and_dict_methods_type_their_results() {
+    let src = "xs = [3, 1]\n\
+               xs.extend([4])\n\
+               xs.extend({5})\n\
+               xs.insert(0, 2)\n\
+               xs.remove(True)\n\
+               print(xs.pop(), xs.pop(0), xs.index(1), xs.count(2.0 == 2))\n\
+               xs.sort()\n\
+               xs.sort(reverse=1)\n\
+               print(sorted(xs, reverse=True))\n\
+               d = {\"a\": 1}\n\
+               print(d.pop(\"a\"), d.pop(\"b\", 0), d.setdefault(\"c\", 2))\n\
+               d.update({\"z\": 9})\n\
+               o: dict[str, int | None] = {}\n\
+               print(o.setdefault(\"k\"))\n\
+               del xs[0]\n\
+               del d[\"a\"]\n\
+               print(\"abc\".index(\"b\"), \"abc\".count(\"c\"))\n";
+    let types = infer_src(src).unwrap_or_else(|e| panic!("{e}"));
+    let at = |text: &str| {
+        let start = src.find(text).unwrap_or_else(|| panic!("no {text:?}"));
+        let span = Span {
+            start,
+            end: start + text.len(),
+        };
+        types.at(span).cloned()
+    };
+    let ints = [
+        "xs.pop()",
+        "xs.pop(0)",
+        "xs.index(1)",
+        "xs.count(2.0 == 2)",
+        "d.pop(\"a\")",
+        "d.pop(\"b\", 0)",
+        "d.setdefault(\"c\", 2)",
+        "\"abc\".index(\"b\")",
+        "\"abc\".count(\"c\")",
+    ];
+    for text in ints {
+        assert_eq!(at(text), Some(Type::Int), "{text}");
+    }
+    let list = Type::List(Box::new(Type::Int));
+    assert_eq!(at("sorted(xs, reverse=True)"), Some(list));
+    let opt = Type::Optional(Box::new(Type::Int));
+    assert_eq!(at("o.setdefault(\"k\")"), Some(opt));
+    assert_eq!(at("xs.insert(0, 2)"), Some(Type::None));
+}
+
+#[test]
+fn list_and_dict_method_misuse_is_an_error() {
+    let cases = [
+        ("xs = [1]\nxs.pop(\"a\")\n", "expected int, found str"),
+        ("xs = [1]\nxs.pop(0, 1)\n", "`pop` takes"),
+        ("xs = [1]\nxs.extend(3)\n", "int is not iterable"),
+        ("xs = [1]\nxs.extend([\"a\"])\n", "expected int, found str"),
+        ("xs = [1]\nxs.insert(0, \"a\")\n", "expected int, found str"),
+        ("xs = [1]\nxs.insert(0)\n", "`insert` takes"),
+        (
+            "xs = [1]\nxs.index(1, 0)\n",
+            "`start` of `list.index` is not supported yet",
+        ),
+        ("xs = [1]\nxs.remove(\"a\")\n", "cannot compare"),
+        (
+            "xs = [{1}]\nxs.sort()\n",
+            "cannot order set[int] against set[int]",
+        ),
+        (
+            "xs = [1]\nxs.sort(key=len)\n",
+            "`key=` of `list.sort` is not supported yet",
+        ),
+        (
+            "xs = [1]\nxs.sort(True)\n",
+            "`sort` takes no positional arguments",
+        ),
+        ("xs = [1]\nxs.sort(reverse=\"a\")\n", "expected"),
+        ("xs = [1]\nxs.sort(cmp=1)\n", "unexpected keyword argument"),
+        ("d = {1: 2}\nd.pop(1, \"a\")\n", "expected int, found str"),
+        ("d = {1: 2}\nd.pop(\"a\")\n", "expected int, found str"),
+        ("d = {1: 2}\nd.setdefault(1)\n", "expected int, found None"),
+        ("d = {1: 2}\nd.update({\"a\": 2})\n", "expected"),
+        (
+            "d = {1: 2}\nd.update([(1, 2)])\n",
+            "`dict.update` of list[tuple[int, int]] is not supported yet",
+        ),
+        (
+            "d = {1: 2}\nd.update()\n",
+            "`dict.update` with no argument is not supported yet",
+        ),
+        (
+            "d = {1: 2}\nd.update(a=1)\n",
+            "keyword arguments of `dict.update` are not supported yet",
+        ),
+        ("s = {1}\ns.pop()\n", "set[int] has no method `.pop`"),
+        ("t = (1, 2)\ndel t[0]\n", "does not support item deletion"),
+        ("s = \"ab\"\ndel s[0]\n", "does not support item deletion"),
+        ("xs = [1]\ndel xs[\"a\"]\n", "expected int, found str"),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src:?}: {got}");
+    }
+}
+
+#[test]
+fn slice_tuple_zero_has_no_fabricated_result_type() {
+    for src in [
+        "try:\n    print((1, 'a')[::0][0])\nexcept ValueError:\n    print('caught')\n",
+        "def f() -> str:\n    return (1, 'a')[::0]\n",
+        "def f(c):\n    return (1, 'a')[::0] if c else 'live'\nprint(f(False))\n",
+        "def f(xs):\n    return xs[::0]\nprint(f((1, 'a')))\n",
+    ] {
+        assert!(infer_src(src).is_ok(), "{src}");
+    }
+}
+
+#[test]
+fn slice_bounds_traverse_declared_raises() {
+    let src = "temper def bound() -> int raises IndexError:\n    raise IndexError('bound')\ntemper def f(xs: list[int]) -> list[int]:\n    return xs[bound()::0]\n";
+    assert!(src_err(src).contains("must declare"));
+    assert!(infer_src(&src.replace(
+        "def f(xs: list[int]) -> list[int]:",
+        "def f(xs: list[int]) -> list[int] raises IndexError:"
+    ))
+    .is_ok());
+}
+
+#[test]
+fn slice_bound_obligations_generalize_each_position() {
+    let mut failures = Vec::new();
+    for (position, slice) in [("start", "n:"), ("stop", ":n"), ("step", "::n")] {
+        for receiver in ["[0, 1, 2]", "'aé🙂'"] {
+            let src = format!("def cut(xs, n):\n    return xs[{slice}]\ndef forward(xs, n):\n    return cut(xs, n)\nprint(forward({receiver}, True))\nprint(forward({receiver}, 1))\nprint(cut({receiver}, False))\nprint(cut({receiver}, 2))\n");
+            if let Err(e) = infer_src(&src) {
+                failures.push(format!("{position} {receiver}: {e:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn slice_bound_obligations_saturate_without_assignment_widening() {
+    for slice in ["n:", ":n", "::n"] {
+        let src = format!("def boolean(n: bool) -> bool:\n    return n\ndef cut(xs, n):\n    result = xs[{slice}]\n    boolean(n)\n    return result\nprint(cut([0, 1, 2], True))\n");
+        assert!(infer_src(&src).is_ok(), "{src}");
+        let late = format!("def cut(xs):\n    return xs[{bound}]\nflag = True\nprint(cut([0, 1, 2]))\nprint(cut('aé🙂'))\n", bound=slice.replace('n', "flag"));
+        assert!(infer_src(&late).is_ok(), "{late}");
+        for value in ["1.0", "'x'", "None", "[1]"] {
+            let invalid = format!("def cut(xs, n):\n    return xs[{slice}]\ndef forward(xs, n):\n    return cut(xs, n)\nprint(forward([0, 1, 2], {value}))\n");
+            assert!(
+                src_err(&invalid).contains("slice bounds must be integers"),
+                "{invalid}"
+            );
+        }
+        let tuple = format!("def cut(xs, n):\n    return xs[{slice}]\nprint(cut((1, 2), True))\n");
+        assert!(src_err(&tuple).contains("a tuple slice needs literal bounds"));
+    }
+    assert!(src_err("n = True\nprint([0, 1, 2][n:])\nn = 1\n").contains("expected bool, found int"));
+    assert!(
+        src_err("def cut(xs, n: int):\n    return xs[n:]\nprint(cut([0, 1, 2], True))\n")
+            .contains("expected int, found bool")
+    );
+}
+
+// ---- list comprehensions (D85) ---------------------------------------------
+
+#[test]
+fn a_comprehension_is_a_list_of_its_element_type() {
+    let src = "ys = [str(x) for x in range(3) if x > 0]\nprint(ys)\n";
+    let types = infer_src(src).unwrap_or_else(|e| panic!("{e}"));
+    let at = src.find('[').unwrap_or(0);
+    let span = Span {
+        start: at,
+        end: src.find(']').unwrap_or(0) + 1,
+    };
+    assert_eq!(types.at(span), Some(&list_of(Type::Str)));
+}
+
+#[test]
+fn a_comprehension_s_names_are_its_own() {
+    // An outer `x` of another type is untouched, in a function too.
+    assert_eq!(
+        src_err("x = \"s\"\nys = [x for x in range(3)]\nprint(x + \"t\")\n"),
+        "no error"
+    );
+    assert_eq!(
+        src_err("def f() -> str:\n    x = \"s\"\n    ys = [x for x in range(3)]\n    return x\n"),
+        "no error"
+    );
+    // Two comprehensions may bind one name at two types.
+    assert_eq!(
+        src_err("a = [x for x in [1]]\nb = [x for x in [\"s\"]]\n"),
+        "no error"
+    );
+    // The name does not leak.
+    assert_eq!(
+        src_err("ys = [x for x in range(3)]\nprint(x)\n"),
+        "name `x` is not defined"
+    );
+    // Within one comprehension, a name keeps one type (D3).
+    assert_eq!(
+        src_err("ys = [x for x in [1] for x in [\"a\"]]\n"),
+        "expected int, found str"
+    );
+}
+
+#[test]
+fn a_comprehension_filter_narrows_as_an_if_test() {
+    let head = "xs: list[int | None] = [1, None]\n";
+    let ok = format!("{head}ys = [x + 1 for x in xs if x is not None if x > 0]\n");
+    assert_eq!(src_err(&ok), "no error");
+    let truth = format!("{head}ys = [x + 1 for x in xs if x]\n");
+    assert!(src_err(&truth).ends_with("a truth test does not narrow `x`: write `x is not None`"));
+    // A later clause rebinding the name ends its narrowing.
+    let rebound = format!("{head}ys = [x + 1 for x in xs if x is not None for x in xs]\n");
+    assert!(
+        src_err(&rebound).contains("int | None"),
+        "{}",
+        src_err(&rebound)
+    );
+}
+
+#[test]
+fn a_comprehension_iterates_what_for_iterates() {
+    let src = "d = {\"a\": 1}\nps = [k + str(v) for k, v in d.items()]\n\
+               es = [i + n for i, n in enumerate([5])]\nzs = [a + b for a, b in zip([\"a\"], [\"b\"])]\n";
+    assert_eq!(src_err(src), "no error");
+    assert_eq!(src_err("ys = [z for z in 5]\n"), "int is not iterable");
 }

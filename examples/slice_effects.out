@@ -1,0 +1,36 @@
+receiver
+bound 1
+bound 4
+bound 1
+[1, 2, 3]
+receiver
+caught receiver
+receiver
+bound 1
+caught 1
+receiver
+bound 1
+bound 4
+caught 4
+receiver
+bound 1
+bound 4
+bound 1
+caught 1
+receiver
+bound 0
+bound 4
+bound 0
+caught slice step cannot be zero
+grew
+[0, 1, 2, 3] [0, 1, 2, 3, 4]
+[4, 3, 2, 1] [1, 2, 3, 4]
+receiver
+index fault list index out of range
+receiver
+bound 0
+index fault list index out of range
+receiver
+bound 0
+bound 4
+index fault list index out of range

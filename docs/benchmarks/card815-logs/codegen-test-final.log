@@ -1,0 +1,9 @@
+   Compiling pythrust-compiler v0.0.0 (/workspace/card815/crates/pythrust-compiler)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.84s
+     Running unittests src/lib.rs (target/debug/deps/pythrust_compiler-5fd8f9e202896135)
+
+running 1 test
+test codegen::tests::integer_list_calls_are_selected_by_the_receiver_type ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 761 filtered out; finished in 0.03s
+

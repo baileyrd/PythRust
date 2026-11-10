@@ -42,7 +42,9 @@ fn kind_of(word: &str) -> TokenKind {
         "temper" => T::Temper,
         "try" => T::Try,
         "except" => T::Except,
+        "finally" => T::Finally,
         "raise" => T::Raise,
+        "del" => T::Del,
         "as" => T::As,
         "+" => T::Plus,
         "-" => T::Minus,
@@ -199,9 +201,22 @@ fn sx_stmt(s: &Stmt) -> String {
             sx_else(orelse)
         ),
         StmtKind::Raise(e) => format!("(raise {})", sx(e)),
-        StmtKind::Try { body, handlers } => {
+        StmtKind::Del { value, index } => format!("(del {} {})", sx(value), sx(index)),
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => {
             let handlers = handlers.iter().map(sx_handler);
-            format!("(try {}{})", sx_block(body), handlers.collect::<String>())
+            let finally = finally
+                .as_ref()
+                .map(|f| format!(" (finally {})", sx_block(f)));
+            format!(
+                "(try {}{}{})",
+                sx_block(body),
+                handlers.collect::<String>(),
+                finally.unwrap_or_default()
+            )
         }
         StmtKind::With {
             value,
@@ -340,7 +355,27 @@ fn sx(e: &Expr) -> String {
             format!("(call {}{})", sx(func), args.collect::<String>())
         }
         ExprKind::Subscript { value, index } => format!("(sub {} {})", sx(value), sx(index)),
+        ExprKind::Slice {
+            value,
+            start,
+            stop,
+            step,
+        } => format!(
+            "(slice {} {} {} {})",
+            sx(value),
+            start.as_deref().map(sx).unwrap_or_default(),
+            stop.as_deref().map(sx).unwrap_or_default(),
+            step.as_deref().map(sx).unwrap_or_default()
+        ),
         ExprKind::Attr { value, attr } => format!("(. {} {})", sx(value), attr.name),
+        ExprKind::ListComp { elt, clauses } => {
+            let clauses = clauses.iter().map(|c| {
+                let ifs = c.ifs.iter().map(|x| format!(" (if {})", sx(x)));
+                let ifs: String = ifs.collect();
+                format!(" (for {} {}{ifs})", sx_target(&c.target), sx(&c.iter))
+            });
+            format!("(listcomp {}{})", sx(elt), clauses.collect::<String>())
+        }
     }
 }
 
@@ -439,6 +474,86 @@ fn invalid_assignment_targets() {
         "attribute assignment is not supported yet"
     );
     assert_eq!(err("a = b = 1 NL"), "chained assignment is not supported");
+}
+
+#[test]
+fn list_comprehensions_own_the_names_they_bind() {
+    // The `[` is at offset 0, so each name a clause binds becomes `name@0`.
+    assert_eq!(ok("[ x for x in xs ] NL"), "(listcomp x@0 (for x@0 xs))");
+    assert_eq!(
+        ok("[ x + y for x in xs if x for y in x if y > 1 if z ] NL"),
+        "(listcomp (+ x@0 y@0) (for x@0 xs (if x@0)) (for y@0 x@0 (if (cmp y@0 > 1)) (if z)))"
+    );
+    assert_eq!(
+        ok("[ a for a , ( b , c ) in ps ] NL"),
+        "(listcomp a@0 (for (tuple a@0 (tuple b@0 c@0)) ps))"
+    );
+    assert_eq!(
+        ok("[ a if c else b for a in xs ] NL"),
+        "(listcomp (ifexp c a@0 b) (for a@0 xs))"
+    );
+}
+
+#[test]
+fn a_comprehension_s_first_iterable_is_the_enclosing_scope_s() {
+    assert_eq!(ok("[ x for x in x ] NL"), "(listcomp x@0 (for x@0 x))");
+    assert_eq!(
+        ok("y = [ x for x in x ] NL"),
+        "(= y (listcomp x@4 (for x@4 x)))"
+    );
+    // The inner `[` is at offset 2: its names are its own, the outer's
+    // stay the outer's, its first iterable included.
+    assert_eq!(
+        ok("[ [ x for y in x ] for x in xs ] NL"),
+        "(listcomp (listcomp x@0 (for y@2 x@0)) (for x@0 xs))"
+    );
+    assert_eq!(
+        ok("[ [ x for x in x ] for x in xs ] NL"),
+        "(listcomp (listcomp x@2 (for x@2 x@0)) (for x@0 xs))"
+    );
+}
+
+#[test]
+fn comprehension_forms_not_supported_yet_are_named() {
+    let target =
+        "a comprehension target other than a name or a tuple of names is not supported yet";
+    assert_eq!(err("[ 1 for x [ 0 ] in xs ] NL"), target);
+    assert_eq!(err("[ 1 for a , x [ 0 ] in xs ] NL"), target);
+    assert_eq!(
+        err("[ 1 for f ( ) in xs ] NL"),
+        "cannot assign to a function call"
+    );
+    let gen = "generator expressions are not supported yet";
+    assert_eq!(err("( x for x in xs ) NL"), gen);
+    assert_eq!(err("f ( x for x in xs ) NL"), gen);
+    assert_eq!(err("f ( 1 , x for x in xs ) NL"), gen);
+    assert_eq!(
+        err("{ x for x in xs } NL"),
+        "set comprehensions are not supported yet"
+    );
+    assert_eq!(
+        err("{ k : 1 for k in xs } NL"),
+        "dict comprehensions are not supported yet"
+    );
+    let src = "{ x for x in xs } NL";
+    assert_eq!(text(src, parse_err(src).span), "for");
+}
+
+#[test]
+fn comprehension_iterables_and_filters_are_or_exprs() {
+    assert_eq!(
+        err("[ x for x in a if b else c ] NL"),
+        "expected `]`, found `else`"
+    );
+    assert_eq!(err("[ x for x in a , b ] NL"), "expected `]`, found `,`");
+    assert_eq!(
+        ok("[ x for x in ( a if b else c ) if not x or y ] NL"),
+        "(listcomp x@0 (for x@0 (ifexp b a c) (if (or (not x@0) y))))"
+    );
+    assert_eq!(
+        err("[ x for x in xs ] = 1 NL"),
+        "cannot assign to a list comprehension"
+    );
 }
 
 #[test]
@@ -826,6 +941,23 @@ fn raise_statement() {
 }
 
 #[test]
+fn del_statement() {
+    assert_eq!(ok("del xs [ i ] NL"), "(del xs i)");
+    assert_eq!(ok("del d [ k ] [ 0 ] NL"), "(del (sub d k) 0)");
+    assert_eq!(err("del x NL"), "`del` of a name is not supported yet");
+    assert_eq!(
+        err("del a [ 0 ] , b [ 0 ] NL"),
+        "`del` of several targets is not supported yet"
+    );
+    assert_eq!(
+        err("del a . b NL"),
+        "`del` of an attribute is not supported yet"
+    );
+    assert!(err("del f ( ) NL").starts_with("cannot delete this"));
+    assert!(err("del NL").starts_with("expected"));
+}
+
+#[test]
 fn try_except() {
     assert_eq!(
         ok("try : NL INDENT x NL DEDENT except ValueError : NL INDENT y NL DEDENT"),
@@ -837,6 +969,63 @@ fn try_except() {
         ok(two),
         "(try (x) (except ValueError as e (y)) (except IndexError (z))) w"
     );
+}
+
+#[test]
+fn try_finally() {
+    let body = "try : NL INDENT x NL DEDENT";
+    let fin = "finally : NL INDENT z NL DEDENT";
+    assert_eq!(
+        ok(&format!("{body} {fin} w NL")),
+        "(try (x) (finally (z))) w"
+    );
+    assert_eq!(
+        ok(&format!(
+            "{body} except ValueError : NL INDENT y NL DEDENT {fin}"
+        )),
+        "(try (x) (except ValueError (y)) (finally (z)))"
+    );
+    let src = format!("{body} {fin}");
+    let stmt = &parse_src(&src).body[0];
+    assert_eq!(
+        text(&src, stmt.span),
+        &src[..src.len() - " NL DEDENT".len()]
+    );
+    // `finally` ends the statement: no handler may follow it.
+    assert_eq!(
+        err(&format!(
+            "{body} {fin} except ValueError : NL INDENT y NL DEDENT"
+        )),
+        "expected an expression, found `except`"
+    );
+    assert_eq!(
+        err(&format!("{body} finally NL")),
+        "expected `:`, found newline"
+    );
+    // No jump may leave a `finally` block (D89); one inside a loop the
+    // block holds stays legal.
+    let def = "def f ( ) : NL INDENT";
+    assert_eq!(
+        err(&format!(
+            "{def} {body} finally : NL INDENT return NL DEDENT DEDENT"
+        )),
+        "`return` inside `finally` is not supported"
+    );
+    let looped = "while x : NL INDENT";
+    for word in ["break", "continue"] {
+        assert_eq!(
+            err(&format!(
+                "{looped} {body} finally : NL INDENT {word} NL DEDENT DEDENT"
+            )),
+            format!("`{word}` inside `finally` is not supported")
+        );
+        let inner =
+            format!("{body} finally : NL INDENT while y : NL INDENT {word} NL DEDENT DEDENT");
+        assert_eq!(
+            ok(&inner),
+            format!("(try (x) (finally ((while y ({word})))))")
+        );
+    }
 }
 
 #[test]
@@ -876,7 +1065,7 @@ fn try_except_errors() {
     let body = "try : NL INDENT x NL DEDENT";
     assert_eq!(
         err(&format!("{body} y NL")),
-        "expected `except`, found name `y`"
+        "expected `except` or `finally`, found name `y`"
     );
     assert!(err(&format!("{body} except : NL INDENT y NL DEDENT"))
         .starts_with("bare `except:` is not supported yet"));

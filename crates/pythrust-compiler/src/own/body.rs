@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{holds_list, strs, CallSite, Heap, Mode, Param, Peer, Strs, Summary};
-use crate::ir::{Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term};
+use crate::ir::{Compound, Func, FuncId, GlobalId, Inst, LocalId, Operand, Program, Rvalue, Term};
 use crate::stdlib::StdFn;
 
 /// An abstract list.
@@ -27,6 +27,8 @@ pub(super) enum Obj {
     Param(usize),
     /// What the module's globals hold, and every list inside it.
     World,
+    /// A specific global, only while tracking stores for module call sites.
+    Global(GlobalId),
     /// Every list the allocations into local `i` give: the latest one,
     /// or the ones before it. Only a flow-sensitive [`Flow`] tells them
     /// apart; otherwise every allocation is [`Age::Latest`].
@@ -47,6 +49,7 @@ pub(super) type Objs = BTreeSet<Obj>;
 struct State {
     pts: Vec<Objs>,
     stored: BTreeMap<Obj, Objs>,
+    globals: BTreeMap<GlobalId, Objs>,
 }
 
 pub(super) struct Flow<'a> {
@@ -61,6 +64,43 @@ pub(super) struct Flow<'a> {
     /// Whether points-to sets hold at one point of the body, so an
     /// assignment replaces its local's, rather than anywhere in it.
     sensitive: bool,
+    /// Named store effects are private to the module-level A5 pass.
+    stores: Option<&'a [Stores]>,
+    globals: BTreeMap<GlobalId, Objs>,
+}
+
+/// Relations between externally reachable lists, retaining global identity.
+/// Fresh intermediate containers are traversed before projecting to roots.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(super) struct Stores {
+    edges: BTreeSet<(Obj, Obj)>,
+    result: Objs,
+}
+
+/// A finite may-store fixpoint, separate from the public mode summaries.
+/// All branches contribute, including recursive calls. Nothing is assumed
+/// about the order in which functions were lowered.
+pub(super) fn stores(program: &Program, summaries: &[Summary]) -> Vec<Stores> {
+    let mut stores = vec![Stores::default(); program.funcs.len()];
+    loop {
+        let mut changed = false;
+        for (i, func) in program.funcs.iter().enumerate() {
+            if i == program.main.0 {
+                continue;
+            }
+            let mut flow = Flow::new(program, func, summaries, false);
+            flow.stores = Some(&stores);
+            while flow.propagate() {}
+            let next = flow.store_summary();
+            if next != stores[i] {
+                stores[i] = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            return stores;
+        }
+    }
 }
 
 /// `func`'s summary, with callees summarized as `summaries` say.
@@ -132,8 +172,12 @@ pub(super) fn calls(
     index: usize,
     func: &Func,
     summaries: &[Summary],
+    stores: &[Stores],
 ) -> Vec<CallSite> {
     let mut flow = Flow::new(program, func, summaries, true);
+    if index == program.main.0 {
+        flow.stores = Some(stores);
+    }
     let entries = flow.entries();
     let mut out = Vec::new();
     for (block, entry) in func.blocks.iter().zip(entries) {
@@ -183,6 +227,8 @@ impl<'a> Flow<'a> {
             pts,
             stored: BTreeMap::new(),
             sensitive,
+            stores: None,
+            globals: BTreeMap::new(),
         }
     }
 
@@ -215,12 +261,14 @@ impl<'a> Flow<'a> {
         State {
             pts: self.pts.clone(),
             stored: self.stored.clone(),
+            globals: self.globals.clone(),
         }
     }
 
     fn load(&mut self, state: State) {
         self.pts = state.pts;
         self.stored = state.stored;
+        self.globals = state.globals;
     }
 
     /// If `inst` is a call, what its arguments may share as it runs.
@@ -265,6 +313,7 @@ impl<'a> Flow<'a> {
         };
         self.pts.iter_mut().for_each(rename);
         self.stored.values_mut().for_each(rename);
+        self.globals.values_mut().for_each(rename);
         if let Some(inner) = self.stored.remove(&latest) {
             self.stored.entry(earlier).or_default().extend(inner);
         }
@@ -283,7 +332,9 @@ impl<'a> Flow<'a> {
     fn flow(&mut self, inst: &Inst) -> bool {
         match inst {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
-            Inst::Append { list, value, .. } | Inst::SetItem { list, value, .. } => {
+            Inst::Append { list, value, .. }
+            | Inst::SetItem { list, value, .. }
+            | Inst::Insert { list, value, .. } => {
                 let value = self.of(*value);
                 let lists = self.of(*list);
                 self.store_all(&lists, &value)
@@ -301,8 +352,15 @@ impl<'a> Flow<'a> {
                 let lists = self.of(*list);
                 self.store_all(&lists, &elements)
             }
-            Inst::SetGlobal { value, .. } => {
+            Inst::SetGlobal { global, value } => {
                 let value = self.of(*value);
+                if self.stores.is_some() {
+                    if self.sensitive {
+                        self.globals.insert(*global, value.clone());
+                    } else {
+                        return self.store(Obj::Global(*global), &value);
+                    }
+                }
                 self.store(Obj::World, &value)
             }
             _ => false,
@@ -327,6 +385,7 @@ impl<'a> Flow<'a> {
             value,
             Rvalue::NewSeq(_)
                 | Rvalue::CopyList(_)
+                | Rvalue::Slice { .. }
                 | Rvalue::View(_)
                 | Rvalue::Call(..)
                 | Rvalue::Std(..)
@@ -342,7 +401,9 @@ impl<'a> Flow<'a> {
                 changed |= self.store(fresh, &items);
             }
             // A shallow copy shares the elements, not the list.
-            Rvalue::CopyList(a) | Rvalue::View(a) if self.elements_hold_list(dest) => {
+            Rvalue::CopyList(a) | Rvalue::View(a) | Rvalue::Slice { source: a, .. }
+                if self.elements_hold_list(dest) =>
+            {
                 let elements = self.contents(&self.of(*a));
                 changed |= self.store(fresh, &elements);
             }
@@ -368,9 +429,11 @@ impl<'a> Flow<'a> {
             }
             Rvalue::NewSeq(_)
             | Rvalue::CopyList(_)
+            | Rvalue::Slice { .. }
             | Rvalue::View(_)
             | Rvalue::Std(..)
             | Rvalue::Rust(..) => Objs::from([Obj::Fresh(dest.0, Age::Latest)]),
+            Rvalue::Global(g) if self.stores.is_some() => self.global(*g),
             Rvalue::Global(_) => Objs::from([Obj::World]),
             Rvalue::Call(f, args) => self.call_result(*f, args, dest),
             _ => Objs::new(),
@@ -388,7 +451,11 @@ impl<'a> Flow<'a> {
             .collect();
         let mut out = self.reachable(&self.union(&aliased));
         out.insert(Obj::Fresh(dest.0, Age::Latest));
-        if summary.result_global {
+        if let Some(stores) = self.stores {
+            for root in &stores[f.0].result {
+                out.extend(self.resolve(*root, args));
+            }
+        } else if summary.result_global {
             out.insert(Obj::World);
         }
         out
@@ -398,6 +465,15 @@ impl<'a> Flow<'a> {
     /// values or in any list it may change; one may leave a global's
     /// list inside an argument.
     fn call_stores(&mut self, f: FuncId, args: &[Operand]) -> bool {
+        if let Some(stores) = self.stores {
+            let mut changed = false;
+            for (target, value) in &stores[f.0].edges {
+                let targets = self.resolve(*target, args);
+                let values = self.resolve(*value, args);
+                changed |= self.store_all(&targets, &values);
+            }
+            return changed;
+        }
         let params = &self.summaries[f.0].params;
         let mut changed = false;
         for (a, _) in args.iter().zip(params).filter(|(_, p)| p.holds_global) {
@@ -411,6 +487,85 @@ impl<'a> Flow<'a> {
         let mut targets = self.passed(args, params, Mode::Mut);
         targets.insert(Obj::World);
         self.store_all(&targets, &kept) | changed
+    }
+
+    /// A global's current module binding, or its symbolic callee root.
+    fn global(&self, global: GlobalId) -> Objs {
+        self.globals
+            .get(&global)
+            .cloned()
+            .unwrap_or_else(|| Objs::from([Obj::Global(global)]))
+    }
+
+    /// Instantiate an external root at this call. Reachability includes
+    /// nested lists and aliases, as in the existing mode-store pass.
+    fn resolve(&self, root: Obj, args: &[Operand]) -> Objs {
+        let roots = match root {
+            Obj::Param(i) => args.get(i).map_or_else(Objs::new, |a| self.of(*a)),
+            Obj::Global(g) => self.global(g),
+            _ => Objs::new(),
+        };
+        self.reachable(&roots)
+    }
+
+    fn store_summary(&self) -> Stores {
+        let external = |o: &Obj| matches!(o, Obj::Param(_) | Obj::Global(_));
+        let roots = self
+            .func
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| holds_list(self.program, self.func.locals[p.0]))
+            .map(|(i, _)| Obj::Param(i));
+        let globals = self
+            .program
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, ty)| holds_list(self.program, **ty))
+            .map(|(i, _)| Obj::Global(GlobalId(i)));
+        let roots: Vec<Obj> = roots.chain(globals).collect();
+        let mut edges = BTreeSet::new();
+        for root in &roots {
+            let root = *root;
+            let region = self.region(root);
+            for target in &region {
+                let Some(inner) = self.stored.get(target) else {
+                    continue;
+                };
+                for value in self.reachable(inner).into_iter().filter(external) {
+                    edges.insert((root, value));
+                }
+            }
+        }
+        // A returned fresh container can already have escaped into a
+        // global (or parameter). Keep that alias even though fresh local
+        // identities themselves cannot cross a function boundary.
+        let returned: Objs = self
+            .func
+            .blocks
+            .iter()
+            .filter_map(|b| match b.term {
+                Term::Return(op) => Some(self.reachable(&self.of(op))),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let mut result: Objs = returned.iter().copied().filter(external).collect();
+        for root in &roots {
+            let region = self.region(*root);
+            if meets(&returned, &region) {
+                result.insert(*root);
+            }
+            // Two roots can receive the same fresh allocation even if
+            // neither receives a parameter or global directly.
+            for other in &roots {
+                if root != other && meets(&region, &self.region(*other)) {
+                    edges.insert((*root, *other));
+                }
+            }
+        }
+        Stores { edges, result }
     }
 
     /// Every list reachable from an argument whose mode is at least
@@ -524,7 +679,10 @@ impl<'a> Flow<'a> {
             Inst::Append { list, .. }
             | Inst::SetItem { list, .. }
             | Inst::Extend { list, .. }
-            | Inst::Scale { list, .. } => {
+            | Inst::Scale { list, .. }
+            | Inst::Insert { list, .. }
+            | Inst::Remove { list, .. }
+            | Inst::Sort { list, .. } => {
                 mutated.extend(self.of(*list));
             }
             _ => {}
@@ -620,6 +778,12 @@ fn join(into: &mut Option<State>, state: &State) -> bool {
     };
     let mut grew = false;
     for (mine, theirs) in into.pts.iter_mut().zip(&state.pts) {
+        let before = mine.len();
+        mine.extend(theirs.iter().copied());
+        grew |= mine.len() > before;
+    }
+    for (global, theirs) in &state.globals {
+        let mine = into.globals.entry(*global).or_default();
         let before = mine.len();
         mine.extend(theirs.iter().copied());
         grew |= mine.len() > before;

@@ -1,0 +1,34 @@
+test_a_duplicate_job_fails (test_check_jobs.Problems.test_a_duplicate_job_fails) ... ok
+test_a_filtered_guard_fails (test_check_jobs.Problems.test_a_filtered_guard_fails) ... ok
+test_a_gate_missing_a_job_is_one (test_check_jobs.Problems.test_a_gate_missing_a_job_is_one) ... ok
+test_a_job_without_a_runner_is_one (test_check_jobs.Problems.test_a_job_without_a_runner_is_one) ... ok
+test_a_missing_job_is_one (test_check_jobs.Problems.test_a_missing_job_is_one) ... ok
+test_a_missing_platform_is_one (test_check_jobs.Problems.test_a_missing_platform_is_one) ... ok
+test_a_missing_trigger_is_one (test_check_jobs.Problems.test_a_missing_trigger_is_one) ... ok
+test_a_path_filter_is_one (test_check_jobs.Problems.test_a_path_filter_is_one) ... ok
+test_a_sound_workflow_has_none (test_check_jobs.Problems.test_a_sound_workflow_has_none) ... ok
+test_no_jobs_is_one (test_check_jobs.Problems.test_no_jobs_is_one) ... ok
+test_the_repository_workflow_is_sound (test_check_jobs.Problems.test_the_repository_workflow_is_sound) ... ok
+test_unparsable_yaml_fails (test_check_jobs.Problems.test_unparsable_yaml_fails) ... ok
+test_a_wrong_group_count_is_reported (test_fclone_driver.Compare.test_a_wrong_group_count_is_reported) ... ok
+test_differing_groups_are_reported (test_fclone_driver.Compare.test_differing_groups_are_reported) ... ok
+test_matching_runs_report_nothing (test_fclone_driver.Compare.test_matching_runs_report_nothing) ... ok
+test_a_missing_or_moved_path_differs (test_fclone_driver.Groups.test_a_missing_or_moved_path_differs) ... ok
+test_a_size_is_part_of_the_group (test_fclone_driver.Groups.test_a_size_is_part_of_the_group) ... ok
+test_no_output_is_no_groups (test_fclone_driver.Groups.test_no_output_is_no_groups) ... ok
+test_order_within_and_between_groups_is_ignored (test_fclone_driver.Groups.test_order_within_and_between_groups_is_ignored) ... ok
+test_windows_separators_and_line_ends_are_one_spelling (test_fclone_driver.Groups.test_windows_separators_and_line_ends_are_one_spelling) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 0.035s
+
+OK
+cannot read: duplicate key 'race'
+  in "<unicode string>", line 19, column 3:
+      check:
+      ^
+/tmp/tmpbu2k6apg/ci-jobs.yml: `pull_request` is filtered by ['paths']; it must run on every PR
+cannot read: mapping values are not allowed here
+  in "<unicode string>", line 3, column 19:
+        - run: a -- b:: c
+                      ^

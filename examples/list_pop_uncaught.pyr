@@ -1,0 +1,7 @@
+# expect-exit: 1
+# An uncaught `pop` of an empty list ends the program with
+# `IndexError: pop from empty list` (D71).
+xs = ["ä"]
+print(xs.pop())
+print(xs.pop())
+print("unreachable")

@@ -78,7 +78,9 @@ impl FnBuilder<'_, '_> {
             | Inst::Extend { list: l, .. }
             | Inst::Scale { list: l, .. }
             | Inst::SetItem { list: l, .. }
-            | Inst::Sort(l)
+            | Inst::Insert { list: l, .. }
+            | Inst::Remove { list: l, .. }
+            | Inst::Sort { list: l, .. }
             | Inst::Reverse(l) => self.ty(*l) == list,
             Inst::Assign { value, .. } => runs_unseen(value),
             Inst::Print { .. }
@@ -87,7 +89,9 @@ impl FnBuilder<'_, '_> {
             | Inst::Forget(_)
             | Inst::SetGlobal { .. }
             | Inst::DropGlobal(_)
-            | Inst::Raise { .. } => false,
+            | Inst::Raise { .. }
+            | Inst::Stash
+            | Inst::Restore => false,
         }
     }
 }
@@ -119,6 +123,7 @@ fn runs_unseen(value: &Rvalue) -> bool {
         | Rvalue::Contains { .. }
         | Rvalue::ToStr(_)
         | Rvalue::CopyList(_)
+        | Rvalue::Slice { .. }
         | Rvalue::NewSeq(_)
         | Rvalue::Field(..)
         | Rvalue::Global(_)
@@ -136,6 +141,7 @@ fn runs_unseen(value: &Rvalue) -> bool {
         | Rvalue::Raised
         | Rvalue::PendingIs(_)
         | Rvalue::Catch
+        | Rvalue::Unstash
         | Rvalue::Hold(_) => false,
     }
 }
@@ -173,7 +179,10 @@ fn std_changes_lists(f: StdFn) -> bool {
         | StdFn::Lower
         | StdFn::Ord
         | StdFn::Chr
-        | StdFn::FloatSum => false,
+        | StdFn::FloatSum
+        | StdFn::ListIndex
+        | StdFn::ListFind
+        | StdFn::ListCount => false,
     }
 }
 

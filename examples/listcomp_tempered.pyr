@@ -1,0 +1,53 @@
+# A comprehension in tempered code sees the loop's alias and mode checks.
+temper def doubled(xs: list[int]) -> list[int]:
+    return [x * 2 for x in xs]
+
+
+temper def grow(mut xs: list[int]) -> None:
+    ys = [x + 1 for x in xs if x > 1]
+    xs.append(len(ys))
+
+
+temper def firsts(rows: list[list[str]]) -> list[str]:
+    return [row[0] for row in rows if len(row) > 0]
+
+
+temper def keep(rows: list[list[int]]) -> list[list[int]]:
+    return [row[:] for row in rows]
+
+
+temper def parse(xs: list[str]) -> list[int] raises ValueError:
+    return [int(s) for s in xs]
+
+
+temper def push(mut xs: list[int]) -> None:
+    done = [xs.append(x) for x in range(2)]
+
+
+temper def fresh(xs: list[list[int]]) -> list[list[int]]:
+    return [list(x) for x in xs]
+
+
+temper def sort_copy(mut xs: list[int]) -> None:
+    done = [xs.sort() for x in list(xs)]
+
+
+xs = [1, 2, 3]
+print(doubled(xs), xs)
+grow(xs)
+print(xs)
+print(firsts([["ä", "b"], [], ["ç"]]))
+rows = [[1], [2, 3]]
+copies = keep(rows)
+copies[0].append(7)
+print(rows, copies)
+print(parse(["1", "-2"]))
+ys = [1]
+push(ys)
+print(ys)
+rows = [[1]]
+fresh(rows)[0].append(2)
+print(rows)
+zs = [3, 1, 2]
+sort_copy(zs)
+print(zs)

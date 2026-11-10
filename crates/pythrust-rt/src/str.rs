@@ -12,7 +12,6 @@
 #![allow(unsafe_code)] // The C ABI below; the logic above it is safe.
 
 use std::cmp::Ordering;
-use std::fmt::Write;
 
 use crate::text;
 
@@ -49,6 +48,32 @@ fn concat(a: &PtStr, b: &PtStr) -> PtStr {
     PtStr {
         rc: crate::sync::Count::new(),
         chars: a.chars + b.chars,
+        text: text.into_boxed_str(),
+    }
+}
+
+/// Check both left-associated byte lengths without allocating. A failed
+/// capacity uses std's same fatal capacity-overflow path as binary concat.
+fn concat3_capacity(a: usize, b: usize, c: usize) -> usize {
+    let size = a
+        .checked_add(b)
+        .filter(|n| *n <= isize::MAX as usize)
+        .and_then(|n| n.checked_add(c))
+        .filter(|n| *n <= isize::MAX as usize);
+    size.unwrap_or(usize::MAX)
+}
+
+fn concat3(a: &PtStr, b: &PtStr, c: &PtStr) -> PtStr {
+    let capacity = concat3_capacity(a.text.len(), b.text.len(), c.text.len());
+    let mut text = String::with_capacity(capacity);
+    text.push_str(a.text());
+    text.push_str(b.text());
+    text.push_str(c.text());
+    PtStr {
+        rc: crate::sync::Count::new(),
+        // Each char occupies at least one byte; checked total bytes bounds
+        // this sum too. Live PtStr values hold valid UTF-8 and char counts.
+        chars: a.chars + b.chars + c.chars,
         text: text.into_boxed_str(),
     }
 }
@@ -172,6 +197,24 @@ pub unsafe extern "C" fn pt_str_concat(a: *const PtStr, b: *const PtStr) -> *mut
     // SAFETY: guaranteed by the caller.
     let (a, b) = unsafe { (borrow(a), borrow(b)) };
     into_ptr(concat(a, b))
+}
+
+/// Internal native `(a + b) + c`, with one result object and buffer.
+/// The compiler proves no later operand work crosses the prefix allocation.
+/// Overflow and allocation failure remain fatal through Rust std, as for `+`.
+///
+/// # Safety
+///
+/// `a`, `b` and `c` are live strings throughout this call; arguments may alias.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_concat3(
+    a: *const PtStr,
+    b: *const PtStr,
+    c: *const PtStr,
+) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller; only immutable borrows are taken.
+    let (a, b, c) = unsafe { (borrow(a), borrow(b), borrow(c)) };
+    into_ptr(concat3(a, b, c))
 }
 
 /// `s * n`, or null when too large to allocate.
@@ -478,7 +521,14 @@ pub unsafe extern "C" fn pt_str_join(
 /// `str(n)` for an int.
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_str_from_int(n: i64) -> *mut PtStr {
-    into_ptr(PtStr::new(decimal(n).into_boxed_str()))
+    let text = decimal(n);
+    // Only decimal() supplies this length: its bytes are digits and a sign.
+    let chars = text.len();
+    into_ptr(PtStr {
+        rc: crate::sync::Count::new(),
+        chars,
+        text: text.into_boxed_str(),
+    })
 }
 
 /// `n` in decimal, allocated once at its exact length, so boxing it does
@@ -486,15 +536,28 @@ pub extern "C" fn pt_str_from_int(n: i64) -> *mut PtStr {
 /// lock where `malloc` and `free` mostly do not; tasks building strings
 /// at once wait on it (M6c step 4c, `docs/benchmarks.md`).
 fn decimal(n: i64) -> String {
-    let digits = n
-        .unsigned_abs()
-        .checked_ilog10()
-        .map_or(1, |d| d as usize + 1);
-    let mut text = String::with_capacity(digits + usize::from(n < 0));
-    // `String`'s `fmt::Write` never errors, and `i64`'s `Display` fails
-    // only if the writer does.
-    let _ = write!(text, "{n}");
-    text
+    // Twenty bytes cover the sign and all nineteen digits of i64::MIN.
+    let mut buffer = [b'0'; 20];
+    let mut start = buffer.len();
+    let mut magnitude = n.unsigned_abs();
+    loop {
+        start -= 1;
+        buffer[start] = b'0' + (magnitude % 10) as u8;
+        magnitude /= 10;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        start -= 1;
+        buffer[start] = b'-';
+    }
+    // All written bytes are ASCII. Keep the proof local, without unchecked UTF-8.
+    let text = match std::str::from_utf8(&buffer[start..]) {
+        Ok(text) => text,
+        Err(_) => unreachable!("decimal digits and sign are ASCII"),
+    };
+    text.to_owned()
 }
 
 /// `str(b)` for a bool: any nonzero byte is true.
@@ -534,6 +597,34 @@ pub unsafe extern "C" fn pt_write_str(s: *const PtStr) {
     crate::write(s.text().as_bytes());
 }
 
+/// Fresh string slice by Unicode code points, without normalization.
+///
+/// # Safety
+/// `s` is a live string; `step` is nonzero (checked at the source site).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_slice(
+    s: *const PtStr,
+    start: i64,
+    stop: i64,
+    step: i64,
+    present: i64,
+) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller, following pt_str_index.
+    let s = unsafe { borrow(s) };
+    let chars: Vec<_> = s.text().chars().collect();
+    let text: String = crate::slice::indices(
+        chars.len(),
+        (present & 1 != 0).then_some(start),
+        (present & 2 != 0).then_some(stop),
+        step,
+    )
+    .into_iter()
+    .flatten()
+    .map(|k| chars[k])
+    .collect();
+    into_ptr(PtStr::new(text.into_boxed_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +635,64 @@ mod tests {
 
     fn text(p: Option<PtStr>) -> Option<String> {
         p.map(|p| p.text().to_string())
+    }
+
+    #[test]
+    fn slice_owns_code_points_after_source_destruction() {
+        let source = into_ptr(s("aé🙂é"));
+        // SAFETY: source is live; the helper borrows it and returns a new
+        // owned string independent of that source.
+        unsafe {
+            let selected = pt_str_slice(source, 0, 0, -1, 0);
+            pt_str_dec(source);
+            assert_eq!(borrow(selected).text(), "́e🙂éa");
+            pt_str_dec(selected);
+        }
+    }
+
+    #[test]
+    fn chain_abi_borrows_aliases_and_owns_an_independent_result() {
+        let a = into_ptr(s("é🙂"));
+        // SAFETY: a is live; the helper borrows all three aliasing inputs.
+        let out = unsafe { pt_str_concat3(a, a, a) };
+        // SAFETY: the one input reference is still ours, not consumed.
+        unsafe { pt_str_dec(a) };
+        // SAFETY: out owns its independent result and no longer needs a.
+        assert_eq!(unsafe { borrow(out) }.text(), "é🙂é🙂é🙂");
+        // SAFETY: give up the result's single owned reference.
+        unsafe { pt_str_dec(out) };
+    }
+
+    #[test]
+    fn chain_capacity_checks_prefix_and_final_without_allocating() {
+        let max = isize::MAX as usize;
+        assert_eq!(concat3_capacity(0, 0, 0), 0);
+        assert_eq!(concat3_capacity(1, 2, 3), 6);
+        assert_eq!(concat3_capacity(max - 2, 1, 1), max);
+        assert_eq!(concat3_capacity(max, 1, 0), usize::MAX);
+        assert_eq!(concat3_capacity(max - 1, 1, 1), usize::MAX);
+        assert_eq!(concat3_capacity(usize::MAX, 1, 0), usize::MAX);
+        assert_eq!(concat3_capacity(0, usize::MAX, 1), usize::MAX);
+    }
+
+    #[test]
+    fn chain_preserves_utf8_chars_empty_and_aliases() {
+        for parts in [
+            ["", "", ""],
+            ["", "é", ""],
+            ["α", "🙂", "中"],
+            ["x", "", "y"],
+        ] {
+            let [a, b, c] = parts.map(s);
+            let fused = concat3(&a, &b, &c);
+            let original = concat(&concat(&a, &b), &c);
+            assert_eq!(fused.text(), original.text());
+            assert_eq!(fused.chars, original.chars);
+        }
+        let a = s("é🙂");
+        let fused = concat3(&a, &a, &a);
+        assert_eq!(fused.text(), "é🙂é🙂é🙂");
+        assert_eq!(fused.chars, 6);
     }
 
     #[test]
@@ -627,6 +776,39 @@ mod tests {
             let text = decimal(n);
             assert_eq!(text, n.to_string(), "{n}");
             assert_eq!(text.capacity(), text.len(), "{n}");
+        }
+    }
+
+    #[test]
+    fn decimal_every_digit_boundary_and_utf8_stays_separate() {
+        let mut values = vec![0, i64::MIN, i64::MIN + 1, i64::MAX];
+        for exponent in 0..=18 {
+            let boundary = 10_i64.pow(exponent);
+            for n in [boundary - 1, boundary, boundary + 1] {
+                values.extend([n, -n]);
+            }
+        }
+        for n in values {
+            let want = n.to_string();
+            let text = decimal(n);
+            assert_eq!(text.as_bytes(), want.as_bytes());
+            assert_eq!(text.capacity(), text.len());
+            let out = pt_str_from_int(n);
+            // SAFETY: out is our new owned string; all helpers borrow it.
+            unsafe {
+                assert_eq!(borrow(out).text().as_bytes(), want.as_bytes());
+                assert_eq!(pt_str_len(out), want.len() as i64);
+                assert!(borrow(out).is_ascii());
+                let wide = s("é🙂中");
+                let joined = concat(borrow(out), &wide);
+                assert_eq!(joined.chars, want.len() + 3);
+                assert_eq!(index(&joined, -1).unwrap().text(), "中");
+                assert!(!joined.is_ascii());
+                pt_str_inc(out);
+                pt_str_dec(out);
+                assert_eq!(borrow(out).text(), want);
+                pt_str_dec(out);
+            }
         }
     }
 

@@ -1,0 +1,80 @@
+# #807: empty/Unicode/alias, parenthesized and longer chains.
+def chain(a: str, b: str, c: str) -> str:
+    return a + b + c
+
+def longer(a: str, b: str, c: str, d: str) -> str:
+    return ((a + b) + c) + d
+
+def right(a: str, b: str, c: str) -> str:
+    return a + (b + c)
+
+for a in ["", "é", "🙂"]:
+    for b in ["", "中"]:
+        for c in ["", "α"]:
+            print([chain(a, b, c)], len(chain(a, b, c)))
+print(chain("é", "é", "é"))
+print(longer("α", "", "🙂", "中"))
+print(right("α", "🙂", "中"))
+
+# First two operands execute once and in order; the tail is already live.
+def take(xs: list[str], n: int) -> str:
+    print("take", n)
+    old = xs[0]
+    xs[0] = str(n)
+    return old
+
+def effects(xs: list[str], tail: str) -> str:
+    return take(xs, 1) + take(xs, 2) + tail
+
+def overwritten(xs: list[str], tail: str) -> str:
+    return xs[0] + take(xs, 4) + tail
+
+xs = ["old"]
+print(effects(xs, "尾"), xs)
+print(overwritten(xs, "尾"), xs)
+
+# A later call must remain after the prefix, including container mutation.
+def later(xs: list[str], a: str, b: str) -> str:
+    return a + b + take(xs, 3)
+print(later(xs, "a", "b"), xs)
+
+# Failure before/inside either first operand retains old assignment target.
+def fail(n: int) -> str:
+    print("fail", n)
+    raise ValueError(str(n))
+
+def first(c: str) -> str:
+    return fail(1) + fail(2) + c
+
+def second(a: str, c: str) -> str:
+    return a + fail(2) + c
+
+def last(a: str, b: str) -> str:
+    return a + b + fail(3)
+
+out = "unchanged"
+try:
+    out = first("tail")
+except ValueError as e:
+    print(e, out)
+try:
+    out = second("a", "tail")
+except ValueError as e:
+    print(e, out)
+try:
+    out = last("a", "b")
+except ValueError as e:
+    print(e, out)
+
+# A later failing subscript and a branch still keep the fallback checks.
+def indexed(a: str, b: str, xs: list[str]) -> str:
+    return a + b + xs[2]
+try:
+    out = indexed("a", "b", xs)
+except IndexError:
+    print("index", out, xs)
+
+def branch(a: str, b: str, c: str, yes: bool) -> str:
+    return a + b + (c if yes else "else")
+print(branch("a", "b", "c", True))
+print(branch("a", "b", "c", False))

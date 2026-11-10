@@ -1,0 +1,60 @@
+# Dict methods (D70): `pop` with and without a default, `setdefault`,
+# `update` with a dict of the same type, and `del d[k]`; a missing key
+# raises KeyError holding it (D71).
+
+
+temper def count(mut d: dict[str, int], words: list[str]) -> None:
+    for w in words:
+        d[w] = d.setdefault(w, 0) + 1
+
+
+temper def take(mut d: dict[str, int], owned k: str) -> int raises KeyError:
+    return d.pop(k)
+
+
+def main() -> None:
+    d = {"ä": 1, "b": 2, "c": 3}
+    print(d.pop("ä"), d.pop("z", -1), d)
+    print(d.setdefault("b", 9), d.setdefault("é", 4), d)
+    d.update({"b": 20, "ñ": 5})
+    d.update(d)
+    print(d)
+    del d["c"]
+    d["c"] = 30
+    print(d, list(d.keys()), list(d.values()))
+    tally: dict[str, int] = {}
+    count(tally, ["x", "y", "x", "ü"])
+    print(tally)
+    opt: dict[int, str | None] = {1: "one"}
+    print(opt.setdefault(2), opt.setdefault(1), opt)
+    print(opt.pop(2, "gone"), opt.pop(3, None), opt)
+    lists = {"a": [1], "b": [2, 3]}
+    got = lists.pop("b")
+    got.append(4)
+    print(got, lists)
+    ints = {"a": 1}
+    for k in ["a", "a"]:
+        try:
+            print(take(ints, k))
+        except KeyError as e:
+            print("take:", e)
+    keyed = {(1, "x"): 1.5}
+    try:
+        keyed.pop((2, "ÿ"))
+    except KeyError as e:
+        print("pop:", e)
+    try:
+        del keyed[(3, "z")]
+    except KeyError as e:
+        print("del:", e)
+    del keyed[(1, "x")]
+    print(keyed, len(keyed))
+    n = {1: 2}
+    for i in range(2, 40):
+        n[i] = i
+    for i in range(1, 40, 3):
+        del n[i]
+    print(len(n), 3 in n, 4 in n, n.pop(38), n.get(39))
+
+
+main()

@@ -1245,3 +1245,21 @@ fn a_loop_that_submits_or_takes_a_result_borrows_per_read() {
     );
     assert_eq!(holds(&lowered(src), "main"), (0, 0));
 }
+
+#[test]
+fn tuple_ordering_keeps_inferences_rejected_boundaries() {
+    for (source, message) in [
+        (
+            "print((1, None) < (2, None))\n",
+            "cannot order None against None",
+        ),
+        (
+            "print(((1,),) < ((\"a\",),))\n",
+            "cannot order int against str",
+        ),
+        ("print(([1],) < ([1.0], 0))\n", "expected int, found float"),
+    ] {
+        let error = lower_src(source).expect_err(source);
+        assert!(error.message.contains(message), "{source}: {error}");
+    }
+}

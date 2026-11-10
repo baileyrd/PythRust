@@ -18,7 +18,7 @@
 //! `RecursionError`, as in `run`, rather than a native stack overflow.
 //! Both are per thread, so tasks (M6c) each count from zero.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
@@ -31,9 +31,12 @@ use cranelift_module::{
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+mod concat;
+mod constarg;
 mod exc;
 mod num;
 mod opt;
+mod pair;
 mod seq;
 mod stdlib;
 mod task;
@@ -62,9 +65,42 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
     cg.declare_globals(&program.globals)?;
     let ids = cg.declare(program)?;
     cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+    let plans = pair::plans(program);
+    cg.declare_pairs(program, &plans)?;
+    cg.declare_clones(program, constarg::plan(program, &plans))?;
     cg.declare_thunks(program)?;
-    for (func, id) in program.funcs.iter().zip(&ids) {
-        cg.define(func, *id, &ids, &program.types)?;
+    for (i, (func, id)) in program.funcs.iter().zip(&ids).enumerate() {
+        let what = |scalar_return, bound| Ctx {
+            func,
+            ids: &ids,
+            types: &program.types,
+            plan: &plans[i],
+            scalar_return,
+            bound,
+        };
+        cg.define(*id, what(false, None))?;
+        if let Some(clone) = cg.pairs.get(&ir::FuncId(i)).copied() {
+            cg.define(clone, what(true, None))?;
+        }
+    }
+    let clones: Vec<_> = cg.clones.iter().map(|(c, id)| (*c, *id)).collect();
+    for (c, id) in clones {
+        let (func, plan) = (&program.funcs[c.callee.0], &plans[c.callee.0]);
+        let param = func
+            .params
+            .get(c.arg)
+            .copied()
+            .ok_or_else(|| backend("clone of a missing parameter".into()))?;
+        let bound = Some((param, c.value));
+        let what = Ctx {
+            func,
+            ids: &ids,
+            types: &program.types,
+            plan,
+            scalar_return: c.scalar,
+            bound,
+        };
+        cg.define(id, what)?;
     }
     cg.define_thunks(program, &ids)?;
     cg.module
@@ -86,6 +122,7 @@ enum Rt {
     StrInc,
     StrDec,
     StrConcat,
+    StrConcat3,
     StrRepeat,
     StrIndex,
     StrLen,
@@ -109,18 +146,22 @@ enum Rt {
     SeqPush,
     SeqLen,
     SeqGet,
+    IntListGet,
     SeqHold,
     SeqReleaseHeld,
     SeqLenHeld,
     SeqGetHeld,
     SeqItemHeld,
     ListSet,
+    IntListSet,
     SeqInc,
     SeqDec,
     SeqEq,
     SeqCmp,
     ListContains,
     ListCopy,
+    ListSlice,
+    StrSlice,
     ListExtend,
     ListScale,
     WriteSeq,
@@ -135,6 +176,9 @@ enum Rt {
     RaiseMsg,
     PendingIs,
     Catch,
+    Stash,
+    Restore,
+    Unstash,
     Uncaught,
     DictSet,
     DictGet,
@@ -179,10 +223,15 @@ enum Rt {
     StrOrd,
     StrChr,
     SeqFsum,
+    ListInsert,
+    ListRemove,
+    TableRemove,
+    ListIndex,
+    ListCount,
 }
 
 impl Rt {
-    const ALL: [Rt; 103] = [
+    const ALL: [Rt; 116] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -193,6 +242,7 @@ impl Rt {
         Rt::StrInc,
         Rt::StrDec,
         Rt::StrConcat,
+        Rt::StrConcat3,
         Rt::StrRepeat,
         Rt::StrIndex,
         Rt::StrLen,
@@ -216,18 +266,22 @@ impl Rt {
         Rt::SeqPush,
         Rt::SeqLen,
         Rt::SeqGet,
+        Rt::IntListGet,
         Rt::SeqHold,
         Rt::SeqReleaseHeld,
         Rt::SeqLenHeld,
         Rt::SeqGetHeld,
         Rt::SeqItemHeld,
         Rt::ListSet,
+        Rt::IntListSet,
         Rt::SeqInc,
         Rt::SeqDec,
         Rt::SeqEq,
         Rt::SeqCmp,
         Rt::ListContains,
         Rt::ListCopy,
+        Rt::ListSlice,
+        Rt::StrSlice,
         Rt::ListExtend,
         Rt::ListScale,
         Rt::WriteSeq,
@@ -242,6 +296,9 @@ impl Rt {
         Rt::RaiseMsg,
         Rt::PendingIs,
         Rt::Catch,
+        Rt::Stash,
+        Rt::Restore,
+        Rt::Unstash,
         Rt::Uncaught,
         Rt::DictSet,
         Rt::DictGet,
@@ -286,6 +343,11 @@ impl Rt {
         Rt::StrOrd,
         Rt::StrChr,
         Rt::SeqFsum,
+        Rt::ListInsert,
+        Rt::ListRemove,
+        Rt::TableRemove,
+        Rt::ListIndex,
+        Rt::ListCount,
     ];
 
     fn symbol(self) -> &'static str {
@@ -300,6 +362,7 @@ impl Rt {
             Rt::StrInc => "pt_str_inc",
             Rt::StrDec => "pt_str_dec",
             Rt::StrConcat => "pt_str_concat",
+            Rt::StrConcat3 => "pt_str_concat3",
             Rt::StrRepeat => "pt_str_repeat",
             Rt::StrIndex => "pt_str_index",
             Rt::StrLen => "pt_str_len",
@@ -323,18 +386,22 @@ impl Rt {
             Rt::SeqPush => "pt_seq_push",
             Rt::SeqLen => "pt_seq_len",
             Rt::SeqGet => "pt_seq_get",
+            Rt::IntListGet => "pt_int_list_get",
             Rt::SeqHold => "pt_seq_hold",
             Rt::SeqReleaseHeld => "pt_seq_release_held",
             Rt::SeqLenHeld => "pt_seq_len_held",
             Rt::SeqGetHeld => "pt_seq_get_held",
             Rt::SeqItemHeld => "pt_seq_item_held",
             Rt::ListSet => "pt_list_set",
+            Rt::IntListSet => "pt_int_list_set",
             Rt::SeqInc => "pt_seq_inc",
             Rt::SeqDec => "pt_seq_dec",
             Rt::SeqEq => "pt_seq_eq",
             Rt::SeqCmp => "pt_seq_cmp",
             Rt::ListContains => "pt_list_contains",
             Rt::ListCopy => "pt_list_copy",
+            Rt::ListSlice => "pt_list_slice",
+            Rt::StrSlice => "pt_str_slice",
             Rt::ListExtend => "pt_list_extend",
             Rt::ListScale => "pt_list_scale",
             Rt::WriteSeq => "pt_write_seq",
@@ -349,6 +416,9 @@ impl Rt {
             Rt::RaiseMsg => "pt_raise_msg",
             Rt::PendingIs => "pt_pending_is",
             Rt::Catch => "pt_catch",
+            Rt::Stash => "pt_stash",
+            Rt::Restore => "pt_restore",
+            Rt::Unstash => "pt_unstash",
             Rt::Uncaught => "pt_uncaught",
             Rt::DictSet => "pt_dict_set",
             Rt::DictGet => "pt_dict_get",
@@ -393,6 +463,11 @@ impl Rt {
             Rt::FutDec => "pt_fut_dec",
             Rt::ResultsNext => "pt_results_next",
             Rt::ListReverse => "pt_list_reverse",
+            Rt::ListInsert => "pt_list_insert",
+            Rt::ListRemove => "pt_list_remove",
+            Rt::TableRemove => "pt_table_remove",
+            Rt::ListIndex => "pt_list_index",
+            Rt::ListCount => "pt_list_count",
         }
     }
 
@@ -406,7 +481,9 @@ impl Rt {
             Rt::WriteStr | Rt::StrInc | Rt::StrDec => (vec![ptr], None),
             Rt::Fail => (vec![ptr, ptr], None),
             Rt::StrNew | Rt::StrConcat => (vec![ptr, ptr], Some(ptr)),
+            Rt::StrConcat3 => (vec![ptr, ptr, ptr], Some(ptr)),
             Rt::StrRepeat | Rt::StrIndex => (vec![ptr, I64], Some(ptr)),
+            Rt::StrSlice | Rt::ListSlice => (vec![ptr, I64, I64, I64, I64], Some(ptr)),
             Rt::StrLen => (vec![ptr], Some(I64)),
             Rt::StrCmp => (vec![ptr, ptr], Some(I64)),
             Rt::StrContains => (vec![ptr, ptr], Some(I8)),
@@ -426,9 +503,11 @@ impl Rt {
             Rt::SeqNew => (vec![ptr, ptr, I64], Some(ptr)),
             Rt::SeqPush => (vec![ptr, I64], None),
             Rt::SeqLen | Rt::SeqLenHeld => (vec![ptr], Some(I64)),
-            Rt::SeqGet | Rt::SeqGetHeld | Rt::SeqItemHeld => (vec![ptr, I64, ptr], Some(I64)),
+            Rt::SeqGet | Rt::IntListGet | Rt::SeqGetHeld | Rt::SeqItemHeld => {
+                (vec![ptr, I64, ptr], Some(I64))
+            }
             Rt::SeqHold => (vec![ptr], Some(ptr)),
-            Rt::ListSet => (vec![ptr, I64, I64], Some(I8)),
+            Rt::ListSet | Rt::IntListSet => (vec![ptr, I64, I64], Some(I8)),
             Rt::SeqInc | Rt::SeqDec | Rt::SeqReleaseHeld | Rt::WriteSeq => (vec![ptr], None),
             Rt::SeqEq => (vec![ptr, ptr], Some(I8)),
             Rt::SeqCmp => (vec![ptr, ptr], Some(I64)),
@@ -444,7 +523,8 @@ impl Rt {
             Rt::RaiseValue => (vec![ptr; 7], None),
             Rt::RaiseMsg => (vec![I8, ptr, ptr, ptr, ptr, ptr, ptr], None),
             Rt::PendingIs => (vec![I32], Some(I8)),
-            Rt::Catch => (vec![], Some(ptr)),
+            Rt::Catch | Rt::Unstash => (vec![], Some(ptr)),
+            Rt::Stash | Rt::Restore => (vec![], None),
             Rt::Uncaught => (vec![], None),
             Rt::DictSet => (vec![ptr, I64, I64], None),
             Rt::DictGet => (vec![ptr, I64, ptr], Some(I64)),
@@ -452,7 +532,11 @@ impl Rt {
             Rt::TableContains => (vec![ptr, I64], Some(I8)),
             Rt::TableEntry => (vec![ptr, I64, I64], Some(I64)),
             Rt::ViewNew | Rt::ListOf => (vec![ptr, ptr, ptr], Some(ptr)),
-            Rt::ListSort => (vec![ptr], None),
+            Rt::ListSort => (vec![ptr, I8], None),
+            Rt::ListInsert => (vec![ptr, I64, I64], None),
+            Rt::ListRemove | Rt::TableRemove => (vec![ptr, I64], None),
+            Rt::ListIndex => (vec![ptr, I64, I8, ptr, ptr, ptr, ptr], Some(I64)),
+            Rt::ListCount => (vec![ptr, I64], Some(I64)),
             Rt::Argv => (vec![ptr, ptr], Some(ptr)),
             Rt::OsListdir => (vec![ptr; 7], Some(ptr)),
             Rt::OsPathJoin => (vec![ptr, ptr], Some(ptr)),
@@ -494,6 +578,10 @@ struct Codegen<'r> {
     globals: Vec<(DataId, Ty)>,
     /// Each function's result type, by `ir::FuncId`.
     rets: Vec<Ty>,
+    /// Private scalar-return variants; ordinary ids and all ABIs stay boxed.
+    pairs: HashMap<ir::FuncId, ClifFunc>,
+    /// Private constant-divisor clones (D69); calls only, never ABIs.
+    clones: BTreeMap<constarg::Clone, ClifFunc>,
     /// The thunk of each function a task runs ([`task`]).
     thunks: HashMap<ir::FuncId, ClifFunc>,
     /// The module values each such function's tasks may reach.
@@ -527,6 +615,8 @@ impl<'r> Codegen<'r> {
             ptr,
             globals: Vec::new(),
             rets: Vec::new(),
+            pairs: HashMap::new(),
+            clones: BTreeMap::new(),
             thunks: HashMap::new(),
             reads: HashMap::new(),
         };
@@ -624,26 +714,19 @@ impl<'r> Codegen<'r> {
         Ok(entry)
     }
 
-    fn define(
-        &mut self,
-        func: &Func,
-        id: ClifFunc,
-        ids: &[ClifFunc],
-        types: &[Compound],
-    ) -> Result<()> {
+    fn define(&mut self, id: ClifFunc, what: Ctx<'_>) -> Result<()> {
         let mut ctx = Context::new();
-        ctx.func.signature = self.signature(func);
-        FnGen::build(
-            self,
-            Ctx { func, ids, types },
-            &mut ctx,
-            &mut FunctionBuilderContext::new(),
-        )?;
+        ctx.func.signature = if what.scalar_return {
+            self.pair_signature(what.func)
+        } else {
+            self.signature(what.func)
+        };
+        FnGen::build(self, what, &mut ctx, &mut FunctionBuilderContext::new())?;
         self.define_function(id, &mut ctx)
     }
 
-    /// Both ordinary functions and task thunks use the same relocation
-    /// policy, including addresses of local functions passed to tasks.
+    /// Ordinary functions, pair/constant-divisor clones and task thunks
+    /// all use the same relocation policy before object emission.
     fn define_function(&mut self, id: ClifFunc, ctx: &mut Context) -> Result<()> {
         far_coff_symbols(self.module.isa().triple(), &mut ctx.func);
         self.module.define_function(id, ctx).map_err(module_err)
@@ -678,6 +761,11 @@ struct Ctx<'c> {
     func: &'c Func,
     ids: &'c [ClifFunc],
     types: &'c [Compound],
+    plan: &'c pair::Plan,
+    scalar_return: bool,
+    /// In a constant-divisor clone (D69): the parameter bound at entry
+    /// and its value; the caller's argument is ignored.
+    bound: Option<(LocalId, i64)>,
 }
 
 /// Translates one function.
@@ -688,6 +776,9 @@ struct FnGen<'b, 'c, 'r> {
     ids: &'c [ClifFunc],
     types: &'c [Compound],
     vars: Vec<Variable>,
+    /// Proven pair temporaries (and, in a clone, its return chain).
+    pair_vars: HashMap<LocalId, [Variable; 2]>,
+    scalar_return: bool,
     blocks: Vec<cranelift_codegen::ir::Block>,
     /// The running thread's `PtCtx`, the hidden first parameter.
     ctx: Value,
@@ -699,7 +790,14 @@ struct FnGen<'b, 'c, 'r> {
 impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     fn build(
         cg: &'c mut Codegen<'r>,
-        Ctx { func, ids, types }: Ctx<'c>,
+        Ctx {
+            func,
+            ids,
+            types,
+            plan,
+            scalar_return,
+            bound,
+        }: Ctx<'c>,
         ctx: &'b mut Context,
         fctx: &'b mut FunctionBuilderContext,
     ) -> Result<()> {
@@ -721,12 +819,21 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         };
         for (i, var) in vars.iter().enumerate() {
             let v = match func.params.iter().position(|p| p.0 == i) {
+                Some(_) if bound.is_some_and(|(p, _)| p.0 == i) => {
+                    let value = bound.map_or(0, |(_, c)| c);
+                    b.ins().iconst(types::I64, value)
+                }
                 Some(k) => params[k],
                 None if func.locals[i] == Ty::Float => b.ins().f64const(0.0),
                 None => b.ins().iconst(cg.clif_ty(func.locals[i]), 0),
             };
             b.def_var(*var, v);
         }
+        let mut pair_locals = plan.calls.clone();
+        if scalar_return {
+            pair_locals.extend(&plan.returns);
+        }
+        let pair_vars = pair::variables(&mut b, pair_locals);
         let mut g = FnGen {
             cg,
             b,
@@ -734,6 +841,8 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             ids,
             types,
             vars,
+            pair_vars,
+            scalar_return,
             blocks,
             ctx: ctx_param,
             raise_to: None,
@@ -756,11 +865,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     /// the path that does not raise neither reads the flag nor rejoins.
     fn body(&mut self, block: &ir::Block) -> Result<()> {
         let Some(f) = fused(block) else {
-            block.insts.iter().try_for_each(|i| self.inst(i))?;
+            self.concat_insts(&block.insts)?;
             return self.term(&block.term);
         };
         let (before, site) = block.insts.split_at(f.site);
-        before.iter().try_for_each(|i| self.inst(i))?;
+        self.concat_insts(before)?;
         self.raise_to = Some((f.raised, f.dest));
         let done = self.inst(&site[0]);
         self.raise_to = None;
@@ -804,6 +913,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     }
 
     fn inst(&mut self, inst: &Inst) -> Result<()> {
+        if self.pair_inst(inst)? {
+            return Ok(());
+        }
         match inst {
             Inst::Assign { dest, value, span } => {
                 let v = self.rvalue(value, *dest, *span)?;
@@ -844,9 +956,23 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let (d, k, v) = (self.operand(*list), self.slot(*index), self.slot(*value));
                 self.call_rt(Rt::DictSet, &[d, k, v]);
             }
-            Inst::Sort(list) => {
+            Inst::Sort { list, reverse, .. } => {
+                let (s, r) = (self.operand(*list), self.operand(*reverse));
+                self.call_rt(Rt::ListSort, &[s, r]);
+            }
+            Inst::Insert {
+                list, index, value, ..
+            } => {
+                let (s, i, v) = (self.operand(*list), self.operand(*index), self.slot(*value));
+                self.call_rt(Rt::ListInsert, &[s, i, v]);
+            }
+            Inst::Remove { list, index, .. } => {
+                let (rt, i) = match self.func.ty(*list) {
+                    Ty::Dict(_) => (Rt::TableRemove, self.slot(*index)),
+                    _ => (Rt::ListRemove, self.operand(*index)),
+                };
                 let s = self.operand(*list);
-                self.call_rt(Rt::ListSort, &[s]);
+                self.call_rt(rt, &[s, i]);
             }
             Inst::Extend { list, other, .. } => {
                 let (s, t) = (self.operand(*list), self.operand(*other));
@@ -876,6 +1002,12 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 self.set_global(*global, null)?;
             }
             Inst::Raise { exc, span } => self.raise(*exc, *span)?,
+            Inst::Stash => {
+                self.call_rt(Rt::Stash, &[]);
+            }
+            Inst::Restore => {
+                self.call_rt(Rt::Restore, &[]);
+            }
         }
         Ok(())
     }
@@ -1020,6 +1152,18 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     fn rvalue(&mut self, value: &Rvalue, dest: LocalId, span: Span) -> Result<Value> {
         match value {
             Rvalue::Use(op) => Ok(self.operand(*op)),
+            Rvalue::Int(op @ (IntOp::FloorDiv | IntOp::Mod), a, Operand::Int(2))
+                if self.func.ty(*a) == Ty::Int =>
+            {
+                // For every signed i64, arithmetic shift floors by positive two;
+                // its low bit is the corresponding nonnegative remainder. The
+                // numerator is already evaluated by lowering, including faults.
+                let a = self.operand(*a);
+                Ok(match op {
+                    IntOp::FloorDiv => self.b.ins().sshr_imm_s(a, 1),
+                    _ => self.b.ins().band_imm_s(a, 1),
+                })
+            }
             Rvalue::Int(op, a, b) => {
                 let (a, b) = (self.operand(*a), self.operand(*b));
                 self.int_op(*op, a, b, span)
@@ -1128,6 +1272,27 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let v = self.operand(*op);
                 Ok(self.b.ins().icmp_imm_s(IntCC::Equal, v, 0))
             }
+            Rvalue::Slice {
+                source,
+                bounds,
+                present,
+            } => {
+                let rt = if self.func.ty(*source) == Ty::Str {
+                    Rt::StrSlice
+                } else {
+                    Rt::ListSlice
+                };
+                self.rt_on(
+                    rt,
+                    &[
+                        *source,
+                        bounds[0],
+                        bounds[1],
+                        bounds[2],
+                        Operand::Int(i64::from(*present)),
+                    ],
+                )
+            }
             Rvalue::CopyList(s) if matches!(self.func.ty(*s), Ty::List(_)) => {
                 self.rt_on(Rt::ListCopy, &[*s])
             }
@@ -1159,6 +1324,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::Raised => Ok(self.pending_flag()),
             Rvalue::PendingIs(classes) => self.pending_is(classes),
             Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
+            Rvalue::Unstash => self.call_rt_value(Rt::Unstash, &[]),
             Rvalue::Submit { exec, func, args } => self.submit(*exec, *func, args),
             Rvalue::TaskResult(fut) => self.task_result(*fut, dest),
             Rvalue::NextResult(rs) => self.next_result(*rs, dest),
@@ -1225,6 +1391,11 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             .load(types::I8, MemFlagsData::trusted(), self.ctx, CTX_PENDING)
     }
 
+    /// A planned constant-divisor clone of `callee` for these arguments.
+    fn clone_target(&self, callee: ir::FuncId, args: &[Operand], scalar: bool) -> Option<ClifFunc> {
+        constarg::target(&self.cg.clones, callee, args, scalar)
+    }
+
     /// Calls `callee`, failing at `span` if `MAX_DEPTH` calls are active.
     fn call(
         &mut self,
@@ -1233,10 +1404,13 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         dest: LocalId,
         span: Span,
     ) -> Result<Value> {
-        let id = *self
-            .ids
-            .get(callee.0)
-            .ok_or_else(|| backend("call to an unknown function".to_string()))?;
+        let scalar = self.pair_vars.contains_key(&dest);
+        let id = match self.clone_target(callee, args, scalar) {
+            Some(clone) => Some(clone),
+            None if scalar => self.cg.pairs.get(&callee).copied(),
+            None => self.ids.get(callee.0).copied(),
+        }
+        .ok_or_else(|| backend("call to an unknown function".to_string()))?;
         let fref = self.cg.module.declare_func_in_func(id, self.b.func);
         let args: Vec<Value> = std::iter::once(self.ctx)
             .chain(args.iter().map(|op| self.operand(*op)))
@@ -1252,6 +1426,15 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         self.b.ins().store(flags, deeper, addr, CTX_DEPTH);
         let call = self.b.ins().call(fref, &args);
         self.b.ins().store(flags, depth, addr, CTX_DEPTH);
+        if scalar {
+            let vals = self.b.inst_results(call);
+            let vals = match vals {
+                [a, b] => [*a, *b],
+                _ => return Err(backend("scalar call without two results".into())),
+            };
+            self.set_pair(dest, vals)?;
+            return Ok(self.b.ins().iconst(self.cg.ptr, 0));
+        }
         match self.b.inst_results(call).first() {
             Some(v) => Ok(*v),
             None => Ok(self
@@ -1346,6 +1529,10 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let c = self.operand(*cond);
                 let (t, e) = (self.block(*then), self.block(*orelse));
                 self.b.ins().brif(c, t, &[], e, &[]);
+            }
+            Term::Return(Operand::Local(l)) if self.scalar_return => {
+                let vals = self.pair_values(*l)?;
+                self.b.ins().return_(&vals);
             }
             Term::Return(op) => {
                 let vals = match self.func.ret {
@@ -1633,6 +1820,179 @@ mod tests {
         }
     }
 
+    /// Inspect pre-optimization CLIF, independent of target instructions.
+    fn arithmetic_clif(expression: &str) -> String {
+        let src =
+            format!("def f(n: int, d: int) -> int:\n    return {expression}\nprint(f(-7, 2))\n");
+        let module = parser::parse(&lexer::lex(&src).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = crate::rc::elide(lower::lower(&module, &types).expect("lower"));
+        let render = |d: &Diagnostic| d.message.clone();
+        let mut cg = Codegen::new(&render).expect("codegen");
+        cg.declare_globals(&program.globals).expect("globals");
+        let ids = cg.declare(&program).expect("declare");
+        cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+        let func = program.funcs.iter().find(|f| f.name == "f").expect("f");
+        let mut ctx = Context::new();
+        ctx.func.signature = cg.signature(func);
+        FnGen::build(
+            &mut cg,
+            Ctx {
+                func,
+                ids: &ids,
+                types: &program.types,
+                plan: &pair::Plan::default(),
+                scalar_return: false,
+                bound: None,
+            },
+            &mut ctx,
+            &mut FunctionBuilderContext::new(),
+        )
+        .expect("build CLIF");
+        ctx.func.display().to_string()
+    }
+
+    /// Inspect the actual runtime references imported by a generated function.
+    fn list_calls(source: &str) -> Vec<&'static str> {
+        let module = parser::parse(&lexer::lex(source).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = crate::rc::elide(lower::lower(&module, &types).expect("lower"));
+        let render = |d: &Diagnostic| d.message.clone();
+        let mut cg = Codegen::new(&render).expect("codegen");
+        cg.declare_globals(&program.globals).expect("globals");
+        let ids = cg.declare(&program).expect("declare");
+        cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+        let func = program.funcs.iter().find(|f| f.name == "f").expect("f");
+        let mut ctx = Context::new();
+        ctx.func.signature = cg.signature(func);
+        FnGen::build(
+            &mut cg,
+            Ctx {
+                func,
+                ids: &ids,
+                types: &program.types,
+                plan: &pair::Plan::default(),
+                scalar_return: false,
+                bound: None,
+            },
+            &mut ctx,
+            &mut FunctionBuilderContext::new(),
+        )
+        .expect("build CLIF");
+        let clif = ctx.func.display().to_string();
+        cg.rt
+            .iter()
+            .filter_map(|(&name, id)| {
+                clif.contains(&format!("u0:{} ", id.as_u32()))
+                    .then_some(name)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn integer_list_calls_are_selected_by_the_receiver_type() {
+        for (annotation, value, typed) in [
+            (": list[int]", "7", true),
+            ("", "7", true),
+            (": list[float]", "7.0", false),
+            ("", "7.0", false),
+            (": list[bool]", "True", false),
+            (": list[str]", "\"a\"", false),
+            (": list[list[int]]", "[7]", false),
+            (": list[int | None]", "None", false),
+        ] {
+            let src = format!(
+                "def f(xs{annotation}):\n    xs[-1] = {value}\n    print(xs[-1])\nf([{value}])\n"
+            );
+            let calls = list_calls(&src);
+            for (symbol, want) in [
+                ("pt_int_list_get", typed),
+                ("pt_int_list_set", typed),
+                ("pt_seq_get", !typed),
+                ("pt_list_set", !typed),
+            ] {
+                assert_eq!(calls.contains(&symbol), want, "{src}: {calls:?}");
+            }
+        }
+        let held =
+            list_calls("def f(xs: list[int]):\n    for x in xs:\n        print(x)\nf([7])\n");
+        assert!(!held.contains(&"pt_int_list_get"), "{held:?}");
+        assert!(
+            held.contains(&"pt_seq_get_held") || held.contains(&"pt_seq_item_held"),
+            "{held:?}"
+        );
+        let tuple = list_calls("def f(xs: tuple[int, int]):\n    print(xs[0])\nf((1, 2))\n");
+        assert!(tuple.contains(&"pt_seq_get"), "{tuple:?}");
+        assert!(!tuple.contains(&"pt_int_list_get"), "{tuple:?}");
+    }
+
+    #[test]
+    fn only_proven_positive_literal_two_uses_half_instructions() {
+        for (expr, instruction) in [("n // 2", "sshr"), ("n % 2", "band")] {
+            let clif = arithmetic_clif(expr);
+            assert!(clif.contains(instruction), "{clif}");
+            assert!(!clif.contains("sdiv") && !clif.contains("srem"), "{clif}");
+        }
+        for divisor in ["d", "0", "-1", "-2", "1", "3", "10"] {
+            for op in ["//", "%"] {
+                let clif = arithmetic_clif(&format!("n {op} {divisor}"));
+                assert!(clif.contains("srem"), "{clif}");
+                assert_eq!(clif.contains("sdiv"), op == "//", "{clif}");
+            }
+        }
+    }
+
+    /// Optimized machine code of `f(n, d)` returning `body`, with `d`
+    /// bound to `divisor` as a constant-divisor clone would (D69).
+    fn machine_code(body: &str, divisor: Option<i64>) -> String {
+        let src = format!("def f(n: int, d: int) -> int:\n    return {body}\nprint(f(-7, 3))\n");
+        let module = parser::parse(&lexer::lex(&src).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = crate::rc::elide(lower::lower(&module, &types).expect("lower"));
+        let render = |d: &Diagnostic| d.message.clone();
+        let mut cg = Codegen::new(&render).expect("codegen");
+        cg.declare_globals(&program.globals).expect("globals");
+        let ids = cg.declare(&program).expect("declare");
+        cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+        let func = program.funcs.iter().find(|f| f.name == "f").expect("f");
+        let mut ctx = Context::new();
+        ctx.func.signature = cg.signature(func);
+        ctx.set_disasm(true);
+        FnGen::build(
+            &mut cg,
+            Ctx {
+                func,
+                ids: &ids,
+                types: &program.types,
+                plan: &pair::Plan::default(),
+                scalar_return: false,
+                bound: divisor.map(|c| (func.params[1], c)),
+            },
+            &mut ctx,
+            &mut FunctionBuilderContext::new(),
+        )
+        .expect("build CLIF");
+        let isa = cg.module.isa();
+        ctx.compile(isa, &mut Default::default()).expect("compile");
+        ctx.compiled_code()
+            .and_then(|c| c.vcode.clone())
+            .expect("disassembly")
+    }
+
+    #[test]
+    fn a_bound_literal_divisor_needs_no_hardware_division() {
+        // x86-64 `idiv` or its checked `srem` sequence, AArch64 `sdiv`.
+        let divides = |code: &str| ["idiv", "sdiv", "srem"].iter().any(|i| code.contains(i));
+        for body in ["n // d", "n % d", "(n // d) + (n % d)"] {
+            let code = machine_code(body, None);
+            assert!(divides(&code), "{body}:\n{code}");
+            for c in [10, 3, 7, -10, i64::MAX, i64::MIN] {
+                let code = machine_code(body, Some(c));
+                assert!(!divides(&code), "{body} by {c}:\n{code}");
+            }
+        }
+    }
+
     #[test]
     fn every_inline_fault_test_is_fused() {
         let src = "def f(xs: list[int], s: str, i: int, d: float) -> float:\n    \
@@ -1782,6 +2142,19 @@ mod tests {
     }
 
     #[test]
+    fn emits_both_constant_divisor_clone_variants_with_data_references() {
+        let src = "greeting = 'hello'\ndef split(n: int, d: int) -> tuple[int, int]:\n    print(greeting)\n    return n // d, n % d\na, b = split(42, 10)\nprint(a, b)\nboxed = split(42, 10)\nprint(boxed)\n";
+        let module = parser::parse(&lexer::lex(src).unwrap()).unwrap();
+        let types = infer::infer(&module).unwrap();
+        let p = crate::rc::elide(lower::lower(&module, &types).unwrap());
+        let clones = constarg::plan(&p, &pair::plans(&p));
+        assert!(clones.iter().any(|c| c.scalar));
+        assert!(clones.iter().any(|c| !c.scalar));
+        let (object, _) = compile(src);
+        assert!(object.len() > 64);
+    }
+
+    #[test]
     fn emits_an_object_with_the_entry_symbol() {
         let (object, _) = compile("def f(n):\n    return n * 2\nprint(f(21), True, None)\n");
         assert!(object.len() > 64);
@@ -1793,9 +2166,10 @@ mod tests {
     fn renders_each_failure_site_once_at_compile_time() {
         let (_, rendered) = compile("x = 5\nprint(x + 1, x // 2, -x)\n");
         let count = |m: &str| rendered.iter().filter(|r| r.as_str() == m).count();
-        // `+`, `//` and `-` can overflow. Dividing by zero raises instead,
-        // so only its raise site is rendered, around a marker.
-        assert_eq!(count(OVERFLOW), 3);
+        // `+` and `-` can overflow; division by positive literal two cannot.
+        // The specialized site needs neither an overflow nor a zero-divisor
+        // diagnostic. Generic divisions are covered by the CLIF controls.
+        assert_eq!(count(OVERFLOW), 2);
         assert!(!rendered.iter().any(|r| r.contains("ZeroDivisionError")));
     }
 

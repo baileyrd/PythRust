@@ -11,6 +11,7 @@ use crate::ast::BinOp;
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 
+use super::methods;
 use super::subst::{Clash, Subst};
 use super::ty::{Type, TypeVar, View};
 
@@ -49,6 +50,15 @@ pub(super) enum Need {
         literal: Option<i64>,
         out: Type,
         access: Access,
+    },
+    /// A slice component must resolve to int or bool, without unifying
+    /// either with the other or prematurely fixing a generic variable.
+    SliceBound(Type),
+    /// A receiver-typed slice. None is omitted, Some(None) computed.
+    Slice {
+        value: Type,
+        bounds: [Option<Option<i64>>; 3],
+        out: Type,
     },
     /// Unpacking `value` into one target per `elems` entry.
     Unpack {
@@ -95,6 +105,16 @@ pub(super) enum Need {
         func: &'static str,
         arg: Type,
     },
+    /// `receiver.name(*args)` is `out`, for a method typed by its
+    /// receiver's type (D52, D70): `index`/`count` of a `str` or list,
+    /// `pop` of a list or dict, and the other list and dict mutators.
+    /// `args` are the positional arguments' types.
+    Method {
+        name: &'static str,
+        receiver: Type,
+        args: Vec<Type>,
+        out: Type,
+    },
     /// `value` flows into `target` (see `Subst::assign`), waiting while
     /// the value is unknown under a `T | None` target. `what` heads the
     /// error.
@@ -113,6 +133,8 @@ pub(super) enum Access {
     Write,
     /// `xs[i] += v`: read, then written back with the same type.
     ReadWrite,
+    /// `del xs[i]` or `del d[k]`: the item is removed.
+    Delete,
 }
 
 /// `left op right` has type `out`.
@@ -217,10 +239,16 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             out: r(out),
             access: *access,
         },
+        Need::Slice { value, bounds, out } => Need::Slice {
+            value: r(value),
+            bounds: *bounds,
+            out: r(out),
+        },
         Need::Unpack { value, elems } => Need::Unpack {
             value: r(value),
             elems: elems.iter().map(r).collect(),
         },
+        Need::SliceBound(t) => Need::SliceBound(r(t)),
         Need::Hashable(t) => Need::Hashable(r(t)),
         Need::Comparable(t) => Need::Comparable(r(t)),
         Need::Key { key, index } => Need::Key {
@@ -254,6 +282,17 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             value: r(value),
             what: what.clone(),
         },
+        Need::Method {
+            name,
+            receiver,
+            args,
+            out,
+        } => Need::Method {
+            name,
+            receiver: r(receiver),
+            args: args.iter().map(r).collect(),
+            out: r(out),
+        },
     }
 }
 
@@ -262,7 +301,11 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Binary(b) => vec![&b.left, &b.right, &b.out],
         Need::Negate { operand, out } => vec![operand, out],
         Need::Equal { left, right } | Need::Order { left, right } => vec![left, right],
-        Need::Len(t) | Need::Hashable(t) | Need::Comparable(t) | Need::ToNumber { arg: t, .. } => {
+        Need::Len(t)
+        | Need::SliceBound(t)
+        | Need::Hashable(t)
+        | Need::Comparable(t)
+        | Need::ToNumber { arg: t, .. } => {
             vec![t]
         }
         Need::OrNone { value, out }
@@ -277,7 +320,14 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Index {
             value, index, out, ..
         } => vec![value, index, out],
+        Need::Slice { value, out, .. } => vec![value, out],
         Need::Unpack { value, elems } => std::iter::once(value).chain(elems).collect(),
+        Need::Method {
+            receiver,
+            args,
+            out,
+            ..
+        } => [receiver, out].into_iter().chain(args).collect(),
     }
 }
 
@@ -288,6 +338,7 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         Need::Equal { left, right } => equal(s, c, left, right),
         Need::Order { left, right } => order(s, c, left, right),
         Need::Len(t) => len(s, c, t),
+        Need::SliceBound(t) => slice_bound(s, c, t),
         Need::Iter { iterable, elem } => iter(s, c, iterable, elem),
         Need::Index {
             value,
@@ -296,6 +347,7 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
             out,
             access,
         } => index_of(s, c, value, index, *literal, out, *access),
+        Need::Slice { value, bounds, out } => slice_of(s, c, value, bounds, out),
         Need::Unpack { value, elems } => unpack(s, c, value, elems),
         Need::Hashable(t) => hashable(s, c, t),
         Need::Comparable(t) => comparable(s, c, t),
@@ -310,7 +362,159 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
             value,
             what,
         } => assign(s, c, target, value, what),
+        Need::Method {
+            name,
+            receiver,
+            args,
+            out,
+        } => method(s, c, name, receiver, args, out),
     }
+}
+
+/// [`Need::Method`]: once the receiver's type is known, its method
+/// `name`'s arguments and result (D52, D70).
+fn method(
+    s: &mut Subst,
+    c: &Constraint,
+    name: &str,
+    receiver: &Type,
+    args: &[Type],
+    out: &Type,
+) -> Result<Step> {
+    let Some(t) = known(s, receiver) else {
+        return Ok(Step::Waiting);
+    };
+    let Some((min, max)) = methods::arity(&t, name) else {
+        let msg = format!("{} has no method `.{name}`", s.zonk(&t));
+        return Err(error(c, msg));
+    };
+    let owner = match &t {
+        Type::Str => "str",
+        Type::Dict(..) => "dict",
+        _ => "list",
+    };
+    if matches!(name, "index" | "count") && args.len() > 1 {
+        let msg = format!("`start` of `{owner}.{name}` is not supported yet");
+        return Err(error(c, msg));
+    }
+    if (owner, name, args.len()) == ("dict", "update", 0) {
+        let msg = "`dict.update` with no argument is not supported yet".to_string();
+        return Err(error(c, msg));
+    }
+    if !(min..=max).contains(&args.len()) {
+        return Err(error(c, methods::arity_message(name, min, max, args.len())));
+    }
+    let (needs, result) = match &t {
+        Type::Str => {
+            args.iter().try_for_each(|a| expect(s, c, &Type::Str, a))?;
+            (vec![], Type::Int)
+        }
+        Type::List(elem) => list_method(s, c, name, elem, args)?,
+        Type::Dict(key, value) => dict_method(s, c, name, key, value, args)?,
+        _ => return Err(error(c, format!("{} has no method `.{name}`", s.zonk(&t)))),
+    };
+    expect(s, c, out, &result)?;
+    Ok(Step::Done(needs))
+}
+
+/// A list method's constraints and result type (D70).
+fn list_method(
+    s: &mut Subst,
+    c: &Constraint,
+    name: &str,
+    elem: &Type,
+    args: &[Type],
+) -> Result<(Vec<Need>, Type)> {
+    let arg = |k: usize| args.get(k).cloned().unwrap_or(Type::None);
+    let equal = || Need::Equal {
+        left: (*elem).clone(),
+        right: arg(0),
+    };
+    let into = |what: &str, value: Type| Need::Assign {
+        target: elem.clone(),
+        value,
+        what: what.to_string(),
+    };
+    Ok(match name {
+        "index" | "count" => (vec![equal()], Type::Int),
+        "remove" => (vec![equal()], Type::None),
+        "pop" => {
+            if let Some(i) = args.first() {
+                int_index(s, c, i)?;
+            }
+            (vec![], elem.clone())
+        }
+        "insert" => {
+            int_index(s, c, &arg(0))?;
+            let what = "inserted value does not match the list";
+            (vec![into(what, arg(1))], Type::None)
+        }
+        "extend" => {
+            let need = Need::Iter {
+                iterable: arg(0),
+                elem: elem.clone(),
+            };
+            (vec![need], Type::None)
+        }
+        _ => {
+            let need = Need::Order {
+                left: elem.clone(),
+                right: elem.clone(),
+            };
+            (vec![need], Type::None)
+        }
+    })
+}
+
+/// A dict method's constraints and result type (D70): `pop`,
+/// `setdefault` (no default means `None`) and `update` of a dict of the
+/// same type.
+fn dict_method(
+    s: &mut Subst,
+    c: &Constraint,
+    name: &str,
+    key: &Type,
+    value: &Type,
+    args: &[Type],
+) -> Result<(Vec<Need>, Type)> {
+    let arg = |k: usize| args.get(k).cloned();
+    if name == "update" {
+        let dict = Type::Dict(Box::new(key.clone()), Box::new(value.clone()));
+        let other = arg(0).unwrap_or(Type::None);
+        if let Some(t) = known(s, &other).filter(|t| !matches!(t, Type::Dict(..))) {
+            let msg = format!(
+                "`dict.update` of {} is not supported yet; pass a dict",
+                s.zonk(&t)
+            );
+            return Err(error(c, msg));
+        }
+        expect(s, c, &dict, &other)?;
+        return Ok((vec![], Type::None));
+    }
+    let mut needs = vec![Need::Key {
+        key: key.clone(),
+        index: arg(0).unwrap_or(Type::None),
+    }];
+    let default = match (name, arg(1)) {
+        ("setdefault", None) => Some(Type::None),
+        (_, d) => d,
+    };
+    if let Some(d) = default {
+        needs.push(Need::Assign {
+            target: value.clone(),
+            value: d,
+            what: format!("the default of `{name}` must match the dict's values"),
+        });
+    }
+    Ok((needs, value.clone()))
+}
+
+/// An index argument: an `int`, or a `bool` as one.
+fn int_index(s: &mut Subst, c: &Constraint, index: &Type) -> Result<()> {
+    if s.resolve(index).is_intlike() {
+        return Ok(());
+    }
+    expect(s, c, &Type::Int, index)
 }
 
 fn binary(s: &mut Subst, c: &Constraint, b: &Binary) -> Result<Step> {
@@ -554,7 +758,11 @@ fn index_of(
             Type::Tuple(_) => "tuple".to_string(),
             other => s.zonk(other).to_string(),
         };
-        let msg = format!("{kind} does not support item assignment");
+        let what = match access {
+            Access::Delete => "deletion",
+            _ => "assignment",
+        };
+        let msg = format!("{kind} does not support item {what}");
         return Err(error(c, msg));
     }
     if let Type::Tuple(items) = &t {
@@ -940,4 +1148,84 @@ pub(super) fn op_symbol(op: BinOp) -> &'static str {
         BinOp::Mod => "%",
         BinOp::Pow => "**",
     }
+}
+
+fn slice_of(
+    s: &mut Subst,
+    c: &Constraint,
+    value: &Type,
+    bounds: &[Option<Option<i64>>; 3],
+    out: &Type,
+) -> Result<Step> {
+    let Some(t) = known(s, value) else {
+        return Ok(Step::Waiting);
+    };
+    let result = match t {
+        Type::Str => Type::Str,
+        Type::List(elem) => Type::List(elem),
+        Type::Tuple(items) => {
+            if bounds.contains(&Some(None)) {
+                return Err(error(c, "a tuple slice needs literal bounds".to_string()));
+            }
+            let [start, stop, step] = bounds.map(Option::flatten);
+            if step == Some(0) {
+                return Ok(Step::Done(Vec::new()));
+            }
+            let fields = crate::slice::indices(items.len(), start, stop, step.unwrap_or(1))
+                .into_iter()
+                .flatten()
+                .map(|k| items[k].clone())
+                .collect();
+            Type::Tuple(fields)
+        }
+        other => {
+            return Err(error(
+                c,
+                format!("slicing {} is not supported yet", s.zonk(&other)),
+            ))
+        }
+    };
+    expect(s, c, &result, out)?;
+    Ok(Step::Done(Vec::new()))
+}
+
+/// Checking waits through generalization/instantiation and saturation.
+/// It never supplies a type: bool and int remain distinct everywhere else.
+fn slice_bound(s: &Subst, c: &Constraint, bound: &Type) -> Result<Step> {
+    let Some(t) = known(s, bound) else {
+        return Ok(Step::Waiting);
+    };
+    if t.is_intlike() {
+        return Ok(Step::Done(Vec::new()));
+    }
+    Err(error(
+        c,
+        format!(
+            "slice bounds must be integers: expected int, found {}",
+            s.zonk(&t)
+        ),
+    ))
+}
+
+/// Only after module inference, ordinary defaults and late-global scheme
+/// solving: an unresolved bound is a value never produced (an empty list's
+/// item, for example). Give its producer an int representation so native
+/// instructions still verify, without defaulting original generic schemes.
+pub(super) fn default_slice_bounds(
+    s: &mut Subst,
+    pending: Vec<Constraint>,
+) -> Result<Vec<Constraint>> {
+    let mut waiting = solve(s, pending)?;
+    while let Some(i) = waiting.iter().position(
+        |c| matches!(&c.need, Need::SliceBound(t) if matches!(s.resolve(t), Type::Var(_))),
+    ) {
+        let c = waiting.swap_remove(i);
+        if let Need::SliceBound(t) = &c.need {
+            expect(s, &c, &Type::Int, t)?;
+        }
+        // Propagate the representative through producer/result constraints,
+        // and validate other bounds before choosing any further default.
+        waiting = solve(s, waiting)?;
+    }
+    Ok(waiting)
 }

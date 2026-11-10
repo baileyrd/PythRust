@@ -9,10 +9,12 @@
 //! `Exception` admits any exception, so it promises callers nothing; when
 //! the body does not need it, a warning names the narrower clause.
 //!
-//! Only `raise` and `int(s)`/`float(s)` of a `str` count. The faults a
-//! `try` can catch (division by zero, an index out of range, unpacking
-//! arity) are implicit in the operators and never tracked here; lowering
-//! has its own fact for them (`lower/faults.rs`). A set holds exception classes (B4): each escape is an
+//! Only `raise` and calls whose failure depends on the data count
+//! (`int(s)` of a `str`, `s.index`, `xs.pop`, `d.pop(k)`, ...: D50, D71).
+//! The faults a `try` can catch (division by zero, an index out of
+//! range, unpacking arity, `del` of a missing index or key) are implicit
+//! in the operators and never tracked here; lowering has its own fact for
+//! them (`lower/faults.rs`). A set holds exception classes (B4): each escape is an
 //! instance of its class or of one derived from it. It over-approximates:
 //! `int(s)` counts whether or not `s` parses, and a raised value whose
 //! class is not known before it runs (a parameter, a call's result) is
@@ -247,12 +249,17 @@ fn bindings<'a>(block: &'a [Stmt], out: &mut Bindings<'a>) {
                     .for_each(|b| bindings(&b.body, out));
                 bindings(orelse, out);
             }
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 bindings(body, out);
                 for h in handlers {
                     caught(h.binding.as_ref(), &h.classes, out);
                     bindings(&h.body, out);
                 }
+                finally.iter().for_each(|f| bindings(f, out));
             }
             StmtKind::With { binding, body, .. } => {
                 out.entry(&binding.name).or_default().push(Source::Opaque);
@@ -494,6 +501,11 @@ impl<'a> Cx<'_, 'a> {
             }
             StmtKind::AnnAssign { value, .. } => self.expr(value, &mut out),
             StmtKind::Expr(value) => self.expr(value, &mut out),
+            // A missing item is an untracked fault, as reading it is.
+            StmtKind::Del { value, index } => {
+                self.expr(value, &mut out);
+                self.expr(index, &mut out);
+            }
             StmtKind::Return(value) => value.iter().for_each(|v| self.expr(v, &mut out)),
             StmtKind::Raise(value) => {
                 self.expr(value, &mut out);
@@ -529,7 +541,11 @@ impl<'a> Cx<'_, 'a> {
                 out.extend(self.block(body));
                 out.extend(self.block(orelse));
             }
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 let classes: Vec<ExcKind> = handlers
                     .iter()
                     .flat_map(|h| &h.classes)
@@ -539,6 +555,9 @@ impl<'a> Cx<'_, 'a> {
                 handlers
                     .iter()
                     .for_each(|h| out.extend(self.block(&h.body)));
+                // What escapes the body escapes still when `finally` always
+                // raises: an over-approximation a declared set allows (D90).
+                finally.iter().for_each(|f| out.extend(self.block(f)));
             }
             StmtKind::With { value, body, .. } => {
                 self.expr(value, &mut out);
@@ -593,10 +612,8 @@ impl<'a> Cx<'_, 'a> {
                     ExprKind::Name(name) => self.call(name, args, e.span, out),
                     ExprKind::Attr { value, attr } => {
                         self.expr(value, out);
-                        let method = StdFn::file_method(&attr.name)
-                            .or_else(|| StdFn::str_method(&attr.name))
-                            .and_then(StdFn::raises);
-                        method.into_iter().for_each(|k| out.add(k, e.span));
+                        let kind = self.method(value, &attr.name, args);
+                        kind.into_iter().for_each(|k| out.add(k, e.span));
                     }
                     _ => self.expr(func, out),
                 }
@@ -630,7 +647,29 @@ impl<'a> Cx<'_, 'a> {
                 self.expr(value, out);
                 self.expr(index, out);
             }
+            ExprKind::Slice {
+                value,
+                start,
+                stop,
+                step,
+            } => {
+                self.expr(value, out);
+                [start, stop, step]
+                    .into_iter()
+                    .flatten()
+                    .for_each(|x| self.expr(x, out));
+            }
             ExprKind::Attr { value, .. } => self.expr(value, out),
+            // As the loop it stands for (D85): each iterable is read as
+            // `for` reads it.
+            ExprKind::ListComp { elt, clauses } => {
+                for c in clauses {
+                    self.expr(&c.iter, out);
+                    self.read(&c.iter, out);
+                    c.ifs.iter().for_each(|x| self.expr(x, out));
+                }
+                self.expr(elt, out);
+            }
             ExprKind::Name(_)
             | ExprKind::Int(_)
             | ExprKind::Float(_)
@@ -652,6 +691,21 @@ impl<'a> Cx<'_, 'a> {
     /// lets its set escape here;
     /// `int(s)` and `float(s)` raise `ValueError` unless `s` is surely a
     /// number; a module function raises what [`StdFn::raises`] says.
+    /// What method `attr` of `receiver` may raise: list `pop`
+    /// (`IndexError`), `remove` and `index` (`ValueError`), dict `pop`
+    /// without a default (`KeyError`) (D71), or a `str` or file method's.
+    fn method(&self, receiver: &Expr, attr: &str, args: &[Arg]) -> Option<ExcKind> {
+        match (self.a.types.at(receiver.span), attr) {
+            (Some(Type::List(_)), "pop") => Some(ExcKind::Index),
+            (Some(Type::List(_)), "remove" | "index") => Some(ExcKind::Value),
+            (Some(Type::Dict(..)), "pop") if args.len() == 1 => Some(ExcKind::Key),
+            (Some(Type::List(_) | Type::Dict(..)), _) => None,
+            _ => StdFn::file_method(attr)
+                .or_else(|| StdFn::str_method(attr))
+                .and_then(StdFn::raises),
+        }
+    }
+
     /// A call may reach a builtin that a `def` shadows when the `def` may
     /// not have run yet, so both count.
     fn call(&self, name: &str, args: &[Arg], at: Span, out: &mut Raises) {
@@ -889,6 +943,48 @@ def g(xs: list[int]) -> int raises Exception:
         let caught = "def c(s: str) -> int:\n    try:\n        return s.index(\"a\")\n    \
                       except ValueError:\n        return -1\n";
         assert_eq!(raises(caught, "c"), "");
+    }
+
+    #[test]
+    fn list_and_dict_methods_that_depend_on_the_data_are_tracked() {
+        let f = |body: &str| {
+            raises(
+                &format!("def f(mut xs: list[int], mut d: dict[str, int]) -> None:\n    {body}\n"),
+                "f",
+            )
+        };
+        assert_eq!(f("xs.pop()"), "IndexError");
+        assert_eq!(f("xs.pop(1)"), "IndexError");
+        assert_eq!(f("xs.remove(1)"), "ValueError");
+        assert_eq!(f("print(xs.index(1))"), "ValueError");
+        assert_eq!(f("d.pop(\"a\")"), "KeyError");
+        assert_eq!(f("d.pop(\"a\", 0)"), "");
+        for quiet in [
+            "print(xs.count(1))",
+            "xs.insert(9, 1)",
+            "xs.extend(xs)",
+            "xs.sort()",
+        ] {
+            assert_eq!(f(quiet), "", "{quiet}");
+        }
+        for quiet in [
+            "d.setdefault(\"a\", 1)",
+            "d.update(d)",
+            "del xs[5]",
+            "del d[\"a\"]",
+        ] {
+            assert_eq!(f(quiet), "", "{quiet}");
+        }
+        let caught = "try:\n        xs.pop()\n    except IndexError:\n        pass";
+        assert_eq!(f(caught), "");
+    }
+
+    #[test]
+    fn a_tempered_list_pop_must_declare_index_error() {
+        let src = "temper def f(mut xs: list[int]) -> int:\n    return xs.pop()\n";
+        assert!(err(src).contains("must declare it; write `-> int raises IndexError`"));
+        let ok = "temper def f(mut xs: list[int]) -> int raises IndexError:\n    return xs.pop()\n";
+        assert_eq!(raises(ok, "f"), "IndexError");
     }
 
     #[test]

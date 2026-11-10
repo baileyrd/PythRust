@@ -1,0 +1,8 @@
+# expect-exit: 1
+# expect-error: is used later
+# deviation: D4 rejects changing a nested list shared by the shallow slice.
+temper def bad(mut xs: list[list[int]]) -> None:
+    ys = xs[:]
+    ys[0].append(2)
+    print(xs)
+bad([[1]])

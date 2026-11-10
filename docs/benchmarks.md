@@ -152,3 +152,217 @@ Each fix alone leaves the task run 3x to 4x slower than serial; it takes both (7
 | both | 0.038 (0.034 to 0.049) | 0.133 (0.106 to 0.158) |
 
 Other runtime functions that build a string through a `String` and may shrink it still `realloc`: `str` of a float (`num::repr`), `repr` of a string (`pt_str_repr`) and the negative-exponent hint (`pow_hint`). They are not on these benchmarks' path. Single-threaded, writing an int into an exact-capacity `String` is 10 to 15% slower than `to_string` in a microbenchmark (std has a fast path); the serial row still improved, as it also lost the counter.
+
+
+## Internal two-int return/unpack (#806)
+
+Same-host comparison against freshly built main
+`e69297ed9406eaf445bf198f9e3a1b995e49a20d` (PR #126), 2026-11-08.
+Release compiler and runtime, x86-64 Linux 6.18.57, glibc 2.41,
+AMD EPYC 9V74, Rust 1.99.1/LLVM 23.1.1, GCC 14.2, CPython 3.13.5.
+Pinned to CPU 0, nine process samples per version after a warm-up, warm files;
+the shared host still varies. Sources and call shapes are identical between
+versions. CPython output is checked for every case. Raw samples, source hashes,
+binary hashes and environment: [card806.json](benchmarks/card806.json).
+
+| Workload | Before median seconds (min–max) | Scalar clone median seconds (min–max) | Pair tuples before → after | Heap allocation calls before → after |
+| --- | --- | --- | --- | --- |
+| `tuple_unpack` (4M direct calls/unpacks) | 0.307225 (0.289608–0.390100) | 0.028025 (0.025715–0.065565) | 4,000,000 → 0 | 8,000,004 → 4 |
+| existing `tuples` | 0.510902 (0.492569–0.668932) | 0.050138 (0.047321–0.052298) | 6,888,889 → 0 | 13,777,783 → 5 |
+| empty process startup control | 0.000897 (0.000716–0.001107) | 0.000849 (0.000718–0.001230) | 0 → 0 | 1 → 1 |
+
+Checksums (stdout): `tuple_unpack`: `800016000000`; existing `tuples`:
+`5888889 27000000`. Execution medians improve about 11.0x and 10.2x on this
+host. These are process wall times (startup included), not compile times or
+portable speed guarantees. Startup was measured separately and was not
+subtracted; the tiny 100-call cases are dominated by startup and support no
+speed claim. Compile/link medians are essentially neutral on this sample:
+`tuple_unpack` 0.074418 → 0.067935 s, existing `tuples` 0.069554 → 0.060780 s;
+complete ranges are in the raw file. Retaining an original function plus a
+private clone can increase compiler work/object code; this prototype does not
+claim a general compilation or size improvement.
+
+The separate GNU-linker probe wraps `pt_seq_new`, `malloc`, `calloc` and
+`realloc`; it is never linked into the timed executables. It counts two-int
+tuple objects and successful linked heap allocation calls, not all allocations
+inside libc/shared libraries. Each eliminated tuple removes its object and slot
+vector allocations. Reallocation counts stay 1/1 (`tuple_unpack`) and 2/2
+(`tuples`). A 100-call fast-path regression has tuple counts 100 → 0 and heap
+calls 204 → 4; its boxed fallback stays 100 tuples/204 heap calls; mixed direct
+unpack plus named boxed sites go from 200 → 100 tuples, 404 → 204 heap calls.
+A multi-return/caught-exception/boundary case also goes from 100 → 0 pair tuples, with non-tuple heap calls retained (537 → 337). The Linux `scalar_pair` test asserts elimination and fallback using this probe.
+Instrumentation is absent from production code and has zero disabled-path cost.
+
+Reproduce (absolute paths; preserve base compiler with its runtime alongside):
+
+```sh
+# In an isolated worktree at e69297e, and again in the changed worktree:
+cargo build --locked --release -p pythrust-compiler -p pythrust-rt
+# Copy the base target/release/{pythrust,libpythrust_rt.a} to /abs/before/.
+# Avoid sharing a target directory across source worktrees, or force a rebuild.
+taskset -c 0 /usr/bin/python3.13 bench/tuple_returns.py \
+  --before /abs/before/pythrust --after /abs/after/target/release/pythrust \
+  --runs 9 --output /abs/results.json
+# Small allocation/fallback assertions only:
+PYTHON=/usr/bin/python3.13 cargo test --locked --test scalar_pair
+```
+
+The published `tuples_baseline` is motivation only: it changes the call shape
+and packs a result into an integer. It is not used to attribute these gains.
+No string fusion, general escape analysis, interpreter/runtime representation
+change, external ABI change or #807/#808 completion is claimed.
+
+
+## Adjacent native string chains (#807)
+
+Compared freshly built main `c633a4fcc9c7dfc41ed66e9346a0797f1793502a`
+(PR #127/#806) with implementation `8614f13b58ea69685b6f9a15a2ea18e6edf921f7`,
+2026-11-08. Same host: x86-64 Linux 6.18.57, AMD EPYC 9V74,
+glibc 2.41, Rust 1.99.1/LLVM 23.1.1, GCC 14.2, CPython 3.13.5
+(`/usr/bin/python3.13`). Pinned to CPU 0; nine samples after one warm-up per
+executable; identical source and call shape before/after. These are process wall
+times including startup, excluding compilation and instrumentation. Shared-host
+noise remains. All stdout matches CPython. Raw sources, checksums, binary and
+runtime hashes, every sample, compile/link times, bounded regressions and
+injected allocation-failure results: [card807.json](benchmarks/card807.json).
+
+| Workload | Before median s (min–max) | After median s (min–max) | Concat result objects before → after | Concat buffer allocations before → after | Text bytes copied before → after |
+| --- | --- | --- | --- | --- | --- |
+| `string_chain` (2M identical direct triple calls) | 0.130884 (0.127143–0.138675) | 0.065087 (0.062926–0.080676) | 4,000,000 → 2,000,000 | 4,000,000 → 2,000,000 | 120,000,000 → 70,000,000 |
+| existing `strings` | 0.229039 (0.218971–0.261097) | 0.234212 (0.218773–0.254133) | 3,020,000 → 3,020,000 | 3,020,000 → 3,020,000 | 224,573,570 → 224,573,570 |
+| empty-process startup control | 0.000742 (0.000696–0.000890) | 0.000750 (0.000707–0.000938) | 0 → 0 | 0 → 0 | 0 → 0 |
+
+The isolated case is about 2.0x faster on this host. The existing workload is
+2.3% slower by median with overlapping ranges and identical counts: it has no
+eligible site, so no improvement is claimed. This is a bounded prototype,
+not broad string acceleration. Output checksums: isolated `58000000`; existing
+`9785790 20000`. Compile/link medians are 0.051268 → 0.053904 s (isolated)
+and 0.053221 → 0.053494 s (existing); no compilation speedup is claimed.
+Startup is measured separately and is not subtracted.
+
+Allocation instrumentation is linked only into separate probe executables.
+GNU `--wrap` counts successful linked `malloc`/`calloc` and `realloc` calls,
+including non-string overhead. Isolated total heap allocations are
+8,000,010 → 4,000,010, plus 1 realloc each; existing `strings` stays
+14,080,006 allocations plus 1 realloc. These are **linked allocator calls**,
+not all allocator activity hidden inside shared libc. Concat helper returns
+count result objects; scoped allocator calls count their object and text-buffer
+allocations without inspecting `PtStr` layout. Buffer counts exclude the returned
+object; an all-empty triple has no buffer allocation. Scoped wrapped
+`memcpy`/`memmove` counts actual bytes written into allocated text buffers,
+excluding object-construction and stack traffic. Probe capacity overflow is an
+explicit failure; concat realloc counts are zero in every reported case, so no
+unobserved allocator-internal resize copies are attributed as savings.
+No counters or fault injection exist in ordinary production/runtime code.
+
+Bounded assertions include empty/mixed-empty, Unicode triples, later-call and
+right-associated fallbacks. For 100 Unicode triples, result objects 200 → 100,
+text buffers 200 → 100, and actual text bytes copied 1,400 → 900. The later-call
+fallback keeps 200 objects/200 buffers/1,400 bytes; right-associated keeps
+200/200/1,600. Forced first concat allocation refusal remains fatal (not caught
+by `except Exception`) and a later operand's instrumented construction marker
+never occurs. Synthetic length tests cover prefix and final overflow without
+large allocations. Low-memory success thresholds and allocator request-size
+stderr necessarily differ when allocations are removed; no new exception/OOM
+policy is introduced.
+
+Reproduce with independent compiler/runtime artifacts (absolute paths):
+
+```sh
+# In clean worktrees at c633a4f and the implementation revision:
+cargo build --locked --release -p pythrust-compiler -p pythrust-rt
+# Preserve the base target/release/{pythrust,libpythrust_rt.a} together.
+taskset -c 0 /usr/bin/python3.13 bench/string_chains.py \
+  --before /abs/base/bin/pythrust --after /abs/current/target/release/pythrust \
+  --runs 9 --output /abs/card807.json
+PYTHON=/usr/bin/python3.13 PYTHRUST_BIN=/abs/current/target/release/pythrust \
+  cargo test --locked --test string_chain --test scalar_pair
+```
+
+Runtime pointer/UTF-8/alias/size tests pass under Miri. Shared-string worker
+inputs pass ThreadSanitizer with five pinned and five unpinned schedules.
+Hosted required CI and independent review of the unchanged published head
+remain mandatory; this document does not assert either has completed.
+
+
+## Current workload profile (#808)
+
+The [current baseline, raw evidence and ranked experiments](benchmarks/card808.md)
+measure main `f542d98`, including merged #806/PR127 and #807/PR128.
+This measurement-only report separates build/startup controls and fclone
+discovery/read/repeated-SHA controls, documents tmpfs and profiling limits,
+and proposes at most three new experiments. It does not implement them.
+
+
+## Portable SHA-256 compression (#809)
+
+A bounded safe scalar 16-word circular schedule with expanded rounds improves
+fresh same-host loaded-SHA medians by 25–28% and full large duplicate/unique
+fclone serial/task medians by 20–30%, with exact interpreter/native/CPython
+output parity. See [method, spread, identities and controls](benchmarks/card809.md),
+[15-sample raw evidence](benchmarks/card809.json) and
+[51-sample short-control repeats](benchmarks/card809-controls.json). These are
+warm synthetic tmpfs workloads; CPython/OpenSSL still leads and no cold-disk,
+general I/O or cross-architecture speedup is claimed. The prototype awaits
+independent review and required CI. D22, dependencies, ABIs and whole-file reads
+remain unchanged; #810/#811 are not completed by this pilot.
+
+
+## Integer-list access dispatch experiment (#810)
+
+[Fresh same-host evidence](benchmarks/card810.md) rejects one exact-`li` dispatch
+variant: unchanged sorting improves about 41% and isolated integer access about
+56%, but matched float fallback slows 8.2% and 4.9% in repeated trials. The final
+change retains raw samples/counts, a reproducible patch and safety regressions;
+production access stays unchanged under the card's no-material-regressions gate.
+
+
+## Integer decimal formatting pilot (#811)
+
+A private safe stack decimal formatter preserves exact-sized owned storage and
+uses its proven ASCII length directly. [Fresh evidence](benchmarks/card811.md)
+shows repeatable same-host gains on the required serial/task/string/conversion
+matrix, with no material regression observed on an unchanged numeric control.
+Separate allocation/fault probes preserve two decimal allocations, zero decimal
+reallocations and fatal allocation failures. Independent review and required CI
+remain pending; this does not reopen #807 scope or held #396/PR119.
+
+
+## Current three-way comparison (#813)
+
+[Fresh matched PythRust/CPython/handwritten Rust results](benchmarks/card813.md)
+measure current main after PR133. The four original algorithms show PythRust
+faster than CPython and optimized handwritten Rust faster than PythRust on this
+host; checked-arithmetic, startup, optimizer and library differences are explicit.
+No universal ranking or production optimization is claimed.
+
+
+## Proven signed half and remainder #814
+
+[Fresh matched three-way baselines, paired experiment, profiles and ranked
+follow-ups](benchmarks/card814.md) retain a native specialization only for proven
+signed-i64 division/remainder by positive literal `2`. Independent 24/42-round
+pairs reduce numeric time about 49–50% and sorting 4–5%; string/tuple controls and
+the observed small string shift are qualified by byte-identical same-path controls.
+The final numeric gap to ordinary handwritten Rust is 1.86× on this host. No
+production helper inliner, list or string change is included; required independent
+review and hosted CI remain gates.
+
+## Compiler-selected integer-list access #815
+
+[Fresh matched measurements, raw evidence and limitations](benchmarks/card815.md)
+compare current main 626a348 with a narrow internal compiler-selected integer
+access interface. Sorting medians fall 47–48% and integer load/store controls
+70–72% in 24/42 balanced rounds; float/inferred-float controls stay within spread.
+The report investigates small string shifts with same-path and identical-byte
+controls, separates profiles/counts, and records parity/release/Miri/TSan checks.
+This supports independent review, not merge/Done; the rejected #810 shared
+accessor and parked D29 C remain rejected/parked.
+
+## Constant-divisor call-site clones #816
+
+[Paired measurements against main, attribution with and without D63, generated
+code and size](benchmarks/card816.md) for a private clone that binds a literal
+divisor argument (D69). Only the tuple workload has an eligible call; the other
+workloads' generated code is instruction-identical and serves as noise controls.
+Results are reported as tables there.

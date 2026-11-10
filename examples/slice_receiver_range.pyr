@@ -1,0 +1,4 @@
+# expect-exit: 1
+# expect-error: slicing range is not supported yet
+# deviation: static subset rejects this form before execution.
+print(range(3)[:])

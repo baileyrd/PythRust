@@ -55,8 +55,10 @@ const fn m(owner: Owner, name: &'static str, min: usize, max: usize) -> Method {
     }
 }
 
-/// Every method but an executor's.
-const METHODS: [Method; 24] = [
+/// Every method but an executor's. A name with several owners (`index`
+/// and `count` on `str` and list, `pop` on list and dict) waits for the
+/// receiver's type (D52).
+const METHODS: [Method; 34] = [
     m(Owner::Str, "split", 0, 2),
     m(Owner::Str, "join", 1, 1),
     m(Owner::Str, "strip", 0, 1),
@@ -73,8 +75,18 @@ const METHODS: [Method; 24] = [
     m(Owner::Str, "upper", 0, 0),
     m(Owner::Str, "lower", 0, 0),
     m(Owner::List, "append", 1, 1),
+    m(Owner::List, "pop", 0, 1),
+    m(Owner::List, "extend", 1, 1),
+    m(Owner::List, "insert", 2, 2),
+    m(Owner::List, "remove", 1, 1),
+    m(Owner::List, "index", 1, 3),
+    m(Owner::List, "count", 1, 1),
+    m(Owner::List, "sort", 0, 0),
     m(Owner::Set, "add", 1, 1),
     m(Owner::Dict, "get", 1, 2),
+    m(Owner::Dict, "pop", 1, 2),
+    m(Owner::Dict, "setdefault", 1, 2),
+    m(Owner::Dict, "update", 0, 1),
     m(Owner::Dict, "keys", 0, 0),
     m(Owner::Dict, "values", 0, 0),
     m(Owner::Dict, "items", 0, 0),
@@ -95,12 +107,47 @@ fn lookup(table: &[Method], name: &str, here: Option<Owner>) -> Option<Method> {
     Some(own.unwrap_or(first))
 }
 
+/// Whether `name` is typed by a [`Need::Method`] once the receiver's
+/// type is known: the list and dict methods of D70, and a name several
+/// types share.
+fn deferred(name: &str) -> bool {
+    let owners = METHODS.iter().filter(|m| m.name == name).count();
+    owners > 1
+        || matches!(
+            name,
+            "extend" | "insert" | "remove" | "sort" | "setdefault" | "update"
+        )
+}
+
+/// The positional arguments `owner`'s method `name` takes, if it has
+/// that method: `str`, list or dict, for [`Need::Method`].
+pub(super) fn arity(owner: &Type, name: &str) -> Option<(usize, usize)> {
+    let owner = Owner::of(owner)?;
+    let found = METHODS
+        .iter()
+        .find(|m| m.owner == owner && m.name == name)?;
+    Some((found.min, found.max))
+}
+
+/// The error for a call to method `name` with `got` arguments.
+pub(super) fn arity_message(name: &str, min: usize, max: usize, got: usize) -> String {
+    let expected = match (min, max) {
+        (0, 0) => "no arguments".to_string(),
+        (1, 1) => "1 argument".to_string(),
+        _ if min == max => format!("{min} arguments"),
+        _ if max == min + 1 => format!("{min} or {max} arguments"),
+        _ => format!("{min} to {max} arguments"),
+    };
+    format!("`{name}` takes {expected} but {got} were given")
+}
+
 impl Checker {
-    /// A method call: `list.append`, `set.add`, `dict.get`, `.keys`,
-    /// `.values`, `.items`, a file's `.read` and `.close`, an executor's
-    /// `.submit` and `.map`, and a future's `.result`. The receiver's
-    /// type picks the method; while it is unknown, the one type that has
-    /// the name fixes it.
+    /// A method call: `list.append`, the list and dict methods of D70,
+    /// `set.add`, `dict.get`, `.keys`, `.values`, `.items`, a file's
+    /// `.read` and `.close`, an executor's `.submit` and `.map`, and a
+    /// future's `.result`. The receiver's type picks the method; while it
+    /// is unknown, the one type that has the name fixes it, and a name
+    /// several types share waits for it (D52).
     pub(super) fn method(&mut self, value: &Expr, attr: &Ident, args: &[Arg]) -> Result<Type> {
         let name = attr.name.as_str();
         if matches!(name, "submit" | "map") {
@@ -111,8 +158,10 @@ impl Checker {
                 "unknown method `.{name}`; the methods are `str.split`, `.join`, \
                  `.strip`, `.lstrip`, `.rstrip`, `.replace`, `.startswith`, \
                  `.endswith`, `.find`, `.rfind`, `.index`, `.rindex`, `.count`, \
-                 `.upper` and `.lower`, `list.append`, `set.add`, \
-                 `dict.get`, `.keys`, `.values` and `.items`, a file's `.read` \
+                 `.upper` and `.lower`, `list.append`, `.pop`, `.extend`, \
+                 `.insert`, `.remove`, `.index`, `.count` and `.sort`, `set.add`, \
+                 `dict.get`, `.pop`, `.setdefault`, `.update`, `.keys`, \
+                 `.values` and `.items`, a file's `.read` \
                  and `.close`, an executor's `.submit` and `.map`, and a future's \
                  `.result`"
             );
@@ -120,6 +169,9 @@ impl Checker {
         };
         let receiver = self.expr(value)?;
         let here = Owner::of(&self.subst.resolve(&receiver));
+        if deferred(name) && here != Some(Owner::Str) {
+            return self.deferred_method(first.name, receiver, args, attr.span);
+        }
         let found = lookup(&METHODS, name, here).unwrap_or(first);
         if found.owner != Owner::Str {
             method_arity(name, args, found.min, found.max, attr.span)?;
@@ -132,6 +184,75 @@ impl Checker {
             Owner::File => self.file(name, value.span, &receiver),
             Owner::Future => self.result(value.span, &receiver),
         }
+    }
+
+    /// A method [`deferred`] to the solver: its positional arguments'
+    /// types wait with the receiver's for [`Need::Method`]. Only
+    /// `list.sort` takes a keyword, `reverse=`; `dict.update` takes none
+    /// yet (D70).
+    fn deferred_method(
+        &mut self,
+        name: &'static str,
+        receiver: Type,
+        args: &[Arg],
+        span: Span,
+    ) -> Result<Type> {
+        if name == "sort" {
+            self.sort_keywords("list.sort", args)?;
+            if let Some(arg) = args.iter().find(|a| a.name.is_none()) {
+                return Err(error(
+                    arg.span,
+                    "`sort` takes no positional arguments".into(),
+                ));
+            }
+        } else if let Some(arg) = args.iter().find(|a| a.name.is_some()) {
+            let msg = match name {
+                "update" => "keyword arguments of `dict.update` are not supported yet".to_string(),
+                _ => format!("`{name}` takes no keyword arguments"),
+            };
+            return Err(error(arg.span, msg));
+        }
+        let mut types = Vec::new();
+        for arg in args.iter().filter(|a| a.name.is_none()) {
+            types.push(self.expr(&arg.value)?);
+        }
+        let out = self.subst.fresh();
+        let need = Need::Method {
+            name,
+            receiver,
+            args: types,
+            out: out.clone(),
+        };
+        self.need(need, span);
+        Ok(out)
+    }
+
+    /// The keywords of `list.sort` and `sorted`, named `what`: `reverse=`
+    /// of a bool or int; `key=` is not supported yet (D70).
+    pub(super) fn sort_keywords(&mut self, what: &str, args: &[Arg]) -> Result<()> {
+        for arg in args {
+            let Some(kw) = &arg.name else {
+                continue;
+            };
+            match kw.name.as_str() {
+                "reverse" => {
+                    let t = self.expr(&arg.value)?;
+                    if self.subst.resolve(&t) != Type::Int {
+                        let what = format!("`reverse=` of `{what}`");
+                        self.expect(arg.value.span, &Type::Bool, &t, &what)?;
+                    }
+                }
+                "key" => {
+                    let msg = format!("`key=` of `{what}` is not supported yet");
+                    return Err(error(arg.span, msg));
+                }
+                other => {
+                    let msg = format!("`{what}` got an unexpected keyword argument `{other}`");
+                    return Err(error(arg.span, msg));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// A `str` method (D53): its arguments are `str`s, positional, and
@@ -332,14 +453,7 @@ fn method_arity(name: &str, args: &[Arg], min: usize, max: usize, span: Span) ->
     if (min..=max).contains(&args.len()) {
         return Ok(());
     }
-    let expected = match (min, max) {
-        (0, 0) => "no arguments".to_string(),
-        (1, 1) => "1 argument".to_string(),
-        _ if max == min + 1 => format!("{min} or {max} arguments"),
-        _ => format!("{min} to {max} arguments"),
-    };
-    let msg = format!("`{name}` takes {expected} but {} were given", args.len());
-    Err(error(span, msg))
+    Err(error(span, arity_message(name, min, max, args.len())))
 }
 
 #[cfg(test)]
@@ -485,14 +599,19 @@ mod tests {
     }
 
     #[test]
-    fn every_method_name_has_one_owner() {
-        // `lookup` gives a receiver still unknown the first owner. A shared
-        // name instead waits for the receiver's type (D52): add that path,
-        // with its tests, along with the first shared name.
+    fn only_index_count_and_pop_have_two_owners_and_all_are_deferred() {
+        // `lookup` gives a receiver still unknown the first owner; a
+        // shared name instead waits for the receiver's type (D52).
+        let mut shared: Vec<&str> = Vec::new();
         for (i, a) in METHODS.iter().enumerate() {
-            let shared = METHODS[i + 1..].iter().find(|b| b.name == a.name);
-            assert!(shared.is_none(), "`.{}` has two owners", a.name);
+            if METHODS[i + 1..].iter().any(|b| b.name == a.name) {
+                shared.push(a.name);
+            }
         }
+        shared.sort_unstable();
+        assert_eq!(shared, ["count", "index", "pop"]);
+        assert!(shared.iter().all(|n| deferred(n)));
+        assert!(!deferred("append") && !deferred("get"));
     }
 
     #[test]

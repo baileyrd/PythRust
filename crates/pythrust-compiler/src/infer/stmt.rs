@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{
-    BinOp, Block, Branch, Expr, ExprKind, Handler, Stmt, StmtKind, Target, TargetKind,
+    source_name, BinOp, Block, Branch, Expr, ExprKind, Handler, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::{Diagnostic, Result};
 use crate::span::Span;
@@ -63,6 +63,10 @@ impl Checker {
             StmtKind::Return(value) => self.ret(value.as_ref(), stmt.span),
             StmtKind::Break | StmtKind::Continue | StmtKind::Pass => Ok(()),
             StmtKind::Expr(e) => self.expr(e).map(drop),
+            StmtKind::Del { value, index } => {
+                let out = self.subst.fresh();
+                self.subscript(value, index, Access::Delete, out).map(drop)
+            }
             StmtKind::FuncDef(f) => Err(error(
                 f.name.span,
                 "`def` is only allowed at module top level".to_string(),
@@ -94,9 +98,14 @@ impl Checker {
                 self.block(orelse)
             }
             StmtKind::Raise(value) => self.raise(value),
-            StmtKind::Try { body, handlers } => {
+            StmtKind::Try {
+                body,
+                handlers,
+                finally,
+            } => {
                 self.block(body)?;
-                handlers.iter().try_for_each(|h| self.handler(h))
+                handlers.iter().try_for_each(|h| self.handler(h))?;
+                finally.iter().try_for_each(|f| self.block(f))
             }
             StmtKind::With {
                 value,
@@ -192,7 +201,7 @@ impl Checker {
 
     /// Adds a fix-it to `err` when it comes from an operation on a name
     /// tested only for truth, and narrowing that name would fix it.
-    fn truth_hint(&self, mut err: Diagnostic) -> Diagnostic {
+    pub(super) fn truth_hint(&self, mut err: Diagnostic) -> Diagnostic {
         if err.message.contains(TRUTH_HINT) {
             return err;
         }
@@ -208,6 +217,7 @@ impl Checker {
         let Some(TruthUse { name, .. }) = self.frame.truth_uses.iter().find(fixes) else {
             return err;
         };
+        let name = source_name(name);
         let hint = format!("; {TRUTH_HINT} `{name}`: write `{name} is not None`");
         err.message.push_str(&hint);
         err
@@ -317,7 +327,7 @@ impl Checker {
 
     fn bind_name(&mut self, name: &str, span: Span, ty: &Type) -> Result<()> {
         let var = self.variable(name, span)?;
-        let what = format!("cannot change the type of `{name}`");
+        let what = format!("cannot change the type of `{}`", source_name(name));
         let deferred = self.subst.assign(&var, ty).map_err(|clash| {
             let detail = solve::mismatch(&self.subst, clash, &var, ty);
             let mut msg = format!("{what}: {detail}");

@@ -1,0 +1,2 @@
+comparison {'baseline': {'median': 0.3359553745, 'mad': 0.003862953500000016, 'minimum': 0.326666346, 'maximum': 0.365913014}, 'candidate': {'median': 0.3382405675, 'mad': 0.005468823999999983, 'minimum': 0.324940173, 'maximum': 0.384476572}}
+self {'baseline': {'median': 0.338655555, 'mad': 0.007912533, 'minimum': 0.324370444, 'maximum': 0.493145809}, 'candidate': {'median': 0.34131210749999996, 'mad': 0.00998490699999996, 'minimum': 0.324508096, 'maximum': 0.475490666}}

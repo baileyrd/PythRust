@@ -1,0 +1,42 @@
+# Literal and computed zero remain catchable and untracked.
+temper def zero(s: str) -> str:
+    return s[::0]
+def computed(xs, n):
+    return xs[::n]
+for n in [0, 1]:
+    try:
+        print(computed([1, 2], n))
+    except ValueError as e:
+        print(e)
+try:
+    print(zero("é🙂"))
+except ValueError as e:
+    print(e)
+try:
+    print((1, "a")[::0][0])
+except ValueError as e:
+    print(e)
+try:
+    print(()[::0])
+except ValueError as e:
+    print(e)
+print("after")
+def contextual() -> str:
+    return (1, "a")[::0]
+def alternative(c):
+    return (1, "a")[::0] if c else "live"
+def generic(t):
+    return t[::0]
+print(alternative(False))
+try:
+    print(alternative(True))
+except ValueError as e:
+    print(e)
+try:
+    print(contextual())
+except ValueError as e:
+    print(e)
+try:
+    print(generic((1, "a")))
+except ValueError as e:
+    print(e)

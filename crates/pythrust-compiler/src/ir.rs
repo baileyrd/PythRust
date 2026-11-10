@@ -297,14 +297,40 @@ pub enum Inst {
         count: Operand,
         span: Span,
     },
-    /// Sorts a list in place by `<`, stably.
-    Sort(Operand),
+    /// Sorts a list in place by `<`, stably; descending when the `Bool`
+    /// `reverse` is true, equal items keeping their order (D70).
+    Sort {
+        list: Operand,
+        reverse: Operand,
+        span: Span,
+    },
+    /// `list.insert(index, value)` at `span`: an index past either end
+    /// clamps, as in CPython; the list adds its own reference.
+    Insert {
+        list: Operand,
+        index: Operand,
+        value: Operand,
+        span: Span,
+    },
+    /// Removes item `index` of a list, which lowering proved in range,
+    /// or key `index` of a dict, which lowering proved present, dropping
+    /// the references the list or dict held (D70).
+    Remove {
+        list: Operand,
+        index: Operand,
+        span: Span,
+    },
     /// Reverses a list, here only `map`'s results ([`Ty::Results`]), in
     /// place.
     Reverse(Operand),
     /// `raise exc`: makes the `Exc` pending, with its own reference, as
     /// raised at `span`. Nothing may be pending.
     Raise { exc: Operand, span: Span },
+    /// Sets the pending exception, which there is, aside while a
+    /// `finally` block runs: none is pending after.
+    Stash,
+    /// Makes the exception stashed last pending again, as it was raised.
+    Restore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -370,6 +396,13 @@ pub enum Rvalue {
     /// or a dict's keys, a set's elements or a view's items, of the
     /// destination's type.
     CopyList(Operand),
+    /// Fresh string/list slice, with nonzero step checked by lowering.
+    /// Bits 0/1/2 distinguish present start/stop/step from omission.
+    Slice {
+        source: Operand,
+        bounds: [Operand; 3],
+        present: u8,
+    },
     /// A new list, tuple, set or dict, of the destination's type,
     /// holding `items`: for a dict, keys and values alternating.
     NewSeq(Vec<Operand>),
@@ -414,6 +447,9 @@ pub enum Rvalue {
     /// The pending exception, which there is, with its reference; none
     /// is pending after.
     Catch,
+    /// The exception stashed last ([`Inst::Stash`]), which there is, with
+    /// its reference: one a `finally` block's own exception replaces.
+    Unstash,
     /// `exec.submit(func, *args)` (M6c): a new future of the task that
     /// calls `func` with `args` on one of `exec`'s workers. The operands
     /// are borrowed; the task gets references of its own.
@@ -586,6 +622,9 @@ impl Rvalue {
             | Rvalue::Entry(a, b, _)
             | Rvalue::Float(_, a, b)
             | Rvalue::IntPow(a, b) => vec![*a, *b],
+            Rvalue::Slice { source, bounds, .. } => {
+                std::iter::once(*source).chain(*bounds).collect()
+            }
             Rvalue::Contains { hay, needle } => vec![*hay, *needle],
             Rvalue::Call(_, args)
             | Rvalue::NewSeq(args)
@@ -600,7 +639,8 @@ impl Rvalue {
             | Rvalue::Global(_)
             | Rvalue::Raised
             | Rvalue::PendingIs(_)
-            | Rvalue::Catch => Vec::new(),
+            | Rvalue::Catch
+            | Rvalue::Unstash => Vec::new(),
         }
     }
 }
@@ -621,7 +661,13 @@ impl Inst {
             Inst::SetItem {
                 list, index, value, ..
             } => [list, index, value].into_iter().any(local),
-            Inst::Raise { exc, .. } | Inst::Sort(exc) | Inst::Reverse(exc) => local(exc),
+            Inst::Raise { exc, .. } | Inst::Reverse(exc) => local(exc),
+            Inst::Stash | Inst::Restore => false,
+            Inst::Sort { list, reverse, .. } => local(list) || local(reverse),
+            Inst::Insert {
+                list, index, value, ..
+            } => [list, index, value].into_iter().any(local),
+            Inst::Remove { list, index, .. } => local(list) || local(index),
         }
     }
 }

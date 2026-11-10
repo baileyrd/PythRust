@@ -1,0 +1,25 @@
+{
+  "observed_at_utc": "2026-11-08",
+  "filesystem_command": "df -T /tmp",
+  "fixture_filesystem": "tmpfs",
+  "python_command": "/usr/bin/python3.13 -c 'import hashlib,ssl,sys; print(hashlib.sha256.__module__, ssl.OPENSSL_VERSION, sys._is_gil_enabled())'",
+  "python_sha256_module": "_hashlib",
+  "openssl": "OpenSSL 3.5.7 9 Jun 2026",
+  "gil_enabled": true,
+  "linker_command": "ld --version",
+  "linker": "GNU ld (GNU Binutils for Debian) 2.44",
+  "profiler_command": "gprof --version",
+  "profiler": "GNU gprof (GNU Binutils for Debian) 2.44",
+  "unavailable_tools": [
+    "perf",
+    "valgrind"
+  ],
+  "failed_diagnostic": {
+    "action": "strace -f -c of a task-owned shared_4 executable",
+    "returncode": 1,
+    "stderr": "strace: test_ptrace_get_syscall_info: PTRACE_TRACEME: Operation not permitted\nstrace: ptrace(PTRACE_TRACEME, ...): Operation not permitted\nstrace: PTRACE_SETOPTIONS: Operation not permitted\nstrace: cleanup: waitpid(-1, __WALL): No child processes\n",
+    "disposition": "Stopped; no retry, privilege escalation, installation or security-setting change for profiling. Use software PC sampling, deterministic linked-call counts and uninstrumented rusage controls."
+  },
+  "python_binary_sha256": "889c603f0d17cb54060951bcf4c4f9b8c9ebd9e52b392c70209bbb9755d797d9",
+  "python_binary_hash_command": "sha256sum /usr/bin/python3.13"
+}

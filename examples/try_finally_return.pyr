@@ -1,0 +1,11 @@
+# deviation: D89: `return` leaving a `finally` block is an error; CPython 3.13 accepts it.
+# expect-error: `return` inside `finally` is not supported
+# expect-exit: 1
+def f() -> int:
+    try:
+        raise ValueError("swallowed")
+    finally:
+        return 1
+
+
+print(f())

@@ -1,0 +1,14 @@
+# Fixed positional tuples, including generic literal slices.
+def reverse(t):
+    return t[::-1]
+def middle(t):
+    return t[+1:-1]
+xs = (1, "é", True, [4], 5.5)
+print(xs[:], xs[1:2], xs[1:1], xs[::-1], xs[:-1:-1])
+print(xs[-100:100:2], xs[100:-100:-2], xs[::9223372036854775807], xs[::-9223372036854775808])
+print(xs[-9223372036854775808:9223372036854775807], xs[9223372036854775807:-9223372036854775808:-1])
+print(()[:], ()[::-1], (1,)[1:], (1,)[::-1])
+print(reverse(xs), middle(xs), reverse(("a", 2)), middle((1, 2)))
+y = xs[3:4]
+y[0].append(6)
+print(xs, y)

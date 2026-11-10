@@ -499,3 +499,469 @@ fn the_rust_flag_names_the_manifest() {
         .unwrap();
     assert!(text(&out.stderr).contains("pythrust.toml"), "{out:?}");
 }
+
+#[test]
+fn loose_callee_stores_reach_tempered_call_checks() {
+    let tmp = scratch("loose_callee_stores_reach_tempered_call_checks");
+    let prefix = "temper def add(mut rows: list[list[int]], owned row: list[int]) -> None:\n    rows.append(row)\nrows: list[list[int]] = []\nrow = [1]\n";
+    for (name, store) in [
+        ("direct", "rows.append(row)\n"),
+        ("captured", "def stash():\n    rows.append(row)\nstash()\n"),
+        (
+            "parameter",
+            "def stash(x):\n    rows.append(x)\nstash(row)\n",
+        ),
+    ] {
+        let src = format!("{prefix}{store}add(rows, row)\nprint(rows)\n");
+        for command in ["check", "run", "build"] {
+            let out = pythrust(command, &tmp, name, &src);
+            let err = text(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{command} {name}: {err}");
+            assert!(
+                err.contains("tempered `add` keeps `row` after it returns"),
+                "{err}"
+            );
+            assert!(err.contains("may also pass that list as `rows`"), "{err}");
+            assert!(err.contains("pass a copy (`list(...)`)"), "{err}");
+            assert!(out.stdout.is_empty(), "{command} {name}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn joined_receiver_aliases_reject_before_any_execution() {
+    let tmp = scratch("joined_receiver_aliases");
+    for (name, receiver) in [
+        ("conditional", "(a if c else b)"),
+        ("or", "(b or a)"),
+        ("and", "(a and b)"),
+    ] {
+        let src = format!("temper def f(c: bool) -> int:\n    a = [1]\n    b = a\n    {receiver}.append(2)\n    return len(a) + len(b)\nprint(f(True))\n");
+        for command in ["check", "run", "build"] {
+            let out = pythrust(command, &tmp, name, &src);
+            assert_eq!(out.status.code(), Some(1), "{command} {name}: {out:?}");
+            assert!(out.stdout.is_empty());
+            let err = text(&out.stderr);
+            assert!(
+                err.contains("may be the same list and is used later")
+                    && err.contains("make independent values before sharing them"),
+                "{command}: {err}"
+            );
+            assert!(!tmp
+                .join(name)
+                .with_extension(std::env::consts::EXE_EXTENSION)
+                .exists());
+        }
+        let legal = src.replace("b = a", "b = [2]");
+        assert!(pythrust("check", &tmp, name, &legal).status.success());
+        let out = pythrust("run", &tmp, name, &legal);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(text(&out.stdout), "3\n");
+        let loose = src.replace("temper ", "");
+        let out = pythrust("run", &tmp, name, &loose);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(text(&out.stdout), "4\n");
+    }
+}
+
+/// Card #804: every CLI mode rejects the alias without offering another
+/// rejected shallow copy; accepted flat-list fixes preserve both branches.
+#[test]
+fn return_copy_diagnostics_are_actionable_in_every_cli_mode() {
+    let tmp = scratch("return_copy_diagnostics_are_actionable");
+    for (name, expression) in [("nested", "rows"), ("shallow", "list(rows)")] {
+        let src = format!("temper def f(rows: list[list[int]]) -> list[list[int]]:\n    return {expression}\nprint(f([[1]]))\n");
+        let mut diagnostics = Vec::new();
+        for command in ["check", "run", "build"] {
+            let out = pythrust(command, &tmp, name, &src);
+            let err = text(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{command}: {err}");
+            assert!(out.stdout.is_empty());
+            assert!(err.contains("parameter `rows`"), "{err}");
+            assert!(err.contains("return an independent value"), "{err}");
+            assert!(!err.contains("return a copy"), "{err}");
+            diagnostics.push(err);
+        }
+        assert!(diagnostics.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(!tmp.join(name).exists());
+    }
+    let src = "temper def f(xs: list[int], flag: bool) -> list[int]:\n    out = [0]\n    if flag:\n        out = xs\n    return out\nprint(f([1, 2], False), f([1, 2], True))\n";
+    for command in ["check", "run", "build"] {
+        let out = pythrust(command, &tmp, "flat", src);
+        let err = text(&out.stderr);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(err.contains("return list(out)"), "{err}");
+        assert!(!err.contains("return list(xs)"), "{err}");
+    }
+    // Apply the literal fix, then check and execute it. Native execution
+    // is held by the aliasing_flat_copy corpus fixture.
+    let fixed = src.replace("return out", "return list(out)");
+    for command in ["check", "run"] {
+        let out = pythrust(command, &tmp, "fixed", &fixed);
+        assert!(out.status.success(), "{command}: {}", text(&out.stderr));
+        let expected = if command == "run" { "[0] [1, 2]\n" } else { "" };
+        assert_eq!(text(&out.stdout), expected);
+    }
+}
+
+/// Builds the runtime `compiler` links, once per test binary: cargo
+/// links its archive anew on every build, even an up-to-date one, so a
+/// build running beside another test's link can hide the archive from it.
+fn build_runtime(compiler: &Path) {
+    static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    BUILT.get_or_init(|| {
+        let mut cargo = Command::new(env!("CARGO"));
+        cargo
+            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .args(["build", "--locked", "-p", "pythrust-rt"]);
+        if compiler.parent().is_some_and(|p| p.ends_with("release")) {
+            cargo.arg("--release");
+        }
+        let built = cargo.output().unwrap();
+        assert!(built.status.success(), "{built:?}");
+    });
+}
+
+fn diagnostic_compiler() -> PathBuf {
+    std::env::var_os("PYTHRUST_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_pythrust")))
+}
+
+/// Card #812: every command rejects before execution, with identical
+/// container/context wording and no invented Optional-copy source.
+#[test]
+fn d4_cli_reports_context_and_safe_guidance() {
+    let tmp = scratch("d4_context");
+    for (name, src, expected, looped) in [
+        (
+            "set",
+            include_str!("../../../examples/aliasing_set_loop.pyr"),
+            "changes a set",
+            true,
+        ),
+        (
+            "dict",
+            include_str!("../../../examples/aliasing_dict_loop.pyr"),
+            "changes a dict",
+            true,
+        ),
+        (
+            "argument",
+            include_str!("../../../examples/aliasing_argument_temporary.pyr"),
+            "temporary value",
+            false,
+        ),
+        (
+            "optional_named",
+            include_str!("../../../examples/aliasing_optional_named.pyr"),
+            "`a` while `b` may be the same list",
+            false,
+        ),
+        (
+            "optional_temporary",
+            include_str!("../../../examples/aliasing_optional_temporary.pyr"),
+            "a list while `a` may be the same list",
+            false,
+        ),
+    ] {
+        let path = source(&tmp, name, src);
+        let mut diagnostics = Vec::new();
+        for command in ["check", "run", "build"] {
+            let out = Command::new(diagnostic_compiler())
+                .arg(command)
+                .arg(&path)
+                .output()
+                .unwrap();
+            let err = text(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{name} {command}: {err}");
+            assert!(out.stdout.is_empty());
+            assert!(err.contains(expected), "{err}");
+            assert_eq!(err.contains("`for` loop"), looped, "{err}");
+            assert!(!err.contains("..."), "{err}");
+            if name == "optional_named" {
+                assert!(err.contains("a = list(a)"), "{err}");
+                assert!(!err.contains("a = list(b)"), "{err}");
+            } else {
+                assert!(!err.contains("list("), "{err}");
+            }
+            diagnostics.push(err);
+        }
+        assert!(diagnostics.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(!path
+            .with_extension(std::env::consts::EXE_EXTENSION)
+            .exists());
+    }
+}
+
+/// Apply each retained D4 fix literally; check, interpret, build and run.
+/// Values prove both independent mutation and iteration over a snapshot.
+#[test]
+fn d4_concrete_fixes_compile_and_preserve_values() {
+    let tmp = scratch("d4_applied_fixes");
+    // `cargo test` does not itself emit the runtime's static archive.
+    let compiler = diagnostic_compiler();
+    build_runtime(&compiler);
+    for (name, src, old, new, hint, expected) in [
+        ("alias", "temper def f() -> tuple[list[int], list[int]]:\n    a = [1]\n    b = a\n    c = b\n    b.append(2)\n    print(c)\n    return a, b\nprint(f())\n", "    b.append(2)", "    b = list(b)\n    b.append(2)", "b = list(b)", "[1]\n([1], [1, 2])\n"),
+        ("optional_named", "temper def f() -> int:\n    a = [1]\n    b: list[int] | None = a\n    a.append(2)\n    if b is None:\n        return 0\n    return len(a) * 10 + len(b)\nprint(f())\n", "    a.append(2)", "    a = list(a)\n    a.append(2)", "a = list(a)", "21\n"),
+        ("list", "temper def f(mut xs: list[int]) -> None:\n    for x in xs:\n        xs.append(x + 10)\na = [1, 2]\nf(a)\nprint(a)\n", "in xs:", "in list(xs):", "list(xs)", "[1, 2, 11, 12]\n"),
+        ("nested_zip", "temper def f(mut xs: list[int]) -> None:\n    for i, pair in enumerate(zip(xs, [0, 0])):\n        xs.append(i + 10)\na = [1, 2]\nf(a)\nprint(a)\n", "zip(xs,", "zip(list(xs),", "list(xs)", "[1, 2, 10, 11]\n"),
+        ("set", "temper def f(mut s: set[int]) -> None:\n    for x in s:\n        s.add(x + 10)\na = {1, 2}\nf(a)\nprint(sorted(a))\n", "in s:", "in list(s):", "list(s)", "[1, 2, 11, 12]\n"),
+        ("dict", "temper def f(mut d: dict[int, int]) -> None:\n    for k in d:\n        d[k + 10] = d[k] + 1\na = {1: 4, 2: 5}\nf(a)\nprint(a)\n", "in d:", "in list(d):", "list(d)", "{1: 4, 2: 5, 11: 5, 12: 6}\n"),
+    ] {
+        let path = source(&tmp, name, src);
+        let out = Command::new(diagnostic_compiler()).arg("check").arg(&path).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(text(&out.stderr).contains(hint), "{out:?}");
+        let fixed = src.replace(old, new);
+        fs::write(&path, fixed).unwrap();
+        for command in ["check", "run", "build"] {
+            let out = Command::new(diagnostic_compiler()).arg(command).arg(&path).output().unwrap();
+            assert!(out.status.success(), "{name} {command}: {out:?}");
+            if command == "run" { assert_eq!(text(&out.stdout), expected); }
+        }
+        let out = Command::new(path.with_extension(std::env::consts::EXE_EXTENSION)).output().unwrap();
+        assert!(out.status.success(), "{name}: {out:?}");
+        assert!(out.stderr.is_empty(), "{name}: {out:?}");
+        assert_eq!(text(&out.stdout), expected);
+    }
+}
+
+#[test]
+fn d4_cli_pending_iterables_are_not_running_loops() {
+    let tmp = scratch("d4_pending_iterables");
+    let base = include_str!("../../../examples/aliasing_pending_iterable.pyr");
+    let mut failures = Vec::new();
+    for (name, target, iterable) in [
+        ("enumerate", "pair, y", "zip(enumerate(xs), grow(xs))"),
+        ("zip", "pair, y", "zip(zip(xs, [0]), grow(xs))"),
+        (
+            "outer_enumerate",
+            "i, pair",
+            "enumerate(zip(enumerate(xs), grow(xs)))",
+        ),
+        (
+            "inner_zip",
+            "pair, y",
+            "zip(enumerate(zip(xs, [0])), grow(xs))",
+        ),
+    ] {
+        let src = base.replace(
+            "pair, y in zip(enumerate(xs), grow(xs))",
+            &format!("{target} in {iterable}"),
+        );
+        let path = source(&tmp, name, &src);
+        for command in ["check", "run", "build"] {
+            let out = Command::new(diagnostic_compiler())
+                .arg(command)
+                .arg(&path)
+                .output()
+                .unwrap();
+            let err = text(&out.stderr);
+            if out.status.code() != Some(1)
+                || !out.stdout.is_empty()
+                || !err.contains("temporary value")
+                || err.contains("`for` loop")
+                || err.contains("list(")
+            {
+                failures.push(format!("{name} {command}: {out:?}"));
+            }
+        }
+        assert!(!path
+            .with_extension(std::env::consts::EXE_EXTENSION)
+            .exists());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn d4_cli_running_outer_loops_are_not_hidden_by_other_temporaries() {
+    let tmp = scratch("d4_active_outer_loop");
+    let base = include_str!("../../../examples/aliasing_pending_iterable.pyr");
+    let original = "    for pair, y in zip(enumerate(xs), grow(xs)):\n        print(pair)";
+    for (name, body, running) in [
+        ("pending_inner", "    for outer in xs:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", true),
+        ("ordinary_argument", "    for outer in xs:\n        print((xs,)[0], grow(xs))", true),
+        ("unrelated_outer", "    for outer in [0]:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", false),
+        ("completed_outer", "    for outer in xs:\n        pass\n    else:\n        for pair, y in zip(enumerate(xs), grow(xs)):\n            print(pair)", false),
+    ] {
+        let path = source(&tmp, name, &base.replace(original, body));
+        let mut diagnostics = Vec::new();
+        for command in ["check", "run", "build"] {
+            let out = Command::new(diagnostic_compiler()).arg(command).arg(&path).output().unwrap();
+            let err = text(&out.stderr);
+            assert_eq!(out.status.code(), Some(1), "{name} {command}: {err}");
+            assert!(out.stdout.is_empty());
+            assert_eq!(err.contains("a `for` loop over it is running"), running, "{name} {command}: {err}");
+            if !running { assert!(err.contains("temporary value"), "{err}"); }
+            assert!(!err.contains("list("), "{err}");
+            diagnostics.push(err);
+        }
+        assert!(diagnostics.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(!path.with_extension(std::env::consts::EXE_EXTENSION).exists());
+    }
+}
+
+/// Literal zero is a runtime operator fault on every receiver, through
+/// generic callers too. Native diagnostics preserve run's exact site.
+#[test]
+fn slice_zero_keeps_runtime_span_message_and_output() {
+    let tmp = scratch("slice_zero_diagnostics");
+    let compiler = diagnostic_compiler();
+    build_runtime(&compiler);
+    for (name, expr) in [
+        ("str", "\"é🙂\"[::0]"),
+        ("list", "[1, 2][::0]"),
+        ("tuple", "(1, \"é\")[::0][0]"),
+        ("computed", "cut([1, 2], 0)"),
+        ("computed_bool", "cut([1, 2], False)"),
+        ("computed_bool_str", "cut(\"é🙂\", False)"),
+    ] {
+        let src = format!("def cut(xs, step):\n    return xs[::step]\nprint(\"before\")\nprint({expr})\nprint(\"after\")\n");
+        let path = source(&tmp, name, &src);
+        let compiler = diagnostic_compiler();
+        let check = Command::new(&compiler)
+            .arg("check")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(check.status.success(), "{check:?}");
+        let run = Command::new(&compiler)
+            .arg("run")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(run.status.code(), Some(1));
+        assert_eq!(run.stdout, b"before\n");
+        let err = text(&run.stderr);
+        assert!(
+            err.contains("ValueError: slice step cannot be zero"),
+            "{err}"
+        );
+        let (line, col, underline) = if name.starts_with("computed") {
+            (2, 12, "xs[::step]")
+        } else {
+            (4, 7, expr.strip_suffix("[0]").unwrap_or(expr))
+        };
+        assert!(
+            err.contains(&format!(":{line}:{col}: runtime error:")),
+            "{err}"
+        );
+        assert!(
+            err.contains(&"^".repeat(underline.chars().count())),
+            "{err}"
+        );
+        let build = Command::new(&compiler)
+            .arg("build")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(build.status.success(), "{build:?}");
+        let native = Command::new(path.with_extension(std::env::consts::EXE_EXTENSION))
+            .output()
+            .unwrap();
+        assert_eq!(native.status.code(), run.status.code());
+        assert_eq!(native.stdout, run.stdout);
+        assert_eq!(native.stderr, run.stderr);
+    }
+}
+
+/// A bound whose source faults (or an empty loop's item) still needs a
+/// verifiable native representation. Exercise each family independently.
+#[test]
+fn slice_never_produced_bounds_keep_native_faults_and_empty_iteration() {
+    let tmp = scratch("slice_never_produced");
+    let compiler = diagnostic_compiler();
+    build_runtime(&compiler);
+    let prefix =
+        "def get(xs):\n    return xs[0]\ndef forward(xs):\n    return get(xs)\nxs = []\nd = {}\n";
+    let mut failures = Vec::new();
+    for (family, bound) in [
+        ("index", "xs[0]"),
+        ("lookup", "d[0]"),
+        ("pop", "xs.pop()"),
+        ("forward", "forward(xs)"),
+        ("min", "min(xs)"),
+        ("max", "max(xs)"),
+    ] {
+        let class = match family {
+            "lookup" => "KeyError",
+            "min" | "max" => "ValueError",
+            _ => "IndexError",
+        };
+        for (kind, receiver) in [("str", "\"aé🙂\""), ("list", "[0, 1, 2]")] {
+            for (position, component) in [
+                ("start", format!("{bound}:")),
+                ("stop", format!(":{bound}")),
+                ("step", format!("::{bound}")),
+            ] {
+                let name = format!("{family}_{kind}_{position}");
+                let src = format!("{prefix}print('before')\ntry:\n    print({receiver}[{component}])\nexcept {class} as e:\n    print(e)\nprint('after')\n");
+                let path = source(&tmp, &name, &src);
+                let run = Command::new(&compiler)
+                    .arg("run")
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+                assert!(run.status.success(), "{name}: {run:?}");
+                let build = Command::new(&compiler)
+                    .arg("build")
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+                if !build.status.success() {
+                    failures.push(format!(
+                        "{name}: {}",
+                        text(&build.stderr).lines().next().unwrap_or("build failed")
+                    ));
+                    continue;
+                }
+                let native = Command::new(path.with_extension(std::env::consts::EXE_EXTENSION))
+                    .output()
+                    .unwrap();
+                assert_eq!(native.status.code(), run.status.code(), "{name}");
+                assert_eq!(native.stdout, run.stdout, "{name}");
+                assert_eq!(native.stderr, run.stderr, "{name}");
+            }
+        }
+    }
+    for (kind, receiver) in [("str", "\"aé🙂\""), ("list", "[0, 1, 2]")] {
+        for (position, component) in [("start", "n:"), ("stop", ":n"), ("step", "::n")] {
+            let name = format!("empty_{kind}_{position}");
+            let src = format!("for n in []:\n    print({receiver}[{component}])\nprint('after')\n");
+            let path = source(&tmp, &name, &src);
+            let run = Command::new(&compiler)
+                .arg("run")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(run.status.success());
+            assert_eq!(run.stdout, b"after\n");
+            let build = Command::new(&compiler)
+                .arg("build")
+                .arg(&path)
+                .output()
+                .unwrap();
+            if !build.status.success() {
+                failures.push(format!(
+                    "{name}: {}",
+                    text(&build.stderr).lines().next().unwrap_or("build failed")
+                ));
+                continue;
+            }
+            let native = Command::new(path.with_extension(std::env::consts::EXE_EXTENSION))
+                .output()
+                .unwrap();
+            assert!(native.status.success(), "{name}: {native:?}");
+            assert_eq!(native.stdout, run.stdout);
+            assert_eq!(native.stderr, run.stderr);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

@@ -7,17 +7,21 @@
 //! compiled. Anything outside the subset the IR covers is a
 //! `DiagKind::Backend` error naming the construct, never a guess.
 
+mod comp;
 mod exc;
 mod expr;
 mod faults;
 mod globals;
 mod hold;
+mod methods;
 mod opt;
 mod reduce;
 mod seq;
+mod slice;
 mod stmt;
 mod table;
 mod tasks;
+mod tuple;
 mod types;
 mod vars;
 mod zip;
@@ -611,11 +615,28 @@ struct Loop {
 /// The handlers of the innermost `try` whose body is being lowered.
 #[derive(Clone, Copy)]
 struct Try {
-    /// Tests the pending exception against each handler in turn.
+    /// Tests the pending exception against each handler in turn, or runs
+    /// the `finally` block of a `try` without handlers left.
     dispatch: BlockId,
     /// How many statement pools were open outside the body: raising in
     /// it releases the ones above.
     pools: usize,
+    /// How many exceptions were stashed outside the body: raising in it
+    /// drops the ones above.
+    stashes: usize,
+}
+
+/// A `finally` block whose `try` is being lowered: a `return`, `break`
+/// or `continue` leaving the `try` lowers a copy of it on the way out.
+#[derive(Clone)]
+struct Fin {
+    body: crate::ast::Block,
+    /// How many loops, `try` bodies, statement pools and handler names
+    /// were open outside the `try`.
+    loops: usize,
+    tries: usize,
+    pools: usize,
+    unbinds: usize,
 }
 
 /// An `except ... as name` whose body is being lowered: leaving it any
@@ -685,6 +706,16 @@ struct FnBuilder<'c, 'a> {
     pools: Vec<Vec<LocalId>>,
     /// Enclosing `try` bodies, innermost last.
     tries: Vec<Try>,
+    /// The `finally` blocks of the enclosing `try` statements, innermost
+    /// last; not those being lowered themselves.
+    finallys: Vec<Fin>,
+    /// Pending exceptions stashed while a `finally` block runs on their
+    /// way out ([`Inst::Stash`]).
+    stashes: usize,
+    /// Return values held while the `finally` blocks they leave run, each
+    /// with how many `try` statements enclose the `try` of the block now
+    /// running: a raise to one of those abandons the return.
+    returning: Vec<(LocalId, usize)>,
     /// Enclosing handlers that bind a name, innermost last.
     unbinds: Vec<Unbind>,
     /// Names some handler of this body binds, and so unbinds: never
@@ -732,6 +763,9 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             exit: BlockId(1),
             pools: vec![Vec::new()],
             tries: Vec::new(),
+            finallys: Vec::new(),
+            stashes: 0,
+            returning: Vec::new(),
             unbinds: Vec::new(),
             caught: BTreeSet::new(),
             unwind: None,
