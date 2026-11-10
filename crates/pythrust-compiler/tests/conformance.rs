@@ -431,6 +431,7 @@ const NATIVE: &[&str] = &[
     "listcomp_tasks",
     "listcomp_tempered",
     "open_text_mode",
+    "with_open_read",
     "unicode_error",
     "raises_finally",
     "slice_list",
