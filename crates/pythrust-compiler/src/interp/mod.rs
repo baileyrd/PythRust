@@ -305,8 +305,8 @@ impl<'m> Interp<'m, '_> {
     }
 
     /// `try`: then its `finally` block, however the rest was left but
-    /// by a fault, which stops the program (D75). An exception the block
-    /// raises replaces what the rest gave; no jump leaves it (D76).
+    /// by a fault, which stops the program (D85). An exception the block
+    /// raises replaces what the rest gave; no jump leaves it (D86).
     fn exec_try(
         &mut self,
         body: &'m Block,

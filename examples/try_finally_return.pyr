@@ -1,4 +1,4 @@
-# deviation: D76: `return` leaving a `finally` block is an error; CPython 3.13 accepts it.
+# deviation: D86: `return` leaving a `finally` block is an error; CPython 3.13 accepts it.
 # expect-error: `return` inside `finally` is not supported
 # expect-exit: 1
 def f() -> int:

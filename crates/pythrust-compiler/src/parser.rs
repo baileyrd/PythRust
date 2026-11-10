@@ -56,10 +56,10 @@ struct Parser<'a> {
     in_func: bool,
     in_loop: bool,
     /// Inside a `finally` block of this function (or the module's code):
-    /// `return` would leave it (D76).
+    /// `return` would leave it (D86).
     in_finally: bool,
     /// Inside a `finally` block entered since the innermost loop:
-    /// `break` and `continue` would leave it (D76).
+    /// `break` and `continue` would leave it (D86).
     jump_leaves_finally: bool,
     /// Modules imported so far.
     modules: Vec<&'static ModuleDef>,
@@ -204,7 +204,7 @@ impl<'a> Parser<'a> {
     }
 
     /// A `finally` block: no `return`, `break` or `continue` may leave it
-    /// (D76).
+    /// (D86).
     fn finally_block(&mut self) -> Result<Block> {
         let outer = (self.in_finally, self.jump_leaves_finally);
         (self.in_finally, self.jump_leaves_finally) = (true, true);
@@ -1502,7 +1502,7 @@ pub(crate) fn test_binding(name: &str, src: &str) -> Binding {
 #[cfg(test)]
 mod tests;
 
-/// Why `word` may not leave a `finally` block (D76; CPython 3.13 allows
+/// Why `word` may not leave a `finally` block (D86; CPython 3.13 allows
 /// it, swallowing a pending exception).
 fn leaves_finally(word: &str) -> String {
     format!("`{word}` inside `finally` is not supported")

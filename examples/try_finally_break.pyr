@@ -1,4 +1,4 @@
-# deviation: D76: `break` leaving a `finally` block is an error; CPython 3.13 accepts it.
+# deviation: D86: `break` leaving a `finally` block is an error; CPython 3.13 accepts it.
 # expect-error: `break` inside `finally` is not supported
 # expect-exit: 1
 for i in range(3):

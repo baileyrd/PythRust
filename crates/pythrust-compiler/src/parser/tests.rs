@@ -914,7 +914,7 @@ fn try_finally() {
         err(&format!("{body} finally NL")),
         "expected `:`, found newline"
     );
-    // No jump may leave a `finally` block (D76); one inside a loop the
+    // No jump may leave a `finally` block (D86); one inside a loop the
     // block holds stays legal.
     let def = "def f ( ) : NL INDENT";
     assert_eq!(

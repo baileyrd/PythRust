@@ -1,4 +1,4 @@
-# `finally` runs however its `try` is left (D75): normally, after a
+# `finally` runs however its `try` is left (D85): normally, after a
 # handler, on an exception no handler catches (raised again afterwards,
 # the same object), and on `return`, `break` and `continue`. A `return`
 # value is evaluated before the block runs; an exception the block raises

@@ -746,7 +746,7 @@ fn breaks(stmt: &Stmt) -> bool {
             bodies.chain(orelse).any(breaks)
         }
         StmtKind::Try { body, handlers, .. } => {
-            // No `break` leaves a `finally` block (D76).
+            // No `break` leaves a `finally` block (D86).
             let bodies = handlers.iter().flat_map(|h| &h.body);
             body.iter().chain(bodies).any(breaks)
         }

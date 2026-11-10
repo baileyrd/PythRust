@@ -1,4 +1,4 @@
-# deviation: undeclared escapes are a compile error (D8, D77); CPython has no `raises`.
+# deviation: undeclared escapes are a compile error (D8, D87); CPython has no `raises`.
 # expect-error: tempered `tidy` can raise ValueError here, so it must declare it
 # expect-exit: 1
 temper def tidy(s: str) -> int:
