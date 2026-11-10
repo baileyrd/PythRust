@@ -1,0 +1,66 @@
+# `with open(...)` (D109-D112) closes its file on every way out of the
+# block, read-only so every backend can share the one input file.
+import concurrent.futures
+
+PATH = "../../examples/data/with_open.txt"
+
+
+def state(f):
+    try:
+        f.readline()
+        return "open"
+    except ValueError as e:
+        return str(e)
+
+
+def first(path):
+    with open(path) as f:
+        return f.readline()
+
+
+def width(s):
+    return len(s)
+
+
+def mixed():
+    with concurrent.futures.ThreadPoolExecutor() as ex, open(PATH, "rb") as raw:
+        print(ex.submit(width, "wörd").result(), len(raw.read()))
+
+
+with open(PATH) as f:
+    print([f.readline()])
+print(state(f))
+print([first(PATH)])
+with open(PATH) as a, open(PATH, encoding="utf-8") as b:
+    print(len(a.read()), [b.readline()])
+print(state(a), state(b))
+for n in [1, 2, 3]:
+    with open(PATH) as f:
+        if n == 1:
+            continue
+        print(n, [f.readline()])
+        break
+print(state(f))
+with open(PATH) as outer:
+    with open(PATH) as inner:
+        for line in inner:
+            print([line])
+    print(state(inner), [outer.readline()])
+print(state(outer))
+try:
+    with open(PATH) as f:
+        raise ValueError("inside")
+except ValueError as e:
+    print(e, state(f))
+try:
+    with open("no/such/dir/x.txt") as f:
+        print("never")
+except OSError:
+    print("missing")
+with open(PATH):
+    print("unnamed")
+with open(PATH) as h:
+    keep = h
+    h = open(PATH)
+print(state(keep), state(h))
+mixed()

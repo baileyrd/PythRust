@@ -14,6 +14,7 @@ fn compiler(command: &str, dir: &Path, src: &str) -> Output {
     let bin =
         std::env::var_os("PYTHRUST_BIN").unwrap_or_else(|| env!("CARGO_BIN_EXE_pythrust").into());
     let mut child = Command::new(bin)
+        .current_dir(dir)
         .arg(command)
         .arg(path)
         .stdout(Stdio::from(stdout))
@@ -132,5 +133,51 @@ fn recursive_wrappers_cannot_hide_flat_depth() {
         format!("({flat}).a"),
     ] {
         rejected(&dir, &format!("x = {expr}\n"));
+    }
+}
+
+/// `with` items nest one level each (D111), so one flat line of them is
+/// as deep as that many blocks: the limit counts them before the body.
+#[test]
+fn flat_with_items_cannot_hide_block_depth() {
+    let dir = common::scratch("expression_limits", "with_items");
+    let file = "open(\"x.txt\", \"w\")";
+    let exec = "concurrent.futures.ThreadPoolExecutor() as e";
+    let program =
+        |items: &[String], tail: &str| format!("with {}:\n    pass\n{tail}", items.join(", "),);
+    for count in [101, 5_000] {
+        let files = vec![file.to_string(); count];
+        rejected(&dir, &program(&files, ""));
+        // A later syntax error must drop the partial items cleanly.
+        rejected(&dir, &program(&files, "x = 1 +\n"));
+        let mixed: Vec<String> = (0..count)
+            .map(|i| match i % 2 {
+                0 => file.to_string(),
+                _ => format!("{exec}{i}"),
+            })
+            .collect();
+        rejected(&dir, &program(&mixed, ""));
+        let execs: Vec<String> = (0..count).map(|i| format!("{exec}{i}")).collect();
+        rejected(&dir, &program(&execs, ""));
+    }
+    // The accepted neighbour: as many items as blocks may nest.
+    let files = vec![file.to_string(); 100];
+    let src = program(&files, "print(open(\"x.txt\").read() == \"\")\n");
+    for command in ["check", "run"] {
+        let out = compiler(command, &dir, &src);
+        assert!(out.status.success(), "{command}: {out:?}");
+    }
+    assert_eq!(compiler("run", &dir, &src).stdout, b"True\n");
+    // The body's own blocks count too: 100 items around one `if`.
+    let files = vec![file.to_string(); 100];
+    let src = format!("with {}:\n    if True:\n        pass\n", files.join(", "));
+    for command in ["check", "run", "build"] {
+        let out = compiler(command, &dir, &src);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{command}: {err}");
+        assert!(
+            err.contains("input.pyr:2:") && err.contains("too deeply nested"),
+            "{err}"
+        );
     }
 }
