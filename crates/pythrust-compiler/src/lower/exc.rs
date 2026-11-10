@@ -255,7 +255,7 @@ impl FnBuilder<'_, '_> {
 
     /// Drops the exceptions stashed above the first `kept`: an exception
     /// raised in a `finally` block replaces the one it was running for
-    /// (D85).
+    /// (D88).
     fn drop_stashes(&mut self, kept: usize) {
         for _ in kept..self.stashes {
             let span = Span { start: 0, end: 0 };

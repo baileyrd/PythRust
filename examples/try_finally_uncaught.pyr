@@ -1,6 +1,6 @@
 # expect-exit: 1
 # An exception no handler catches still runs every `finally` block on its
-# way out, innermost first, then ends the program (D85).
+# way out, innermost first, then ends the program (D88).
 def inner(xs: list[str]) -> None:
     try:
         xs.append("é")

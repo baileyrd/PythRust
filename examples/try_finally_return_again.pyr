@@ -1,5 +1,5 @@
 # A `return` whose `finally` block raises, caught in the same function,
-# can run again: each value it computed is released once (D85).
+# can run again: each value it computed is released once (D88).
 def again() -> str:
     for i in range(3):
         try:

@@ -1,6 +1,6 @@
 # An executor's block inside a `try` with `finally`: leaving the block
 # any way waits for its tasks before the `finally` block runs, as Python
-# leaves a `with` before the `try` around it (D85). Each task prints, so
+# leaves a `with` before the `try` around it (D88). Each task prints, so
 # its line comes before the `finally` block's.
 import concurrent.futures
 

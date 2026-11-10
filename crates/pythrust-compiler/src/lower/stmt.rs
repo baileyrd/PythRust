@@ -249,7 +249,7 @@ impl FnBuilder<'_, '_> {
             return Ok(());
         }
         // The value is evaluated first, then every `finally` block left
-        // runs (D85). Leaving the function unbinds its handlers' names.
+        // runs (D88). Leaving the function unbinds its handlers' names.
         // `keep` holds a value of its own only when a block raised into
         // a `try` of this function and this `return` runs again.
         let keep = self.new_local(self.ret);

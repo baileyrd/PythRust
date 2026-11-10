@@ -1,5 +1,5 @@
 # A tempered function's `raises` covers what its `finally` blocks let
-# escape too, plus what escapes the `try` body and handlers (D87). The
+# escape too, plus what escapes the `try` body and handlers (D90). The
 # body's escapes count even where the block always raises.
 temper def parse(s: str) -> int raises ValueError, IndexError:
     try:

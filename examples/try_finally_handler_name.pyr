@@ -1,5 +1,5 @@
 # A `finally` block inside an `except ... as e` handler still sees `e`
-# when a `return`, `break` or `continue` leaves its `try` (D85): Python
+# when a `return`, `break` or `continue` leaves its `try` (D88): Python
 # unbinds `e` only when the handler itself is left, after the block runs.
 def ret() -> str:
     try:

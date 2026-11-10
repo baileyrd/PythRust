@@ -556,7 +556,7 @@ impl<'a> Cx<'_, 'a> {
                     .iter()
                     .for_each(|h| out.extend(self.block(&h.body)));
                 // What escapes the body escapes still when `finally` always
-                // raises: an over-approximation a declared set allows (D87).
+                // raises: an over-approximation a declared set allows (D90).
                 finally.iter().for_each(|f| out.extend(self.block(f)));
             }
             StmtKind::With { value, body, .. } => {
