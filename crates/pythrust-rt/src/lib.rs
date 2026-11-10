@@ -37,6 +37,7 @@ pub mod sys;
 pub mod table;
 pub mod task;
 pub mod text;
+pub mod textio;
 
 use std::io::{self, Write};
 use std::sync::atomic::AtomicUsize;
@@ -157,8 +158,10 @@ fn fail_with(msg: &str) -> ! {
     std::process::exit(1)
 }
 
-/// Writes this thread's pending line and everything buffered to stdout.
+/// Writes this thread's pending line and everything buffered to stdout,
+/// and flushes the files open for writing (D98): every exit calls it.
 fn flush() {
+    obj::flush_files();
     LINE.with_borrow_mut(|line| {
         let mut out = OUT.lock().unwrap_or_else(PoisonError::into_inner);
         out.extend_from_slice(line);

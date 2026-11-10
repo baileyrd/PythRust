@@ -1,0 +1,28 @@
+# UnicodeError and UnicodeDecodeError (D93) sit under ValueError, as in
+# CPython: an `except ValueError` catches both, and a tempered function
+# that reads text declares what it may raise.
+temper def check(n: int) -> int raises UnicodeError:
+    if n < 0:
+        raise UnicodeError("négatif")
+    return n
+
+
+temper def first_line(path: str) -> str raises OSError, UnicodeDecodeError:
+    return open(path).readline()
+
+
+for n in [1, -1]:
+    try:
+        print(check(n))
+    except ValueError as e:
+        print("ValueError:", e, [e])
+try:
+    first_line("no-such-file.txt")
+except UnicodeError:
+    print("decoding")
+except OSError:
+    print("missing")
+try:
+    raise UnicodeError
+except UnicodeError as e:
+    print("bare", [e])

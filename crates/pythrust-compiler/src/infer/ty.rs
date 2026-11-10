@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::stdlib::Kind;
+
 /// An inference variable. Unresolved ones left in the output are generic
 /// (or unconstrained, such as the element type of a never-filled `[]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -36,8 +38,11 @@ pub enum Type {
     Exception,
     /// Immutable bytes, as `f.read()` returns (M6a).
     Bytes,
-    /// What `open(p, "rb")` returns: Python's `_io.BufferedReader`.
-    File,
+    /// What `open(p, mode)` returns (D91, D99): whether it is written,
+    /// and what it reads or writes, `str` or `bytes`, which together are
+    /// its [`Kind`]. The methods it has depend on it (D92). The data is a
+    /// type, so a generic function's `f.read()` is typed by its caller.
+    File(bool, Box<Type>),
     /// `concurrent.futures.ThreadPoolExecutor()` (M6c).
     Executor,
     /// What `ex.submit(f, ...)` returns: `f`'s result, once it ends.
@@ -96,11 +101,34 @@ impl Type {
             | Type::View(..)
             | Type::Exception
             | Type::Bytes
-            | Type::File
+            | Type::File(..)
             | Type::Executor
             | Type::Future(_)
             | Type::Results(_) => Some(true),
             _ => self.any_part(Type::holds_heap),
+        }
+    }
+
+    /// The file of `kind`.
+    pub fn file(kind: Kind) -> Type {
+        let data = match kind.is_text() {
+            true => Type::Str,
+            false => Type::Bytes,
+        };
+        Type::File(kind.writes(), Box::new(data))
+    }
+
+    /// A file's kind, once what it holds is known.
+    pub fn file_kind(&self) -> Option<Kind> {
+        let Type::File(writes, data) = self else {
+            return None;
+        };
+        match (**data == Type::Str, **data == Type::Bytes, writes) {
+            (true, _, false) => Some(Kind::TextReader),
+            (true, _, true) => Some(Kind::TextWriter),
+            (_, true, false) => Some(Kind::BytesReader),
+            (_, true, true) => Some(Kind::BytesWriter),
+            _ => None,
         }
     }
 
@@ -112,7 +140,7 @@ impl Type {
     /// it depends on a generic type.
     pub fn reaches_mutable(&self) -> Option<bool> {
         match self {
-            Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::File | Type::Executor => {
+            Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::File(..) | Type::Executor => {
                 Some(true)
             }
             _ => self.any_part(Type::reaches_mutable),
@@ -162,7 +190,12 @@ impl fmt::Display for Type {
             Type::Range => f.write_str("range"),
             Type::Exception => f.write_str("Exception"),
             Type::Bytes => f.write_str("bytes"),
-            Type::File => f.write_str("BufferedReader"),
+            Type::File(..) => f.write_str(match self.file_kind() {
+                Some(Kind::TextReader) => "TextIOWrapper (reading)",
+                Some(Kind::TextWriter) => "TextIOWrapper (writing)",
+                Some(other) => other.class(),
+                None => "file",
+            }),
             Type::Executor => f.write_str("ThreadPoolExecutor"),
             Type::Future(result) => write!(f, "Future[{result}]"),
             Type::Results(result) => write!(f, "Iterator[{result}]"),

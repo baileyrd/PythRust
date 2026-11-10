@@ -159,6 +159,9 @@ fn std_changes_lists(f: StdFn) -> bool {
         | StdFn::Getsize
         | StdFn::Open
         | StdFn::Read
+        | StdFn::Readline
+        | StdFn::Write
+        | StdFn::Flush
         | StdFn::Close
         | StdFn::Sha256
         | StdFn::Executor

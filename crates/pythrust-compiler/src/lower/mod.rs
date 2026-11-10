@@ -38,6 +38,7 @@ use crate::ir::{
     self, Block, BlockId, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty,
 };
 use crate::span::Span;
+use crate::stdlib::Kind;
 
 /// Concrete types for one instance's type variables.
 type Subst = HashMap<TypeVar, Ty>;
@@ -469,6 +470,17 @@ impl<'a> Cx<'a> {
     }
 }
 
+/// The kind of a file, written or not, that holds `held`, `str` or
+/// `bytes` (D99).
+fn file_kind(writes: bool, held: Ty) -> Kind {
+    match (held == Ty::Str, writes) {
+        (true, false) => Kind::TextReader,
+        (true, true) => Kind::TextWriter,
+        (false, false) => Kind::BytesReader,
+        (false, true) => Kind::BytesWriter,
+    }
+}
+
 /// Whether `t` has no variables `subst` leaves unbound.
 fn is_closed(t: &Type, subst: &Subst) -> bool {
     match t {
@@ -482,7 +494,8 @@ fn is_closed(t: &Type, subst: &Subst) -> bool {
         Type::Dict(k, v) => is_closed(k, subst) && is_closed(v, subst),
         Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
-        Type::Exception | Type::Bytes | Type::File | Type::Executor => true,
+        Type::File(_, data) => is_closed(data, subst),
+        Type::Exception | Type::Bytes | Type::Executor => true,
     }
 }
 
@@ -513,7 +526,7 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::Range => Ty::Range,
         Type::Exception => Ty::Exc,
         Type::Bytes => Ty::Bytes,
-        Type::File => Ty::File,
+        Type::File(writes, data) => Ty::File(file_kind(*writes, settle(data, subst, bound, seqs))),
         Type::Dict(k, v) => {
             let (k, v) = (settle(k, subst, bound, seqs), settle(v, subst, bound, seqs));
             seqs.dict(k, v)
@@ -590,8 +603,14 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         | (Type::Range, Ty::Range)
         | (Type::Exception, Ty::Exc)
         | (Type::Bytes, Ty::Bytes)
-        | (Type::File, Ty::File)
         | (Type::Executor, Ty::None) => true,
+        (Type::File(writes, data), Ty::File(kind)) => {
+            let held = match kind.is_text() {
+                true => Ty::Str,
+                false => Ty::Bytes,
+            };
+            *writes == kind.writes() && bind(data, held, seqs, subst)
+        }
         _ => false,
     }
 }
@@ -1036,7 +1055,10 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::Range => Ok(Ty::Range),
         Type::Exception => Ok(Ty::Exc),
         Type::Bytes => Ok(Ty::Bytes),
-        Type::File => Ok(Ty::File),
+        Type::File(writes, data) => {
+            let held = concrete(data, subst, seqs, span)?;
+            Ok(Ty::File(file_kind(*writes, held)))
+        }
         // Tasks ([`FnBuilder::task_call`]): the executor's variable holds
         // nothing (its `with` statement owns it), a future is a handle in
         // `build` and its task's result for analysis, and `map`'s results

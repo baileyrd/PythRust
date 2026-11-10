@@ -40,6 +40,11 @@ impl FnGen<'_, '_, '_> {
         if let (StdFn::ListIndex | StdFn::ListFind | StdFn::ListCount, [s, x]) = (f, args) {
             return self.list_search(f, *s, *x, span);
         }
+        // What `write` writes: a `str` or `bytes`.
+        let written = match args.get(1) {
+            Some(Operand::Local(l)) => self.func.locals[l.0],
+            _ => Ty::None,
+        };
         let args: Vec<Value> = args.iter().map(|a| self.operand(*a)).collect();
         match (f, args.as_slice()) {
             (StdFn::Argv, []) => {
@@ -59,13 +64,36 @@ impl FnGen<'_, '_, '_> {
                 let site = self.site(span)?;
                 self.call_rt_value(Rt::OsPathGetsize, &[[*p].as_slice(), &site].concat())
             }
-            (StdFn::Open, [p]) => {
+            (StdFn::Open, [p, mode, encoding]) => {
                 let site = self.site(span)?;
-                self.call_rt_value(Rt::Open, &[[*p].as_slice(), &site].concat())
+                let args = [[*p, *mode, *encoding].as_slice(), &site].concat();
+                self.call_rt_value(Rt::Open, &args)
             }
-            (StdFn::Read, [f]) => {
+            (StdFn::Read | StdFn::Readline, [file]) => {
+                let rt = match (f, ty) {
+                    (StdFn::Readline, _) => Rt::FileReadline,
+                    (_, Ty::Str) => Rt::FileReadText,
+                    _ => Rt::FileRead,
+                };
                 let site = self.site(span)?;
-                self.call_rt_value(Rt::FileRead, &[[*f].as_slice(), &site].concat())
+                self.call_rt_value(rt, &[[*file].as_slice(), &site].concat())
+            }
+            (StdFn::Write, [file, data]) => {
+                let rt = match written {
+                    Ty::Str => Rt::FileWriteStr,
+                    _ => Rt::FileWriteBytes,
+                };
+                let site = self.site(span)?;
+                self.call_rt_value(rt, &[[*file, *data].as_slice(), &site].concat())
+            }
+            (StdFn::Flush | StdFn::Close, [file]) => {
+                let rt = match f {
+                    StdFn::Flush => Rt::FileFlush,
+                    _ => Rt::FileClose,
+                };
+                let site = self.site(span)?;
+                self.call_rt(rt, &[[*file].as_slice(), &site].concat());
+                Ok(self.b.ins().iconst(types::I8, 0))
             }
             (StdFn::Sha256, [b]) => self.call_rt_value(Rt::Sha256Hex, &[*b]),
             (StdFn::Executor, []) => self.call_rt_value(Rt::ExecNew, &[]),
@@ -127,10 +155,6 @@ impl FnGen<'_, '_, '_> {
                 self.call_rt_value(Rt::StrChr, &[[*n].as_slice(), &site].concat())
             }
             (StdFn::FloatSum, [xs, start]) => self.call_rt_value(Rt::SeqFsum, &[*xs, *start]),
-            (StdFn::Close, [f]) => {
-                self.call_rt(Rt::FileClose, &[*f]);
-                Ok(self.b.ins().iconst(types::I8, 0))
-            }
             _ => Err(backend(format!(
                 "`{}` with {} arguments",
                 f.name(),

@@ -30,7 +30,7 @@ use crate::ast::{
 use crate::diag::{Result, Warning};
 use crate::exc::ExcKind;
 use crate::span::Span;
-use crate::stdlib::StdFn;
+use crate::stdlib::{Kind, StdFn};
 
 use super::builtins;
 use super::{error, scope, Type, Types};
@@ -592,10 +592,16 @@ impl<'a> Cx<'_, 'a> {
 
     /// Reading `map`'s results, as `for`, `in`, `list`, `sorted` and
     /// `set` do, takes each task's result; making, binding or testing
-    /// them takes none.
+    /// them takes none. Reading a text file's lines raises what
+    /// `readline` does (D93, D96).
     fn read(&self, e: &Expr, out: &mut Raises) {
-        if matches!(self.a.types.at(e.span), Some(Type::Results(_))) {
-            self.tasks.escapes().for_each(|k| out.add(k, e.span));
+        match self.a.types.at(e.span) {
+            Some(Type::Results(_)) => self.tasks.escapes().for_each(|k| out.add(k, e.span)),
+            Some(t @ Type::File(..)) => {
+                let kinds = file_raises(StdFn::Readline, t);
+                kinds.into_iter().for_each(|k| out.add(k, e.span));
+            }
+            _ => {}
         }
     }
 
@@ -612,8 +618,8 @@ impl<'a> Cx<'_, 'a> {
                     ExprKind::Name(name) => self.call(name, args, e.span, out),
                     ExprKind::Attr { value, attr } => {
                         self.expr(value, out);
-                        let kind = self.method(value, &attr.name, args);
-                        kind.into_iter().for_each(|k| out.add(k, e.span));
+                        let kinds = self.method(value, &attr.name, args);
+                        kinds.into_iter().for_each(|k| out.add(k, e.span));
                     }
                     _ => self.expr(func, out),
                 }
@@ -693,17 +699,21 @@ impl<'a> Cx<'_, 'a> {
     /// number; a module function raises what [`StdFn::raises`] says.
     /// What method `attr` of `receiver` may raise: list `pop`
     /// (`IndexError`), `remove` and `index` (`ValueError`), dict `pop`
-    /// without a default (`KeyError`) (D71), or a `str` or file method's.
-    fn method(&self, receiver: &Expr, attr: &str, args: &[Arg]) -> Option<ExcKind> {
-        match (self.a.types.at(receiver.span), attr) {
+    /// without a default (`KeyError`) (D71), or a `str` or file method's
+    /// (D96).
+    fn method(&self, receiver: &Expr, attr: &str, args: &[Arg]) -> Vec<ExcKind> {
+        let one = match (self.a.types.at(receiver.span), attr) {
             (Some(Type::List(_)), "pop") => Some(ExcKind::Index),
             (Some(Type::List(_)), "remove" | "index") => Some(ExcKind::Value),
             (Some(Type::Dict(..)), "pop") if args.len() == 1 => Some(ExcKind::Key),
             (Some(Type::List(_) | Type::Dict(..)), _) => None,
-            _ => StdFn::file_method(attr)
-                .or_else(|| StdFn::str_method(attr))
-                .and_then(StdFn::raises),
-        }
+            (Some(t @ Type::File(..)), _) => {
+                let f = StdFn::file_method(attr);
+                return f.map_or(Vec::new(), |f| file_raises(f, t));
+            }
+            _ => StdFn::str_method(attr).and_then(StdFn::raises),
+        };
+        one.into_iter().collect()
     }
 
     /// A call may reach a builtin that a `def` shadows when the `def` may
@@ -814,6 +824,20 @@ fn may_be_str(t: Option<&Type>) -> bool {
     !matches!(t, Some(Type::Int | Type::Float | Type::Bool))
 }
 
+/// What file method `f` of a file of type `t` raises (D96). In generic
+/// code what the file holds may be unknown: then reading may decode text.
+fn file_raises(f: StdFn, t: &Type) -> Vec<ExcKind> {
+    let Type::File(writes, _) = t else {
+        return Vec::new();
+    };
+    let kinds = match (t.file_kind(), writes) {
+        (Some(kind), _) => f.file_raises(kind),
+        (None, false) => f.file_raises(Kind::TextReader),
+        (None, true) => f.file_raises(Kind::TextWriter),
+    };
+    kinds.to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{infer, lexer, parser};
@@ -900,7 +924,17 @@ def g(xs: list[int]) -> int raises Exception:
 
     #[test]
     fn opening_and_reading_a_file_raise_os_error_but_closing_does_not() {
-        assert_eq!(raises("def r(f):\n    return f.read()\n", "r"), "OSError");
+        // A generic file may hold text, so reading it may fail to decode.
+        assert_eq!(
+            raises("def r(f):\n    return f.read()\n", "r"),
+            "OSError, UnicodeDecodeError"
+        );
+        let bytes = "def r():\n    return open(\"p\", \"rb\").read()\n";
+        assert_eq!(raises(bytes, "r"), "OSError");
+        let text = "def r():\n    return open(\"p\").readline()\n";
+        assert_eq!(raises(text, "r"), "OSError, UnicodeDecodeError");
+        let write = "def w(f):\n    f.write(\"x\")\n    f.flush()\n";
+        assert_eq!(raises(write, "w"), "OSError");
         assert_eq!(raises("def c(f):\n    f.close()\n", "c"), "");
         let open = "def o(p: str):\n    return open(p, \"rb\")\n";
         assert_eq!(raises(open, "o"), "OSError");
@@ -1300,7 +1334,8 @@ temper def f(s: str) -> int:
             "`TypeError` is not an exception; `raises` lists one of ArithmeticError, \
              Exception, FileNotFoundError, IndexError, IsADirectoryError, KeyError, \
              LookupError, NotADirectoryError, OSError, OverflowError, PermissionError, \
-             RecursionError, RuntimeError, ValueError, ZeroDivisionError"
+             RecursionError, RuntimeError, UnicodeDecodeError, UnicodeError, ValueError, \
+             ZeroDivisionError"
         );
         let twice = "temper def f() -> None raises ValueError, ValueError:\n    pass\n";
         assert_eq!(err(twice), "`ValueError` is listed twice in `raises`");

@@ -50,6 +50,9 @@ pub(super) enum Name {
     Values,
     Items,
     Read,
+    Readline,
+    Write,
+    Flush,
     Close,
 }
 
@@ -85,6 +88,9 @@ impl Name {
             Name::Values => "values",
             Name::Items => "items",
             Name::Read => "read",
+            Name::Readline => "readline",
+            Name::Write => "write",
+            Name::Flush => "flush",
             Name::Close => "close",
         }
     }
@@ -108,8 +114,14 @@ impl Name {
                 | Name::Keys
                 | Name::Values
                 | Name::Items
-                | Name::Read
-                | Name::Close
+        ) && !self.on_file()
+    }
+
+    /// Whether a file has it (D91).
+    fn on_file(self) -> bool {
+        matches!(
+            self,
+            Name::Read | Name::Readline | Name::Write | Name::Flush | Name::Close
         )
     }
 }
@@ -171,7 +183,7 @@ impl<'m> Method<'m> {
             Method::Str(..) => "str",
             Method::List(..) => "list",
             Method::Table(_, on, _) => on.type_name(),
-            Method::File(..) => "_io.BufferedReader",
+            Method::File(_, f) => f.file.borrow().kind().qualified(),
         }
     }
 
@@ -219,6 +231,9 @@ pub(super) fn bind<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
         "values" => Some(Name::Values),
         "items" => Some(Name::Items),
         "read" => Some(Name::Read),
+        "readline" => Some(Name::Readline),
+        "write" => Some(Name::Write),
+        "flush" => Some(Name::Flush),
         "close" => Some(Name::Close),
         _ => None,
     };
@@ -227,9 +242,7 @@ pub(super) fn bind<'m>(v: Value<'m>, attr: &Ident) -> Result<Value<'m>> {
         (Some(n), Value::List(l)) if n.on_list() => Some(Method::List(n, Rc::clone(l))),
         (Some(Name::Add), Value::Set(t)) => Some(Method::Table(Name::Add, v.clone(), Rc::clone(t))),
         (Some(n), Value::Dict(t)) if n.on_dict() => Some(Method::Table(n, v.clone(), Rc::clone(t))),
-        (Some(n @ (Name::Read | Name::Close)), Value::File(f)) => {
-            Some(Method::File(n, Rc::clone(f)))
-        }
+        (Some(n), Value::File(f)) if n.on_file() => Some(Method::File(n, Rc::clone(f))),
         _ => None,
     };
     match method {
@@ -263,11 +276,7 @@ pub(super) fn call<'m>(m: &Method<'m>, args: Args<'m>) -> Exec<'m, Value<'m>> {
     }
     match m {
         Method::Str(name, s) => str_call(*name, s, pos, span),
-        Method::File(Name::Read, f) => stdlib::read(f, span),
-        Method::File(_, f) => {
-            f.file.borrow_mut().take();
-            Ok(Value::None)
-        }
+        Method::File(name, f) => stdlib::file_call(*name, f, pos, span),
         Method::List(name, list) => list_call(*name, list, pos, reverse, span),
         Method::Table(name, _, table) => table_call(*name, table, pos, span),
     }
@@ -285,6 +294,8 @@ fn arity(m: &Method) -> (usize, usize) {
             | Name::Values
             | Name::Items
             | Name::Read
+            | Name::Readline
+            | Name::Flush
             | Name::Close
             | Name::Upper
             | Name::Lower

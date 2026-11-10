@@ -25,7 +25,7 @@ use crate::str::{self as pstr, PtStr};
 
 /// The builtin exception classes, by kind code (the compiler's
 /// `ExcKind::ALL`).
-const NAMES: [&str; 15] = [
+const NAMES: [&str; 17] = [
     "ValueError",
     "IndexError",
     "ZeroDivisionError",
@@ -41,6 +41,8 @@ const NAMES: [&str; 15] = [
     "PermissionError",
     "IsADirectoryError",
     "NotADirectoryError",
+    "UnicodeError",
+    "UnicodeDecodeError",
 ];
 
 /// The kind code of `ValueError`.
@@ -56,10 +58,13 @@ pub(crate) const PERMISSION: u8 = 12;
 pub(crate) const IS_A_DIRECTORY: u8 = 13;
 pub(crate) const NOT_A_DIRECTORY: u8 = 14;
 
+/// The kind code of `UnicodeDecodeError` (D93).
+pub(crate) const UNICODE_DECODE: u8 = 16;
+
 /// The descriptors of an exception holding a string, by kind code.
-const WITH_MESSAGE: [&[u8]; 15] = [
+const WITH_MESSAGE: [&[u8]; 17] = [
     b"x0s", b"x1s", b"x2s", b"x3s", b"x4s", b"x5s", b"x6s", b"x7s", b"x8s", b"x9s", b"x:s", b"x;s",
-    b"x<s", b"x=s", b"x>s",
+    b"x<s", b"x=s", b"x>s", b"x?s", b"x@s",
 ];
 
 /// The descriptors of an `OSError` the runtime raised, by kind code

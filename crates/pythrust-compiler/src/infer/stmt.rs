@@ -88,7 +88,7 @@ impl Checker {
             } => {
                 let iterable = self.consumed(iter)?;
                 let elem = self.subst.fresh();
-                let need = Need::Iter {
+                let need = Need::Loop {
                     iterable,
                     elem: elem.clone(),
                 };
@@ -125,6 +125,9 @@ impl Checker {
     /// `raise e`, or `raise ValueError` for `raise ValueError()`.
     fn raise(&mut self, value: &Expr) -> Result<()> {
         if let ExprKind::Name(name) = &value.kind {
+            if name == "UnicodeDecodeError" && self.is_exception_name(name) {
+                return Err(error(value.span, builtins::UNICODE_DECODE_GAP.to_string()));
+            }
             if self.is_exception_name(name) {
                 self.nodes.insert(value.span, Type::Exception);
                 return Ok(());
