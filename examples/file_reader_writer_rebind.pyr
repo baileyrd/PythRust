@@ -1,0 +1,9 @@
+# expect-exit: 1
+# deviation: D99: a variable holds one kind of file, as it holds one type; CPython lets a writer's name be rebound to a reader.
+# expect-error: expected TextIOWrapper (writing), found TextIOWrapper (reading)
+try:
+    f = open("no/such/dir/never.txt", "w")
+    f = open("no/such/dir/never.txt")
+    print(f.read())
+except OSError:
+    print("missing")

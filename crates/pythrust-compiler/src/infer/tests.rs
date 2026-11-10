@@ -2270,24 +2270,19 @@ fn files_read_bytes_that_size_and_compare() {
               print(len(data), data == f.read(), data != data, str(data))\nif data:\n    print(f)\n";
     assert_eq!(src_err(ok), "no error");
     let cases = [
-        ("f = open(\"p\")\n", "only binary reading is supported yet"),
-        (
-            "f = open(\"p\", \"r\")\n",
-            "only binary reading is supported yet",
-        ),
         (
             "m = \"rb\"\nf = open(\"p\", m)\n",
-            "only binary reading is supported yet",
+            "`mode` of `open` must be a string literal",
         ),
         ("f = open(1, \"rb\")\n", "argument of `open`"),
         (
             "f = open(\"p\", \"rb\", 1)\n",
-            "`open` takes 1 to 2 arguments",
+            "`buffering=` of `open` is not supported yet",
         ),
-        ("x = [1]\nx.read()\n", "`read` needs a file from `open`"),
+        ("x = [1]\nx.read()\n", "a file method needs a file"),
         (
             "f = open(\"p\", \"rb\")\nf.read(10)\n",
-            "`read` takes no arguments",
+            "`read` of a size is not supported yet",
         ),
         (
             "f = open(\"p\", \"rb\")\nprint(f == f)\n",
@@ -2309,6 +2304,86 @@ fn files_read_bytes_that_size_and_compare() {
         (
             "import hashlib\nprint(hashlib.sha256(\"a\").hexdigest())\n",
             "argument of `hashlib.sha256`",
+        ),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src:?}: {got}");
+    }
+}
+
+/// Text modes and writing (D91-D99): a file's kind is fixed by its
+/// literal mode, and its methods by its kind.
+#[test]
+fn text_files_and_writers_check_by_kind() {
+    let ok = "w = open(\"p\", \"w\")\nn: int = w.write(\"é\")\nw.flush()\nw.close()\n\
+              w = open(\"p\", \"a\", encoding=\"UTF-8\")\nw = open(\"p\", mode=\"at\", encoding=None)\n\
+              r = open(\"p\")\nline: str = r.readline()\ntext: str = r.read()\n\
+              for l in r:\n    print(l.strip())\nlines: list[str] = list(open(\"p\", \"rt\"))\n\
+              b = open(\"p\", \"wb\")\nb.write(open(\"q\", \"rb\").read())\n\
+              def copy(src, dst):\n    for l in src:\n        dst.write(l)\n\
+              copy(open(\"p\"), open(\"q\", \"w\"))\n";
+    assert_eq!(src_err(ok), "no error");
+    let cases = [
+        (
+            "open(\"p\", \"x\")\n",
+            "mode 'x' of `open` is not supported yet",
+        ),
+        (
+            "open(\"p\", \"br\")\n",
+            "mode 'br' of `open` is not supported yet",
+        ),
+        (
+            "open(\"p\").write(\"a\")\n",
+            "file opened for reading is not writable",
+        ),
+        (
+            "open(\"p\", \"a\").read()\n",
+            "file opened for writing is not readable",
+        ),
+        ("open(\"p\", \"w\").write(1)\n", "argument of `write`"),
+        (
+            "f = open(\"p\", \"wb\")\nf.write(\"a\")\n",
+            "argument of `write`",
+        ),
+        (
+            "open(\"p\", \"rb\").readline()\n",
+            "`readline` of a binary file",
+        ),
+        (
+            "for b in open(\"p\", \"rb\"):\n    pass\n",
+            "iterating a binary file",
+        ),
+        (
+            "for l in open(\"p\", \"w\"):\n    pass\n",
+            "file opened for writing is not readable",
+        ),
+        ("sorted(open(\"p\"))\n", "use `list(f)`"),
+        (
+            "open(\"p\").seek(0)\n",
+            "`seek` of a file is not supported yet",
+        ),
+        ("open(\"p\", encoding=\"latin-1\")\n", "only UTF-8"),
+        ("open(\"p\", encoding=\"u8\")\n", "only UTF-8"),
+        (
+            "open(\"p\", \"rb\", encoding=\"utf-8\")\n",
+            "binary mode doesn't take an encoding",
+        ),
+        (
+            "open(\"p\", newline=\"\")\n",
+            "`newline=` of `open` is not supported yet",
+        ),
+        (
+            "open(\"p\", \"r\", 1)\n",
+            "`buffering=` of `open` is not supported yet",
+        ),
+        (
+            "f = open(\"p\", \"w\")\nf = open(\"p\")\n",
+            "expected TextIOWrapper (writing), found TextIOWrapper (reading)",
+        ),
+        (
+            "def r(f):\n    return f.read()\nr(open(\"p\", \"w\"))\n",
+            "file",
         ),
     ];
     for (src, want) in cases {

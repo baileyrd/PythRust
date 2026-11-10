@@ -401,7 +401,8 @@ fn source(program: &Program, ty: Ty) -> Type {
         Ty::Range => Type::Range,
         Ty::Exc => Type::Exception,
         Ty::Bytes => Type::Bytes,
-        Ty::File => Type::File,
+        // The mode is lost; only the kind of value counts here.
+        Ty::File(kind) => Type::file(kind),
         // Only `build` makes these, and the analyses never see its IR.
         Ty::Exec => Type::Executor,
         Ty::Future => Type::Future(Box::new(Type::None)),

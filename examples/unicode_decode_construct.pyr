@@ -1,0 +1,7 @@
+# expect-exit: 1
+# deviation: D93: constructing UnicodeDecodeError is not supported yet; CPython needs its five arguments, the second bytes.
+# expect-error: constructing `UnicodeDecodeError` is not supported yet
+try:
+    raise UnicodeDecodeError("utf-8", "x", 0, 1, "invalid start byte")
+except Exception:
+    print("caught")

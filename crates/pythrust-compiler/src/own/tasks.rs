@@ -100,7 +100,7 @@ impl World {
         }
         world.close(&callees);
         // An exception may hold any list.
-        nested |= program.globals.iter().any(|t| holds(program, *t, Ty::Exc));
+        nested |= program.globals.iter().any(|t| holds(program, *t, is_exc));
         if nested {
             world.widen(program);
         }
@@ -129,7 +129,7 @@ impl World {
     /// Whether a value of `ty` may hold a file: it does, or it holds an
     /// exception and some exception holds one.
     fn holds_file(&self, program: &Program, ty: Ty) -> bool {
-        holds(program, ty, Ty::File) || (self.exc_files && holds(program, ty, Ty::Exc))
+        holds(program, ty, is_file) || (self.exc_files && holds(program, ty, is_exc))
     }
 
     /// Adds each function's callees' reach to its own, to a fixpoint.
@@ -475,7 +475,7 @@ impl<'a> Cx<'a> {
         let Operand::Local(l) = op else {
             return false;
         };
-        holds(self.program, self.func.locals[l.0], Ty::Exc)
+        holds(self.program, self.func.locals[l.0], is_exc)
     }
 
     /// What a diagnostic on the submitter's `inst` calls `shared`: for
@@ -567,19 +567,20 @@ fn exc_files(program: &Program) -> bool {
         Inst::Assign {
             value: Rvalue::NewExc(_, Some(Operand::Local(l))),
             ..
-        } => holds(program, f.locals[l.0], Ty::File),
+        } => holds(program, f.locals[l.0], is_file),
         _ => false,
     })
 }
 
 /// Whether a global of `ty` may hold a list: one does, or an exception.
 fn module_value(program: &Program, ty: Ty) -> bool {
-    holds_list(program, ty) || holds(program, ty, Ty::Exc)
+    holds_list(program, ty) || holds(program, ty, is_exc)
 }
 
-/// Whether a value of `ty` is or holds a `want` (a file, an exception).
-fn holds(program: &Program, ty: Ty, want: Ty) -> bool {
-    if ty == want {
+/// Whether a value of `ty` is or holds one `want` picks (a file, an
+/// exception).
+fn holds(program: &Program, ty: Ty, want: fn(Ty) -> bool) -> bool {
+    if want(ty) {
         return true;
     }
     match program.compound(ty) {
@@ -590,6 +591,14 @@ fn holds(program: &Program, ty: Ty, want: Ty) -> bool {
         Some(Compound::Tuple(fields)) => fields.iter().any(|f| holds(program, *f, want)),
         None => false,
     }
+}
+
+fn is_file(ty: Ty) -> bool {
+    matches!(ty, Ty::File(_))
+}
+
+fn is_exc(ty: Ty) -> bool {
+    ty == Ty::Exc
 }
 
 fn successors(term: &Term) -> Vec<BlockId> {

@@ -48,7 +48,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diag::Diagnostic;
 use crate::exc::ExcKind;
 use crate::span::Span;
-use crate::stdlib::StdFn;
+use crate::stdlib::{Kind, StdFn};
 
 /// A value type. Every local and operand has exactly one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -90,9 +90,9 @@ pub enum Ty {
     View(TypeId),
     /// Immutable, reference-counted bytes (M6a).
     Bytes,
-    /// A reference-counted file open for reading bytes (M6a); dropping
-    /// its last reference closes it.
-    File,
+    /// A reference-counted file of a kind (M6a, D91); dropping its last
+    /// reference closes it.
+    File(Kind),
     /// An executor's pool of workers (M6c), owned by the one temporary
     /// of its `with` block: releasing it waits for every task it started.
     /// Never copied, stored or printed. Only `build` makes one.
@@ -132,7 +132,7 @@ impl Ty {
                 | Ty::Set(_)
                 | Ty::View(_)
                 | Ty::Bytes
-                | Ty::File
+                | Ty::File(_)
                 | Ty::Exec
                 | Ty::Future
                 | Ty::Results

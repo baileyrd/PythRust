@@ -1,0 +1,7 @@
+# expect-exit: 1
+# deviation: D95: files are UTF-8 only; CPython opens this one as Latin-1.
+# expect-error: `encoding=` of `open` is not supported yet: only UTF-8
+try:
+    open("no-such-file.txt", encoding="latin-1")
+except OSError:
+    print("missing")

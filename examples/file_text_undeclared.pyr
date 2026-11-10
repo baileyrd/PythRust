@@ -1,0 +1,11 @@
+# expect-exit: 1
+# deviation: a tempered function must declare the UnicodeDecodeError reading text may raise (D93, D8)
+# expect-error: UnicodeDecodeError
+temper def first_line(path: str) -> str raises OSError:
+    return open(path).readline()
+
+
+try:
+    print(first_line("no-such-file.txt"))
+except OSError:
+    print("missing")

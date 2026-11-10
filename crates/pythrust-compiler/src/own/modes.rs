@@ -96,7 +96,7 @@ fn plural(ty: &Type) -> String {
         Type::Str => "strings",
         Type::Exception => "exceptions",
         Type::Bytes => "bytes values",
-        Type::File => "files",
+        Type::File(..) => "files",
         _ => return format!("`{ty}` values"),
     };
     word.to_string()

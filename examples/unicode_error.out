@@ -1,0 +1,4 @@
+1
+ValueError: négatif [UnicodeError('négatif')]
+missing
+bare [UnicodeError()]

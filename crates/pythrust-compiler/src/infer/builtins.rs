@@ -7,12 +7,17 @@ use crate::ast::{Arg, Expr, ExprKind};
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::span::Span;
-use crate::stdlib::StdFn;
+use crate::stdlib::{Mode, StdFn};
 
 use super::expr::int_literal;
 use super::solve::Need;
 use super::ty::Type;
 use super::{error, Checker};
+
+/// Why a program cannot make a `UnicodeDecodeError` (D93): CPython's
+/// takes five arguments, which no other class does.
+pub(super) const UNICODE_DECODE_GAP: &str =
+    "constructing `UnicodeDecodeError` is not supported yet";
 
 /// The builtin exception classes, sorted, for messages that list them.
 pub(super) fn exception_names() -> String {
@@ -114,6 +119,7 @@ impl Checker {
             "zip" => self.zip(args, span),
             // Any one value as the message, as `str(x)` takes.
             _ if StdFn::from_name(name).is_some() => self.std(name, args, span),
+            "UnicodeDecodeError" => Err(error(span, UNICODE_DECODE_GAP.to_string())),
             _ if is_exception(name) => {
                 self.positional(name, args, 0, 1, span)?;
                 Ok(Type::Exception)
@@ -142,6 +148,9 @@ impl Checker {
             StdFn::Open => return self.open(args, span),
             StdFn::Sha256 => return self.sha256(args, span),
             StdFn::Read
+            | StdFn::Readline
+            | StdFn::Write
+            | StdFn::Flush
             | StdFn::Close
             | StdFn::Split
             | StdFn::StrJoin
@@ -176,22 +185,80 @@ impl Checker {
         Ok(result)
     }
 
-    /// `open(path, "rb")`: the one mode supported, written as a literal
-    /// so the file's type is known.
+    /// `open(path[, mode][, encoding=...])` (D91, D95): `mode` and
+    /// `encoding` are literals, so the file's type, its mode, is known.
     fn open(&mut self, args: &[Arg], span: Span) -> Result<Type> {
-        let mut found = self.positional("open", args, 1, 2, span)?.into_iter();
-        if let Some((t, at)) = found.next() {
-            self.expect(at, &Type::Str, &t, "argument of `open`")?;
+        const PARAMS: [&str; 8] = [
+            "file",
+            "mode",
+            "buffering",
+            "encoding",
+            "errors",
+            "newline",
+            "closefd",
+            "opener",
+        ];
+        let (mut mode, mut encoding) = (None, None);
+        let positional: Vec<Arg> = args.iter().filter(|a| a.name.is_none()).cloned().collect();
+        for (k, a) in args.iter().enumerate() {
+            let kw = match &a.name {
+                Some(kw) => kw.name.as_str(),
+                None if k >= 2 => PARAMS.get(k).copied().unwrap_or("opener"),
+                None if k == 1 => "mode",
+                None => continue,
+            };
+            match kw {
+                "mode" if mode.is_none() => mode = Some(&a.value),
+                "encoding" if encoding.is_none() => encoding = Some(&a.value),
+                _ => {
+                    let msg = format!("`{kw}=` of `open` is not supported yet");
+                    return Err(error(a.span, msg));
+                }
+            }
         }
-        let rb = args
-            .get(1)
-            .is_some_and(|a| matches!(&a.value.kind, ExprKind::Str(m) if m == "rb"));
-        if !rb {
-            let at = args.get(1).map_or(span, |a| a.value.span);
-            let msg = "only binary reading is supported yet: write `open(path, \"rb\")`";
-            return Err(error(at, msg.to_string()));
+        let path = &positional[..positional.len().min(1)];
+        if let Some((t, at)) = self.positional("open", path, 1, 1, span)?.first() {
+            self.expect(*at, &Type::Str, t, "argument of `open`")?;
         }
-        Ok(Type::File)
+        let mode = match mode {
+            None => Mode::R,
+            Some(e) => self.open_mode(e)?,
+        };
+        if let Some(e) = encoding {
+            self.open_encoding(e, mode)?;
+        }
+        Ok(Type::file(mode.kind()))
+    }
+
+    /// `open`'s `mode`: a literal of D91's.
+    fn open_mode(&mut self, e: &Expr) -> Result<Mode> {
+        self.expr(e)?;
+        let ExprKind::Str(m) = &e.kind else {
+            let msg = "`mode` of `open` must be a string literal";
+            return Err(error(e.span, msg.to_string()));
+        };
+        let msg = || format!("mode '{m}' of `open` is not supported yet");
+        Mode::parse(m).ok_or_else(|| error(e.span, msg()))
+    }
+
+    /// `open`'s `encoding=`: `None` or a literal naming UTF-8 (D95),
+    /// which a binary mode refuses.
+    fn open_encoding(&mut self, e: &Expr, mode: Mode) -> Result<()> {
+        self.expr(e)?;
+        if matches!(e.kind, ExprKind::None) {
+            return Ok(());
+        }
+        if !mode.kind().is_text() {
+            let msg = "binary mode doesn't take an encoding argument";
+            return Err(error(e.span, msg.to_string()));
+        }
+        match &e.kind {
+            ExprKind::Str(name) if crate::textio::is_utf8(name) => Ok(()),
+            _ => {
+                let msg = "`encoding=` of `open` is not supported yet: only UTF-8";
+                Err(error(e.span, msg.to_string()))
+            }
+        }
     }
 
     /// `hashlib.sha256(data).hexdigest()`, which the parser made one

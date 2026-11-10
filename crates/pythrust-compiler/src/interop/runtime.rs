@@ -83,6 +83,10 @@ pub const EMBEDDED: &[(&str, &str)] = &[
         "src/text.rs",
         include_str!("../../../pythrust-rt/src/text.rs"),
     ),
+    (
+        "src/textio.rs",
+        include_str!("../../../pythrust-rt/src/textio.rs"),
+    ),
 ];
 
 /// The workspace manifest whose `[workspace.package]` the runtime's

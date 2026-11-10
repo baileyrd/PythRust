@@ -7,6 +7,7 @@ use crate::diag::Result;
 use crate::infer::Type;
 use crate::ir::{BlockId, CmpOp, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty, View};
 use crate::span::Span;
+use crate::stdlib::StdFn;
 
 use super::table::Part;
 use super::{unsupported, FnBuilder, Loop};
@@ -519,6 +520,9 @@ impl FnBuilder<'_, '_> {
                 | Looped::Fold { .. } => Ok(()),
             };
         }
+        if let Ty::File(_) = self.ty(s) {
+            return self.for_file(l, s, span);
+        }
         let item = match self.ty(s) {
             Ty::Str => Ty::Str,
             ty @ Ty::List(_) => self.slot_ty(ty, 0, span)?,
@@ -532,6 +536,40 @@ impl FnBuilder<'_, '_> {
             }
         };
         self.for_seq(l, s, item, span)
+    }
+
+    /// `for line in f` over a text file (D91): each step reads a line,
+    /// which may raise, and an empty one ends the loop. The loop holds
+    /// its own reference to `f`.
+    fn for_file(&mut self, l: &Looped, f: Operand, span: Span) -> Result<()> {
+        let f = self.own(f, span);
+        let (head, latch) = (self.new_block(), self.new_block());
+        let (other, end) = (self.new_block(), self.new_block());
+        self.terminate(Term::Goto(head));
+        self.switch_to(head);
+        let next = |b: &mut Self| {
+            let line = b.temp(Ty::Str, Rvalue::Std(StdFn::Readline, vec![f]), span);
+            b.check_raised(span)?;
+            let n = b.temp(Ty::Int, Rvalue::Len(line), span);
+            let going = b.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Gt, n, Operand::Int(0)), span);
+            let (got, ended) = (b.new_block(), b.new_block());
+            b.terminate(Term::Branch {
+                cond: going,
+                then: got,
+                orelse: ended,
+            });
+            b.switch_to(ended);
+            if let Operand::Local(line) = line {
+                b.emit(Inst::Release(line));
+            }
+            b.terminate(Term::Goto(other));
+            b.switch_to(got);
+            Ok(line)
+        };
+        self.iteration(l, next, latch, end)?;
+        self.switch_to(latch);
+        self.terminate(Term::Goto(head));
+        self.finish_loop(l, other, end)
     }
 
     /// The one field type of a non-empty tuple `for` iterates: inference

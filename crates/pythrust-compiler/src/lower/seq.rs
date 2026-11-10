@@ -154,7 +154,7 @@ impl FnBuilder<'_, '_> {
     }
 
     /// A list's method (`append` here), a dict's or set's, a file's
-    /// `read` or `close`, or a `str` method.
+    /// (D91), or a `str` method.
     pub(super) fn method(
         &mut self,
         value: &Expr,
@@ -167,8 +167,12 @@ impl FnBuilder<'_, '_> {
         if let Ty::Dict(_) | Ty::Set(_) = ty {
             return self.table_method(list, attr, args, span);
         }
-        if let (Ty::File, Some(f), []) = (ty, StdFn::file_method(attr), args) {
-            return self.std(f, vec![list], span);
+        if let (Ty::File(_), Some(f)) = (ty, StdFn::file_method(attr)) {
+            let mut ops = vec![list];
+            for arg in args {
+                ops.push(self.expr(&arg.value)?);
+            }
+            return self.std(f, ops, span);
         }
         if let (Ty::Str, Some(f)) = (ty, StdFn::str_method(attr)) {
             return self.str_method(f, list, args, span);

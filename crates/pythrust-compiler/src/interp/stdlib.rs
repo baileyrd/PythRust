@@ -4,7 +4,6 @@
 //! `hashlib.sha256(data).hexdigest()`.
 
 use std::cell::RefCell;
-use std::io::Read;
 use std::rc::Rc;
 use std::{fs, io};
 
@@ -13,7 +12,10 @@ use super::value::{str_repr, Exc, ExcArg, File, Value};
 use super::{raised, rt_err, Exec, Interp};
 use crate::exc::ExcKind;
 use crate::span::Span;
-use crate::stdlib::StdFn;
+use crate::stdlib::{Mode, StdFn};
+use crate::textio::{self, Data, FileError};
+
+use super::methods::Name;
 
 /// The runtime's SHA-256, one source for both backends.
 #[path = "../../../pythrust-rt/src/sha256.rs"]
@@ -25,6 +27,9 @@ impl<'m> Interp<'m, '_> {
         let span = args.span;
         if f == StdFn::Executor {
             return Ok(Value::Executor);
+        }
+        if f == StdFn::Open {
+            return open(args, span);
         }
         if let (StdFn::Sha256, [Value::Bytes(data)]) = (f, args.positional.as_slice()) {
             return Ok(Value::str(&sha256::hex(&sha256::digest(data))));
@@ -55,7 +60,6 @@ impl<'m> Interp<'m, '_> {
                 let link = fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
                 Value::Bool(link)
             }
-            (StdFn::Open, [p, _]) => open(p, span)?,
             (StdFn::Getsize, [p]) => {
                 let len = fs::metadata(p)
                     .map_err(|e| os_error(&e, Some(p), span))?
@@ -72,21 +76,30 @@ impl<'m> Interp<'m, '_> {
     }
 }
 
-/// `open(p, "rb")`. A directory fails as CPython's does, though Unix
-/// opens one for reading; a NUL in `p` is CPython's untracked
-/// `ValueError`, before any file system call.
-fn open<'m>(p: &str, span: Span) -> Exec<'m, Value<'m>> {
+/// `open(p, mode, encoding=...)` (D91, D95): a NUL in `p` is CPython's
+/// untracked `ValueError`, before any file system call.
+fn open<'m>(args: &Args<'m>, span: Span) -> Exec<'m, Value<'m>> {
+    let keyword = |name: &str| {
+        let found = args.keywords.iter().find(|(kw, _)| kw.name == name);
+        found.map(|(_, v)| v)
+    };
+    let text = |v: Option<&Value<'m>>| match v {
+        Some(Value::Str(s)) => Some(s.to_string()),
+        _ => None,
+    };
+    let p = text(args.positional.first());
+    let mode = text(args.positional.get(1).or_else(|| keyword("mode")));
+    let mode = mode.as_deref().map_or(Some(Mode::R), Mode::parse);
+    let (Some(p), Some(mode)) = (p, mode) else {
+        return Err(rt_err(span, "internal: `open` of no path or mode".to_string()).into());
+    };
+    let encoding = text(keyword("encoding")).unwrap_or_else(|| "utf-8".to_string());
     if p.contains('\0') {
         return Err(raised(ExcKind::Value, NUL.to_string(), span));
     }
-    let opened = fs::File::open(p).and_then(|file| match file.metadata()?.is_dir() {
-        true => Err(is_a_directory()),
-        false => Ok(file),
-    });
-    let file = opened.map_err(|e| os_error(&e, Some(p), span))?;
-    let file = RefCell::new(Some(file));
-    let name = p.to_string();
-    Ok(Value::File(Rc::new(File { name, file })))
+    let file = textio::File::open(&p, mode, &encoding).map_err(|e| os_error(&e, Some(&p), span))?;
+    let file = RefCell::new(file);
+    Ok(Value::File(Rc::new(File { file })))
 }
 
 /// CPython's message for a path holding a NUL: Windows converts the
@@ -97,27 +110,66 @@ const NUL: &str = if cfg!(windows) {
     "embedded null byte"
 };
 
-#[cfg(unix)]
-fn is_a_directory() -> io::Error {
-    io::Error::from_raw_os_error(21) // EISDIR on Linux and macOS.
-}
-
-#[cfg(not(unix))]
-fn is_a_directory() -> io::Error {
-    io::Error::from(io::ErrorKind::IsADirectory)
-}
-
-/// `f.read()`: the rest of the file; a `ValueError` once closed.
-pub(super) fn read<'m>(f: &File, span: Span) -> Exec<'m, Value<'m>> {
+/// Calls method `name` of file `f` with `args`, which inference checked
+/// against its mode (D91, D92).
+pub(super) fn file_call<'m>(
+    name: Name,
+    f: &File,
+    args: Vec<Value<'m>>,
+    span: Span,
+) -> Exec<'m, Value<'m>> {
     let mut file = f.file.borrow_mut();
-    let Some(file) = file.as_mut() else {
-        let msg = "read of closed file".to_string();
-        return Err(raised(ExcKind::Value, msg, span));
+    let done = match (name, args.as_slice()) {
+        (Name::Read, []) => file.read().map(|data| match data {
+            Data::Text(s) => Value::str(&s),
+            Data::Bytes(b) => Value::Bytes(Rc::from(b)),
+        }),
+        (Name::Readline, []) => file.readline().map(|s| Value::str(&s)),
+        (Name::Write, [Value::Str(s)]) => file.write_text(s).map(count),
+        (Name::Write, [Value::Bytes(b)]) => file.write_bytes(b).map(count),
+        (Name::Flush, []) => file.flush().map(|()| Value::None),
+        (Name::Close, []) => file.close().map(|()| Value::None).map_err(FileError::Os),
+        _ => {
+            let msg = format!("internal: file method `{}` here", name.as_str());
+            return Err(rt_err(span, msg).into());
+        }
     };
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)
-        .map_err(|e| os_error(&e, None, span))?;
-    Ok(Value::Bytes(Rc::from(data)))
+    done.map_err(|e| file_error(e, span))
+}
+
+/// The lines of text file `f` left to read, for `for` and the builtins
+/// that read an iterable whole.
+pub(super) fn lines<'m>(f: &File, span: Span) -> Exec<'m, Vec<Value<'m>>> {
+    let mut file = f.file.borrow_mut();
+    let mut out = Vec::new();
+    loop {
+        let line = file.readline().map_err(|e| file_error(e, span))?;
+        if line.is_empty() {
+            return Ok(out);
+        }
+        out.push(Value::str(&line));
+    }
+}
+
+/// The next line of text file `f`, `None` at the end: a step of `for`.
+pub(super) fn next_line<'m>(f: &File, span: Span) -> Exec<'m, Option<Value<'m>>> {
+    let line = f.file.borrow_mut().readline();
+    let line = line.map_err(|e| file_error(e, span))?;
+    Ok((!line.is_empty()).then(|| Value::str(&line)))
+}
+
+/// A count as an `int`.
+fn count<'m>(n: usize) -> Value<'m> {
+    Value::Int(i64::try_from(n).unwrap_or(i64::MAX))
+}
+
+/// The exception a failed file operation raises (D93, D96).
+fn file_error<'m>(e: FileError, span: Span) -> super::Unwind<'m> {
+    match e {
+        FileError::Os(e) => os_error(&e, None, span),
+        FileError::Decode(msg) => raised(ExcKind::UnicodeDecode, msg, span),
+        FileError::Closed(msg) => raised(ExcKind::Value, msg.to_string(), span),
+    }
 }
 
 /// A path argument: inference made it a `str`.

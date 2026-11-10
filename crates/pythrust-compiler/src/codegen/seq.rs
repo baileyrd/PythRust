@@ -238,7 +238,7 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::Str => 's',
         Ty::Range => 'r',
         Ty::Exc => 'x',
-        Ty::Bytes | Ty::File => 'y',
+        Ty::Bytes | Ty::File(_) => 'y',
         Ty::Future => 'u',
         Ty::Exec => return Err(backend("an executor in a value".to_string())),
         // A list of futures ([`Ty::Results`]).
