@@ -102,6 +102,8 @@ thread_local! {
         PtCtx { pending: AtomicU8::new(0), depth: AtomicI64::new(0) }
     };
     static PENDING: RefCell<Option<Pending>> = const { RefCell::new(None) };
+    /// Exceptions set aside while `finally` blocks run, innermost last.
+    static STASHED: RefCell<Vec<Pending>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The running thread's [`PtCtx`], valid while the thread lives.
@@ -343,6 +345,36 @@ pub extern "C" fn pt_catch() -> *mut PtSeq {
         .map_or(std::ptr::null_mut(), |p| p.exc as *mut PtSeq)
 }
 
+/// Sets the pending exception aside while a `finally` block runs, place
+/// and reference included: none is pending after. Does nothing if none
+/// is pending.
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_stash() {
+    set_flag(false);
+    if let Some(p) = PENDING.with_borrow_mut(Option::take) {
+        STASHED.with_borrow_mut(|s| s.push(p));
+    }
+}
+
+/// Makes the exception stashed last pending again, as it was raised;
+/// the `finally` block it waited on ended normally.
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_restore() {
+    if let Some(p) = STASHED.with_borrow_mut(Vec::pop) {
+        set_pending(p.exc as *mut PtSeq, p.head, p.tail);
+    }
+}
+
+/// Takes the exception stashed last and its reference: the `finally`
+/// block it waited on raised one of its own, which replaces it. Null if
+/// none is stashed.
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_unstash() -> *mut PtSeq {
+    STASHED
+        .with_borrow_mut(Vec::pop)
+        .map_or(std::ptr::null_mut(), |p| p.exc as *mut PtSeq)
+}
+
 /// Ends the program with the pending exception, as an uncaught one:
 /// flushes stdout, prints its diagnostic to stderr, exits 1.
 #[unsafe(no_mangle)]
@@ -382,6 +414,41 @@ mod tests {
     fn context_fields_sit_where_generated_code_reads_them() {
         assert_eq!(std::mem::offset_of!(PtCtx, pending), 0);
         assert_eq!(std::mem::offset_of!(PtCtx, depth), 8);
+    }
+
+    /// A raise inside a `finally` block running for a stashed exception:
+    /// the stashed one comes back as it was, place included, or is
+    /// taken away in favour of the new one.
+    #[test]
+    fn a_stashed_exception_is_restored_or_taken() {
+        let (head, tail) = (b"first: ", b"!");
+        // SAFETY: each exception is live until its last dec; the parts
+        // are static.
+        unsafe {
+            let e = seq::pt_seq_new(b"x0".as_ptr(), 2, 0);
+            pt_raise(e, head.as_ptr(), 7, tail.as_ptr(), 1);
+            seq::pt_seq_dec(e);
+            pt_stash();
+            assert_eq!(raised(), 0);
+            assert!(pt_catch().is_null());
+            pt_restore();
+            assert_eq!(raised(), 1);
+            let back = PENDING.with_borrow(|p| p.as_ref().map(|p| (p.exc, p.head)));
+            assert_eq!(back, Some((e as usize, &head[..])));
+            pt_stash();
+            let other = seq::pt_seq_new(b"x1".as_ptr(), 2, 0);
+            pt_raise(other, head.as_ptr(), 7, tail.as_ptr(), 1);
+            seq::pt_seq_dec(other);
+            let dropped = pt_unstash();
+            assert_eq!(dropped, e);
+            seq::pt_seq_dec(dropped);
+            assert!(pt_unstash().is_null());
+            pt_restore();
+            let caught = pt_catch();
+            assert_eq!(caught, other);
+            seq::pt_seq_dec(caught);
+        }
+        assert_eq!(raised(), 0);
     }
 
     #[test]
