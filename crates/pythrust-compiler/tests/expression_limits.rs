@@ -14,6 +14,7 @@ fn compiler(command: &str, dir: &Path, src: &str) -> Output {
     let bin =
         std::env::var_os("PYTHRUST_BIN").unwrap_or_else(|| env!("CARGO_BIN_EXE_pythrust").into());
     let mut child = Command::new(bin)
+        .current_dir(dir)
         .arg(command)
         .arg(path)
         .stdout(Stdio::from(stdout))
