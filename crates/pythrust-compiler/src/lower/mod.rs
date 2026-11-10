@@ -630,11 +630,12 @@ struct Try {
 #[derive(Clone)]
 struct Fin {
     body: crate::ast::Block,
-    /// How many loops, `try` bodies and statement pools were open
-    /// outside the `try`.
+    /// How many loops, `try` bodies, statement pools and handler names
+    /// were open outside the `try`.
     loops: usize,
     tries: usize,
     pools: usize,
+    unbinds: usize,
 }
 
 /// An `except ... as name` whose body is being lowered: leaving it any

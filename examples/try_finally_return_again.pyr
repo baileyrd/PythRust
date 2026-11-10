@@ -1,0 +1,30 @@
+# A `return` whose `finally` block raises, caught in the same function,
+# can run again: each value it computed is released once (D75).
+def again() -> str:
+    for i in range(3):
+        try:
+            try:
+                return "v" + str(i)
+            finally:
+                if i < 2:
+                    raise ValueError("again")
+        except ValueError:
+            pass
+    return "end"
+
+
+def again_list() -> list[str]:
+    for i in range(3):
+        try:
+            try:
+                return [str(i) + "x", "ÿ" * i]
+            finally:
+                if i < 2:
+                    raise ValueError("again")
+        except ValueError:
+            pass
+    return []
+
+
+print(again())
+print(again_list())

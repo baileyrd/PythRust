@@ -1,0 +1,50 @@
+# A `finally` block inside an `except ... as e` handler still sees `e`
+# when a `return`, `break` or `continue` leaves its `try` (D75): Python
+# unbinds `e` only when the handler itself is left, after the block runs.
+def ret() -> str:
+    try:
+        raise ValueError("é")
+    except ValueError as e:
+        try:
+            return "r"
+        finally:
+            print("finally sees", e)
+
+
+def loop(how: str) -> int:
+    n = 0
+    for i in range(3):
+        try:
+            raise IndexError("b" + str(i))
+        except IndexError as e:
+            try:
+                n += 1
+                if how == "break" and i == 1:
+                    break
+                if how == "continue":
+                    continue
+            finally:
+                print(how, "finally sees", e)
+    return n
+
+
+def twice() -> str:
+    try:
+        raise KeyError("outer")
+    except KeyError as a:
+        try:
+            try:
+                raise ValueError("inner")
+            except ValueError as b:
+                try:
+                    return "done"
+                finally:
+                    print("inner finally", a, b)
+        finally:
+            print("outer finally", a)
+
+
+print(ret())
+print(loop("break"))
+print(loop("continue"))
+print(twice())

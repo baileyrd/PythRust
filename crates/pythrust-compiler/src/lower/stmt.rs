@@ -250,10 +250,14 @@ impl FnBuilder<'_, '_> {
         }
         // The value is evaluated first, then every `finally` block left
         // runs (D75). Leaving the function unbinds its handlers' names.
+        // `keep` holds a value of its own only when a block raised into
+        // a `try` of this function and this `return` runs again.
         let keep = self.new_local(self.ret);
+        if self.ret.is_rc() {
+            self.emit(Inst::Release(keep));
+        }
         self.move_into(keep, v, span);
-        self.unbind_left(|_| true)?;
-        self.leave_finallys(0)?;
+        self.leave_finallys(0, |_| true)?;
         self.move_into(slot, Operand::Local(keep), span);
         self.jump_away(Term::Goto(self.exit));
         Ok(())
@@ -326,11 +330,12 @@ impl FnBuilder<'_, '_> {
                 "`break` or `continue` outside a loop",
             ));
         };
+        // The `finally` blocks of the `try` statements left run first,
+        // and the names of the handlers left are unbound.
         let depth = self.loops.len();
-        self.unbind_left(|u| u.loops >= depth)?;
-        // The `finally` blocks of the `try` statements left run first.
         let inside = self.finallys.iter().position(|f| f.loops >= depth);
-        self.leave_finallys(inside.unwrap_or(self.finallys.len()))?;
+        let from = inside.unwrap_or(self.finallys.len());
+        self.leave_finallys(from, |u| u.loops >= depth)?;
         // The statements being left end here: release their temporaries.
         // From a nested loop's `else`, that includes its snapshot.
         let left: Vec<LocalId> = self.pools[l.pools..].concat();

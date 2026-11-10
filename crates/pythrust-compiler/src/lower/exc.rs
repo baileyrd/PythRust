@@ -50,6 +50,7 @@ impl FnBuilder<'_, '_> {
             loops: self.loops.len(),
             tries: self.tries.len(),
             pools,
+            unbinds: self.unbinds.len(),
         });
         self.tries.push(Try {
             dispatch,
@@ -78,26 +79,55 @@ impl FnBuilder<'_, '_> {
     }
 
     /// On the way out of the `try` statements of `self.finallys[from..]`,
-    /// innermost first: each one's statements end, then its `finally`
-    /// block runs where the `try` is, outside its body.
-    pub(super) fn leave_finallys(&mut self, from: usize) -> Result<()> {
+    /// innermost first: each one's statements end and its handlers'
+    /// names that `left` picks are unbound, then its `finally` block runs
+    /// where the `try` is, outside its body. Then the names `left` picks
+    /// outside them all are unbound: a handler's name stays bound for the
+    /// `finally` blocks inside the handler, as in Python.
+    pub(super) fn leave_finallys(
+        &mut self,
+        from: usize,
+        left: impl Fn(&Unbind) -> bool,
+    ) -> Result<()> {
+        let mut bound = self.unbinds.len();
         for i in (from..self.finallys.len()).rev() {
             let fin = self.finallys[i].clone();
-            let left: Vec<LocalId> = self.pools[fin.pools..].concat();
-            left.into_iter().for_each(|t| self.emit(Inst::Release(t)));
+            let temps: Vec<LocalId> = self.pools[fin.pools..].concat();
+            temps.into_iter().for_each(|t| self.emit(Inst::Release(t)));
+            self.unbind_range(fin.unbinds..bound, &left)?;
+            bound = bound.min(fin.unbinds);
             let loops = self.loops.split_off(fin.loops);
             let tries = self.tries.split_off(fin.tries);
             let finallys = self.finallys.split_off(i);
+            let unbinds = self.unbinds.split_off(fin.unbinds);
             let lowered = self.block(&fin.body);
             self.loops.truncate(fin.loops);
             self.tries.truncate(fin.tries);
             self.finallys.truncate(i);
+            self.unbinds.truncate(fin.unbinds);
             self.loops.extend(loops);
             self.tries.extend(tries);
             self.finallys.extend(finallys);
+            self.unbinds.extend(unbinds);
             lowered?;
         }
-        Ok(())
+        self.unbind_range(0..bound, &left)
+    }
+
+    /// Unbinds the names of `self.unbinds[range]` that `left` picks.
+    fn unbind_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        left: &impl Fn(&Unbind) -> bool,
+    ) -> Result<()> {
+        let leaving: Vec<Unbind> = self.unbinds[range]
+            .iter()
+            .filter(|u| left(u))
+            .cloned()
+            .collect();
+        leaving
+            .into_iter()
+            .try_for_each(|u| self.unbind(&u.name, u.span))
     }
 
     /// `try` and its handlers. The body raises into a dispatch that runs
@@ -216,10 +246,7 @@ impl FnBuilder<'_, '_> {
 
     /// Unbinds the names of the handlers being left: those `left` picks.
     pub(super) fn unbind_left(&mut self, left: impl Fn(&Unbind) -> bool) -> Result<()> {
-        let leaving: Vec<Unbind> = self.unbinds.iter().filter(|u| left(u)).cloned().collect();
-        leaving
-            .into_iter()
-            .try_for_each(|u| self.unbind(&u.name, u.span))
+        self.unbind_range(0..self.unbinds.len(), &left)
     }
 
     /// Unbinds variable `name`: a later read fails as unbound.
