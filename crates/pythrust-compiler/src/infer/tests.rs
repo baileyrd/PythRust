@@ -2742,3 +2742,69 @@ fn slice_bound_obligations_saturate_without_assignment_widening() {
             .contains("expected int, found bool")
     );
 }
+
+// ---- list comprehensions (D85) ---------------------------------------------
+
+#[test]
+fn a_comprehension_is_a_list_of_its_element_type() {
+    let src = "ys = [str(x) for x in range(3) if x > 0]\nprint(ys)\n";
+    let types = infer_src(src).unwrap_or_else(|e| panic!("{e}"));
+    let at = src.find('[').unwrap_or(0);
+    let span = Span {
+        start: at,
+        end: src.find(']').unwrap_or(0) + 1,
+    };
+    assert_eq!(types.at(span), Some(&list_of(Type::Str)));
+}
+
+#[test]
+fn a_comprehension_s_names_are_its_own() {
+    // An outer `x` of another type is untouched, in a function too.
+    assert_eq!(
+        src_err("x = \"s\"\nys = [x for x in range(3)]\nprint(x + \"t\")\n"),
+        "no error"
+    );
+    assert_eq!(
+        src_err("def f() -> str:\n    x = \"s\"\n    ys = [x for x in range(3)]\n    return x\n"),
+        "no error"
+    );
+    // Two comprehensions may bind one name at two types.
+    assert_eq!(
+        src_err("a = [x for x in [1]]\nb = [x for x in [\"s\"]]\n"),
+        "no error"
+    );
+    // The name does not leak.
+    assert_eq!(
+        src_err("ys = [x for x in range(3)]\nprint(x)\n"),
+        "name `x` is not defined"
+    );
+    // Within one comprehension, a name keeps one type (D3).
+    assert_eq!(
+        src_err("ys = [x for x in [1] for x in [\"a\"]]\n"),
+        "expected int, found str"
+    );
+}
+
+#[test]
+fn a_comprehension_filter_narrows_as_an_if_test() {
+    let head = "xs: list[int | None] = [1, None]\n";
+    let ok = format!("{head}ys = [x + 1 for x in xs if x is not None if x > 0]\n");
+    assert_eq!(src_err(&ok), "no error");
+    let truth = format!("{head}ys = [x + 1 for x in xs if x]\n");
+    assert!(src_err(&truth).ends_with("a truth test does not narrow `x`: write `x is not None`"));
+    // A later clause rebinding the name ends its narrowing.
+    let rebound = format!("{head}ys = [x + 1 for x in xs if x is not None for x in xs]\n");
+    assert!(
+        src_err(&rebound).contains("int | None"),
+        "{}",
+        src_err(&rebound)
+    );
+}
+
+#[test]
+fn a_comprehension_iterates_what_for_iterates() {
+    let src = "d = {\"a\": 1}\nps = [k + str(v) for k, v in d.items()]\n\
+               es = [i + n for i, n in enumerate([5])]\nzs = [a + b for a, b in zip([\"a\"], [\"b\"])]\n";
+    assert_eq!(src_err(src), "no error");
+    assert_eq!(src_err("ys = [z for z in 5]\n"), "int is not iterable");
+}

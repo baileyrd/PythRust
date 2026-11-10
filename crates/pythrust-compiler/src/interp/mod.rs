@@ -31,12 +31,12 @@ use std::iter;
 use std::rc::Rc;
 
 use crate::ast::{
-    Arg, BinOp, Block, CmpOp, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp, Module, Stmt,
-    StmtKind, Target, TargetKind,
+    Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Handler, Ident, LogicalOp, Module,
+    Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
-use crate::infer::{Type, Types, View};
+use crate::infer::{scope, Type, Types, View};
 use crate::span::Span;
 use builtins::{Args, Builtin};
 use methods::Method;
@@ -369,32 +369,71 @@ impl<'m> Interp<'m, '_> {
         body: &'m Block,
         orelse: &'m Block,
     ) -> Exec<'m, Flow<'m>> {
+        match self.each(target, iter, |s| Ok(loop_exit(s.exec_block(body)?)))? {
+            Some(flow) => Ok(flow),
+            None => self.exec_block(orelse),
+        }
+    }
+
+    /// Binds `target` to each item of `iter`, as `for` iterates it, and
+    /// runs `step` after each binding; the first flow `step` gives ends
+    /// the loop and is returned. `None` when the items ran out.
+    fn each(
+        &mut self,
+        target: &'m Target,
+        iter: &'m Expr,
+        mut step: impl FnMut(&mut Self) -> Exec<'m, Option<Flow<'m>>>,
+    ) -> Exec<'m, Option<Flow<'m>>> {
         if let Some(mut z) = self.lazy(iter)? {
             while let Some(v) = z.step()? {
                 self.assign(target, v)?;
-                if let Some(flow) = loop_exit(self.exec_block(body)?) {
-                    return Ok(flow);
+                if let Some(flow) = step(self)? {
+                    return Ok(Some(flow));
                 }
             }
-            return self.exec_block(orelse);
+            return Ok(None);
         }
         let mut items = match self.dict_view(iter)? {
             Some(items) => items,
             None => match self.eval(iter)? {
-                Value::Results(r) => return self.for_results(&r, target, body, orelse),
+                Value::Results(r) => return self.each_result(&r, target, step),
                 v => v.iter(iter.span)?,
             },
         };
         for v in items.by_ref() {
             self.assign(target, v)?;
-            if let Some(flow) = loop_exit(self.exec_block(body)?) {
-                return Ok(flow);
+            if let Some(flow) = step(self)? {
+                return Ok(Some(flow));
             }
         }
         if let Some(message) = items.changed_size() {
             return Err(rt_err(iter.span, format!("RuntimeError: {message}")).into());
         }
-        self.exec_block(orelse)
+        Ok(None)
+    }
+
+    /// A comprehension's clauses (D85), as the nested loops they stand
+    /// for: each element that passes every filter is appended to `out`.
+    fn comp(
+        &mut self,
+        elt: &'m Expr,
+        clauses: &'m [CompFor],
+        out: &mut Vec<Value<'m>>,
+    ) -> Exec<'m, ()> {
+        let Some((c, rest)) = clauses.split_first() else {
+            out.push(self.eval(elt)?);
+            return Ok(());
+        };
+        self.each(&c.target, &c.iter, |s| {
+            for test in &c.ifs {
+                if !s.eval(test)?.truthy() {
+                    return Ok(None);
+                }
+            }
+            s.comp(elt, rest, out)?;
+            Ok(None)
+        })?;
+        Ok(())
     }
 
     /// For `for x in d.keys()` (or `values()`, `items()`) on a dict `d`:
@@ -590,6 +629,11 @@ impl<'m> Interp<'m, '_> {
                 e.span,
             ),
             ExprKind::Attr { value, attr } => Ok(methods::bind(self.eval(value)?, attr)?),
+            ExprKind::ListComp { elt, clauses } => {
+                let mut out = Vec::new();
+                self.comp(elt, clauses, &mut out)?;
+                Ok(Value::list(out))
+            }
         }
     }
 
@@ -970,6 +1014,13 @@ fn bind_keyword<'m>(
 fn locals_of(def: &FuncDef) -> HashSet<&str> {
     let mut names: HashSet<&str> = def.params.iter().map(|p| p.name.name.as_str()).collect();
     collect_block(&def.body, &mut names);
+    for e in scope::exprs(&def.body) {
+        if let ExprKind::ListComp { clauses, .. } = &e.kind {
+            clauses
+                .iter()
+                .for_each(|c| collect_target(&c.target, &mut names));
+        }
+    }
     names
 }
 

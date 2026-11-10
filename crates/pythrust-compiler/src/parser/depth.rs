@@ -60,6 +60,13 @@ fn height(expr: &Expr) -> usize {
             .max()
             .unwrap_or(0),
         ExprKind::Attr { value, .. } => height(value),
+        ExprKind::ListComp { elt, clauses } => clauses
+            .iter()
+            .flat_map(|c| std::iter::once(&c.iter).chain(&c.ifs))
+            .map(height)
+            .max()
+            .unwrap_or(0)
+            .max(height(elt)),
     };
     child + 1
 }

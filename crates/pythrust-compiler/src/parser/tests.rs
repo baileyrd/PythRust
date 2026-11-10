@@ -355,6 +355,14 @@ fn sx(e: &Expr) -> String {
             step.as_deref().map(sx).unwrap_or_default()
         ),
         ExprKind::Attr { value, attr } => format!("(. {} {})", sx(value), attr.name),
+        ExprKind::ListComp { elt, clauses } => {
+            let clauses = clauses.iter().map(|c| {
+                let ifs = c.ifs.iter().map(|x| format!(" (if {})", sx(x)));
+                let ifs: String = ifs.collect();
+                format!(" (for {} {}{ifs})", sx_target(&c.target), sx(&c.iter))
+            });
+            format!("(listcomp {}{})", sx(elt), clauses.collect::<String>())
+        }
     }
 }
 
@@ -453,6 +461,86 @@ fn invalid_assignment_targets() {
         "attribute assignment is not supported yet"
     );
     assert_eq!(err("a = b = 1 NL"), "chained assignment is not supported");
+}
+
+#[test]
+fn list_comprehensions_own_the_names_they_bind() {
+    // The `[` is at offset 0, so each name a clause binds becomes `name@0`.
+    assert_eq!(ok("[ x for x in xs ] NL"), "(listcomp x@0 (for x@0 xs))");
+    assert_eq!(
+        ok("[ x + y for x in xs if x for y in x if y > 1 if z ] NL"),
+        "(listcomp (+ x@0 y@0) (for x@0 xs (if x@0)) (for y@0 x@0 (if (cmp y@0 > 1)) (if z)))"
+    );
+    assert_eq!(
+        ok("[ a for a , ( b , c ) in ps ] NL"),
+        "(listcomp a@0 (for (tuple a@0 (tuple b@0 c@0)) ps))"
+    );
+    assert_eq!(
+        ok("[ a if c else b for a in xs ] NL"),
+        "(listcomp (ifexp c a@0 b) (for a@0 xs))"
+    );
+}
+
+#[test]
+fn a_comprehension_s_first_iterable_is_the_enclosing_scope_s() {
+    assert_eq!(ok("[ x for x in x ] NL"), "(listcomp x@0 (for x@0 x))");
+    assert_eq!(
+        ok("y = [ x for x in x ] NL"),
+        "(= y (listcomp x@4 (for x@4 x)))"
+    );
+    // The inner `[` is at offset 2: its names are its own, the outer's
+    // stay the outer's, its first iterable included.
+    assert_eq!(
+        ok("[ [ x for y in x ] for x in xs ] NL"),
+        "(listcomp (listcomp x@0 (for y@2 x@0)) (for x@0 xs))"
+    );
+    assert_eq!(
+        ok("[ [ x for x in x ] for x in xs ] NL"),
+        "(listcomp (listcomp x@2 (for x@2 x@0)) (for x@0 xs))"
+    );
+}
+
+#[test]
+fn comprehension_forms_not_supported_yet_are_named() {
+    let target =
+        "a comprehension target other than a name or a tuple of names is not supported yet";
+    assert_eq!(err("[ 1 for x [ 0 ] in xs ] NL"), target);
+    assert_eq!(err("[ 1 for a , x [ 0 ] in xs ] NL"), target);
+    assert_eq!(
+        err("[ 1 for f ( ) in xs ] NL"),
+        "cannot assign to a function call"
+    );
+    let gen = "generator expressions are not supported yet";
+    assert_eq!(err("( x for x in xs ) NL"), gen);
+    assert_eq!(err("f ( x for x in xs ) NL"), gen);
+    assert_eq!(err("f ( 1 , x for x in xs ) NL"), gen);
+    assert_eq!(
+        err("{ x for x in xs } NL"),
+        "set comprehensions are not supported yet"
+    );
+    assert_eq!(
+        err("{ k : 1 for k in xs } NL"),
+        "dict comprehensions are not supported yet"
+    );
+    let src = "{ x for x in xs } NL";
+    assert_eq!(text(src, parse_err(src).span), "for");
+}
+
+#[test]
+fn comprehension_iterables_and_filters_are_or_exprs() {
+    assert_eq!(
+        err("[ x for x in a if b else c ] NL"),
+        "expected `]`, found `else`"
+    );
+    assert_eq!(err("[ x for x in a , b ] NL"), "expected `]`, found `,`");
+    assert_eq!(
+        ok("[ x for x in ( a if b else c ) if not x or y ] NL"),
+        "(listcomp x@0 (for x@0 (ifexp b a c) (if (or (not x@0) y))))"
+    );
+    assert_eq!(
+        err("[ x for x in xs ] = 1 NL"),
+        "cannot assign to a list comprehension"
+    );
 }
 
 #[test]
