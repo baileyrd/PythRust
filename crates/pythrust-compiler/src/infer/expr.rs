@@ -26,6 +26,15 @@ enum Slot {
     Element,
 }
 
+/// What a comprehension gathers, the type expected where it goes (if
+/// any, D117), and its span: threaded through its clauses unchanged.
+#[derive(Clone, Copy)]
+struct Gathering<'a> {
+    gather: &'a Gather,
+    expected: Option<&'a Type>,
+    span: Span,
+}
+
 impl Checker {
     /// Infers `e` and records its type at its span.
     pub(super) fn expr(&mut self, e: &Expr) -> Result<Type> {
@@ -118,16 +127,23 @@ impl Checker {
                 let msg = format!("methods can only be called: `.{}(...)`", attr.name);
                 Err(error(attr.span, msg))
             }
-            ExprKind::Comp { gather, clauses } => self.comp_clauses(gather, clauses, e.span),
+            ExprKind::Comp { gather, clauses } => {
+                let g = Gathering {
+                    gather,
+                    expected: None,
+                    span: e.span,
+                };
+                self.comp_clauses(g, clauses)
+            }
         }
     }
 
     /// The type of the comprehension at `span` (D85, D116), typed as the
     /// loop it stands for: each clause binds its target as `for` does.
     /// Rebinding a name ends its narrowing.
-    fn comp_clauses(&mut self, gather: &Gather, clauses: &[CompFor], span: Span) -> Result<Type> {
+    fn comp_clauses(&mut self, g: Gathering, clauses: &[CompFor]) -> Result<Type> {
         let Some((c, rest)) = clauses.split_first() else {
-            return self.gathered(gather, span);
+            return self.gathered(g);
         };
         let iterable = self.consumed(&c.iter)?;
         let elem = self.subst.fresh();
@@ -141,14 +157,39 @@ impl Checker {
         scope::target_names(&c.target, &mut bound);
         let saved = self.frame.narrowed.clone();
         self.frame.narrowed.retain(|n, _| !bound.contains(n));
-        let out = self.comp_filters(&c.ifs, gather, rest, span);
+        let out = self.comp_filters(&c.ifs, g, rest);
         self.frame.narrowed = saved;
         out
     }
 
-    /// What `gather` makes, as a display of its one item would: a list,
-    /// a set of one hashable type, or a dict with hashable keys.
-    fn gathered(&mut self, gather: &Gather, span: Span) -> Result<Type> {
+    /// What `g` makes, as a display of its one item would: the expected
+    /// type when there is one of its shape (D117), each item checked
+    /// against its slot as `checked` checks a display's.
+    fn gathered(&mut self, g: Gathering) -> Result<Type> {
+        let Some(expected) = g.expected else {
+            return self.inferred(g.gather, g.span);
+        };
+        match (g.gather, expected) {
+            (Gather::List(e), Type::List(elem)) => {
+                self.slot(e, elem, Slot::Element)?;
+            }
+            (Gather::Set(e), Type::Set(elem)) => {
+                self.slot(e, elem, Slot::Key)?;
+                self.need(Need::Hashable((**elem).clone()), g.span);
+            }
+            (Gather::Dict(k, v), Type::Dict(key, value)) => {
+                self.slot(k, key, Slot::Key)?;
+                self.slot(v, value, Slot::Element)?;
+                self.need(Need::Hashable((**key).clone()), g.span);
+            }
+            _ => return self.inferred(g.gather, g.span),
+        }
+        Ok(expected.clone())
+    }
+
+    /// What `gather` makes with nothing expected: a list, a set of one
+    /// hashable type, or a dict with hashable keys.
+    fn inferred(&mut self, gather: &Gather, span: Span) -> Result<Type> {
         match gather {
             Gather::List(e) => Ok(Type::List(Box::new(self.expr(e)?))),
             Gather::Set(e) => self.set(std::slice::from_ref(e), span),
@@ -163,15 +204,9 @@ impl Checker {
 
     /// A comprehension's filters, each narrowing what follows it as an
     /// `if` test narrows its block, then its later clauses.
-    fn comp_filters(
-        &mut self,
-        ifs: &[Expr],
-        gather: &Gather,
-        rest: &[CompFor],
-        span: Span,
-    ) -> Result<Type> {
+    fn comp_filters(&mut self, ifs: &[Expr], g: Gathering, rest: &[CompFor]) -> Result<Type> {
         let Some((test, more)) = ifs.split_first() else {
-            return self.comp_clauses(gather, rest, span);
+            return self.comp_clauses(g, rest);
         };
         self.expr(test)?;
         let saved = (self.frame.truthy.clone(), self.frame.truth_uses.len());
@@ -181,7 +216,7 @@ impl Checker {
         // on a name tested only for truth gets its hint.
         let out = self
             .narrowed(&inside, &[], |c| {
-                let t = c.comp_filters(more, gather, rest, span)?;
+                let t = c.comp_filters(more, g, rest)?;
                 c.settle()?;
                 Ok(t)
             })
@@ -482,8 +517,17 @@ impl Checker {
         let resolved = self.subst.resolve(expected);
         let slots: Vec<(&Expr, Type, Slot)> = match (&e.kind, &resolved) {
             (ExprKind::List(_) | ExprKind::Tuple(_), Type::Optional(inner))
-            | (ExprKind::Dict(_) | ExprKind::Set(_), Type::Optional(inner)) => {
-                return self.checked(e, inner)
+            | (ExprKind::Dict(_) | ExprKind::Set(_), Type::Optional(inner))
+            | (ExprKind::Comp { .. }, Type::Optional(inner)) => return self.checked(e, inner),
+            (ExprKind::Comp { gather, clauses }, _) => {
+                let g = Gathering {
+                    gather,
+                    expected: Some(&resolved),
+                    span: e.span,
+                };
+                let t = self.comp_clauses(g, clauses)?;
+                self.nodes.insert(e.span, t.clone());
+                return Ok(t);
             }
             (ExprKind::List(items), Type::List(elem)) => items
                 .iter()
@@ -511,20 +555,7 @@ impl Checker {
         };
         let mut found = Vec::new();
         for (x, slot, kind) in slots {
-            let t = self.checked(x, &slot)?;
-            match kind {
-                Slot::Key => self.need(
-                    Need::Key {
-                        key: slot,
-                        index: t.clone(),
-                    },
-                    x.span,
-                ),
-                Slot::Element => {
-                    self.expect(x.span, &slot, &t, "element does not match the annotation")?
-                }
-            }
-            found.push(t);
+            found.push(self.slot(x, &slot, kind)?);
         }
         let t = match (&e.kind, resolved) {
             (ExprKind::Tuple(_), _) => Type::Tuple(found),
@@ -535,6 +566,25 @@ impl Checker {
             _ => expected.clone(),
         };
         self.nodes.insert(e.span, t.clone());
+        Ok(t)
+    }
+
+    /// `x` checked against the type its slot expects: a key needs only
+    /// to fit it (a `bool` fits `int`, D20), an element must match it.
+    fn slot(&mut self, x: &Expr, slot: &Type, kind: Slot) -> Result<Type> {
+        let t = self.checked(x, slot)?;
+        match kind {
+            Slot::Key => self.need(
+                Need::Key {
+                    key: slot.clone(),
+                    index: t.clone(),
+                },
+                x.span,
+            ),
+            Slot::Element => {
+                self.expect(x.span, slot, &t, "element does not match the annotation")?
+            }
+        }
         Ok(t)
     }
 
