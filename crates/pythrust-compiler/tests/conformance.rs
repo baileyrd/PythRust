@@ -2440,3 +2440,93 @@ fn run_kills_on_timeout() {
     let got = run(&mut cmd, Duration::from_millis(200));
     assert!(got.is_err_and(|e| e.contains("timed out")));
 }
+
+/// A `return` that a `finally` block cancels by raising releases its
+/// value where the raise is caught, as CPython and `run` do, so a
+/// returned file is closed then, not when the function ends (#143
+/// review). Under a 64-descriptor limit, 100 abandoned files would fail
+/// with `Too many open files`. The neighbour: a `finally` that catches
+/// its own exception keeps the return.
+#[cfg(unix)]
+#[test]
+fn a_cancelled_return_releases_its_value() -> Res<()> {
+    const CANCELLED: &str = r#"def caught(n):
+    try:
+        try:
+            return open("/dev/null", "rb")
+        finally:
+            raise ValueError("cancel")
+    except ValueError:
+        pass
+    if n > 0:
+        return caught(n - 1)
+    return open("/dev/null", "rb")
+
+
+def nested(n):
+    try:
+        try:
+            try:
+                return open("/dev/null", "rb")
+            finally:
+                k = n
+        finally:
+            raise ValueError("cancel")
+    except ValueError:
+        pass
+    if n > 0:
+        return nested(n - 1)
+    return open("/dev/null", "rb")
+
+
+def again(n):
+    i = 0
+    while True:
+        try:
+            try:
+                return open("/dev/null", "rb")
+            finally:
+                if i < n:
+                    raise ValueError("again")
+        except ValueError:
+            i += 1
+
+
+def kept():
+    try:
+        return open("/dev/null", "rb")
+    finally:
+        try:
+            raise ValueError("inside")
+        except ValueError:
+            pass
+
+
+print(caught(100).read(), nested(100).read(), again(100).read())
+for i in range(100):
+    f = kept()
+    print(f.read(), end="")
+    f.close()
+print("done")
+"#;
+    build_runtime()?;
+    let dir = scratch("cancelled_return")?;
+    let exe = native_case(&dir, "cancelled", CANCELLED)?;
+    let source = exe.with_extension("pyr");
+    let limited = |args: &[&std::ffi::OsStr]| -> Res<Run> {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "ulimit -n 64 && exec \"$@\"", "sh"])
+            .args(args);
+        run(&mut cmd, TIMEOUT)
+    };
+    let py = python();
+    let want = limited(&[py.as_ref(), "-I".as_ref(), source.as_os_str()])?;
+    assert_eq!(want.status, 0, "{}", want.stdout);
+    assert!(want.stdout.ends_with("done\n"), "{}", want.stdout);
+    let bin = pythrust_bin()?;
+    let ran = limited(&[bin.as_os_str(), "run".as_ref(), source.as_os_str()])?;
+    assert_eq!(ran, want);
+    assert_eq!(limited(&[exe.as_os_str()])?, want);
+    dir.pass();
+    Ok(())
+}

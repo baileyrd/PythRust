@@ -83,11 +83,13 @@ impl FnBuilder<'_, '_> {
     /// names that `left` picks are unbound, then its `finally` block runs
     /// where the `try` is, outside its body. Then the names `left` picks
     /// outside them all are unbound: a handler's name stays bound for the
-    /// `finally` blocks inside the handler, as in Python.
+    /// `finally` blocks inside the handler, as in Python. `keep` holds a
+    /// `return`'s value, released if a block raises out of its `try`.
     pub(super) fn leave_finallys(
         &mut self,
         from: usize,
         left: impl Fn(&Unbind) -> bool,
+        keep: Option<LocalId>,
     ) -> Result<()> {
         let mut bound = self.unbinds.len();
         for i in (from..self.finallys.len()).rev() {
@@ -100,7 +102,11 @@ impl FnBuilder<'_, '_> {
             let tries = self.tries.split_off(fin.tries);
             let finallys = self.finallys.split_off(i);
             let unbinds = self.unbinds.split_off(fin.unbinds);
+            self.returning.extend(keep.map(|k| (k, fin.tries)));
             let lowered = self.block(&fin.body);
+            if keep.is_some() {
+                self.returning.pop();
+            }
             self.loops.truncate(fin.loops);
             self.tries.truncate(fin.tries);
             self.finallys.truncate(i);
@@ -217,6 +223,7 @@ impl FnBuilder<'_, '_> {
     /// and unbinding the handler names left, else the unwind block, whose
     /// exit releases everything (or the program ends).
     pub(super) fn raise_path(&mut self) -> Result<()> {
+        self.abandon_returns();
         let Some(t) = self.tries.last().copied() else {
             self.drop_stashes(0);
             let unwind = self.unwind_block();
@@ -230,6 +237,20 @@ impl FnBuilder<'_, '_> {
         self.unbind_left(|u| u.tries >= depth)?;
         self.jump_away(Term::Goto(t.dispatch));
         Ok(())
+    }
+
+    /// Releases the return values a raise from here abandons: those whose
+    /// running `finally` block it leaves. A `try` inside the block catches
+    /// without abandoning, and the `return` goes on.
+    fn abandon_returns(&mut self) {
+        let depth = self.tries.len();
+        let left: Vec<LocalId> = self
+            .returning
+            .iter()
+            .filter(|(_, tries)| depth <= *tries)
+            .map(|(l, _)| *l)
+            .collect();
+        left.into_iter().for_each(|l| self.emit(Inst::Release(l)));
     }
 
     /// Drops the exceptions stashed above the first `kept`: an exception

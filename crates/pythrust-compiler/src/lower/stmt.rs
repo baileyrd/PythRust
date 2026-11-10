@@ -257,7 +257,8 @@ impl FnBuilder<'_, '_> {
             self.emit(Inst::Release(keep));
         }
         self.move_into(keep, v, span);
-        self.leave_finallys(0, |_| true)?;
+        let held = self.ret.is_rc().then_some(keep);
+        self.leave_finallys(0, |_| true, held)?;
         self.move_into(slot, Operand::Local(keep), span);
         self.jump_away(Term::Goto(self.exit));
         Ok(())
@@ -335,7 +336,7 @@ impl FnBuilder<'_, '_> {
         let depth = self.loops.len();
         let inside = self.finallys.iter().position(|f| f.loops >= depth);
         let from = inside.unwrap_or(self.finallys.len());
-        self.leave_finallys(from, |u| u.loops >= depth)?;
+        self.leave_finallys(from, |u| u.loops >= depth, None)?;
         // The statements being left end here: release their temporaries.
         // From a nested loop's `else`, that includes its snapshot.
         let left: Vec<LocalId> = self.pools[l.pools..].concat();

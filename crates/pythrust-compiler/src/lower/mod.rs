@@ -711,6 +711,10 @@ struct FnBuilder<'c, 'a> {
     /// Pending exceptions stashed while a `finally` block runs on their
     /// way out ([`Inst::Stash`]).
     stashes: usize,
+    /// Return values held while the `finally` blocks they leave run, each
+    /// with how many `try` statements enclose the `try` of the block now
+    /// running: a raise to one of those abandons the return.
+    returning: Vec<(LocalId, usize)>,
     /// Enclosing handlers that bind a name, innermost last.
     unbinds: Vec<Unbind>,
     /// Names some handler of this body binds, and so unbinds: never
@@ -760,6 +764,7 @@ impl<'c, 'a> FnBuilder<'c, 'a> {
             tries: Vec::new(),
             finallys: Vec::new(),
             stashes: 0,
+            returning: Vec::new(),
             unbinds: Vec::new(),
             caught: BTreeSet::new(),
             unwind: None,
