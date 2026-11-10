@@ -51,6 +51,15 @@ pub(super) enum Need {
         out: Type,
         access: Access,
     },
+    /// A slice component must resolve to int or bool, without unifying
+    /// either with the other or prematurely fixing a generic variable.
+    SliceBound(Type),
+    /// A receiver-typed slice. None is omitted, Some(None) computed.
+    Slice {
+        value: Type,
+        bounds: [Option<Option<i64>>; 3],
+        out: Type,
+    },
     /// Unpacking `value` into one target per `elems` entry.
     Unpack {
         value: Type,
@@ -230,10 +239,16 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
             out: r(out),
             access: *access,
         },
+        Need::Slice { value, bounds, out } => Need::Slice {
+            value: r(value),
+            bounds: *bounds,
+            out: r(out),
+        },
         Need::Unpack { value, elems } => Need::Unpack {
             value: r(value),
             elems: elems.iter().map(r).collect(),
         },
+        Need::SliceBound(t) => Need::SliceBound(r(t)),
         Need::Hashable(t) => Need::Hashable(r(t)),
         Need::Comparable(t) => Need::Comparable(r(t)),
         Need::Key { key, index } => Need::Key {
@@ -286,7 +301,11 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Binary(b) => vec![&b.left, &b.right, &b.out],
         Need::Negate { operand, out } => vec![operand, out],
         Need::Equal { left, right } | Need::Order { left, right } => vec![left, right],
-        Need::Len(t) | Need::Hashable(t) | Need::Comparable(t) | Need::ToNumber { arg: t, .. } => {
+        Need::Len(t)
+        | Need::SliceBound(t)
+        | Need::Hashable(t)
+        | Need::Comparable(t)
+        | Need::ToNumber { arg: t, .. } => {
             vec![t]
         }
         Need::OrNone { value, out }
@@ -301,6 +320,7 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Index {
             value, index, out, ..
         } => vec![value, index, out],
+        Need::Slice { value, out, .. } => vec![value, out],
         Need::Unpack { value, elems } => std::iter::once(value).chain(elems).collect(),
         Need::Method {
             receiver,
@@ -318,6 +338,7 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         Need::Equal { left, right } => equal(s, c, left, right),
         Need::Order { left, right } => order(s, c, left, right),
         Need::Len(t) => len(s, c, t),
+        Need::SliceBound(t) => slice_bound(s, c, t),
         Need::Iter { iterable, elem } => iter(s, c, iterable, elem),
         Need::Index {
             value,
@@ -326,6 +347,7 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
             out,
             access,
         } => index_of(s, c, value, index, *literal, out, *access),
+        Need::Slice { value, bounds, out } => slice_of(s, c, value, bounds, out),
         Need::Unpack { value, elems } => unpack(s, c, value, elems),
         Need::Hashable(t) => hashable(s, c, t),
         Need::Comparable(t) => comparable(s, c, t),
@@ -1126,4 +1148,84 @@ pub(super) fn op_symbol(op: BinOp) -> &'static str {
         BinOp::Mod => "%",
         BinOp::Pow => "**",
     }
+}
+
+fn slice_of(
+    s: &mut Subst,
+    c: &Constraint,
+    value: &Type,
+    bounds: &[Option<Option<i64>>; 3],
+    out: &Type,
+) -> Result<Step> {
+    let Some(t) = known(s, value) else {
+        return Ok(Step::Waiting);
+    };
+    let result = match t {
+        Type::Str => Type::Str,
+        Type::List(elem) => Type::List(elem),
+        Type::Tuple(items) => {
+            if bounds.contains(&Some(None)) {
+                return Err(error(c, "a tuple slice needs literal bounds".to_string()));
+            }
+            let [start, stop, step] = bounds.map(Option::flatten);
+            if step == Some(0) {
+                return Ok(Step::Done(Vec::new()));
+            }
+            let fields = crate::slice::indices(items.len(), start, stop, step.unwrap_or(1))
+                .into_iter()
+                .flatten()
+                .map(|k| items[k].clone())
+                .collect();
+            Type::Tuple(fields)
+        }
+        other => {
+            return Err(error(
+                c,
+                format!("slicing {} is not supported yet", s.zonk(&other)),
+            ))
+        }
+    };
+    expect(s, c, &result, out)?;
+    Ok(Step::Done(Vec::new()))
+}
+
+/// Checking waits through generalization/instantiation and saturation.
+/// It never supplies a type: bool and int remain distinct everywhere else.
+fn slice_bound(s: &Subst, c: &Constraint, bound: &Type) -> Result<Step> {
+    let Some(t) = known(s, bound) else {
+        return Ok(Step::Waiting);
+    };
+    if t.is_intlike() {
+        return Ok(Step::Done(Vec::new()));
+    }
+    Err(error(
+        c,
+        format!(
+            "slice bounds must be integers: expected int, found {}",
+            s.zonk(&t)
+        ),
+    ))
+}
+
+/// Only after module inference, ordinary defaults and late-global scheme
+/// solving: an unresolved bound is a value never produced (an empty list's
+/// item, for example). Give its producer an int representation so native
+/// instructions still verify, without defaulting original generic schemes.
+pub(super) fn default_slice_bounds(
+    s: &mut Subst,
+    pending: Vec<Constraint>,
+) -> Result<Vec<Constraint>> {
+    let mut waiting = solve(s, pending)?;
+    while let Some(i) = waiting.iter().position(
+        |c| matches!(&c.need, Need::SliceBound(t) if matches!(s.resolve(t), Type::Var(_))),
+    ) {
+        let c = waiting.swap_remove(i);
+        if let Need::SliceBound(t) = &c.need {
+            expect(s, &c, &Type::Int, t)?;
+        }
+        // Propagate the representative through producer/result constraints,
+        // and validate other bounds before choosing any further default.
+        waiting = solve(s, waiting)?;
+    }
+    Ok(waiting)
 }

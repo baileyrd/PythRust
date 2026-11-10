@@ -158,7 +158,10 @@ impl<'a> Held<'a> {
                 let held = items.iter().flat_map(|a| self.holdings(*a)).collect();
                 return self.store_fresh(dest, &held);
             }
-            Rvalue::CopyList(a) | Rvalue::View(a) => {
+            // String slices are independent; list slices retain their
+            // elements. Keep CopyList/View's existing holdings unchanged.
+            Rvalue::Slice { .. } if !self.is_list(dest) => return false,
+            Rvalue::CopyList(a) | Rvalue::View(a) | Rvalue::Slice { source: a, .. } => {
                 let held = self.holdings(*a);
                 return self.store_fresh(dest, &held);
             }

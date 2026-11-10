@@ -156,6 +156,7 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::Contains { .. }
         | Rvalue::ToStr(_)
         | Rvalue::CopyList(_)
+        | Rvalue::Slice { .. }
         | Rvalue::NewSeq(_)
         | Rvalue::Field(..)
         | Rvalue::Global(_)

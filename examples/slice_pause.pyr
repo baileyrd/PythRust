@@ -1,0 +1,11 @@
+import concurrent.futures
+
+temper def worker(n: int) -> int:
+    return n
+
+temper def main() -> None:
+    xs = [1, 2, 3]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(worker, 2)
+        print(xs[:(pause f.result())])
+main()

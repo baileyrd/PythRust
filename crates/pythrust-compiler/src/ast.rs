@@ -291,6 +291,13 @@ pub enum ExprKind {
         value: Box<Expr>,
         index: Box<Expr>,
     },
+    /// A slice read; absent components keep their distinct Python defaults.
+    Slice {
+        value: Box<Expr>,
+        start: Option<Box<Expr>>,
+        stop: Option<Box<Expr>>,
+        step: Option<Box<Expr>>,
+    },
     Attr {
         value: Box<Expr>,
         attr: Ident,

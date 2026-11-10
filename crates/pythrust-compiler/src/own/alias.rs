@@ -384,6 +384,7 @@ impl<'a> Body<'a> {
                     value,
                     Rvalue::NewSeq(_)
                         | Rvalue::CopyList(_)
+                        | Rvalue::Slice { .. }
                         | Rvalue::View(_)
                         | Rvalue::Call(..)
                         | Rvalue::Std(..)
@@ -455,6 +456,7 @@ impl<'a> Body<'a> {
             Rvalue::Index(a, _) | Rvalue::Entry(a, ..) => self.step(&of(state, *a), ty),
             Rvalue::NewSeq(_)
             | Rvalue::CopyList(_)
+            | Rvalue::Slice { .. }
             | Rvalue::View(_)
             | Rvalue::Std(..)
             | Rvalue::Rust(..) => fresh,

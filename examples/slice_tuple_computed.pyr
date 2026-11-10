@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: a tuple slice needs literal bounds
+# deviation: static subset rejects this form before execution.
+xs = (1, "a")
+n = 1
+print(xs[:n])

@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: `del` of a slice is not supported yet
+# deviation: static subset rejects this form before execution.
+xs = [1, 2]
+del xs[:]
+print(xs)

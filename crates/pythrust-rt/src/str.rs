@@ -597,6 +597,34 @@ pub unsafe extern "C" fn pt_write_str(s: *const PtStr) {
     crate::write(s.text().as_bytes());
 }
 
+/// Fresh string slice by Unicode code points, without normalization.
+///
+/// # Safety
+/// `s` is a live string; `step` is nonzero (checked at the source site).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_str_slice(
+    s: *const PtStr,
+    start: i64,
+    stop: i64,
+    step: i64,
+    present: i64,
+) -> *mut PtStr {
+    // SAFETY: guaranteed by the caller, following pt_str_index.
+    let s = unsafe { borrow(s) };
+    let chars: Vec<_> = s.text().chars().collect();
+    let text: String = crate::slice::indices(
+        chars.len(),
+        (present & 1 != 0).then_some(start),
+        (present & 2 != 0).then_some(stop),
+        step,
+    )
+    .into_iter()
+    .flatten()
+    .map(|k| chars[k])
+    .collect();
+    into_ptr(PtStr::new(text.into_boxed_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,6 +635,19 @@ mod tests {
 
     fn text(p: Option<PtStr>) -> Option<String> {
         p.map(|p| p.text().to_string())
+    }
+
+    #[test]
+    fn slice_owns_code_points_after_source_destruction() {
+        let source = into_ptr(s("aé🙂é"));
+        // SAFETY: source is live; the helper borrows it and returns a new
+        // owned string independent of that source.
+        unsafe {
+            let selected = pt_str_slice(source, 0, 0, -1, 0);
+            pt_str_dec(source);
+            assert_eq!(borrow(selected).text(), "́e🙂éa");
+            pt_str_dec(selected);
+        }
     }
 
     #[test]

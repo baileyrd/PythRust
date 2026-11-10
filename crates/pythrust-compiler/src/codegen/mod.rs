@@ -160,6 +160,8 @@ enum Rt {
     SeqCmp,
     ListContains,
     ListCopy,
+    ListSlice,
+    StrSlice,
     ListExtend,
     ListScale,
     WriteSeq,
@@ -226,7 +228,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 111] = [
+    const ALL: [Rt; 113] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -275,6 +277,8 @@ impl Rt {
         Rt::SeqCmp,
         Rt::ListContains,
         Rt::ListCopy,
+        Rt::ListSlice,
+        Rt::StrSlice,
         Rt::ListExtend,
         Rt::ListScale,
         Rt::WriteSeq,
@@ -390,6 +394,8 @@ impl Rt {
             Rt::SeqCmp => "pt_seq_cmp",
             Rt::ListContains => "pt_list_contains",
             Rt::ListCopy => "pt_list_copy",
+            Rt::ListSlice => "pt_list_slice",
+            Rt::StrSlice => "pt_str_slice",
             Rt::ListExtend => "pt_list_extend",
             Rt::ListScale => "pt_list_scale",
             Rt::WriteSeq => "pt_write_seq",
@@ -468,6 +474,7 @@ impl Rt {
             Rt::StrNew | Rt::StrConcat => (vec![ptr, ptr], Some(ptr)),
             Rt::StrConcat3 => (vec![ptr, ptr, ptr], Some(ptr)),
             Rt::StrRepeat | Rt::StrIndex => (vec![ptr, I64], Some(ptr)),
+            Rt::StrSlice | Rt::ListSlice => (vec![ptr, I64, I64, I64, I64], Some(ptr)),
             Rt::StrLen => (vec![ptr], Some(I64)),
             Rt::StrCmp => (vec![ptr, ptr], Some(I64)),
             Rt::StrContains => (vec![ptr, ptr], Some(I8)),
@@ -1217,6 +1224,27 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::IsNone(op) => {
                 let v = self.operand(*op);
                 Ok(self.b.ins().icmp_imm_s(IntCC::Equal, v, 0))
+            }
+            Rvalue::Slice {
+                source,
+                bounds,
+                present,
+            } => {
+                let rt = if self.func.ty(*source) == Ty::Str {
+                    Rt::StrSlice
+                } else {
+                    Rt::ListSlice
+                };
+                self.rt_on(
+                    rt,
+                    &[
+                        *source,
+                        bounds[0],
+                        bounds[1],
+                        bounds[2],
+                        Operand::Int(i64::from(*present)),
+                    ],
+                )
             }
             Rvalue::CopyList(s) if matches!(self.func.ty(*s), Ty::List(_)) => {
                 self.rt_on(Rt::ListCopy, &[*s])

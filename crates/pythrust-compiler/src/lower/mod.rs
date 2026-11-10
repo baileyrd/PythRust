@@ -16,6 +16,7 @@ mod methods;
 mod opt;
 mod reduce;
 mod seq;
+mod slice;
 mod stmt;
 mod table;
 mod tasks;

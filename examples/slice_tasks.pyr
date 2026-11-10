@@ -1,0 +1,16 @@
+import concurrent.futures
+
+def read(xs):
+    return xs[0]
+def main():
+    xs = [1, 2]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(read, xs[:])
+        xs.append(3)
+        print(f.result(), xs)
+    words = ["é", "🙂"]
+    for word in words[:]:
+        words.append("x")
+        print(word)
+    print(words)
+main()

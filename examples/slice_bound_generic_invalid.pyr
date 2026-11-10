@@ -1,0 +1,9 @@
+# expect-exit: 1
+# expect-error: slice bounds must be integers
+# deviation: a generalized slice still rejects noninteger bounds before executing.
+def cut(xs, n):
+    return xs[:n]
+def forward(xs, n):
+    return cut(xs, n)
+print("before")
+print(forward("aé🙂", 1.0))

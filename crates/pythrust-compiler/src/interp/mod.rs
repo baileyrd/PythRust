@@ -13,6 +13,7 @@ mod builtins;
 mod fsum;
 mod methods;
 mod ops;
+mod slice;
 mod stdlib;
 mod table;
 mod tasks;
@@ -578,6 +579,16 @@ impl<'m> Interp<'m, '_> {
                 let index = self.eval(index)?;
                 get_item(&container, &index, e.span)
             }
+            ExprKind::Slice {
+                value,
+                start,
+                stop,
+                step,
+            } => self.slice_read(
+                value,
+                [start.as_deref(), stop.as_deref(), step.as_deref()],
+                e.span,
+            ),
             ExprKind::Attr { value, attr } => Ok(methods::bind(self.eval(value)?, attr)?),
         }
     }

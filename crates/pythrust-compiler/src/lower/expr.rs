@@ -33,6 +33,16 @@ impl<'a> FnBuilder<'_, 'a> {
             ExprKind::Dict(items) => self.dict_display(items, e.span),
             ExprKind::Set(items) => self.set_display(items, e.span),
             ExprKind::Subscript { value, index } => self.subscript(value, index, e.span),
+            ExprKind::Slice {
+                value,
+                start,
+                stop,
+                step,
+            } => self.slice_read(
+                value,
+                [start.as_deref(), stop.as_deref(), step.as_deref()],
+                e.span,
+            ),
             ExprKind::Attr { .. } => Err(unsupported(e.span, "attributes other than methods")),
         }
     }

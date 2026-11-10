@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: returns a value sharing a list
+# deviation: static subset rejects this form before execution.
+temper def bad(xs: list[list[int]]) -> list[list[int]]:
+    return xs[:]
+print(bad([[1]]))

@@ -1,0 +1,296 @@
+# Never-produced slice bounds retain their original faults in native code.
+def get(xs):
+    return xs[0]
+def forward(xs):
+    return get(xs)
+def cut(xs, n):
+    return xs[n:]
+xs = []
+d = {}
+print("index str start")
+try:
+    print("aé🙂"[xs[0]:])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("index str stop")
+try:
+    print("aé🙂"[:xs[0]])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("index str step")
+try:
+    print("aé🙂"[::xs[0]])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("index list start")
+try:
+    print([0, 1, 2][xs[0]:])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("index list stop")
+try:
+    print([0, 1, 2][:xs[0]])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("index list step")
+try:
+    print([0, 1, 2][::xs[0]])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("lookup str start")
+try:
+    print("aé🙂"[d[0]:])
+except KeyError as e:
+    print(e)
+xs = []
+d = {}
+print("lookup str stop")
+try:
+    print("aé🙂"[:d[0]])
+except KeyError as e:
+    print(e)
+xs = []
+d = {}
+print("lookup str step")
+try:
+    print("aé🙂"[::d[0]])
+except KeyError as e:
+    print(e)
+xs = []
+d = {}
+print("lookup list start")
+try:
+    print([0, 1, 2][d[0]:])
+except KeyError as e:
+    print(e)
+xs = []
+d = {}
+print("lookup list stop")
+try:
+    print([0, 1, 2][:d[0]])
+except KeyError as e:
+    print(e)
+xs = []
+d = {}
+print("lookup list step")
+try:
+    print([0, 1, 2][::d[0]])
+except KeyError as e:
+    print(e)
+xs = []
+d = {}
+print("pop str start")
+try:
+    print("aé🙂"[xs.pop():])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("pop str stop")
+try:
+    print("aé🙂"[:xs.pop()])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("pop str step")
+try:
+    print("aé🙂"[::xs.pop()])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("pop list start")
+try:
+    print([0, 1, 2][xs.pop():])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("pop list stop")
+try:
+    print([0, 1, 2][:xs.pop()])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("pop list step")
+try:
+    print([0, 1, 2][::xs.pop()])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("forward str start")
+try:
+    print("aé🙂"[forward(xs):])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("forward str stop")
+try:
+    print("aé🙂"[:forward(xs)])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("forward str step")
+try:
+    print("aé🙂"[::forward(xs)])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("forward list start")
+try:
+    print([0, 1, 2][forward(xs):])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("forward list stop")
+try:
+    print([0, 1, 2][:forward(xs)])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("forward list step")
+try:
+    print([0, 1, 2][::forward(xs)])
+except IndexError as e:
+    print(e)
+xs = []
+d = {}
+print("min str start")
+try:
+    print("aé🙂"[min(xs):])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("min str stop")
+try:
+    print("aé🙂"[:min(xs)])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("min str step")
+try:
+    print("aé🙂"[::min(xs)])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("min list start")
+try:
+    print([0, 1, 2][min(xs):])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("min list stop")
+try:
+    print([0, 1, 2][:min(xs)])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("min list step")
+try:
+    print([0, 1, 2][::min(xs)])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("max str start")
+try:
+    print("aé🙂"[max(xs):])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("max str stop")
+try:
+    print("aé🙂"[:max(xs)])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("max str step")
+try:
+    print("aé🙂"[::max(xs)])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("max list start")
+try:
+    print([0, 1, 2][max(xs):])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("max list stop")
+try:
+    print([0, 1, 2][:max(xs)])
+except ValueError as e:
+    print(e)
+xs = []
+d = {}
+print("max list step")
+try:
+    print([0, 1, 2][::max(xs)])
+except ValueError as e:
+    print(e)
+for n in []:
+    print("aé🙂"[n:])
+print("after empty str start")
+for n in []:
+    print("aé🙂"[:n])
+print("after empty str stop")
+for n in []:
+    print("aé🙂"[::n])
+print("after empty str step")
+for n in []:
+    print([0, 1, 2][n:])
+print("after empty list start")
+for n in []:
+    print([0, 1, 2][:n])
+print("after empty list stop")
+for n in []:
+    print([0, 1, 2][::n])
+print("after empty list step")
+# A representative from one call must not constrain the generic scheme.
+xs = []
+try:
+    print(cut([0, 1, 2], get(xs)))
+except IndexError as e:
+    print(e)
+print(cut([0, 1, 2], True), cut("aé🙂", 1))
+def receiver():
+    print("receiver")
+    return ["é", "🙂"]
+def later(n):
+    print("later", n)
+    return n
+xs = []
+try:
+    print(receiver()[get(xs):later(2):later(1)])
+except IndexError as e:
+    print(e)
+print("after faults")

@@ -2681,3 +2681,64 @@ fn list_and_dict_method_misuse_is_an_error() {
         assert!(got.contains(want), "{src:?}: {got}");
     }
 }
+
+#[test]
+fn slice_tuple_zero_has_no_fabricated_result_type() {
+    for src in [
+        "try:\n    print((1, 'a')[::0][0])\nexcept ValueError:\n    print('caught')\n",
+        "def f() -> str:\n    return (1, 'a')[::0]\n",
+        "def f(c):\n    return (1, 'a')[::0] if c else 'live'\nprint(f(False))\n",
+        "def f(xs):\n    return xs[::0]\nprint(f((1, 'a')))\n",
+    ] {
+        assert!(infer_src(src).is_ok(), "{src}");
+    }
+}
+
+#[test]
+fn slice_bounds_traverse_declared_raises() {
+    let src = "temper def bound() -> int raises IndexError:\n    raise IndexError('bound')\ntemper def f(xs: list[int]) -> list[int]:\n    return xs[bound()::0]\n";
+    assert!(src_err(src).contains("must declare"));
+    assert!(infer_src(&src.replace(
+        "def f(xs: list[int]) -> list[int]:",
+        "def f(xs: list[int]) -> list[int] raises IndexError:"
+    ))
+    .is_ok());
+}
+
+#[test]
+fn slice_bound_obligations_generalize_each_position() {
+    let mut failures = Vec::new();
+    for (position, slice) in [("start", "n:"), ("stop", ":n"), ("step", "::n")] {
+        for receiver in ["[0, 1, 2]", "'aé🙂'"] {
+            let src = format!("def cut(xs, n):\n    return xs[{slice}]\ndef forward(xs, n):\n    return cut(xs, n)\nprint(forward({receiver}, True))\nprint(forward({receiver}, 1))\nprint(cut({receiver}, False))\nprint(cut({receiver}, 2))\n");
+            if let Err(e) = infer_src(&src) {
+                failures.push(format!("{position} {receiver}: {e:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn slice_bound_obligations_saturate_without_assignment_widening() {
+    for slice in ["n:", ":n", "::n"] {
+        let src = format!("def boolean(n: bool) -> bool:\n    return n\ndef cut(xs, n):\n    result = xs[{slice}]\n    boolean(n)\n    return result\nprint(cut([0, 1, 2], True))\n");
+        assert!(infer_src(&src).is_ok(), "{src}");
+        let late = format!("def cut(xs):\n    return xs[{bound}]\nflag = True\nprint(cut([0, 1, 2]))\nprint(cut('aé🙂'))\n", bound=slice.replace('n', "flag"));
+        assert!(infer_src(&late).is_ok(), "{late}");
+        for value in ["1.0", "'x'", "None", "[1]"] {
+            let invalid = format!("def cut(xs, n):\n    return xs[{slice}]\ndef forward(xs, n):\n    return cut(xs, n)\nprint(forward([0, 1, 2], {value}))\n");
+            assert!(
+                src_err(&invalid).contains("slice bounds must be integers"),
+                "{invalid}"
+            );
+        }
+        let tuple = format!("def cut(xs, n):\n    return xs[{slice}]\nprint(cut((1, 2), True))\n");
+        assert!(src_err(&tuple).contains("a tuple slice needs literal bounds"));
+    }
+    assert!(src_err("n = True\nprint([0, 1, 2][n:])\nn = 1\n").contains("expected bool, found int"));
+    assert!(
+        src_err("def cut(xs, n: int):\n    return xs[n:]\nprint(cut([0, 1, 2], True))\n")
+            .contains("expected int, found bool")
+    );
+}

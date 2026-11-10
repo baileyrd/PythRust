@@ -1,0 +1,43 @@
+# Operand evaluation once, left to right, stopping on faults.
+def receiver(fail):
+    print("receiver")
+    if fail:
+        raise ValueError("receiver")
+    return [0, 1, 2, 3]
+def bound(n, fail):
+    print("bound", n)
+    if fail:
+        raise ValueError(n)
+    return n
+for failure in [-1, 0, 1, 2, 3]:
+    try:
+        print(receiver(failure == 0)[bound(1, failure == 1):bound(4, failure == 2):bound(1, failure == 3)])
+    except ValueError as e:
+        print("caught", e)
+try:
+    print(receiver(False)[bound(0, False):bound(4, False):bound(0, False)])
+except ValueError as e:
+    print("caught", e)
+xs = [0, 1, 2]
+def grow(xs):
+    xs.extend([3, 4])
+    print("grew")
+    return -1
+print(xs[:grow(xs)], xs)
+def shrink(xs):
+    del xs[0]
+    return -1
+print(xs[::-1][:shrink(xs)], xs)
+# An operator fault in a bound also skips later operands.
+try:
+    print(receiver(False)[[1][9]:bound(4, False):bound(1, False)])
+except IndexError as e:
+    print("index fault", e)
+try:
+    print(receiver(False)[bound(0, False):[1][9]:bound(1, False)])
+except IndexError as e:
+    print("index fault", e)
+try:
+    print(receiver(False)[bound(0, False):bound(4, False):[1][9]])
+except IndexError as e:
+    print("index fault", e)

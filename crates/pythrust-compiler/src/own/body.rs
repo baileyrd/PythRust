@@ -385,6 +385,7 @@ impl<'a> Flow<'a> {
             value,
             Rvalue::NewSeq(_)
                 | Rvalue::CopyList(_)
+                | Rvalue::Slice { .. }
                 | Rvalue::View(_)
                 | Rvalue::Call(..)
                 | Rvalue::Std(..)
@@ -400,7 +401,9 @@ impl<'a> Flow<'a> {
                 changed |= self.store(fresh, &items);
             }
             // A shallow copy shares the elements, not the list.
-            Rvalue::CopyList(a) | Rvalue::View(a) if self.elements_hold_list(dest) => {
+            Rvalue::CopyList(a) | Rvalue::View(a) | Rvalue::Slice { source: a, .. }
+                if self.elements_hold_list(dest) =>
+            {
                 let elements = self.contents(&self.of(*a));
                 changed |= self.store(fresh, &elements);
             }
@@ -426,6 +429,7 @@ impl<'a> Flow<'a> {
             }
             Rvalue::NewSeq(_)
             | Rvalue::CopyList(_)
+            | Rvalue::Slice { .. }
             | Rvalue::View(_)
             | Rvalue::Std(..)
             | Rvalue::Rust(..) => Objs::from([Obj::Fresh(dest.0, Age::Latest)]),
