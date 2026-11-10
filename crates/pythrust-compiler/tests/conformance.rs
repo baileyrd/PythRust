@@ -1894,6 +1894,7 @@ fn text_inputs(dir: &Path) -> Res<()> {
 fn text_run(cmd: &mut Command, dir: &Path) -> Res<Run> {
     text_inputs(dir)?;
     let mut got = run(cmd.current_dir(dir), TIMEOUT)?;
+    got.stdout = universal_newlines(got.stdout);
     for name in ["out.txt", "copy.bin", "kept.txt"] {
         let data = fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
         got.stdout.push_str(&format!("{name}: {data:?}\n"));
@@ -1941,6 +1942,11 @@ fn text_files_match_cpython() -> Res<()> {
 fn every_exit_flushes_open_writers() -> Res<()> {
     build_runtime()?;
     let dir = scratch("exit_flush")?;
+    // `write("before\n")` in text mode, on each platform's separator (D94).
+    const LINE: &str = match cfg!(windows) {
+        true => "before\r\n",
+        false => "before\n",
+    };
     let uncaught =
         "f = open(\"out.txt\", \"w\")\nf.write(\"before\\n\")\nraise ValueError(\"x\")\n";
     let fault = "f = open(\"out.txt\", \"w\")\nf.write(\"before\\n\")\n\
@@ -1951,7 +1957,7 @@ fn every_exit_flushes_open_writers() -> Res<()> {
         let mut pythrust = Command::new(pythrust_bin()?);
         pythrust.arg("run").arg(&source);
         let got = written(&mut pythrust, &dir.join(format!("{name}-run")))?;
-        assert_eq!(got, "before\n", "{name}");
+        assert_eq!(got, LINE, "{name}");
         let native = written(&mut Command::new(&exe), &dir.join(format!("{name}-native")))?;
         assert_eq!(native, got, "{name}");
         if python_too {
