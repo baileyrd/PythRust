@@ -64,17 +64,23 @@ pub(crate) fn root(path: &str) -> Result<Root, String> {
     })
 }
 
-/// The project of the program `graph`: the manifest is read only when
-/// some module imports a name neither standard nor local (D81). An
-/// error comes rendered.
+/// The project of the program `graph`. A program importing only
+/// standard modules never reads the manifest; one importing a local
+/// module reads it when there is one, so a binding by the same name is
+/// an error (D125); one importing a name neither standard nor local
+/// needs it (D81). An error comes rendered.
 pub(crate) fn bindings(root: &Root, graph: &Graph, sources: &Sources) -> Result<Project, String> {
-    let Some(first) = graph.foreign.first() else {
-        return Ok(Project {
-            crates: Vec::new(),
-            manifest: None,
-        });
+    let none = || Project {
+        crates: Vec::new(),
+        manifest: None,
     };
+    if graph.foreign.is_empty() && graph.locals.is_empty() {
+        return Ok(none());
+    }
     let Some(file) = &root.manifest else {
+        let Some(first) = graph.foreign.first() else {
+            return Ok(none());
+        };
         let why = format!(
             "no pythrust.toml names it (none in {} or any directory above it)",
             root.start.display()

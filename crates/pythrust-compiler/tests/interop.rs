@@ -1238,8 +1238,9 @@ fn a_module_imports_a_binding() {
     assert_eq!(stdout(build(&dir, src, &[("probe", &probe())])), "41\n");
 }
 
-/// A name that is both a local module and a binding is an error once
-/// the manifest is read (D81), naming the import in its own file.
+/// A name that is both a local module and a binding is an error (D81):
+/// importing a local module reads the manifest (D125), even when it is
+/// the program's only import, naming the import in its own file.
 #[test]
 fn a_local_module_named_like_a_binding_is_refused() {
     let dir = scratch("module-shadows-binding");
@@ -1247,11 +1248,14 @@ fn a_local_module_named_like_a_binding_is_refused() {
     fs::write(dir.join("other.pyr"), "import probe\n\nY = probe.X\n").unwrap();
     let crates = dir.join("crates");
     copy_tree(&probe(), &crates.join("probe"));
-    let digits = binding(&crates, "digits", "", false);
-    let src = "import other, digits\n\nprint(other.Y, digits.digits(7))\n";
-    let bindings = [("probe", crates.join("probe")), ("digits", digits)];
+    let bindings = [("probe", crates.join("probe"))];
     let bindings: Vec<(&str, &Path)> = bindings.iter().map(|(n, p)| (*n, p.as_path())).collect();
-    let out = compile(&dir, "main.pyr", src, &bindings);
+    let out = compile(
+        &dir,
+        "main.pyr",
+        "import other\n\nprint(other.Y)\n",
+        &bindings,
+    );
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     let err = text(&out.stderr);
     let want = "other.pyr:1:8: parse error: `probe` is both the local module `probe.pyr` \

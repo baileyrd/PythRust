@@ -16,7 +16,7 @@ use crate::sources::{lex_at, Sources};
 pub(crate) fn check_name(name: &str) -> Result<(), String> {
     let what = if !is_plain_name(name) {
         "is not a name"
-    } else if stdlib::module(name).is_some() {
+    } else if stdlib::is_python_module(name) {
         "is a standard module"
     } else if infer::is_builtin(name) {
         "is a builtin"
@@ -89,6 +89,9 @@ mod tests {
         let cases = [
             ("os", "is a standard module"),
             ("hashlib", "is a standard module"),
+            // Stdlib wins, so a binding named like any CPython module is
+            // unreachable (D128).
+            ("json", "is a standard module"),
             ("len", "is a builtin"),
             ("print", "is a builtin"),
             ("ValueError", "is a builtin"),
