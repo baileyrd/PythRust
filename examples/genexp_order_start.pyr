@@ -1,0 +1,21 @@
+# expect-exit: 1
+# A reducer's other argument is read after the first iterable and before
+# any item (D123), so an unbound `start` fails after `iter`, before `item`.
+def source() -> list[int]:
+    print("iter")
+    return [1]
+
+
+def item(x: int) -> int:
+    print("item", x)
+    return x
+
+
+def total(flag: bool) -> int:
+    if flag:
+        start = 0
+    return sum((item(x) for x in source()), start)
+
+
+print(total(True))
+print(total(False))

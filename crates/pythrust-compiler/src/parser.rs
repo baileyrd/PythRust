@@ -955,7 +955,7 @@ impl<'a> Parser<'a> {
         let args = if self.at(&TokenKind::RParen) {
             Vec::new()
         } else {
-            self.comma_list(Self::arg)?.0
+            self.call_args()?
         };
         self.expect(&TokenKind::RParen)?;
         check_args(&args)?;
@@ -966,6 +966,33 @@ impl<'a> Parser<'a> {
                 args,
             },
         })
+    }
+
+    /// `arg (',' arg)* [',']`, or a generator expression alone (D119):
+    /// beside any other argument it must be parenthesized, as in CPython.
+    fn call_args(&mut self) -> Result<Vec<Arg>> {
+        let first = self.arg()?;
+        if self.at(&TokenKind::For) {
+            let start = first.span;
+            let gen = self.comp_tail(Gather::Gen(Box::new(first.value)), start)?;
+            if !self.at(&TokenKind::RParen) {
+                return Err(error(gen.span, PARENS));
+            }
+            return Ok(vec![Arg {
+                name: None,
+                span: gen.span,
+                value: gen,
+            }]);
+        }
+        let mut args = vec![first];
+        while self.eat(&TokenKind::Comma) && starts_expr(self.peek()) {
+            let arg = self.arg()?;
+            if self.at(&TokenKind::For) {
+                return Err(error(arg.value.span, PARENS));
+            }
+            args.push(arg);
+        }
+        Ok(args)
     }
 
     /// `[NAME '='] expr`
@@ -981,7 +1008,9 @@ impl<'a> Parser<'a> {
             None
         };
         let value = self.expr()?;
-        self.no_comp("generator expressions")?;
+        if name.is_some() && self.at(&TokenKind::For) {
+            return Err(error(value.span, PARENS));
+        }
         Ok(Arg {
             name,
             value,
@@ -1091,8 +1120,11 @@ impl<'a> Parser<'a> {
                 span: self.span_from(start),
             });
         }
-        let inner = self.expr_list()?;
-        self.no_comp("generator expressions")?;
+        let (items, comma) = self.comma_list(Self::expr)?;
+        if self.at(&TokenKind::For) {
+            return self.paren_gen(items, comma, start);
+        }
+        let inner = self.tuple_or_single(items, comma, start)?;
         self.expect(&TokenKind::RParen)?;
         let span = self.span_from(start);
         self.widen_pauses(inner.span, span);
@@ -1129,24 +1161,43 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// The named error for a comprehension form not supported yet (D87),
-    /// at its `for`.
-    fn no_comp(&self, forms: &str) -> Result<()> {
-        if !self.at(&TokenKind::For) {
-            return Ok(());
-        }
-        let msg = format!("{forms} are not supported yet");
-        Err(error(self.tok(0).span, msg))
-    }
-
     /// `comp_for+ close`, after the opening bracket and what `gather`
     /// holds.
-    fn comp(&mut self, mut gather: Gather, close: &TokenKind, start: Span) -> Result<Expr> {
+    fn comp(&mut self, gather: Gather, close: &TokenKind, start: Span) -> Result<Expr> {
+        self.comp_closed(gather, Some(close), start)
+    }
+
+    /// A call's bare generator expression (D119): `comp_for+`, the `)`
+    /// left to the call.
+    fn comp_tail(&mut self, gather: Gather, start: Span) -> Result<Expr> {
+        self.comp_closed(gather, None, start)
+    }
+
+    /// `( expr comp_for+ )`, after its first item: one item, with no
+    /// comma, as CPython requires.
+    fn paren_gen(&mut self, items: Vec<Expr>, comma: bool, start: Span) -> Result<Expr> {
+        let Ok([item]) = <[Expr; 1]>::try_from(items) else {
+            return Err(error(self.span_from(start), PARENS));
+        };
+        if comma {
+            return Err(error(self.span_from(start), PARENS));
+        }
+        self.comp(Gather::Gen(Box::new(item)), &TokenKind::RParen, start)
+    }
+
+    fn comp_closed(
+        &mut self,
+        mut gather: Gather,
+        close: Option<&TokenKind>,
+        start: Span,
+    ) -> Result<Expr> {
         let mut clauses = Vec::new();
         while self.at(&TokenKind::For) {
             clauses.push(self.comp_for()?);
         }
-        self.expect(close)?;
+        if let Some(close) = close {
+            self.expect(close)?;
+        }
         comp::own_names(&mut gather, &mut clauses, start.start)?;
         bounded(Expr {
             kind: ExprKind::Comp { gather, clauses },
@@ -1279,6 +1330,9 @@ fn check_params(params: &[Param]) -> Result<()> {
     }
     Ok(())
 }
+
+/// CPython's error for a generator expression beside another argument.
+const PARENS: &str = "generator expression must be parenthesized";
 
 fn check_args(args: &[Arg]) -> Result<()> {
     let mut after_keyword = args.iter().skip_while(|a| a.name.is_none());
@@ -1447,6 +1501,7 @@ fn expr_noun(kind: &ExprKind) -> &'static str {
             Gather::List(_) => "a list comprehension",
             Gather::Set(_) => "a set comprehension",
             Gather::Dict(..) => "a dict comprehension",
+            Gather::Gen(_) => "a generator expression",
         },
         ExprKind::Dict(_) => "a dict display",
         ExprKind::Set(_) => "a set display",

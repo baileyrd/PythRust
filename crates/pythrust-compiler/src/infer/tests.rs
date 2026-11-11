@@ -2653,6 +2653,46 @@ fn enumerate_and_zip_refuse_other_places() {
     }
 }
 
+/// A generator expression is a reducer's argument only (D119-D122):
+/// typed as the list comprehension in that slot, and anywhere else not a
+/// value yet.
+#[test]
+fn generator_expressions_only_feed_reducers() {
+    let ret = |body: &str| ret_of(&format!("def f():\n    return {body}\n"));
+    let ok = [
+        ("sum(x * 2 for x in [1])", "int"),
+        ("sum((x for x in [1.5]), 1.0)", "float"),
+        ("any(x for x in \"ab\")", "bool"),
+        ("min(len(w) for w in [\"a\"])", "int"),
+        ("sorted((x for x in [2, 1]), reverse=True)", "list[int]"),
+        ("set(x for x in [1])", "set[int]"),
+        ("list(c for c in \"ab\")", "list[str]"),
+        ("\"-\".join(c for c in \"ab\")", "str"),
+    ];
+    for (e, want) in ok {
+        assert_eq!(ret(e), want, "{e}");
+    }
+    let not_value = "a generator expression is not a value yet; use a list comprehension `[...]`";
+    let refused = [
+        "g = (x for x in [1])\n",
+        "print(x for x in [1])\n",
+        "print(len(x for x in [1]))\n",
+        "def f(xs):\n    return 0\nprint(f(x for x in [1]))\n",
+        "for y in (x for x in [1]):\n    print(y)\n",
+        "print([y for y in (x for x in [1])])\n",
+        "print(sum(y for y in (x for x in [1])))\n",
+        "print(list(enumerate(x for x in [1])))\n",
+        "print(max((x for x in [1]), 5))\n",
+        "def sum(xs):\n    return 0\nprint(sum(x for x in [1]))\n",
+    ];
+    for src in refused {
+        let got = src_err(src);
+        assert!(got.contains(not_value), "{src:?}: {got}");
+    }
+    let wrong = src_err("print(\",\".join(x for x in [1]))\n");
+    assert!(wrong.contains("`str.join` needs a list of str"), "{wrong}");
+}
+
 #[test]
 fn list_and_dict_methods_type_their_results() {
     let src = "xs = [3, 1]\n\

@@ -1,0 +1,15 @@
+# deviation: an int is 64-bit and `sum` past its range is a fatal OverflowError (checked integers, D2); CPython's ints are unbounded. In an unannotated function a generator expression's int `sum` still adds each item as the loop yields it (D119), so the fault comes before the third item runs.
+# expect-exit: 1
+
+
+def seen(x):
+    print("see", x)
+    return x
+
+
+def total(xs):
+    return sum(seen(x) for x in xs)
+
+
+print(total([1, 2]))
+print(total([2**62, 2**62, 1]))

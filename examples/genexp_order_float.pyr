@@ -1,0 +1,20 @@
+# expect-exit: 1
+# A float `sum` gathers its items, but reads `start` first (D123).
+def source() -> list[float]:
+    print("iter")
+    return [0.5]
+
+
+def item(x: float) -> float:
+    print("item", x)
+    return x
+
+
+def total(flag: bool) -> float:
+    if flag:
+        start = 0.25
+    return sum((item(x) for x in source()), start)
+
+
+print(total(True))
+print(total(False))

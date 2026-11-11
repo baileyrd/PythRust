@@ -1,0 +1,13 @@
+# deviation: an int is 64-bit and `sum` past its range is a fatal OverflowError (checked integers, D2); CPython's ints are unbounded. A generator expression's `sum` adds each item as the loop yields it (D119), so the fault comes before the third item runs.
+# expect-exit: 1
+
+
+def seen(x):
+    print("see", x)
+    return x
+
+
+big = 2**62
+near = big - 2
+print(sum((seen(b) for b in [big, 1]), near))
+print(sum(seen(b) for b in [big, big, 1]))

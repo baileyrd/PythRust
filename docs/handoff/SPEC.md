@@ -7,7 +7,7 @@ Nano (CDTO, Python-first) wants Python's surface with Rust's guarantees: a Pytho
 
 ## Scope
 - In: phase-2 subset (ints, floats, strings, lists, tuples, dicts, sets, control flow, `T | None`); `temper def` with modes `mut`/`owned`, `raises`; builtin exception hierarchy; Cranelift native backend (`pythrust build`); stdlib M6a (`sys`, `os`, `hashlib`, `open(p, "rb")`); Rust bindings M6b; tasks via `concurrent.futures` + `pause` M6c; package tool M6d (`pythrust.toml`, `pythrust.lock`).
-- Out / later: classes, generator expressions (list, dict and set comprehensions are in, D85, D116), lambda, slice assignment/deletion and computed tuple slices, `try`/`else`, bare `raise`, user exceptions, generators, `shared[T]` and channels (parked), Python bridge M6e (waits for a second app), type-changing rebinding, general unions, arbitrary-precision ints. Full list: `grammar.md#deliberate-omissions-phase-2`.
+- Out / later: classes, generator expressions outside a reducer's argument (list, dict and set comprehensions are in, D85, D116; generator expressions as a reducer's argument, D119-D123), lambda, slice assignment/deletion and computed tuple slices, `try`/`else`, bare `raise`, user exceptions, generators, `shared[T]` and channels (parked), Python bridge M6e (waits for a second app), type-changing rebinding, general unions, arbitrary-precision ints. Full list: `grammar.md#deliberate-omissions-phase-2`.
 
 ## Constraints
 - Tempering never changes meaning: removing `temper`/modes/`raises` from an accepted program leaves output unchanged. [stated]

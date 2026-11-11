@@ -1,0 +1,20 @@
+# expect-exit: 1
+# As genexp_order_start, with `start=`.
+def source() -> list[int]:
+    print("iter")
+    return [1]
+
+
+def item(x: int) -> int:
+    print("item", x)
+    return x
+
+
+def total(flag: bool) -> int:
+    if flag:
+        start = 0
+    return sum((item(x) for x in source()), start=start)
+
+
+print(total(True))
+print(total(False))

@@ -386,7 +386,7 @@ impl Checker {
     /// deviation; its element type is checked first, so a wrong one is
     /// the ordinary type error.
     fn join_arg(&mut self, arg: &Arg) -> Result<()> {
-        let t = self.consumed(&arg.value)?;
+        let t = self.reduced(&arg.value)?;
         // Solved first, so an `enumerate` or `zip` shows its item type.
         self.settle()?;
         let at = arg.value.span;

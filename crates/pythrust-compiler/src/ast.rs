@@ -322,13 +322,16 @@ pub enum Gather {
     Set(Box<Expr>),
     /// The key, evaluated first, as in CPython 3.8+, then the value.
     Dict(Box<Expr>, Box<Expr>),
+    /// A generator expression: a value only as a reducer's argument,
+    /// which takes each item as the loop yields it (D119, D121).
+    Gen(Box<Expr>),
 }
 
 impl Gather {
     /// The expressions gathered each pass, in evaluation order.
     pub fn exprs(&self) -> Vec<&Expr> {
         match self {
-            Gather::List(e) | Gather::Set(e) => vec![e],
+            Gather::List(e) | Gather::Set(e) | Gather::Gen(e) => vec![e],
             Gather::Dict(k, v) => vec![k, v],
         }
     }
@@ -336,7 +339,7 @@ impl Gather {
     /// [`Self::exprs`], mutably.
     pub fn exprs_mut(&mut self) -> Vec<&mut Expr> {
         match self {
-            Gather::List(e) | Gather::Set(e) => vec![e],
+            Gather::List(e) | Gather::Set(e) | Gather::Gen(e) => vec![e],
             Gather::Dict(k, v) => vec![k, v],
         }
     }

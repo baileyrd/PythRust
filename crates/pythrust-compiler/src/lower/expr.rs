@@ -628,6 +628,9 @@ impl<'a> FnBuilder<'_, 'a> {
             if let Some(op) = self.zip_builtin(name, args, span)? {
                 return Ok(op);
             }
+            if let Some(op) = self.reduce_gen(name, args, span)? {
+                return Ok(op);
+            }
         }
         // Python evaluates arguments as written, then binds them.
         let mut ops = Vec::new();
@@ -824,7 +827,7 @@ impl<'a> FnBuilder<'_, 'a> {
 
     /// A builtin call; `ops` are `args`' values. Inference allows
     /// keywords only for `print`.
-    fn builtin(
+    pub(super) fn builtin(
         &mut self,
         name: &str,
         args: &[Arg],

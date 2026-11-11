@@ -231,7 +231,7 @@ fn sum<'m>(args: &Args<'m>) -> Result<Value<'m>> {
 }
 
 /// CPython's compensated float sum of `xs` from `start`.
-fn float_sum<'m>(start: f64, xs: impl Iterator<Item = Value<'m>>) -> f64 {
+pub(super) fn float_sum<'m>(start: f64, xs: impl Iterator<Item = Value<'m>>) -> f64 {
     fsum::fsum(start, xs.filter_map(|x| x.num()).map(Num::float))
 }
 
