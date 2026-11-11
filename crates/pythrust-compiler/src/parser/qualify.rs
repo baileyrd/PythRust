@@ -195,6 +195,7 @@ fn stmt(s: &mut Stmt, rename: &mut Rename<'_>) {
         } => {
             block(body, rename);
             for h in handlers {
+                h.classes.iter_mut().for_each(|c| ident(c, rename));
                 h.binding.iter_mut().for_each(|b| ident(b, rename));
                 block(&mut h.body, rename);
             }
@@ -212,10 +213,12 @@ fn stmt(s: &mut Stmt, rename: &mut Rename<'_>) {
     }
 }
 
-/// A `def`: its name and defaults in the enclosing scope, its body with
-/// its own locals (parameters and what it assigns) kept.
+/// A `def`: its name, defaults and `raises` names in the enclosing
+/// scope, its body with its own locals (parameters and what it assigns)
+/// kept.
 fn func(f: &mut FuncDef, rename: &mut Rename<'_>) {
     ident(&mut f.name, rename);
+    f.raises.iter_mut().for_each(|r| ident(r, rename));
     for p in &mut f.params {
         p.default.iter_mut().for_each(|d| expr(d, rename));
     }
@@ -428,5 +431,21 @@ mod tests {
             assert!(seen.iter().any(|s| s == n), "{n} not in {seen:?}");
         }
         assert!(!seen.iter().any(|s| s == "len" || s == "n"), "{seen:?}");
+    }
+
+    #[test]
+    fn exception_names_in_handlers_and_raises_are_module_names() {
+        let src = "KeyError = 1\n\
+                   temper def f() -> int raises KeyError, ValueError:\n\
+                   \x20   try:\n        return 1\n\
+                   \x20   except (KeyError, OSError):\n        return 2\n";
+        let (a, _) = qualified(src, "a");
+        let tree = format!("{a:?}");
+        assert!(tree.matches("\"a.KeyError\"").count() == 3, "{tree}");
+        let main = main_of("ValueError = 0\nOSError = 1\nKeyError = 2\n", &[a]);
+        let seen = names(&main);
+        for n in ["__main__.ValueError", "__main__.OSError", "KeyError"] {
+            assert!(seen.iter().any(|s| s == n), "{n} not in {seen:?}");
+        }
     }
 }

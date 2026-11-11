@@ -24,8 +24,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::{
-    Arg, CmpOp, Expr, ExprKind, FuncDef, Ident, Mode, Module, Stmt, StmtKind, StubDef, Target,
-    TargetKind,
+    unqualified, Arg, CmpOp, Expr, ExprKind, FuncDef, Ident, Mode, Module, Stmt, StmtKind, StubDef,
+    Target, TargetKind,
 };
 use crate::diag::{Result, Warning};
 use crate::exc::ExcKind;
@@ -184,7 +184,7 @@ fn stub_declaration(f: &StubDef) -> Result<Raises> {
 /// redefines; `Exception` admits any.
 fn declared_escape(name: &Ident, defs: &[&FuncDef], globals: &Bindings) -> Result<ExcKind> {
     let n = name.name.as_str();
-    let Some(builtin) = ExcKind::from_name(n) else {
+    let Some(builtin) = ExcKind::from_name(unqualified(n)) else {
         let names = builtins::exception_names();
         let msg = format!("`{n}` is not an exception; `raises` lists one of {names}");
         return Err(error(name.span, msg));

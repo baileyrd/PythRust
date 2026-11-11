@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: `KeyError` is redefined here, so it no longer names the builtin exception
+import a
+
+print(a.f({}))

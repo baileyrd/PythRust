@@ -1,0 +1,5 @@
+ValueError = "shadowed · ✓"
+
+
+temper def f(s: str) -> int raises ValueError:
+    return int(s)

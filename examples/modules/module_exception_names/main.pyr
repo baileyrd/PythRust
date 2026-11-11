@@ -1,0 +1,11 @@
+# Exception names in a module's handlers and `raises` clauses are the
+# builtins, though the main file binds the same names for itself.
+import a
+
+ValueError = 0
+KeyError = "main's · ü"
+ZeroDivisionError = 1.5
+print(a.parse("bad"), a.parse("3"))
+print(a.pick({"x": 1, "zero": 0}, "x"), a.pick({}, "y"))
+print(a.strict("12"), a.local())
+print(ValueError, KeyError, ZeroDivisionError)

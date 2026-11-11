@@ -371,6 +371,12 @@ pub struct CompFor {
 /// leaks nor shadows (CPython 3 scoping).
 pub const COMP_MARK: char = '@';
 
+/// A qualified name's own part: `x` of the global `a.x` (step 3, D76).
+/// A builtin's name is qualified only where its module rebinds it.
+pub fn unqualified(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
+
 /// The name `x` a comprehension starting at `offset` binds.
 pub fn comp_name(name: &str, offset: usize) -> String {
     format!("{name}{COMP_MARK}{offset}")
