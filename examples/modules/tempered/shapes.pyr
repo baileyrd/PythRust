@@ -4,5 +4,5 @@ temper def area(w: int, h: int) -> int:
 
 temper def label(a: int) -> str:
     if a > 50:
-        return "big " + str(a)
-    return "small " + str(a)
+        return "größer " + str(a)
+    return "kleiner " + str(a)

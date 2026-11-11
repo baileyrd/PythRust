@@ -17,8 +17,8 @@ def len(s: str) -> int:
 
 def describe(n: int) -> str:
     if n < LIMIT:
-        return "small"
-    return "large"
+        return "klein · ✓"
+    return "groß · 大"
 
 
 if __name__ == "__main__":
