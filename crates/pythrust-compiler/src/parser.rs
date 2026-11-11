@@ -41,9 +41,24 @@ pub fn parse_module(
     bindings: &[Binding],
     locals: &[LocalModule],
 ) -> Result<Module> {
+    parse_part(tokens, bindings, locals, &mut Vec::new())
+}
+
+/// [`parse_module`], where the standard modules in `ready` are already
+/// initialized by an earlier module, so importing one shares its state
+/// (D83); those this module initializes are added.
+fn parse_part(
+    tokens: &[Token],
+    bindings: &[Binding],
+    locals: &[LocalModule],
+    ready: &mut Vec<&'static str>,
+) -> Result<Module> {
     let mut parser = Parser::new(tokens, bindings)?;
     parser.locals = locals;
-    parser.module()
+    parser.ready = std::mem::take(ready);
+    let module = parser.module()?;
+    *ready = parser.ready;
+    Ok(module)
 }
 
 /// A local module: its dotted name and its tokens, their spans already
@@ -59,13 +74,14 @@ pub struct Unit<'t> {
 pub fn parse_program(locals: &[Unit<'_>], main: &[Token], bindings: &[Binding]) -> Result<Module> {
     let mut done: Vec<LocalModule> = Vec::new();
     let mut parts: Vec<Module> = Vec::new();
+    let mut ready = Vec::new();
     for unit in locals {
-        let mut module = parse_module(unit.tokens, bindings, &done)?;
+        let mut module = parse_part(unit.tokens, bindings, &done, &mut ready)?;
         done.push(qualify::qualify(&mut module, unit.name));
         parts.push(module);
     }
-    let mut module = parse_module(main, bindings, &done)?;
-    qualify::main_name(&mut module);
+    let mut module = parse_part(main, bindings, &done, &mut ready)?;
+    qualify::main_name(&mut module, &parts);
     Ok(qualify::link(parts, module))
 }
 
@@ -100,6 +116,9 @@ struct Parser<'a> {
     jump_leaves_finally: bool,
     /// Modules imported so far.
     modules: Vec<&'static ModuleDef>,
+    /// The standard modules whose variables are initialized, by this
+    /// module or an earlier one: importing one again shares them.
+    ready: Vec<&'static str>,
     /// The Rust bindings `import` may name, and those it has.
     bindings: &'a [Binding],
     imported_bindings: Vec<&'a Binding>,
@@ -138,6 +157,7 @@ impl<'a> Parser<'a> {
             in_finally: false,
             jump_leaves_finally: false,
             modules: Vec::new(),
+            ready: Vec::new(),
             bindings,
             imported_bindings: Vec::new(),
             locals: &[],

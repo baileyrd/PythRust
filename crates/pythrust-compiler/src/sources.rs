@@ -5,14 +5,15 @@
 //! space, so a span alone says which file it belongs to, and `Span`
 //! stays `{start, end}`.
 
-use pythrust_compiler::{lexer, Diagnostic, Span, Token, Warning};
+use pythrust_compiler::{lexer, DiagKind, Diagnostic, Span, Token, Warning};
 
 /// A source file and the offset its spans start at.
 struct Source {
     path: String,
     text: String,
     base: usize,
-    /// A local module's dotted name: its own names render without it.
+    /// The module's dotted name: its own names render without it. A
+    /// binding's stub has none.
     module: Option<String>,
 }
 
@@ -24,13 +25,15 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
-    /// The program's file, whose spans start at 0.
+    /// The program's file, whose spans start at 0. It is the module
+    /// `__main__`, which qualifies a global a local module's free name
+    /// would meet; it renders unqualified there too.
     pub(crate) fn new(path: &str, text: &str) -> Sources {
         let main = Source {
             path: path.to_string(),
             text: text.to_string(),
             base: 0,
-            module: None,
+            module: Some("__main__".to_string()),
         };
         Sources {
             main,
@@ -86,12 +89,19 @@ impl Sources {
         format!("{}:{line}", file.path)
     }
 
-    /// Renders `diag` against the file it belongs to.
+    /// Renders `diag` against the file it belongs to. A runtime error's
+    /// message is the program's own text (an exception's), so it is
+    /// shown as raised, as native code shows it (D127 names only the
+    /// compiler's names).
     pub(crate) fn render(&self, diag: &Diagnostic) -> String {
         let (file, span) = self.locate(diag.span);
+        let message = match diag.kind {
+            DiagKind::Runtime => diag.message.clone(),
+            _ => file.own_names(&diag.message),
+        };
         let local = Diagnostic {
             span,
-            message: file.own_names(&diag.message),
+            message,
             kind: diag.kind,
         };
         crate::render(&file.path, &file.text, &local)
@@ -238,5 +248,34 @@ mod tests {
         };
         let out = sources.render_warning(&w);
         assert!(out.starts_with("a.pyr:1:5:"), "{out}");
+    }
+
+    #[test]
+    fn a_runtime_message_is_shown_as_raised() {
+        let mut sources = Sources::new("main.pyr", "import a\n");
+        let a = sources.add_module("a.pyr", "raise E\n", "a");
+        let d = Diagnostic {
+            message: "ValueError: `a.x`".to_string(),
+            kind: pythrust_compiler::DiagKind::Runtime,
+            ..diag(a, a + 1)
+        };
+        assert!(sources.render(&d).contains("ValueError: `a.x`"));
+    }
+
+    #[test]
+    fn the_main_files_qualified_names_render_unqualified_there() {
+        let mut sources = Sources::new("main.pyr", "len = 1\n");
+        let a = sources.add_module("a.pyr", "x = 1\n", "a");
+        let message = "`__main__.len` and `a.x`".to_string();
+        let in_main = Diagnostic {
+            message: message.clone(),
+            ..diag(0, 1)
+        };
+        assert!(sources.render(&in_main).contains("`len` and `a.x`"));
+        let in_a = Diagnostic {
+            message,
+            ..diag(a, a + 1)
+        };
+        assert!(sources.render(&in_a).contains("`__main__.len` and `x`"));
     }
 }

@@ -26,12 +26,7 @@ impl<'a> Parser<'a> {
             }
             let module = self.import(&name)?;
             self.dotted_import(module, &name)?;
-            stmts.extend(
-                module
-                    .vars
-                    .iter()
-                    .map(|(var, init)| bind(var, *init, name.span)),
-            );
+            stmts.extend(self.initialize(module, name.span));
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
@@ -53,6 +48,17 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Newline)?;
         let span = self.span_from(start);
         Ok(stmts.into_iter().map(|s| Stmt { span, ..s }).collect())
+    }
+
+    /// The assignments that initialize `module`'s variables, unless an
+    /// import of it has already: every importer shares them (D83).
+    fn initialize(&mut self, module: &'static ModuleDef, span: Span) -> Vec<Stmt> {
+        if self.ready.contains(&module.name) {
+            return Vec::new();
+        }
+        self.ready.push(module.name);
+        let vars = module.vars.iter();
+        vars.map(|(var, init)| bind(var, *init, span)).collect()
     }
 
     /// After `import concurrent`, the `.futures` it needs: the one

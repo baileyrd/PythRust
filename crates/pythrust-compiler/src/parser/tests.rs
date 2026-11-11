@@ -1539,12 +1539,13 @@ fn src_err(src: &str) -> String {
 }
 
 #[test]
-fn import_binds_each_module_variable_from_its_initializer() {
-    let m = src_parse("import sys, sys\nprint(sys.argv)\n").unwrap();
+fn import_binds_each_module_variable_from_its_initializer_once() {
+    let m = src_parse("import sys, sys\nimport sys\nprint(sys.argv)\n").unwrap();
     let names: Vec<String> = m.body.iter().map(sx_stmt).collect();
-    let bind = "(= sys.argv (call sys.__argv__))";
-    assert_eq!(names[..2], [bind, bind]);
-    assert_eq!(names[2], "(call print sys.argv)");
+    assert_eq!(
+        names,
+        ["(= sys.argv (call sys.__argv__))", "(call print sys.argv)"]
+    );
 }
 
 #[test]

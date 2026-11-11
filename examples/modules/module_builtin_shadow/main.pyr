@@ -1,0 +1,15 @@
+# A builtin the main file shadows stays the builtin in a module: each
+# module keeps its own globals and builtins.
+import a
+
+
+def len(xs: list[int]) -> int:
+    return 99
+
+
+def str(n: int) -> str:
+    return "ninety-nine"
+
+
+print(a.size([1, 2]), len([1, 2]))
+print(a.label(), str(1))

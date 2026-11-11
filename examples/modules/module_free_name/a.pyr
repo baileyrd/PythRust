@@ -1,0 +1,2 @@
+def peek() -> int:
+    return limit

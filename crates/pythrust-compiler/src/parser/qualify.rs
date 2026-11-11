@@ -3,6 +3,10 @@
 //! global `a.x`, the name `a.x` reads in its importers. A function's own
 //! locals keep their names; comprehension names (`x@n`) and the names
 //! of other modules (`sys.argv`, `b.f`) are never a module's globals.
+//!
+//! A name a module reads but does not bind is a builtin's (or no one's),
+//! never the main file's: a main-file global it would meet is qualified
+//! `__main__.x` instead, so each module keeps its own lookup (D76).
 
 use std::collections::BTreeSet;
 
@@ -16,11 +20,16 @@ use crate::span::Span;
 /// The name every module reads for its own name (D83).
 const NAME: &str = "__name__";
 
+/// The main file's module name, which qualifies its globals that a
+/// local module's free names would otherwise meet.
+const MAIN: &str = "__main__";
+
 /// Qualifies the globals of `module`, the local module `name`, with
-/// `name.`, and binds its `__name__` first if it reads it. The module's
-/// names, as importers see them.
+/// `name.`, and binds its `__name__` first: an importer may read it.
+/// The module's names, as importers see them.
 pub fn qualify(module: &mut Module, name: &str) -> LocalModule {
-    let globals = own_name(module, name);
+    bind_name(module, name);
+    let globals = globals(&module.body);
     let mut rename = |n: &str| globals.contains(n).then(|| format!("{name}.{n}"));
     block(&mut module.body, &mut rename);
     LocalModule {
@@ -29,10 +38,17 @@ pub fn qualify(module: &mut Module, name: &str) -> LocalModule {
     }
 }
 
-/// Binds `__name__` to `"__main__"` first in the main file, if it reads
-/// it (D83).
-pub fn main_name(module: &mut Module) {
-    own_name(module, "__main__");
+/// Binds `__name__` to `"__main__"` first in the main file, if it names
+/// it anywhere (D83), and qualifies the main file's globals that a name
+/// free in one of the local modules `parts` would otherwise resolve to.
+pub fn main_name(module: &mut Module, parts: &[Module]) {
+    if reads(&module.body, NAME) {
+        bind_name(module, MAIN);
+    }
+    let free: BTreeSet<String> = parts.iter().flat_map(|p| free(&p.body)).collect();
+    let clash: BTreeSet<String> = globals(&module.body).intersection(&free).cloned().collect();
+    let mut rename = |n: &str| clash.contains(n).then(|| format!("{MAIN}.{n}"));
+    block(&mut module.body, &mut rename);
 }
 
 /// The program as one module (D76): the bodies of `parts`, in the
@@ -56,13 +72,9 @@ pub fn link(parts: Vec<Module>, main: Module) -> Module {
     out
 }
 
-/// The module's globals, after binding `__name__` to `name` first when
-/// the module reads it and does not bind it itself.
-fn own_name(module: &mut Module, name: &str) -> BTreeSet<String> {
-    let mut globals = globals(&module.body);
-    if globals.contains(NAME) || !reads(&module.body, NAME) {
-        return globals;
-    }
+/// Binds `__name__` to `name` first in `module`; a later assignment
+/// still rebinds it.
+fn bind_name(module: &mut Module, name: &str) {
     let at = Span {
         start: module.span.start,
         end: module.span.start,
@@ -80,8 +92,20 @@ fn own_name(module: &mut Module, name: &str) -> BTreeSet<String> {
         span: at,
     };
     module.body.insert(0, bind);
-    globals.insert(NAME.to_string());
-    globals
+}
+
+/// The names a qualified module's code reads outside any function's
+/// locals that are not qualified: builtins', or names it never binds.
+fn free(body: &[Stmt]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut look = |n: &str| {
+        if !n.contains('.') && !n.contains(COMP_MARK) {
+            out.insert(n.to_string());
+        }
+        None
+    };
+    block(&mut body.to_vec(), &mut look);
+    out
 }
 
 /// The names the top level of `body` binds, a function's name included:
@@ -316,7 +340,7 @@ mod tests {
                    def g(v):\n    return v\n\
                    print(f(X), [X for X in [2]])\n";
         let (m, local) = qualified(src, "a");
-        let want: BTreeSet<String> = ["X", "f", "g"].map(String::from).into();
+        let want: BTreeSet<String> = ["X", "__name__", "f", "g"].map(String::from).into();
         assert_eq!(local.names, want);
         let seen = names(&m);
         for n in ["a.X", "a.f", "a.g", "print"] {
@@ -337,8 +361,8 @@ mod tests {
     fn a_local_shadowing_a_global_stays_local() {
         let src = "x = 1\ndef f():\n    x = 2\n    return x\n";
         let (m, _) = qualified(src, "a");
-        let StmtKind::FuncDef(f) = &m.body[1].kind else {
-            panic!("a def")
+        let StmtKind::FuncDef(f) = &m.body[2].kind else {
+            panic!("a def, after `__name__` and `x`")
         };
         assert_eq!(f.name.name, "a.f");
         let StmtKind::Assign { target, .. } = &f.body[0].kind else {
@@ -359,31 +383,50 @@ mod tests {
         }];
         let m = parser::parse_program(&units, &main, &[binding]).unwrap();
         assert_eq!(m.stubs.len(), 1);
-        let StmtKind::Assign { target, .. } = &m.body[0].kind else {
-            panic!("`a` runs first")
+        let StmtKind::Assign { target, .. } = &m.body[1].kind else {
+            panic!("`a` runs first, after its `__name__`")
         };
         assert_eq!(target.kind, TargetKind::Name("a.X".into()));
-        assert!(matches!(m.body[1].kind, StmtKind::Expr(_)), "then main");
+        assert!(matches!(m.body[2].kind, StmtKind::Expr(_)), "then main");
     }
 
     #[test]
-    fn dunder_name_is_bound_only_when_read() {
-        let (m, local) = qualified("x = 1\n", "a");
-        assert!(!local.names.contains(NAME));
-        assert_eq!(m.body.len(), 1);
-        let (m, local) = qualified("print(__name__)\n", "pkg.b");
-        assert!(local.names.contains(NAME));
+    fn a_module_always_exports_its_name() {
+        let (m, local) = qualified("x = 1\n", "util");
+        assert!(local.names.contains(NAME), "{:?}", local.names);
         let StmtKind::Assign { target, value } = &m.body[0].kind else {
             panic!("`__name__` bound first")
         };
-        assert_eq!(target.kind, TargetKind::Name("pkg.b.__name__".into()));
-        assert_eq!(value.kind, ExprKind::Str("pkg.b".into()));
-        let tokens = lexer::lex("if __name__ == '__main__':\n    pass\n").unwrap();
+        assert_eq!(target.kind, TargetKind::Name("util.__name__".into()));
+        assert_eq!(value.kind, ExprKind::Str("util".into()));
+    }
+
+    fn main_of(src: &str, parts: &[Module]) -> Module {
+        let tokens = lexer::lex(src).unwrap();
         let mut main = parser::parse(&tokens).unwrap();
-        main_name(&mut main);
+        main_name(&mut main, parts);
+        main
+    }
+
+    #[test]
+    fn main_binds_its_name_first_even_when_it_rebinds_it() {
+        let main = main_of("print(__name__)\n__name__ = 'x'\n", &[]);
         let StmtKind::Assign { value, .. } = &main.body[0].kind else {
             panic!("`__name__` bound first")
         };
         assert_eq!(value.kind, ExprKind::Str("__main__".into()));
+        assert_eq!(main.body.len(), 3);
+        assert_eq!(main_of("x = 1\n", &[]).body.len(), 1, "unread, unbound");
+    }
+
+    #[test]
+    fn a_main_global_a_module_name_would_meet_is_qualified() {
+        let (a, _) = qualified("def size(xs):\n    return len(xs) + n\n", "a");
+        let main = main_of("def len(xs):\n    return 9\nn = 1\nm = len([])\n", &[a]);
+        let seen = names(&main);
+        for n in ["__main__.len", "__main__.n", "m"] {
+            assert!(seen.iter().any(|s| s == n), "{n} not in {seen:?}");
+        }
+        assert!(!seen.iter().any(|s| s == "len" || s == "n"), "{seen:?}");
     }
 }
