@@ -610,8 +610,8 @@ fn consumes(name: &str, n: usize, k: usize) -> bool {
 }
 
 /// Beside a generator expression, `name`'s other argument (`what`) is
-/// a literal or a name (D123): read before the loops start, it cannot
-/// show that it ran after the first iterable, as CPython runs it.
+/// a literal or a name (D123), the accepted scope of #1210; both
+/// backends read it after the first iterable, as CPython does.
 fn plain_beside_gen(name: &str, what: &str, args: &[Arg]) -> Result<()> {
     let Some((first, rest)) = args.split_first() else {
         return Ok(());
@@ -623,7 +623,7 @@ fn plain_beside_gen(name: &str, what: &str, args: &[Arg]) -> Result<()> {
     else {
         return Ok(());
     };
-    let Some(computed) = rest.iter().find(|a| !effect_free(&a.value)) else {
+    let Some(computed) = rest.iter().find(|a| !plain(&a.value)) else {
         return Ok(());
     };
     let msg = format!(
@@ -634,7 +634,7 @@ fn plain_beside_gen(name: &str, what: &str, args: &[Arg]) -> Result<()> {
 }
 
 /// A name, or an int, float or bool literal with an optional sign.
-fn effect_free(e: &Expr) -> bool {
+fn plain(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Name(_) => true,
         ExprKind::Unary {
