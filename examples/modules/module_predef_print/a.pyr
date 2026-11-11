@@ -1,0 +1,12 @@
+print("a: before its def · ✓")
+
+
+def print(s: str) -> None:
+    pass
+
+
+print("a: after its def, silent")
+
+
+def quiet() -> None:
+    print("silent too")

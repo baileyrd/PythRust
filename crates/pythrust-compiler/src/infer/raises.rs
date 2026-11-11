@@ -104,7 +104,7 @@ pub(super) fn check(
     let late_shadow = defs
         .iter()
         .map(|f| f.name.name.as_str())
-        .any(|n| builtins::is_builtin(n) && !early.contains(n));
+        .any(|n| builtins::is_builtin(unqualified(n)) && !early.contains(n));
     let mut a = Analysis {
         types,
         defs: defs.iter().map(|f| (f.name.name.as_str(), *f)).collect(),
@@ -727,14 +727,16 @@ impl<'a> Cx<'_, 'a> {
         if self.a.early.contains(name) {
             return;
         }
-        let parses = matches!(name, "int" | "float")
+        // The builtin a module's `a.int` stands for until its `def` runs.
+        let bare = unqualified(name);
+        let parses = matches!(bare, "int" | "float")
             && first
                 .is_some_and(|arg| !self.a.typed || may_be_str(self.a.types.at(arg.value.span)));
         // `chr` out of range, or `min`/`max` of an empty iterable (D56,
         // D57); a literal `chr` argument in range cannot fail.
         let chr =
-            name == "chr" && !first.is_some_and(|a| builtins::chr_literal(&a.value).is_some());
-        let extreme = matches!(name, "min" | "max") && args.len() == 1;
+            bare == "chr" && !first.is_some_and(|a| builtins::chr_literal(&a.value).is_some());
+        let extreme = matches!(bare, "min" | "max") && args.len() == 1;
         if parses || chr || extreme {
             out.add(ExcKind::Value, at);
         }

@@ -1,0 +1,9 @@
+temper def f() -> int:
+    return int("bad · ✓")
+
+
+print(f())
+
+
+temper def int(s: str) -> int:
+    return 0
