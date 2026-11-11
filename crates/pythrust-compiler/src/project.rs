@@ -66,19 +66,22 @@ pub(crate) fn root(path: &str) -> Result<Root, String> {
 
 /// The project of the program `graph`. A program importing only
 /// standard modules never reads the manifest; one importing a local
-/// module reads it when there is one, so a binding by the same name is
-/// an error (D125); one importing a name neither standard nor local
-/// needs it (D81). An error comes rendered.
+/// module or package reads it when there is one, so a binding by the
+/// same name is an error (D125, D126); one importing a name neither
+/// standard nor a local module file needs it (D81), unless the name is
+/// a package directory the manifest does not give. An error comes
+/// rendered.
 pub(crate) fn bindings(root: &Root, graph: &Graph, sources: &Sources) -> Result<Project, String> {
     let none = || Project {
         crates: Vec::new(),
         manifest: None,
     };
-    if graph.foreign.is_empty() && graph.locals.is_empty() {
+    if graph.foreign.is_empty() && graph.locals.is_empty() && graph.packages.is_empty() {
         return Ok(none());
     }
+    let package = |i: &Ident| graph.packages.contains(&i.name);
     let Some(file) = &root.manifest else {
-        let Some(first) = graph.foreign.first() else {
+        let Some(first) = graph.foreign.iter().find(|i| !package(i)) else {
             return Ok(none());
         };
         let why = format!(
@@ -90,20 +93,28 @@ pub(crate) fn bindings(root: &Root, graph: &Graph, sources: &Sources) -> Result<
     };
     let found = load(file.clone())?;
     for local in &graph.locals {
-        if found.all.iter().any(|c| c.name == local.name) {
-            let message = format!(
-                "`{0}` is both the local module `{0}.pyr` and a Rust binding in {1}; rename one",
-                local.name,
-                found.path.display()
-            );
-            return Err(render_import(sources, &local.import, message));
+        let top = local.name.split('.').next().unwrap_or(&local.name);
+        if !found.all.iter().any(|c| c.name == top) {
+            continue;
+        }
+        let what = match top == local.name {
+            true => format!("the local module `{top}.pyr`"),
+            false => format!("the package of the local module `{}`", local.name),
+        };
+        let message = format!(
+            "`{top}` is both {what} and a Rust binding in {}; rename one",
+            found.path.display()
+        );
+        return Err(render_import(sources, &local.import, message));
+    }
+    let mut crates = Vec::new();
+    for import in &graph.foreign {
+        match named(&found, import) {
+            Ok(c) => crates.push(c),
+            Err(_) if package(import) => {}
+            Err(m) => return Err(render_import(sources, import, m)),
         }
     }
-    let crates = graph
-        .foreign
-        .iter()
-        .map(|import| named(&found, import).map_err(|m| render_import(sources, import, m)))
-        .collect::<Result<_, _>>()?;
     Ok(Project {
         crates,
         manifest: Some(found),

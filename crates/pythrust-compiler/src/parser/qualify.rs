@@ -30,11 +30,20 @@ const MAIN: &str = "__main__";
 pub fn qualify(module: &mut Module, name: &str) -> LocalModule {
     bind_name(module, name);
     let globals = globals(&module.body);
+    let defs = module
+        .body
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::FuncDef(f) => Some(f.name.name.clone()),
+            _ => None,
+        })
+        .collect();
     let mut rename = |n: &str| globals.contains(n).then(|| format!("{name}.{n}"));
     block(&mut module.body, &mut rename);
     LocalModule {
         name: name.to_string(),
         names: globals,
+        defs,
     }
 }
 
@@ -386,7 +395,7 @@ mod tests {
             name: "a",
             tokens: &a,
         }];
-        let m = parser::parse_program(&units, &main, &[binding]).unwrap();
+        let m = parser::parse_program(&units, &[], &main, &[binding]).unwrap();
         assert_eq!(m.stubs.len(), 1);
         let StmtKind::Assign { target, .. } = &m.body[1].kind else {
             panic!("`a` runs first, after its `__name__`")

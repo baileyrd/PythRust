@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: module `pkg.b` is not imported here; write `import pkg.b`
+import pkg.a
+
+print(pkg.b.Y)

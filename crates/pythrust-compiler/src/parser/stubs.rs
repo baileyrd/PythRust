@@ -99,29 +99,21 @@ impl<'a> Parser<'a> {
     }
 
     /// Records the import of binding `name`, if one is given by that
-    /// name; whether it was. A binding is known to later stages by its
-    /// functions (`Module::stubs`), so one with none, which only a
-    /// caller building a [`Binding`] by hand can pass, is refused.
-    pub(super) fn import_binding(&mut self, name: &Ident) -> Result<bool> {
+    /// name. A binding is known to later stages by its functions
+    /// (`Module::stubs`), so one with none, which only a caller building
+    /// a [`Binding`] by hand can pass, is refused.
+    pub(super) fn import_binding(&mut self, name: &Ident) -> Result<Option<&'a Binding>> {
         let Some(binding) = self.bindings.iter().find(|b| b.name == name.name) else {
-            return Ok(false);
+            return Ok(None);
         };
         if binding.funcs.is_empty() {
             return Err(error(name.span, no_functions(&name.name)));
         }
-        if self.imported_binding(&name.name).is_none() {
+        if !self.imported_bindings.iter().any(|b| b.name == name.name) {
             self.imported_bindings.push(binding);
             self.stubs.extend(binding.funcs.iter().cloned());
         }
-        Ok(true)
-    }
-
-    /// The imported binding named `name`, if any.
-    pub(super) fn imported_binding(&self, name: &str) -> Option<&'a Binding> {
-        self.imported_bindings
-            .iter()
-            .copied()
-            .find(|b| b.name == name)
+        Ok(Some(binding))
     }
 
     /// After the binding name (already consumed at `first`), `.f` for one

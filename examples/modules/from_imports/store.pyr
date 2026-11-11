@@ -1,0 +1,13 @@
+__all__ = ["add"]
+items: list[str] = []
+_limit = 3
+LABEL = "größe"
+
+
+def add(s: str) -> None:
+    if len(items) < _limit:
+        items.append(s)
+
+
+def count() -> int:
+    return len(items)

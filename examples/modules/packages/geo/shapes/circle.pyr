@@ -1,0 +1,8 @@
+from geo.shapes.square import area
+import geo.units
+
+print("circle as", __name__)
+
+
+def describe(r: int) -> str:
+    return "≈ " + str(3 * area(r) * geo.units.SCALE)

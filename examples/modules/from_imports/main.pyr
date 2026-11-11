@@ -1,0 +1,16 @@
+# `from` binds a function by name and copies a variable into a global
+# holding the same object, so a list is shared and rebinding the copy
+# leaves the module's own (D83); `as` renames; a parenthesized list; a
+# `_private` name imports as in CPython (D80).
+from store import (add, items as things,
+    _limit, LABEL)
+from store import count as how_many
+import store
+
+add("é")
+add("ü")
+things.append("ß")
+print(store.items, things, how_many(), _limit, LABEL)
+things = ["new"]
+print(store.items, things, how_many())
+print(store.__all__)

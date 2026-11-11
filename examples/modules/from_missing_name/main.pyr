@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: module `tools` has no `nope`
+from tools import greet, nope
+
+print(greet())

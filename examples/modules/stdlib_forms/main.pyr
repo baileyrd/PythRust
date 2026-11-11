@@ -1,0 +1,25 @@
+# `from`, dotted and `as` on standard modules (D84).
+import sys as s
+import os.path
+import os.path as osp
+from os import path
+from os.path import join as j, isdir
+from sys import argv
+from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
+
+
+def twice(n: int) -> int:
+    return 2 * n
+
+
+def main() -> None:
+    with ThreadPoolExecutor() as ex:
+        print(ex.submit(twice, 21).result())
+
+
+print(len(s.argv), len(argv), argv == s.argv)
+print(j("dir", "fïle"), path.join("a", "b"), osp.isdir("."), os.path.isdir("."), isdir("."))
+data = open(argv[0], "rb").read()
+print(len(sha256(data).hexdigest()))
+main()

@@ -1,0 +1,5 @@
+square as geo.shapes.square
+units as geo.units
+circle as geo.shapes.circle
+9 20 ≈ 120
+16 True

@@ -17,7 +17,6 @@ use crate::ast::{
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
-use crate::stdlib::ModuleDef;
 use crate::token::{Token, TokenKind};
 
 /// Limit both recursive grammar calls and constructed expression height.
@@ -41,20 +40,23 @@ pub fn parse_module(
     bindings: &[Binding],
     locals: &[LocalModule],
 ) -> Result<Module> {
-    parse_part(tokens, bindings, locals, &mut Vec::new())
+    parse_in(tokens, bindings, locals, &[], &mut Vec::new())
 }
 
-/// [`parse_module`], where the standard modules in `ready` are already
-/// initialized by an earlier module, so importing one shares its state
-/// (D83); those this module initializes are added.
-fn parse_part(
+/// [`parse_module`], with the program's package directories, where the
+/// standard modules in `ready` are already initialized by an earlier
+/// module, so importing one shares its state (D83); those this module
+/// initializes are added.
+fn parse_in(
     tokens: &[Token],
     bindings: &[Binding],
     locals: &[LocalModule],
+    packages: &[String],
     ready: &mut Vec<&'static str>,
 ) -> Result<Module> {
     let mut parser = Parser::new(tokens, bindings)?;
     parser.locals = locals;
+    parser.packages = packages;
     parser.ready = std::mem::take(ready);
     let module = parser.module()?;
     *ready = parser.ready;
@@ -70,17 +72,23 @@ pub struct Unit<'t> {
 
 /// Parses a whole program as one module (step 3, D76): each local
 /// module in the order its top level runs (D83), its globals qualified,
-/// then the main file, which may import any of them.
-pub fn parse_program(locals: &[Unit<'_>], main: &[Token], bindings: &[Binding]) -> Result<Module> {
+/// then the main file, which may import any of them or of `packages`,
+/// the package directories imported, by dotted name (D78).
+pub fn parse_program(
+    locals: &[Unit<'_>],
+    packages: &[String],
+    main: &[Token],
+    bindings: &[Binding],
+) -> Result<Module> {
     let mut done: Vec<LocalModule> = Vec::new();
     let mut parts: Vec<Module> = Vec::new();
     let mut ready = Vec::new();
     for unit in locals {
-        let mut module = parse_part(unit.tokens, bindings, &done, &mut ready)?;
+        let mut module = parse_in(unit.tokens, bindings, &done, packages, &mut ready)?;
         done.push(qualify::qualify(&mut module, unit.name));
         parts.push(module);
     }
-    let mut module = parse_part(main, bindings, &done, &mut ready)?;
+    let mut module = parse_in(main, bindings, &done, packages, &mut ready)?;
     qualify::main_name(&mut module, &parts);
     Ok(qualify::link(parts, module))
 }
@@ -114,8 +122,8 @@ struct Parser<'a> {
     /// Inside a `finally` block entered since the innermost loop:
     /// `break` and `continue` would leave it (D89).
     jump_leaves_finally: bool,
-    /// Modules imported so far.
-    modules: Vec<&'static ModuleDef>,
+    /// The names imports bound so far (D84).
+    imports: Vec<(String, imports::Imported<'a>)>,
     /// The standard modules whose variables are initialized, by this
     /// module or an earlier one: importing one again shares them.
     ready: Vec<&'static str>,
@@ -125,6 +133,8 @@ struct Parser<'a> {
     /// The program's local modules `import` may name, and those it has.
     locals: &'a [LocalModule],
     imported_locals: Vec<&'a LocalModule>,
+    /// The program's package directories, by dotted name (D78).
+    packages: &'a [String],
     /// The functions of the imported bindings.
     stubs: Vec<StubDef>,
     /// The `pause` markers so far (M6c).
@@ -156,12 +166,13 @@ impl<'a> Parser<'a> {
             in_loop: false,
             in_finally: false,
             jump_leaves_finally: false,
-            modules: Vec::new(),
+            imports: Vec::new(),
             ready: Vec::new(),
             bindings,
             imported_bindings: Vec::new(),
             locals: &[],
             imported_locals: Vec::new(),
+            packages: &[],
             stubs: Vec::new(),
             pauses: Vec::new(),
             withs: 0,
@@ -302,7 +313,7 @@ impl<'a> Parser<'a> {
     fn module(&mut self) -> Result<Module> {
         let start = self.tok(0).span;
         let mut body = Vec::new();
-        while self.at(&TokenKind::Import) {
+        while self.at(&TokenKind::Import) || self.at(&TokenKind::From) {
             body.extend(self.import_stmt()?);
         }
         while !self.at(&TokenKind::EndMarker) {
@@ -333,7 +344,7 @@ impl<'a> Parser<'a> {
             TokenKind::While => self.while_stmt(),
             TokenKind::For => self.for_stmt(),
             TokenKind::Try => self.try_stmt(),
-            TokenKind::Import => {
+            TokenKind::Import | TokenKind::From => {
                 let msg = "`import` must come at module top level, before other statements";
                 Err(error(self.tok(0).span, msg))
             }
@@ -1137,21 +1148,11 @@ impl<'a> Parser<'a> {
         let tok = self.tok(0);
         let kind = match &tok.kind {
             TokenKind::Name(name) => {
-                if let Some(binding) = self.imported_binding(name) {
+                if let Some(imported) = self.imported(name).cloned() {
                     self.bump();
-                    return self.binding_func(binding, tok.span);
+                    return self.imported_expr(imported, tok.span);
                 }
-                if let Some(local) = self.imported_local(name) {
-                    self.bump();
-                    return self.local_name(local, tok.span);
-                }
-                match self.imported(name) {
-                    Some(module) => {
-                        self.bump();
-                        return self.module_name(module, tok.span);
-                    }
-                    None => ExprKind::Name(name.clone()),
-                }
+                ExprKind::Name(name.clone())
             }
             TokenKind::Int(value) => ExprKind::Int(int_literal(*value, tok.span)?),
             TokenKind::Float(value) => ExprKind::Float(*value),
@@ -1620,6 +1621,7 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Raise => "raise",
         TokenKind::Del => "del",
         TokenKind::Import => "import",
+        TokenKind::From => "from",
         TokenKind::As => "as",
         TokenKind::With => "with",
         TokenKind::Pause => "pause",

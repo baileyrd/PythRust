@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: relative imports are not supported yet
+# deviation: a relative import is refused (D78); CPython resolves it within the package
+import pkg.a
+
+print(pkg.a.X)

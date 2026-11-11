@@ -1,0 +1,11 @@
+# Packages are directories (D78): `import a.b` binds `a`, `as` binds the
+# module, `from` takes a module or a name from one, and a module in a
+# package imports its neighbours by their full names.
+import geo
+import geo.shapes.square
+import geo.units as u
+from geo.shapes import circle
+from geo.shapes.square import area as square_area
+
+print(geo.shapes.square.area(3), u.scale(2), circle.describe(2))
+print(square_area(4), geo.shapes.square.__name__ == "geo.shapes.square")

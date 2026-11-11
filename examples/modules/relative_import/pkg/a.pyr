@@ -1,0 +1,3 @@
+from . import b
+
+X = b.Y
