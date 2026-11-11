@@ -1,16 +1,19 @@
 //! A program's project (M6d, `docs/research/package-tool.md`): the
 //! `pythrust.toml` found by walking up from the program's directory,
-//! read only when the program imports a module that is not standard,
-//! and the Rust bindings it names for those imports.
+//! read only when the program imports a module that is neither standard
+//! nor local, and the Rust bindings it names for those imports. Its
+//! directory is the root local modules are found in (D75).
 
 use std::path::{Component, Path, PathBuf};
 
 use pythrust_compiler::ast::Ident;
 use pythrust_compiler::manifest::{self, toml, Manifest, RustDep};
-use pythrust_compiler::{lexer, stdlib, DiagKind, Diagnostic, Token, TokenKind};
+use pythrust_compiler::{stdlib, DiagKind, Diagnostic};
 
 use crate::bindings;
 use crate::cargo::Crate;
+use crate::modules::Graph;
+use crate::sources::Sources;
 
 /// The bindings a program imports and the manifest that names them.
 pub(crate) struct Project {
@@ -36,29 +39,64 @@ impl Found {
     }
 }
 
-/// The project of the program at `path`, whose text is `src`. An error
-/// comes rendered.
-pub(crate) fn bindings(path: &str, src: &str) -> Result<Project, String> {
-    let imports = foreign_imports(src);
-    let Some(first) = imports.first() else {
+/// Where a program's modules are found (D75): the directory of the
+/// first `pythrust.toml` in or above the main file's, else the main
+/// file's. Finding it checks only that the manifest exists (D81).
+pub(crate) struct Root {
+    pub(crate) dir: PathBuf,
+    /// The main file's directory, where the walk started.
+    start: PathBuf,
+    manifest: Option<PathBuf>,
+}
+
+/// The root of the program at `path`.
+pub(crate) fn root(path: &str) -> Result<Root, String> {
+    let start = normalize(&absolute(&program_dir(path))?);
+    let manifest = find(&start)?;
+    let dir = match manifest.as_deref().and_then(Path::parent) {
+        Some(dir) => dir.to_path_buf(),
+        None => start.clone(),
+    };
+    Ok(Root {
+        dir,
+        start,
+        manifest,
+    })
+}
+
+/// The project of the program `graph`: the manifest is read only when
+/// some module imports a name neither standard nor local (D81). An
+/// error comes rendered.
+pub(crate) fn bindings(root: &Root, graph: &Graph, sources: &Sources) -> Result<Project, String> {
+    let Some(first) = graph.foreign.first() else {
         return Ok(Project {
             crates: Vec::new(),
             manifest: None,
         });
     };
-    let start = normalize(&absolute(&program_dir(path))?);
-    let Some(file) = find(&start)? else {
+    let Some(file) = &root.manifest else {
         let why = format!(
             "no pythrust.toml names it (none in {} or any directory above it)",
-            start.display()
+            root.start.display()
         );
         let message = stdlib::not_standard(&first.name, &why);
-        return Err(render_import(path, src, first, message));
+        return Err(render_import(sources, first, message));
     };
-    let found = load(file)?;
-    let crates = imports
+    let found = load(file.clone())?;
+    for local in &graph.locals {
+        if found.all.iter().any(|c| c.name == local.name) {
+            let message = format!(
+                "`{0}` is both the local module `{0}.pyr` and a Rust binding in {1}; rename one",
+                local.name,
+                found.path.display()
+            );
+            return Err(render_import(sources, &local.import, message));
+        }
+    }
+    let crates = graph
+        .foreign
         .iter()
-        .map(|import| named(&found, import).map_err(|m| render_import(path, src, import, m)))
+        .map(|import| named(&found, import).map_err(|m| render_import(sources, import, m)))
         .collect::<Result<_, _>>()?;
     Ok(Project {
         crates,
@@ -86,41 +124,6 @@ fn load(file: PathBuf) -> Result<Found, String> {
     Ok(Found { path: file, all })
 }
 
-/// The program's imports that are not standard modules, each once, in
-/// order. A file that does not lex has none here: the front end reports
-/// its error.
-fn foreign_imports(src: &str) -> Vec<Ident> {
-    let Ok(tokens) = lexer::lex(src) else {
-        return Vec::new();
-    };
-    let mut names: Vec<Ident> = Vec::new();
-    let mut in_import = false;
-    for (i, t) in tokens.iter().enumerate() {
-        match &t.kind {
-            TokenKind::Import => in_import = true,
-            TokenKind::Newline => in_import = false,
-            TokenKind::Name(name) if in_import && after_import_or_comma(&tokens, i) => {
-                let known = stdlib::module(name).is_some() || names.iter().any(|n| &n.name == name);
-                if !known {
-                    names.push(Ident {
-                        name: name.clone(),
-                        span: t.span,
-                    });
-                }
-            }
-            _ if !in_import && t.kind != TokenKind::Newline => break,
-            _ => {}
-        }
-    }
-    names
-}
-
-/// Whether the token before `i` is `import` or `,`: a module name, not
-/// the `futures` of `concurrent.futures`.
-fn after_import_or_comma(tokens: &[Token], i: usize) -> bool {
-    i > 0 && matches!(tokens[i - 1].kind, TokenKind::Import | TokenKind::Comma)
-}
-
 /// The directory of the program at `path`: `.` for a bare file name.
 fn program_dir(path: &str) -> PathBuf {
     match Path::new(path).parent() {
@@ -137,7 +140,7 @@ fn absolute(path: &Path) -> Result<PathBuf, String> {
 /// `path` with `.` dropped and each `..` taking off the name before it,
 /// as text: the directories above a program are those of its path as
 /// written, not of the current directory. Symlinks are not resolved.
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for part in path.components() {
         match part {
@@ -210,39 +213,19 @@ fn place(dir: &Path, dep: &RustDep) -> Crate {
     }
 }
 
-/// `message` as a parse error at `import` in the program.
-fn render_import(path: &str, src: &str, import: &Ident, message: String) -> String {
+/// `message` as a parse error at `import`, in whichever file it is.
+fn render_import(sources: &Sources, import: &Ident, message: String) -> String {
     let diag = Diagnostic {
         span: import.span,
         message,
         kind: DiagKind::Parse,
     };
-    crate::render(path, src, &diag)
+    sources.render(&diag)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn names(src: &str) -> Vec<String> {
-        foreign_imports(src).into_iter().map(|i| i.name).collect()
-    }
-
-    #[test]
-    fn only_leading_non_standard_imports_count() {
-        assert_eq!(names("import sys, os\nprint(1)\n"), Vec::<String>::new());
-        assert_eq!(
-            names("# c\n\nimport sys, fastfs\nimport concurrent.futures\nimport b, fastfs\nx = 1\nimport late\n"),
-            ["fastfs", "b"]
-        );
-        assert_eq!(names("x = (\n"), Vec::<String>::new());
-    }
-
-    #[test]
-    fn continued_and_aliased_imports_scan_their_module_names() {
-        assert_eq!(names("import sys, \\\n    fastfs\n"), ["fastfs"]);
-        assert_eq!(names("import fastfs as f\n"), ["fastfs"]);
-    }
 
     #[test]
     fn normalize_takes_dot_dot_off_the_name_before_it() {

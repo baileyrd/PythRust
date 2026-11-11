@@ -405,9 +405,72 @@ pub fn not_standard(name: &str, why: &str) -> String {
     )
 }
 
+/// CPython 3.13's `sys.stdlib_module_names`: every top-level standard
+/// module name, implemented here or not (D81). A local module may not
+/// take one, and importing one Pythrust lacks is "not supported yet".
+const PYTHON_MODULES: &str = "\
+__future__ _abc _aix_support _android_support _apple_support _ast _asyncio _bisect _blake2
+_bz2 _codecs _codecs_cn _codecs_hk _codecs_iso2022 _codecs_jp _codecs_kr _codecs_tw
+_collections _collections_abc _colorize _compat_pickle _compression _contextvars _csv
+_ctypes _curses _curses_panel _datetime _dbm _decimal _elementtree _frozen_importlib
+_frozen_importlib_external _functools _gdbm _hashlib _heapq _imp _interpchannels
+_interpqueues _interpreters _io _ios_support _json _locale _lsprof _lzma _markupbase _md5
+_multibytecodec _multiprocessing _opcode _opcode_metadata _operator _osx_support
+_overlapped _pickle _posixshmem _posixsubprocess _py_abc _pydatetime _pydecimal _pyio
+_pylong _pyrepl _queue _random _scproxy _sha1 _sha2 _sha3 _signal _sitebuiltins _socket
+_sqlite3 _sre _ssl _stat _statistics _string _strptime _struct _suggestions _symtable
+_sysconfig _thread _threading_local _tkinter _tokenize _tracemalloc _typing _uuid
+_warnings _weakref _weakrefset _winapi _wmi _zoneinfo abc antigravity argparse array ast
+asyncio atexit base64 bdb binascii bisect builtins bz2 cProfile calendar cmath cmd code
+codecs codeop collections colorsys compileall concurrent configparser contextlib
+contextvars copy copyreg csv ctypes curses dataclasses datetime dbm decimal difflib dis
+doctest email encodings ensurepip enum errno faulthandler fcntl filecmp fileinput fnmatch
+fractions ftplib functools gc genericpath getopt getpass gettext glob graphlib grp gzip
+hashlib heapq hmac html http idlelib imaplib importlib inspect io ipaddress itertools json
+keyword linecache locale logging lzma mailbox marshal math mimetypes mmap modulefinder
+msvcrt multiprocessing netrc nt ntpath nturl2path numbers opcode operator optparse os
+pathlib pdb pickle pickletools pkgutil platform plistlib poplib posix posixpath pprint
+profile pstats pty pwd py_compile pyclbr pydoc pydoc_data pyexpat queue quopri random re
+readline reprlib resource rlcompleter runpy sched secrets select selectors shelve shlex
+shutil signal site smtplib socket socketserver sqlite3 sre_compile sre_constants sre_parse
+ssl stat statistics string stringprep struct subprocess symtable sys sysconfig syslog
+tabnanny tarfile tempfile termios textwrap this threading time timeit tkinter token
+tokenize tomllib trace traceback tracemalloc tty turtle turtledemo types typing
+unicodedata unittest urllib uuid venv warnings wave weakref webbrowser winreg winsound
+wsgiref xml xmlrpc zipapp zipfile zipimport zlib zoneinfo";
+
+/// Whether `name` is a top-level module of CPython's standard library.
+pub fn is_python_module(name: &str) -> bool {
+    PYTHON_MODULES.split_ascii_whitespace().any(|n| n == name)
+}
+
+/// The error for `import name` that names no module the program can
+/// import: a standard one Pythrust lacks is "not supported yet" (D81).
+pub fn not_found(name: &str) -> String {
+    if is_python_module(name) {
+        return format!(
+            "the standard module `{name}` is not supported yet; the standard modules are: {}",
+            module_names()
+        );
+    }
+    not_standard(name, "no pythrust.toml names it")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_modules_are_known_whether_implemented_or_not() {
+        for name in ["sys", "json", "__future__", "zoneinfo", "concurrent"] {
+            assert!(is_python_module(name), "{name}");
+        }
+        for name in ["fastfs", "concurrent.futures", "", "Json"] {
+            assert!(!is_python_module(name), "{name}");
+        }
+        assert!(not_found("json").contains("`json` is not supported yet"));
+        assert!(not_found("mymod").contains("no pythrust.toml names it"));
+    }
 
     #[test]
     fn every_initializer_is_unwritable_and_found_by_name() {

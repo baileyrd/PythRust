@@ -1,0 +1,12 @@
+# A module's function run as a task.
+import concurrent.futures
+import work
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        futures = [ex.submit(work.square, n) for n in range(5)]
+        print([f.result() for f in futures])
+
+
+main()

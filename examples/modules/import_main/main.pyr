@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: circular import: main -> helper -> main
+# deviation: importing the main file closes a cycle (D83); CPython runs the main file again as `main`
+import helper
+
+print("main")

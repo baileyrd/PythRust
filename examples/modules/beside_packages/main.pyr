@@ -1,0 +1,5 @@
+# Accepted beside the package errors: directories that no import names,
+# one holding an `__init__.pyr`, next to the modules a program imports.
+import tools
+
+print(tools.greet("pkg"), tools.greet("other"))

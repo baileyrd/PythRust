@@ -1226,3 +1226,35 @@ fn fclone_fast_finds_the_groups_fclone_lite_finds() {
     assert!(!want.contains("locked"), "{want}");
     assert_eq!(group_set(&got), groups, "{got}");
 }
+
+/// A local module imports a binding the root manifest names, and only
+/// that module does (D81): the build counts imports across modules.
+#[test]
+fn a_module_imports_a_binding() {
+    let dir = scratch("module-binding");
+    let util = "import probe\n\ntemper def twice(n: int) -> int:\n    return probe.double(n) + 1\n";
+    fs::write(dir.join("util.pyr"), util).unwrap();
+    let src = "import util\n\nprint(util.twice(20))\n";
+    assert_eq!(stdout(build(&dir, src, &[("probe", &probe())])), "41\n");
+}
+
+/// A name that is both a local module and a binding is an error once
+/// the manifest is read (D81), naming the import in its own file.
+#[test]
+fn a_local_module_named_like_a_binding_is_refused() {
+    let dir = scratch("module-shadows-binding");
+    fs::write(dir.join("probe.pyr"), "X = 1\n").unwrap();
+    fs::write(dir.join("other.pyr"), "import probe\n\nY = probe.X\n").unwrap();
+    let crates = dir.join("crates");
+    copy_tree(&probe(), &crates.join("probe"));
+    let digits = binding(&crates, "digits", "", false);
+    let src = "import other, digits\n\nprint(other.Y, digits.digits(7))\n";
+    let bindings = [("probe", crates.join("probe")), ("digits", digits)];
+    let bindings: Vec<(&str, &Path)> = bindings.iter().map(|(n, p)| (*n, p.as_path())).collect();
+    let out = compile(&dir, "main.pyr", src, &bindings);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = text(&out.stderr);
+    let want = "other.pyr:1:8: parse error: `probe` is both the local module `probe.pyr` \
+                and a Rust binding in ";
+    assert!(err.contains(want), "{err}");
+}

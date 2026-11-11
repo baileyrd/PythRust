@@ -1,0 +1,7 @@
+import base
+
+print("left", base.bump(1))
+
+
+def value() -> int:
+    return base.bump(2)

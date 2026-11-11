@@ -1,0 +1,11 @@
+print("base runs once")
+counter = [0]
+
+
+def bump(n: int) -> int:
+    counter[0] += 1
+    return n * 10
+
+
+def calls() -> int:
+    return counter[0]

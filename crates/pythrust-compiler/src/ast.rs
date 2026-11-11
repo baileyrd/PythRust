@@ -33,6 +33,14 @@ pub struct Binding {
     pub funcs: Vec<StubDef>,
 }
 
+/// A local module of the program (step 3, D75): its dotted name and the
+/// names its top level binds, which `name.x` may read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalModule {
+    pub name: String,
+    pub names: std::collections::BTreeSet<String>,
+}
+
 /// A stub's `'temper' 'def' NAME '(' [params] ')' '->' type [raises] ':'
 /// '...'`: a signature with no body, implemented in Rust. Every type is
 /// one that crosses the boundary, checked by the parser.

@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: `a` is both the module `a.pyr` and the directory `a/`; rename one
+# deviation: a module file beside a directory of its name is refused (D78); CPython imports the file
+import a
+
+print(a.X)

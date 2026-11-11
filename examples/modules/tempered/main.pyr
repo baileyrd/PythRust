@@ -1,0 +1,12 @@
+# A tempered function in a module, called from a tempered function in
+# another; a loose generic one used at two types.
+import shapes
+import generic
+
+
+temper def report(n: int) -> str:
+    return shapes.label(shapes.area(n, n + 1))
+
+
+print(report(3), report(10))
+print(generic.first([5, 6]), generic.first(["x", "y"]))

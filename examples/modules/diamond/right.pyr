@@ -1,0 +1,8 @@
+import base
+import left
+
+print("right", base.bump(3), left.value())
+
+
+def value() -> int:
+    return base.bump(4) + 1

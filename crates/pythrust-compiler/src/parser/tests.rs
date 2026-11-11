@@ -1568,7 +1568,7 @@ fn import_comes_first_at_module_level() {
     assert_eq!(src_err("def f():\n    import sys\n"), late);
     assert_eq!(
         src_err("import json\n"),
-        "`json` is not a standard module, and no pythrust.toml names it; \
+        "the standard module `json` is not supported yet; \
          the standard modules are: concurrent.futures, hashlib, os, sys"
     );
     assert!(src_err("import sys.argv\n").contains("import the top-level module"));

@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: module `util` has no `nope`
+import util
+
+print(util.nope)
