@@ -1,101 +1,15 @@
 //! Loading each Rust binding's stub (M6b; `docs/research/rust-interop.md#resolution`),
-//! the bindings coming from `pythrust.toml` ([`crate::project`]), and the
-//! source files diagnostics render against.
-//!
-//! Every file's spans are offset by where it starts in one shared span
-//! space, so a span alone says which file it belongs to.
+//! the bindings coming from `pythrust.toml` ([`crate::project`]). Each
+//! stub is added to [`Sources`], which offsets its spans.
 
 use std::path::Path;
 
 use pythrust_compiler::ast::Binding;
 use pythrust_compiler::interop::gen;
-use pythrust_compiler::{infer, lexer, parser, stdlib, Diagnostic, Span, TokenKind, Warning};
+use pythrust_compiler::{infer, lexer, parser, stdlib, Diagnostic, TokenKind};
 
 use crate::cargo::Crate;
-
-/// A source file and the offset its spans start at.
-struct Source {
-    path: String,
-    text: String,
-    base: usize,
-}
-
-/// The program's file and each stub's, in the order added.
-pub(crate) struct Sources {
-    main: Source,
-    stubs: Vec<Source>,
-}
-
-impl Sources {
-    /// The program's file, whose spans start at 0.
-    pub(crate) fn new(path: &str, text: &str) -> Sources {
-        let main = Source {
-            path: path.to_string(),
-            text: text.to_string(),
-            base: 0,
-        };
-        Sources {
-            main,
-            stubs: Vec::new(),
-        }
-    }
-
-    /// The program's file name.
-    pub(crate) fn path(&self) -> &str {
-        &self.main.path
-    }
-
-    /// Adds a file after the others, one past the last one's end so an
-    /// end-of-file span stays in its own file; returns its base.
-    fn add(&mut self, path: &str, text: &str) -> usize {
-        let last = self.stubs.last().unwrap_or(&self.main);
-        let base = last.base + last.text.len() + 1;
-        self.stubs.push(Source {
-            path: path.to_string(),
-            text: text.to_string(),
-            base,
-        });
-        base
-    }
-
-    /// The file `span` belongs to, and `span` within it.
-    fn locate(&self, span: Span) -> (&Source, Span) {
-        let file = self
-            .stubs
-            .iter()
-            .rev()
-            .find(|f| f.base <= span.start)
-            .unwrap_or(&self.main);
-        (file, unshift(span, file.base))
-    }
-
-    /// `file:line` of `span`, as a shim's comment names its stub.
-    pub(crate) fn place(&self, span: Span) -> String {
-        let (file, span) = self.locate(span);
-        let line = crate::line_col(&file.text, span.start).line;
-        format!("{}:{line}", file.path)
-    }
-
-    /// Renders `diag` against the file it belongs to.
-    pub(crate) fn render(&self, diag: &Diagnostic) -> String {
-        let (file, span) = self.locate(diag.span);
-        let local = Diagnostic {
-            span,
-            ..diag.clone()
-        };
-        crate::render(&file.path, &file.text, &local)
-    }
-
-    /// Renders `w` as [`Sources::render`] does an error.
-    pub(crate) fn render_warning(&self, w: &Warning) -> String {
-        let (file, span) = self.locate(w.span);
-        let local = Warning {
-            span,
-            message: w.message.clone(),
-        };
-        crate::render_warning(&file.path, &file.text, &local)
-    }
-}
+use crate::sources::{shift, Sources};
 
 /// Checks the name of a binding: a plain name that is no standard
 /// module, builtin, exception class, keyword or reserved word.
@@ -171,23 +85,10 @@ fn parse(text: &str, name: &str, base: usize) -> pythrust_compiler::Result<Bindi
     parser::parse_stub(&tokens, name)
 }
 
-fn shift(span: Span, by: usize) -> Span {
-    Span {
-        start: span.start + by,
-        end: span.end + by,
-    }
-}
-
-fn unshift(span: Span, by: usize) -> Span {
-    Span {
-        start: span.start.saturating_sub(by),
-        end: span.end.saturating_sub(by),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pythrust_compiler::Span;
 
     #[test]
     fn names_that_mean_something_else_are_refused() {

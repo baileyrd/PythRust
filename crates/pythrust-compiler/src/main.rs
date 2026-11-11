@@ -17,12 +17,12 @@ mod json;
 mod lockfile;
 mod project;
 mod rt;
+mod sources;
 
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use bindings::Sources;
 use pythrust_compiler::ast::{Binding, Module};
 use pythrust_compiler::infer::Types;
 use pythrust_compiler::interop::gen;
@@ -30,6 +30,7 @@ use pythrust_compiler::{
     codegen, infer, interp, lexer, lower, own, parser, rc, stdlib, DiagKind, Diagnostic, Span,
     Warning,
 };
+use sources::Sources;
 
 const USAGE: &str =
     "usage: pythrust <check|build> <file> | pythrust run <file> [arg ...] | pythrust lock [--check]";
