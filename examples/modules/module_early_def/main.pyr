@@ -1,0 +1,5 @@
+# A module's leading `def int` runs before any code that could call it,
+# so a tempered caller reaches only it and declares nothing.
+import a
+
+print(a.f(), int("7"))

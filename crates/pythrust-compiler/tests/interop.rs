@@ -1262,3 +1262,19 @@ fn a_local_module_named_like_a_binding_is_refused() {
                 and a Rust binding in ";
     assert!(err.contains(want), "{err}");
 }
+
+/// A binding function named like a builtin is the binding's, never the
+/// builtin's: its declared set is all a tempered caller sees.
+#[test]
+fn a_binding_function_named_like_a_builtin_raises_only_what_it_declares() {
+    let dir = scratch("binding-builtin-name");
+    let fx = dir.join("crates/fx");
+    fs::create_dir_all(fx.join("src")).unwrap();
+    let toml = "[package]\nname = \"fx\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n";
+    fs::write(fx.join("Cargo.toml"), toml).unwrap();
+    let lib = "pub fn int(s: &str) -> i64 {\n    s.len() as i64\n}\n";
+    fs::write(fx.join("src/lib.rs"), lib).unwrap();
+    fs::write(fx.join("fx.pyr"), "temper def int(s: str) -> int: ...\n").unwrap();
+    let src = "import fx\n\ntemper def f(s: str) -> int:\n    return fx.int(s)\n\nprint(f(\"bad · ✓\"))\n";
+    assert_eq!(stdout(build(&dir, src, &[("fx", &fx)])), "10\n");
+}

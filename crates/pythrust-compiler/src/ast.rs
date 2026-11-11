@@ -15,6 +15,10 @@ pub struct Module {
     /// nothing a program does, so the expression it covers stands in the
     /// tree alone and only the `pause` check reads these.
     pub pauses: Vec<Pause>,
+    /// Where each file's top level starts in `body`, in the order they
+    /// run (step 3, D83): `[0]` for one file. A file's leading `def`s
+    /// run before any code that could call them.
+    pub starts: Vec<usize>,
     pub span: Span,
 }
 

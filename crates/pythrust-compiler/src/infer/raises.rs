@@ -127,22 +127,43 @@ pub(super) fn check(
     Ok((sets.collect(), warnings))
 }
 
-/// The functions whose `def` runs before any other code: before every
-/// other kind of module statement and every parameter default, its own
-/// included. Any other `def` binds its name only when it runs, and a call
-/// before that reaches the builtin of that name (`run` does this too).
+/// The functions whose `def` runs before any other code of its file
+/// that could call it: before every other kind of statement of that
+/// file (its `__name__`, which calls nothing, aside) and every parameter
+/// default, its own included. An earlier file cannot call it, as it
+/// imports nothing that runs later (D83). Any other `def` binds its name
+/// only when it runs, and a call before that reaches the builtin of
+/// that name (`run` does this too).
 fn early(module: &Module) -> HashSet<&str> {
     let mut out = HashSet::new();
-    for s in &module.body {
-        let StmtKind::FuncDef(f) = &s.kind else {
-            break;
-        };
-        if f.params.iter().any(|p| p.default.is_some()) {
-            break;
+    let ends = module
+        .starts
+        .iter()
+        .skip(1)
+        .copied()
+        .chain([module.body.len()]);
+    for (start, end) in module.starts.iter().copied().zip(ends) {
+        let file = module.body.get(start..end).unwrap_or_default();
+        for s in file.iter().skip_while(|s| binds_own_name(s)) {
+            let StmtKind::FuncDef(f) = &s.kind else {
+                break;
+            };
+            if f.params.iter().any(|p| p.default.is_some()) {
+                break;
+            }
+            out.insert(f.name.name.as_str());
         }
-        out.insert(f.name.name.as_str());
     }
     out
+}
+
+/// Whether `s` is a file's `__name__ = "..."`, which calls nothing.
+fn binds_own_name(s: &Stmt) -> bool {
+    let StmtKind::Assign { target, value } = &s.kind else {
+        return false;
+    };
+    let named = matches!(&target.kind, TargetKind::Name(n) if unqualified(n) == "__name__");
+    named && matches!(value.kind, ExprKind::Str(_))
 }
 
 /// `f`'s declared set: its `raises` clause, or nothing for a tempered
@@ -194,6 +215,16 @@ fn declared_escape(name: &Ident, defs: &[&FuncDef], globals: &Bindings) -> Resul
         return Err(error(name.span, msg));
     }
     Ok(builtin)
+}
+
+/// The names that would hide builtin `e` from `f`'s `raises` clause:
+/// `a.ValueError` for a function of module `a`; for the main file's,
+/// `ValueError` or, where a module reads that name, `__main__.ValueError`.
+fn scope_names(f: &FuncDef, e: ExcKind) -> Vec<String> {
+    match f.name.name.rsplit_once('.') {
+        Some((module, _)) if module != "__main__" => vec![format!("{module}.{}", e.name())],
+        _ => vec![e.name().to_string(), format!("__main__.{}", e.name())],
+    }
 }
 
 /// Whether a module variable or a function named `n` hides the builtin
@@ -378,8 +409,10 @@ impl<'a> Analysis<'a> {
             .filter(|(e, _)| !declared.covers(**e))
             .min_by_key(|(_, at)| at.start);
         let Some((e, at)) = missing else {
-            let nameable =
-                |e: ExcKind| !shadowed(e.name(), &self.globals, self.defs.keys().copied());
+            let nameable = |e: ExcKind| {
+                let shadows = |n: &str| shadowed(n, &self.globals, self.defs.keys().copied());
+                !scope_names(f, e).iter().any(|n| shadows(n))
+            };
             return Ok(vacuous(f, declared, &got, nameable));
         };
         let mut all = declared.clone();
@@ -727,8 +760,12 @@ impl<'a> Cx<'_, 'a> {
         if self.a.early.contains(name) {
             return;
         }
-        // The builtin a module's `a.int` stands for until its `def` runs.
-        let bare = unqualified(name);
+        // The builtin a program's `def` of a builtin's name (a module's
+        // `a.int`) stands for until it runs; a binding's is never one.
+        let bare = match self.a.defs.contains_key(name) {
+            true => unqualified(name),
+            false => name,
+        };
         let parses = matches!(bare, "int" | "float")
             && first
                 .is_some_and(|arg| !self.a.typed || may_be_str(self.a.types.at(arg.value.span)));
@@ -883,6 +920,46 @@ mod tests {
              nothing, and {escapes} can escape it; {fix}"
         );
         ("Exception".to_string(), message)
+    }
+
+    /// The types of a program whose module `a` is `a_src`, or the first
+    /// diagnostic's message.
+    fn program(a_src: &str, main: &str) -> Result<infer::Types, String> {
+        let a = lexer::lex(a_src).map_err(|d| d.message)?;
+        let main = lexer::lex(main).map_err(|d| d.message)?;
+        let units = [parser::Unit {
+            name: "a",
+            tokens: &a,
+        }];
+        let module = parser::parse_program(&units, &main, &[]).map_err(|d| d.message)?;
+        infer::infer(&module).map_err(|d| d.message)
+    }
+
+    #[test]
+    fn a_modules_leading_def_runs_before_any_call_and_a_late_one_does_not() {
+        let early = "temper def int(s: str) -> int:\n    return 0\n\n\
+                     temper def f() -> int:\n    return int(\"bad\")\n";
+        let types = program(early, "import a\nprint(a.f())\n").unwrap();
+        assert_eq!(types.raises("a.f").map(|r| r.escapes().count()), Some(0));
+        let late = "temper def f() -> int:\n    return int(\"bad\")\n\nprint(f())\n\n\
+                    temper def int(s: str) -> int:\n    return 0\n";
+        let got = program(late, "import a\n").err().unwrap_or_default();
+        assert!(
+            got.starts_with("tempered `a.f` can raise ValueError"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn a_narrowing_hint_never_names_a_class_the_functions_module_rebinds() {
+        let a = "ValueError = 1\n\ndef f(s: str) -> int raises Exception:\n    return int(s)\n";
+        let types = program(a, "import a\nprint(a.f(\"1\"))\n").unwrap();
+        assert!(types.warnings().is_empty(), "{:?}", types.warnings());
+        let main = "import a\nValueError = 1\nprint(a.f(\"1\"))\n";
+        let a = "def f(s: str) -> int raises Exception:\n    return int(s)\n";
+        let types = program(a, main).unwrap();
+        let hint = types.warnings().first().map(|w| w.message.clone());
+        assert!(hint.is_some_and(|m| m.ends_with("write `raises ValueError`")));
     }
 
     #[test]

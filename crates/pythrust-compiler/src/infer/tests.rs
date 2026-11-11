@@ -266,6 +266,7 @@ fn module(body: Vec<Stmt>) -> Module {
         body,
         stubs: Vec::new(),
         pauses: Vec::new(),
+        starts: vec![0],
         span: Span { start: 0, end: 0 },
     }
 }

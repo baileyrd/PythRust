@@ -58,9 +58,11 @@ pub fn link(parts: Vec<Module>, main: Module) -> Module {
         body: Vec::new(),
         stubs: Vec::new(),
         pauses: Vec::new(),
+        starts: Vec::new(),
         span: main.span,
     };
     for part in parts.into_iter().chain([main]) {
+        out.starts.push(out.body.len());
         out.body.extend(part.body);
         out.pauses.extend(part.pauses);
         for stub in part.stubs {

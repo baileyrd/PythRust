@@ -312,6 +312,7 @@ impl<'a> Parser<'a> {
             body,
             stubs: std::mem::take(&mut self.stubs),
             pauses: std::mem::take(&mut self.pauses),
+            starts: vec![0],
             span: start.merge(self.eof.span),
         })
     }
