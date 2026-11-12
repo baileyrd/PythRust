@@ -395,10 +395,11 @@ fn record_type(record: &Ident, span: Span) -> TypeExpr {
 }
 
 /// The module-wide rules of a file's records (D129, D136): a record's
-/// name is no other binding's, and an annotation evaluated when its
-/// statement runs (a field's, a `def`'s parameters and result) names
-/// only records defined before it.
-pub(super) fn check_module(body: &[Stmt]) -> Result<()> {
+/// name is no other binding's, and unless the module's annotations are
+/// `lazy` (D154), an annotation evaluated when its statement runs (a
+/// field's, a `def`'s parameters and result) names only records defined
+/// before it.
+pub(super) fn check_module(body: &[Stmt], lazy: bool) -> Result<()> {
     check_exc_classes(body)?;
     let records: Vec<(usize, &RecordDef)> = body
         .iter()
@@ -413,6 +414,9 @@ pub(super) fn check_module(body: &[Stmt]) -> Result<()> {
     }
     for &(_, r) in &records {
         check_unbound(&r.name, r.span, &format!("a {}", noun(r.kind)), body)?;
+    }
+    if lazy {
+        return Ok(());
     }
     for (at, s) in body.iter().enumerate() {
         let at = runs_at(s, at, &records);

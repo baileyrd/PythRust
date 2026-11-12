@@ -831,9 +831,14 @@ fn write_record<'m>(
     out: &mut String,
     span: Span,
 ) -> Result<()> {
-    // No record reaches itself: a field's annotation names only records
-    // defined before it (D129, D148), so D146's `...` guard has no case.
-    enter_repr(&mut cx.active, Rc::as_ptr(r).cast::<()>(), span)?;
+    // A record reached again inside itself shows as `...`, as CPython's
+    // dataclass `repr` does (D146, D162).
+    let id = Rc::as_ptr(r).cast::<()>();
+    if cx.active.contains(&id) {
+        out.push_str("...");
+        return Ok(());
+    }
+    enter_repr(&mut cx.active, id, span)?;
     out.push_str(unqualified(&r.def.name.name));
     out.push('(');
     let fields = r.fields.borrow();

@@ -8,13 +8,50 @@
 
 use super::{error, Parser};
 use crate::ast::{Binding, Expr, ExprKind, Ident, LocalModule, Stmt, StmtKind, Target, TargetKind};
-use crate::diag::Result;
+use crate::diag::{Diagnostic, Result};
 use crate::span::Span;
 use crate::stdlib::{self, ModuleDef, StdFn};
 use crate::token::TokenKind;
 
 /// The standard module whose `dataclass` makes records (D132).
 const DATACLASSES: &str = "dataclasses";
+
+/// The module whose `annotations` feature makes annotations lazy (D154).
+const FUTURE: &str = "__future__";
+
+/// A `from __future__` import after other statements (D164).
+const LATE_FUTURE: &str = "`from __future__` imports must occur at the beginning of the file";
+
+/// CPython's future features other than `annotations` (D164).
+const FEATURES: &[&str] = &[
+    "nested_scopes",
+    "generators",
+    "division",
+    "absolute_import",
+    "with_statement",
+    "print_function",
+    "unicode_literals",
+    "barry_as_FLUFL",
+    "generator_stop",
+];
+
+/// Whether `kind` is the name `__future__`.
+fn is_future(kind: &TokenKind) -> bool {
+    matches!(kind, TokenKind::Name(n) if n == FUTURE)
+}
+
+/// `name` is `annotations`, the one future feature recognized (D164).
+fn future_feature(name: &Ident) -> Result<()> {
+    let n = name.name.as_str();
+    if n == "annotations" {
+        return Ok(());
+    }
+    let msg = match FEATURES.contains(&n) {
+        true => format!("`from __future__ import {n}` is not supported yet"),
+        false => format!("future feature `{n}` is not defined"),
+    };
+    Err(error(name.span, msg))
+}
 
 /// A module an import names.
 #[derive(Clone)]
@@ -70,6 +107,61 @@ impl<'a> Parser<'a> {
         Ok(stmts.into_iter().map(|s| Stmt { span, ..s }).collect())
     }
 
+    /// The `from __future__` imports that start a module (D154, D164):
+    /// whether its annotations are lazy, as CPython makes them, so they
+    /// may name a class defined later. `annotations` is the one feature
+    /// recognized, so any such import makes them lazy.
+    pub(super) fn future_imports(&mut self) -> Result<bool> {
+        let mut lazy = false;
+        while self.at(&TokenKind::From) && is_future(&self.tok(1).kind) {
+            self.future_import()?;
+            lazy = true;
+        }
+        Ok(lazy)
+    }
+
+    /// The error for an import after other statements, CPython's own
+    /// for a future import (D164).
+    pub(super) fn misplaced_import(&self) -> Diagnostic {
+        let span = self.tok(0).span;
+        match self.at(&TokenKind::From) && is_future(&self.tok(1).kind) {
+            true => error(span, LATE_FUTURE),
+            false => error(
+                span,
+                "`import` must come at module top level, before other statements",
+            ),
+        }
+    }
+
+    /// `'from' '__future__' 'import' names NEWLINE`, the names in
+    /// parentheses or not.
+    fn future_import(&mut self) -> Result<()> {
+        self.bump();
+        self.bump();
+        self.expect(&TokenKind::Import)?;
+        if self.at(&TokenKind::Star) {
+            let msg = "future feature `*` is not defined";
+            return Err(error(self.tok(0).span, msg));
+        }
+        let paren = self.eat(&TokenKind::LParen);
+        loop {
+            future_feature(&self.expect_name("a future feature")?)?;
+            if self.at(&TokenKind::As) {
+                let msg = "`as` on a `__future__` import is not supported yet";
+                return Err(error(self.tok(0).span, msg));
+            }
+            let more = self.eat(&TokenKind::Comma);
+            if !more || (paren && self.at(&TokenKind::RParen)) {
+                break;
+            }
+        }
+        if paren {
+            self.expect(&TokenKind::RParen)?;
+        }
+        self.expect(&TokenKind::Newline)?;
+        Ok(())
+    }
+
     /// The modules after `import`, each bound by its first name, or by
     /// its `as` name to the whole path.
     fn plain_import(&mut self) -> Result<Vec<Stmt>> {
@@ -103,6 +195,9 @@ impl<'a> Parser<'a> {
             return Err(error(self.tok(0).span, msg));
         }
         let path = self.path()?;
+        if path.text() == FUTURE {
+            return Err(error(path.span(), LATE_FUTURE));
+        }
         self.expect(&TokenKind::Import)?;
         if path.text() == DATACLASSES {
             return self.import_dataclass();

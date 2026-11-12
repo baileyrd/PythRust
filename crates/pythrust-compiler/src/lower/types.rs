@@ -17,6 +17,9 @@ pub(super) struct SeqTypes {
     /// Every record's fields with their declared types, by its qualified
     /// name ([`crate::infer::Types::record`]).
     records: HashMap<String, Vec<(String, Type)>>,
+    /// Each record type made so far, by its qualified name: records are
+    /// nominal, and one may reach itself through its fields (D162).
+    named: HashMap<String, TypeId>,
 }
 
 impl SeqTypes {
@@ -35,19 +38,36 @@ impl SeqTypes {
         self.records.get(name).map(Vec::as_slice)
     }
 
-    /// Record `name`, its fields of types `fields`.
-    pub(super) fn record(&mut self, name: &str, fields: Vec<Ty>) -> Ty {
+    /// Record `name`'s type if it has been made.
+    pub(super) fn named(&self, name: &str) -> Option<Ty> {
+        self.named.get(name).copied().map(Ty::Record)
+    }
+
+    /// Record `name`'s type, its fields to come from [`Self::fill`], so
+    /// that a field's type may name it.
+    pub(super) fn reserve(&mut self, name: &str) -> Ty {
         let names = self
             .declared(name)
             .map(|d| d.iter().map(|(n, _)| n.clone()).collect())
             .unwrap_or_default();
         let shown = crate::ast::source_name(crate::ast::unqualified(name)).to_string();
-        Ty::Record(self.intern(Compound::Record {
+        let id = TypeId(self.all.len());
+        self.all.push(Compound::Record {
             name: name.to_string(),
             shown,
             names,
-            fields,
-        }))
+            fields: Vec::new(),
+        });
+        self.named.insert(name.to_string(), id);
+        Ty::Record(id)
+    }
+
+    /// The field types of `record`, a type [`Self::reserve`] made.
+    pub(super) fn fill(&mut self, record: Ty, types: Vec<Ty>) {
+        let Ty::Record(id) = record else { return };
+        if let Some(Compound::Record { fields, .. }) = self.all.get_mut(id.0) {
+            *fields = types;
+        }
     }
 
     /// The qualified name of record type `ty`.

@@ -321,6 +321,7 @@ impl<'a> Parser<'a> {
 
     fn module(&mut self) -> Result<Module> {
         let start = self.tok(0).span;
+        let lazy = self.future_imports()?;
         let mut body = Vec::new();
         while self.at(&TokenKind::Import) || self.at(&TokenKind::From) {
             body.extend(self.import_stmt()?);
@@ -328,7 +329,7 @@ impl<'a> Parser<'a> {
         while !self.at(&TokenKind::EndMarker) {
             body.extend(self.stmts()?);
         }
-        record::check_module(&body)?;
+        record::check_module(&body, lazy)?;
         Ok(Module {
             body,
             stubs: std::mem::take(&mut self.stubs),
@@ -363,10 +364,7 @@ impl<'a> Parser<'a> {
             TokenKind::While => self.while_stmt(),
             TokenKind::For => self.for_stmt(),
             TokenKind::Try => self.try_stmt(),
-            TokenKind::Import | TokenKind::From => {
-                let msg = "`import` must come at module top level, before other statements";
-                Err(error(self.tok(0).span, msg))
-            }
+            TokenKind::Import | TokenKind::From => Err(self.misplaced_import()),
             _ => {
                 let stmt = self.simple_stmt()?;
                 self.expect(&TokenKind::Newline)?;

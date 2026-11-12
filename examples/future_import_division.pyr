@@ -1,0 +1,6 @@
+# deviation: only the `annotations` future feature is recognized (D164); CPython accepts every feature it defines.
+# expect-error: `from __future__ import division` is not supported yet
+# expect-exit: 1
+from __future__ import annotations, division
+
+print("été", 7 / 2)

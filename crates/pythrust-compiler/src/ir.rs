@@ -550,10 +550,41 @@ pub enum Term {
 /// Whether a value of type `ty` is, or may hold, a value of a type
 /// `leaf` picks; `types` are [`Program::types`].
 pub fn holds(types: &[Compound], ty: Ty, leaf: fn(Ty) -> bool) -> bool {
-    if leaf(ty) {
-        return true;
+    reachable(types, ty).into_iter().any(leaf)
+}
+
+/// Every type a value of type `ty` is or may hold, `ty` first, each
+/// once: so this ends for a record that reaches itself (D162).
+pub fn reachable(types: &[Compound], ty: Ty) -> Vec<Ty> {
+    let mut out = vec![ty];
+    let mut next = 0;
+    while let Some(&t) = out.get(next) {
+        next += 1;
+        for part in parts(types, t) {
+            if !out.contains(&part) {
+                out.push(part);
+            }
+        }
     }
-    let inner = match ty {
+    out
+}
+
+/// The types a value of type `ty` holds directly.
+pub fn parts(types: &[Compound], ty: Ty) -> Vec<Ty> {
+    match compound(types, ty) {
+        Some(Compound::List(t) | Compound::Opt(t) | Compound::Set(t) | Compound::View(_, t)) => {
+            vec![*t]
+        }
+        Some(Compound::Dict(k, v)) => vec![*k, *v],
+        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => fields.clone(),
+        None => Vec::new(),
+    }
+}
+
+/// What compound type `ty` is, `types` being [`Program::types`]; `None`
+/// for a scalar.
+pub fn compound(types: &[Compound], ty: Ty) -> Option<&Compound> {
+    match ty {
         Ty::List(id)
         | Ty::Tuple(id)
         | Ty::Record(id)
@@ -562,16 +593,6 @@ pub fn holds(types: &[Compound], ty: Ty, leaf: fn(Ty) -> bool) -> bool {
         | Ty::Set(id)
         | Ty::View(id) => types.get(id.0),
         _ => None,
-    };
-    match inner {
-        Some(Compound::List(t) | Compound::Opt(t) | Compound::Set(t) | Compound::View(_, t)) => {
-            holds(types, *t, leaf)
-        }
-        Some(Compound::Dict(k, v)) => holds(types, *k, leaf) || holds(types, *v, leaf),
-        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
-            fields.iter().any(|t| holds(types, *t, leaf))
-        }
-        None => false,
     }
 }
 
@@ -692,5 +713,30 @@ impl Inst {
             } => [list, index, value].into_iter().any(local),
             Inst::Remove { list, index, .. } => local(list) || local(index),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A record whose field holds a list of it: every type once, so the
+    /// walk ends (D162).
+    #[test]
+    fn reachable_ends_on_a_record_that_reaches_itself() {
+        let record = Ty::Record(TypeId(0));
+        let list = Ty::List(TypeId(1));
+        let types = vec![
+            Compound::Record {
+                name: "P".into(),
+                shown: "P".into(),
+                names: vec!["kids".into(), "tag".into()],
+                fields: vec![list, Ty::Str],
+            },
+            Compound::List(record),
+        ];
+        assert_eq!(reachable(&types, record), vec![record, list, Ty::Str]);
+        assert!(holds(&types, list, |t| t == Ty::Str));
+        assert!(!holds(&types, list, is_exc));
     }
 }

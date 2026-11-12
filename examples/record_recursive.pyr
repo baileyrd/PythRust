@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+# Lazy annotations let a record hold its own type (D162): through an
+# optional, and through a list, which can close a cycle.
+@dataclass(frozen=True)
+class Link:
+    value: str
+    nxt: Link | None
+
+    def length(self) -> int:
+        nxt = self.nxt
+        if nxt is None:
+            return 1
+        return 1 + nxt.length()
+
+
+@dataclass(frozen=True)
+class Tree:
+    name: str
+    kids: list[Tree]
+
+    def size(self) -> int:
+        n = 1
+        for k in self.kids:
+            n += k.size()
+        return n
+
+
+chain = Link("ä", Link("ö", Link("ü", None)))
+print(chain.length())
+print(chain)
+print(chain == Link("ä", Link("ö", Link("ü", None))))
+t = Tree("é", [Tree("a", []), Tree("b", [Tree("c", [])])])
+print(t.size())
+print(t)
+t.kids.append(t)
+print(t)
+print(t == t)

@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+# Lazy annotations (D154): a record's method takes and returns its own
+# record, and a function names a record defined after it.
+def nearest(points: list[Point]) -> Point:
+    best = points[0]
+    for p in points:
+        best = best.closer(p)
+    return best
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+    y: int
+    label: str
+
+    def closer(self, other: Point) -> Point:
+        if abs(self.x) + abs(self.y) <= abs(other.x) + abs(other.y):
+            return self
+        return other
+
+    def moved(self, by: Step) -> Point:
+        return Point(self.x + by.dx, self.y + by.dy, self.label)
+
+
+@dataclass(frozen=True)
+class Step:
+    dx: int
+    dy: int
+
+
+pts = [Point(3, 4, "ä"), Point(-1, 1, "ö"), Point(2, -2, "ü")]
+print(nearest(pts))
+print(pts[0].moved(Step(-3, -3)))
+print(nearest([pts[0].moved(Step(-3, -3)), pts[1]]))

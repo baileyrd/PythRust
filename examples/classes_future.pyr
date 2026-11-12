@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+
+# Lazy annotations (D154): a method takes and returns its own class, and
+# a function or method names a class defined after it.
+def deepest(t: Tree) -> int:
+    return t.depth()
+
+
+class Tree:
+    def __init__(self, label: str):
+        self.label = label
+        self.kids: list[Tree] = []
+        self.tag: Tag | None = None
+
+    def add(self, child: Tree) -> Tree:
+        self.kids.append(child)
+        return self
+
+    def mark(self, tag: Tag) -> Tree:
+        self.tag = tag
+        return self
+
+    def depth(self) -> int:
+        best = 0
+        for k in self.kids:
+            best = max(best, k.depth())
+        return best + 1
+
+    def __repr__(self) -> str:
+        return "Tree(" + self.label + ", " + str(len(self.kids)) + ")"
+
+
+class Tag:
+    def __init__(self, name: str):
+        self.name = name
+
+    def __repr__(self) -> str:
+        return "Tag(" + self.name + ")"
+
+
+root = Tree("racine").add(Tree("élan").add(Tree("ñu"))).add(Tree("b"))
+print(root)
+print(deepest(root))
+print(root.mark(Tag("été")).tag)
+print(root.kids[0].kids[0])

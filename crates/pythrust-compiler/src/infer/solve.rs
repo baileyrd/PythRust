@@ -436,14 +436,15 @@ fn printable(
             let Some(r) = records.get(&name) else {
                 return Ok(Step::Done(vec![]));
             };
-            if r.kind != RecordKind::Plain {
-                return inner(r.fields.iter().map(|(_, t)| t.clone()).collect());
-            }
             let shows = r.methods.contains("__repr__") || !nested && r.methods.contains("__str__");
-            if shows {
+            let blank = match r.kind {
+                RecordKind::Plain => (!shows).then(|| name.clone()),
+                _ => unshown(records, &Type::Record(name.clone()), &mut Vec::new()),
+            };
+            let Some(blank) = blank else {
                 return Ok(Step::Done(vec![]));
-            }
-            let shown = source_name(unqualified(&name));
+            };
+            let shown = source_name(unqualified(&blank));
             Err(error(
                 c,
                 format!("printing `{shown}` needs a `__repr__` method"),
@@ -451,6 +452,29 @@ fn printable(
         }
         _ => Ok(Step::Done(vec![])),
     }
+}
+
+/// The first plain class without `__repr__` that a record's value of
+/// type `t` holds, its fields' types being closed. Each record is
+/// walked once, in `seen`, so this ends for one that reaches itself
+/// (D162).
+fn unshown(records: &HashMap<String, Record>, t: &Type, seen: &mut Vec<String>) -> Option<String> {
+    let parts: Vec<&Type> = match t {
+        Type::List(e) | Type::Set(e) | Type::View(_, e) | Type::Optional(e) => vec![e],
+        Type::Dict(k, v) => vec![k, v],
+        Type::Tuple(items) => items.iter().collect(),
+        Type::Record(name) if seen.contains(name) => Vec::new(),
+        Type::Record(name) => {
+            let r = records.get(name)?;
+            if r.kind == RecordKind::Plain {
+                return (!r.methods.contains("__repr__")).then(|| name.clone());
+            }
+            seen.push(name.clone());
+            r.fields.iter().map(|(_, t)| t).collect()
+        }
+        _ => Vec::new(),
+    };
+    parts.into_iter().find_map(|p| unshown(records, p, seen))
 }
 
 /// [`Need::Method`]: once the receiver's type is known, its method
