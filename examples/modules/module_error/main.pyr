@@ -1,0 +1,11 @@
+# expect-exit: 1
+# An exception raised in a module: caught in the importer, then uncaught.
+import checks
+
+try:
+    checks.positive(-1)
+except ValueError as e:
+    print("caught", e)
+print(checks.ratio(6, 3))
+print(checks.ratio(1, 0))
+print("unreachable")

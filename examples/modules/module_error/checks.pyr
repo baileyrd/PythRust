@@ -1,0 +1,8 @@
+def positive(n: int) -> int:
+    if n < 0:
+        raise ValueError("negative")
+    return n
+
+
+def ratio(a: int, b: int) -> int:
+    return a // b

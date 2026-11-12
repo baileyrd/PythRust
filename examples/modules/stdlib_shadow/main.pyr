@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: the local module `random.pyr` is named like the standard module `random`
+# deviation: a local module named like a standard module is an error (D75, D81); CPython imports the local file
+import random
+
+print("main")

@@ -1,0 +1,2 @@
+def fail() -> None:
+    raise ValueError("`a.x` and `x` stay as written · ✓")

@@ -1,0 +1,9 @@
+# `__name__` of a module that never reads it, of one that renames
+# itself, and of the main file before and after it renames itself.
+import util
+import quiet
+
+print(util.__name__, util.x, quiet.__name__)
+print(__name__)
+__name__ = "renamed · ✓"
+print(__name__)

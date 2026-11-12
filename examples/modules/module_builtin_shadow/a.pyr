@@ -1,0 +1,6 @@
+def size(xs: list[int]) -> int:
+    return len(xs)
+
+
+def label() -> str:
+    return str(size([1, 2, 3])) + " Größe"

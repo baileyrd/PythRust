@@ -1,0 +1,9 @@
+# A module's list is one object: changed through its functions and read
+# from the importer, it is the same list.
+import store
+
+store.add("a")
+store.add("b")
+items = store.items
+items.append("c")
+print(store.items, store.count(), len(items))

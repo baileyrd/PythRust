@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: no module file `util.pyr`; `Util.pyr` differs only in case
+import util
+
+print(util.X)

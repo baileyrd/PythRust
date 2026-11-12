@@ -1,0 +1,7 @@
+# Every module importing `sys` shares one `sys.argv`, initialized once:
+# a diamond of imports, each mutating it.
+import a
+import b
+import sys
+
+print(len(sys.argv), sys.argv[-2], sys.argv[-1])

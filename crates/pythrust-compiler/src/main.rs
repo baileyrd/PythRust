@@ -15,6 +15,7 @@ mod bindings;
 mod cargo;
 mod json;
 mod lockfile;
+mod modules;
 mod project;
 mod rt;
 mod sources;
@@ -23,12 +24,13 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use modules::Graph;
+use parser::Unit;
 use pythrust_compiler::ast::{Binding, Module};
 use pythrust_compiler::infer::Types;
 use pythrust_compiler::interop::gen;
 use pythrust_compiler::{
-    codegen, infer, interp, lexer, lower, own, parser, rc, stdlib, DiagKind, Diagnostic, Span,
-    Warning,
+    codegen, infer, interp, lower, own, parser, rc, stdlib, DiagKind, Diagnostic, Span, Warning,
 };
 use sources::Sources;
 
@@ -153,8 +155,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let project = match project::bindings(path, &src) {
-        Ok(project) => project,
+    let mut sources = Sources::new(path, &src);
+    let loaded = project::root(path).and_then(|root| {
+        let graph = modules::load(&root.dir, path, &src, &mut sources)?;
+        let project = project::bindings(&root, &graph, &sources)?;
+        Ok((graph, project))
+    });
+    let (graph, project) = match loaded {
+        Ok(loaded) => loaded,
         Err(message) => {
             eprint!("{message}");
             return ExitCode::FAILURE;
@@ -163,16 +171,14 @@ fn main() -> ExitCode {
     if let (Some(found), Command::Check | Command::Build) = (&project.manifest, inv.command) {
         eprintln!("pythrust: using {}", found.path.display());
     }
-    let crates = &project.crates;
-    let mut sources = Sources::new(path, &src);
-    let rust = match bindings::load(crates, &mut sources) {
+    let rust = match bindings::load(&project.crates, &mut sources) {
         Ok(rust) => rust,
         Err(message) => {
             eprint!("{message}");
             return ExitCode::FAILURE;
         }
     };
-    let (module, types) = match front(&src, &rust) {
+    let (module, types) = match front(&graph, &rust) {
         Ok(checked) => checked,
         Err(diag) => {
             eprint!("{}", sources.render(&diag));
@@ -286,12 +292,19 @@ fn parse_args(args: &[String]) -> Result<Request<'_>, String> {
     }))
 }
 
-/// The checks `run`, `check` and `build` share: lex, parse, infer, and
-/// check ownership over every function. All finish before anything runs.
-/// `import` may name one of `rust`.
-fn front(src: &str, rust: &[Binding]) -> pythrust_compiler::Result<(Module, Types)> {
-    let tokens = lexer::lex(src)?;
-    let module = parser::parse_with(&tokens, rust)?;
+/// The checks `run`, `check` and `build` share: parse every module as
+/// one program (D76), infer, and check ownership over every function.
+/// All finish before anything runs. `import` may name one of `rust`.
+fn front(graph: &Graph, rust: &[Binding]) -> pythrust_compiler::Result<(Module, Types)> {
+    let locals: Vec<Unit<'_>> = graph
+        .locals
+        .iter()
+        .map(|m| Unit {
+            name: &m.name,
+            tokens: &m.tokens,
+        })
+        .collect();
+    let module = parser::parse_program(&locals, &graph.main, rust)?;
     let types = infer::infer(&module)?;
     own::check(&module, &own::analyze(&module, &types))?;
     Ok((module, types))
@@ -666,6 +679,7 @@ fn floor_char_boundary(src: &str, offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pythrust_compiler::lexer;
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
@@ -775,11 +789,21 @@ mod tests {
         assert!(parse_args(&args(&["build", "a", "b"])).is_err());
     }
 
+    /// [`front`] on a program of one file.
+    fn front_one(src: &str) -> pythrust_compiler::Result<(Module, Types)> {
+        let graph = Graph {
+            locals: Vec::new(),
+            main: lexer::lex(src)?,
+            foreign: Vec::new(),
+        };
+        front(&graph, &[])
+    }
+
     /// What `main` does for `command` short of rendering: the checks,
     /// then the program for `run`.
     fn exec(command: Command, src: &str) -> (pythrust_compiler::Result<()>, String) {
         let mut out = Vec::new();
-        let result = front(src, &[]).and_then(|(module, types)| match command {
+        let result = front_one(src).and_then(|(module, types)| match command {
             Command::Run => interp::run(&module, &types, &["f.pyr".to_string()], &mut out),
             Command::Check | Command::Build => Ok(()),
         });
@@ -787,7 +811,7 @@ mod tests {
     }
 
     fn compiled(src: &str) -> pythrust_compiler::Result<Vec<u8>> {
-        let (module, types) = front(src, &[])?;
+        let (module, types) = front_one(src)?;
         compile(&Sources::new("f.pyr", src), &module, &types)
     }
 
@@ -836,7 +860,7 @@ mod tests {
     #[test]
     fn checks_pass_with_warnings_and_render_them_at_the_clause() {
         let src = "def f(n: int) -> int raises Exception:\n    return n\n";
-        let (_, types) = front(src, &[]).unwrap();
+        let (_, types) = front_one(src).unwrap();
         let [w] = types.warnings() else {
             panic!("{:?}", types.warnings());
         };

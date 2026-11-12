@@ -1226,3 +1226,55 @@ fn fclone_fast_finds_the_groups_fclone_lite_finds() {
     assert!(!want.contains("locked"), "{want}");
     assert_eq!(group_set(&got), groups, "{got}");
 }
+
+/// A local module imports a binding the root manifest names, and only
+/// that module does (D81): the build counts imports across modules.
+#[test]
+fn a_module_imports_a_binding() {
+    let dir = scratch("module-binding");
+    let util = "import probe\n\ntemper def twice(n: int) -> int:\n    return probe.double(n) + 1\n";
+    fs::write(dir.join("util.pyr"), util).unwrap();
+    let src = "import util\n\nprint(util.twice(20))\n";
+    assert_eq!(stdout(build(&dir, src, &[("probe", &probe())])), "41\n");
+}
+
+/// A name that is both a local module and a binding is an error (D81):
+/// importing a local module reads the manifest (D125), even when it is
+/// the program's only import, naming the import in its own file.
+#[test]
+fn a_local_module_named_like_a_binding_is_refused() {
+    let dir = scratch("module-shadows-binding");
+    fs::write(dir.join("probe.pyr"), "X = 1\n").unwrap();
+    fs::write(dir.join("other.pyr"), "import probe\n\nY = probe.X\n").unwrap();
+    let crates = dir.join("crates");
+    copy_tree(&probe(), &crates.join("probe"));
+    let bindings = [("probe", crates.join("probe"))];
+    let bindings: Vec<(&str, &Path)> = bindings.iter().map(|(n, p)| (*n, p.as_path())).collect();
+    let out = compile(
+        &dir,
+        "main.pyr",
+        "import other\n\nprint(other.Y)\n",
+        &bindings,
+    );
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = text(&out.stderr);
+    let want = "other.pyr:1:8: parse error: `probe` is both the local module `probe.pyr` \
+                and a Rust binding in ";
+    assert!(err.contains(want), "{err}");
+}
+
+/// A binding function named like a builtin is the binding's, never the
+/// builtin's: its declared set is all a tempered caller sees.
+#[test]
+fn a_binding_function_named_like_a_builtin_raises_only_what_it_declares() {
+    let dir = scratch("binding-builtin-name");
+    let fx = dir.join("crates/fx");
+    fs::create_dir_all(fx.join("src")).unwrap();
+    let toml = "[package]\nname = \"fx\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n";
+    fs::write(fx.join("Cargo.toml"), toml).unwrap();
+    let lib = "pub fn int(s: &str) -> i64 {\n    s.len() as i64\n}\n";
+    fs::write(fx.join("src/lib.rs"), lib).unwrap();
+    fs::write(fx.join("fx.pyr"), "temper def int(s: str) -> int: ...\n").unwrap();
+    let src = "import fx\n\ntemper def f(s: str) -> int:\n    return fx.int(s)\n\nprint(f(\"bad · ✓\"))\n";
+    assert_eq!(stdout(build(&dir, src, &[("fx", &fx)])), "10\n");
+}

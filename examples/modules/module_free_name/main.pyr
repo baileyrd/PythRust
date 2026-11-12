@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-error: `limit` is not defined
+# A module's name it does not define is not the main file's global.
+import a
+
+limit = 3
+print(a.peek())

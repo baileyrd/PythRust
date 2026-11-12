@@ -1,0 +1,6 @@
+# expect-exit: 1
+# An uncaught exception's message is the program's text, never renamed.
+import a
+
+print("before")
+a.fail()

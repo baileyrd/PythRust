@@ -1,0 +1,6 @@
+# A module's call before its own `def print` runs finds the builtin;
+# after it, its own `print`. Main's `print` stays the builtin.
+import a
+
+a.quiet()
+print("main · ü")

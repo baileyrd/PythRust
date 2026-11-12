@@ -5,13 +5,16 @@
 //! space, so a span alone says which file it belongs to, and `Span`
 //! stays `{start, end}`.
 
-use pythrust_compiler::{Diagnostic, Span, Warning};
+use pythrust_compiler::{lexer, DiagKind, Diagnostic, Span, Token, Warning};
 
 /// A source file and the offset its spans start at.
 struct Source {
     path: String,
     text: String,
     base: usize,
+    /// The module's dotted name: its own names render without it. A
+    /// binding's stub has none.
+    module: Option<String>,
 }
 
 /// The program's file and each other file (a binding's stub or a local
@@ -22,12 +25,15 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
-    /// The program's file, whose spans start at 0.
+    /// The program's file, whose spans start at 0. It is the module
+    /// `__main__`, which qualifies a global a local module's free name
+    /// would meet; it renders unqualified there too.
     pub(crate) fn new(path: &str, text: &str) -> Sources {
         let main = Source {
             path: path.to_string(),
             text: text.to_string(),
             base: 0,
+            module: Some("__main__".to_string()),
         };
         Sources {
             main,
@@ -44,12 +50,23 @@ impl Sources {
     /// end-of-file span stays in its own file; returns its base, which
     /// its spans are shifted by.
     pub(crate) fn add(&mut self, path: &str, text: &str) -> usize {
+        self.push(path, text, None)
+    }
+
+    /// Adds the local module `name`'s file, as [`Sources::add`] does a
+    /// stub. Its own names render as written there: `x`, not `a.x` (D77).
+    pub(crate) fn add_module(&mut self, path: &str, text: &str, name: &str) -> usize {
+        self.push(path, text, Some(name.to_string()))
+    }
+
+    fn push(&mut self, path: &str, text: &str, module: Option<String>) -> usize {
         let last = self.others.last().unwrap_or(&self.main);
         let base = last.base + last.text.len() + 1;
         self.others.push(Source {
             path: path.to_string(),
             text: text.to_string(),
             base,
+            module,
         });
         base
     }
@@ -72,12 +89,20 @@ impl Sources {
         format!("{}:{line}", file.path)
     }
 
-    /// Renders `diag` against the file it belongs to.
+    /// Renders `diag` against the file it belongs to. A runtime error's
+    /// message is the program's own text (an exception's), so it is
+    /// shown as raised, as native code shows it (D127 names only the
+    /// compiler's names).
     pub(crate) fn render(&self, diag: &Diagnostic) -> String {
         let (file, span) = self.locate(diag.span);
+        let message = match diag.kind {
+            DiagKind::Runtime => diag.message.clone(),
+            _ => file.own_names(&diag.message),
+        };
         let local = Diagnostic {
             span,
-            ..diag.clone()
+            message,
+            kind: diag.kind,
         };
         crate::render(&file.path, &file.text, &local)
     }
@@ -87,10 +112,50 @@ impl Sources {
         let (file, span) = self.locate(w.span);
         let local = Warning {
             span,
-            message: w.message.clone(),
+            message: file.own_names(&w.message),
         };
         crate::render_warning(&file.path, &file.text, &local)
     }
+}
+
+impl Source {
+    /// `message` with this module's own names unqualified: `` `a.x` ``
+    /// becomes `` `x` `` in `a.pyr`. Other modules' names keep theirs.
+    fn own_names(&self, message: &str) -> String {
+        let Some(module) = &self.module else {
+            return message.to_string();
+        };
+        let prefix = format!("`{module}.");
+        let mut out = String::with_capacity(message.len());
+        let mut rest = message;
+        while let Some(at) = rest.find(&prefix) {
+            let after = &rest[at + prefix.len()..];
+            let own = after
+                .find('`')
+                .is_some_and(|end| end > 0 && !after[..end].contains(['.', ' ']));
+            out.push_str(&rest[..at]);
+            out.push('`');
+            if !own {
+                out.push_str(&prefix[1..]);
+            }
+            rest = after;
+        }
+        out.push_str(rest);
+        out
+    }
+}
+
+/// Lexes `text`, a file whose spans start at `base`, into that span
+/// space; an error comes in it too.
+pub(crate) fn lex_at(text: &str, base: usize) -> pythrust_compiler::Result<Vec<Token>> {
+    let mut tokens = lexer::lex(text).map_err(|d| Diagnostic {
+        span: shift(d.span, base),
+        ..d
+    })?;
+    for t in &mut tokens {
+        t.span = shift(t.span, base);
+    }
+    Ok(tokens)
 }
 
 /// `span` moved `by` bytes on, into the file whose base is `by`.
@@ -153,6 +218,24 @@ mod tests {
     }
 
     #[test]
+    fn a_module_renders_its_own_names_unqualified() {
+        let mut sources = Sources::new("main.pyr", "import a\n");
+        let a = sources.add_module("a.pyr", "x = 1\n", "a");
+        let d = Diagnostic {
+            message: "`a.x` and `a.f` call `b.g`, `a.b.c`, `sys.argv`, `a.`".to_string(),
+            ..diag(a, a + 1)
+        };
+        let out = sources.render(&d);
+        let want = "`x` and `f` call `b.g`, `a.b.c`, `sys.argv`, `a.`";
+        assert!(out.contains(want), "{out}");
+        let in_main = Diagnostic {
+            span: Span { start: 0, end: 1 },
+            ..d
+        };
+        assert!(sources.render(&in_main).contains("`a.x` and `a.f`"));
+    }
+
+    #[test]
     fn warnings_render_against_their_own_file() {
         let mut sources = Sources::new("main.pyr", "x = 1\n");
         let a = sources.add("a.pyr", "y = 2\n");
@@ -165,5 +248,34 @@ mod tests {
         };
         let out = sources.render_warning(&w);
         assert!(out.starts_with("a.pyr:1:5:"), "{out}");
+    }
+
+    #[test]
+    fn a_runtime_message_is_shown_as_raised() {
+        let mut sources = Sources::new("main.pyr", "import a\n");
+        let a = sources.add_module("a.pyr", "raise E\n", "a");
+        let d = Diagnostic {
+            message: "ValueError: `a.x`".to_string(),
+            kind: pythrust_compiler::DiagKind::Runtime,
+            ..diag(a, a + 1)
+        };
+        assert!(sources.render(&d).contains("ValueError: `a.x`"));
+    }
+
+    #[test]
+    fn the_main_files_qualified_names_render_unqualified_there() {
+        let mut sources = Sources::new("main.pyr", "len = 1\n");
+        let a = sources.add_module("a.pyr", "x = 1\n", "a");
+        let message = "`__main__.len` and `a.x`".to_string();
+        let in_main = Diagnostic {
+            message: message.clone(),
+            ..diag(0, 1)
+        };
+        assert!(sources.render(&in_main).contains("`len` and `a.x`"));
+        let in_a = Diagnostic {
+            message,
+            ..diag(a, a + 1)
+        };
+        assert!(sources.render(&in_a).contains("`__main__.len` and `x`"));
     }
 }

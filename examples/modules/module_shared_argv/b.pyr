@@ -1,0 +1,5 @@
+import sys
+import a
+
+print("b sees", len(sys.argv), sys.argv[-1])
+sys.argv.append("again")

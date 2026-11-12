@@ -6,17 +6,17 @@ use std::path::Path;
 
 use pythrust_compiler::ast::Binding;
 use pythrust_compiler::interop::gen;
-use pythrust_compiler::{infer, lexer, parser, stdlib, Diagnostic, TokenKind};
+use pythrust_compiler::{infer, lexer, parser, stdlib, TokenKind};
 
 use crate::cargo::Crate;
-use crate::sources::{shift, Sources};
+use crate::sources::{lex_at, Sources};
 
 /// Checks the name of a binding: a plain name that is no standard
 /// module, builtin, exception class, keyword or reserved word.
 pub(crate) fn check_name(name: &str) -> Result<(), String> {
     let what = if !is_plain_name(name) {
         "is not a name"
-    } else if stdlib::module(name).is_some() {
+    } else if stdlib::is_python_module(name) {
         "is a standard module"
     } else if infer::is_builtin(name) {
         "is a builtin"
@@ -74,21 +74,13 @@ fn stub_text(name: &str, dir: &Path) -> Result<String, String> {
 
 /// Lexes and parses the stub `text` of `name`, its spans offset by `base`.
 fn parse(text: &str, name: &str, base: usize) -> pythrust_compiler::Result<Binding> {
-    let shift_diag = |d: Diagnostic| Diagnostic {
-        span: shift(d.span, base),
-        ..d
-    };
-    let mut tokens = lexer::lex(text).map_err(shift_diag)?;
-    for t in &mut tokens {
-        t.span = shift(t.span, base);
-    }
-    parser::parse_stub(&tokens, name)
+    parser::parse_stub(&lex_at(text, base)?, name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pythrust_compiler::Span;
+    use pythrust_compiler::{Diagnostic, Span};
 
     #[test]
     fn names_that_mean_something_else_are_refused() {
@@ -97,6 +89,9 @@ mod tests {
         let cases = [
             ("os", "is a standard module"),
             ("hashlib", "is a standard module"),
+            // Stdlib wins, so a binding named like any CPython module is
+            // unreachable (D128).
+            ("json", "is a standard module"),
             ("len", "is a builtin"),
             ("print", "is a builtin"),
             ("ValueError", "is a builtin"),

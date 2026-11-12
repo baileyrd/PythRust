@@ -1,0 +1,8 @@
+KeyError = "shadowed · ✓"
+
+
+def f(d: dict[str, int]) -> int:
+    try:
+        return d["k"]
+    except (ValueError, KeyError):
+        return 0

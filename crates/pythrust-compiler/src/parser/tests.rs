@@ -1539,12 +1539,13 @@ fn src_err(src: &str) -> String {
 }
 
 #[test]
-fn import_binds_each_module_variable_from_its_initializer() {
-    let m = src_parse("import sys, sys\nprint(sys.argv)\n").unwrap();
+fn import_binds_each_module_variable_from_its_initializer_once() {
+    let m = src_parse("import sys, sys\nimport sys\nprint(sys.argv)\n").unwrap();
     let names: Vec<String> = m.body.iter().map(sx_stmt).collect();
-    let bind = "(= sys.argv (call sys.__argv__))";
-    assert_eq!(names[..2], [bind, bind]);
-    assert_eq!(names[2], "(call print sys.argv)");
+    assert_eq!(
+        names,
+        ["(= sys.argv (call sys.__argv__))", "(call print sys.argv)"]
+    );
 }
 
 #[test]
@@ -1568,7 +1569,7 @@ fn import_comes_first_at_module_level() {
     assert_eq!(src_err("def f():\n    import sys\n"), late);
     assert_eq!(
         src_err("import json\n"),
-        "`json` is not a standard module, and no pythrust.toml names it; \
+        "the standard module `json` is not supported yet; \
          the standard modules are: concurrent.futures, hashlib, os, sys"
     );
     assert!(src_err("import sys.argv\n").contains("import the top-level module"));

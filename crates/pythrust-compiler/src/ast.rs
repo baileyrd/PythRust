@@ -15,6 +15,10 @@ pub struct Module {
     /// nothing a program does, so the expression it covers stands in the
     /// tree alone and only the `pause` check reads these.
     pub pauses: Vec<Pause>,
+    /// Where each file's top level starts in `body`, in the order they
+    /// run (step 3, D83): `[0]` for one file. A file's leading `def`s
+    /// run before any code that could call them.
+    pub starts: Vec<usize>,
     pub span: Span,
 }
 
@@ -31,6 +35,14 @@ pub struct Pause {
 pub struct Binding {
     pub name: String,
     pub funcs: Vec<StubDef>,
+}
+
+/// A local module of the program (step 3, D75): its dotted name and the
+/// names its top level binds, which `name.x` may read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalModule {
+    pub name: String,
+    pub names: std::collections::BTreeSet<String>,
 }
 
 /// A stub's `'temper' 'def' NAME '(' [params] ')' '->' type [raises] ':'
@@ -362,6 +374,12 @@ pub struct CompFor {
 /// each later stage sees an ordinary variable of one type that neither
 /// leaks nor shadows (CPython 3 scoping).
 pub const COMP_MARK: char = '@';
+
+/// A qualified name's own part: `x` of the global `a.x` (step 3, D76).
+/// A builtin's name is qualified only where its module rebinds it.
+pub fn unqualified(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
 
 /// The name `x` a comprehension starting at `offset` binds.
 pub fn comp_name(name: &str, offset: usize) -> String {

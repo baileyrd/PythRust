@@ -1,0 +1,22 @@
+def parse(s: str) -> int:
+    try:
+        return int(s)
+    except ValueError:
+        return 7
+
+
+def pick(d: dict[str, int], k: str) -> int:
+    try:
+        return d[k] // d["zero"]
+    except (KeyError, ZeroDivisionError) as e:
+        print("caught", e)
+        return -1
+
+
+temper def strict(s: str) -> int raises ValueError:
+    return int(s)
+
+
+def local() -> str:
+    KeyError = "a local · ✓"
+    return KeyError

@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{
-    source_name, BinOp, Block, Branch, Expr, ExprKind, Handler, Stmt, StmtKind, Target, TargetKind,
+    source_name, unqualified, BinOp, Block, Branch, Expr, ExprKind, Handler, Stmt, StmtKind,
+    Target, TargetKind,
 };
 use crate::diag::{Diagnostic, Result};
 use crate::span::Span;
@@ -160,7 +161,7 @@ impl Checker {
     /// Why handler name `name` is not a builtin exception class.
     fn not_a_class(&self, name: &str) -> String {
         let variable = self.lookup(name).is_some();
-        if variable && !builtins::is_exception(name) {
+        if variable && !builtins::is_exception(unqualified(name)) {
             return format!("`{name}` is a variable: {CLASS_NOT_A_VALUE}");
         }
         not_an_exception(name)
@@ -360,7 +361,7 @@ impl Checker {
 
 /// Why `except name` names no builtin exception: shadowed, or unknown.
 fn not_an_exception(name: &str) -> String {
-    if builtins::is_exception(name) {
+    if builtins::is_exception(unqualified(name)) {
         return format!("`{name}` is redefined here, so it no longer names the builtin exception");
     }
     let names = builtins::exception_names();

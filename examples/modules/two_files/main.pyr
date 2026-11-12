@@ -1,0 +1,12 @@
+# Two files: a module's globals, functions and `__name__`, a builtin's
+# name and a global's name reused in both files, and `sys` imported twice.
+import sys
+import util
+
+total = 100
+print("main starts as", __name__, len(sys.argv))
+print(util.total([1, 2, 3]), total)
+print(util.len("abc"), len("abc"))
+print(util.LIMIT, util.describe(7))
+if __name__ == "__main__":
+    print("main is __main__")

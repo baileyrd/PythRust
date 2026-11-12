@@ -29,7 +29,7 @@ mod ty;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::mem;
 
 use crate::ast::{Block, FuncDef, Module, StmtKind, StubDef, TypeExpr};
@@ -182,6 +182,10 @@ struct Checker {
     /// Rust binding functions that raise a class the program redefines,
     /// with that class's name.
     stub_redefined: HashMap<String, String>,
+    /// Every Rust binding function, by its dotted name. A local module's
+    /// functions are dotted too (`a.f`, D76), so the dot alone does not
+    /// tell a binding.
+    stubs: HashSet<String>,
     /// The `enumerate(...)` or `zip(...)` call being checked where it is
     /// consumed directly (D51): anywhere else it is not a value yet.
     consumed: Option<Span>,
@@ -235,6 +239,7 @@ impl Checker {
             let ret = self.annotation(&f.returns)?;
             let sig = FuncType { params, ret };
             self.funcs.insert(f.name.name.clone(), Func::Mono(sig));
+            self.stubs.insert(f.name.name.clone());
         }
         Ok(())
     }

@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: `ValueError` is redefined, so it no longer names the builtin exception
+# deviation: a `raises` clause naming a class its module rebinds is a compile error (D8); CPython never reads the clause
+import a
+
+print(a.f("1"))

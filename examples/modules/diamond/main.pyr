@@ -1,0 +1,7 @@
+# A diamond: `left` and `right` both import `base`, whose top level runs
+# once, first; the others run depth-first in import order (D83).
+import left
+import right
+import base
+
+print("main", left.value(), right.value(), base.calls())

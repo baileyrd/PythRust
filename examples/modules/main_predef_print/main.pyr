@@ -1,0 +1,13 @@
+# The main file's call before its own `def print` runs finds the
+# builtin, while a module's `print` is always the builtin.
+import a
+
+print("main: before its def · ✓")
+
+
+def print(s: str) -> None:
+    pass
+
+
+print("main: after its def, silent")
+a.hello()

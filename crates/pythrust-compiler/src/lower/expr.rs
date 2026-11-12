@@ -1,6 +1,8 @@
 //! Expressions: each lowers to an operand, emitting what it needs first.
 
-use crate::ast::{self, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, StubDef, UnaryOp};
+use crate::ast::{
+    self, unqualified, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, StubDef, UnaryOp,
+};
 use crate::diag::{Diagnostic, Result};
 use crate::exc::ExcKind;
 use crate::infer::Type;
@@ -603,21 +605,21 @@ impl<'a> FnBuilder<'_, 'a> {
             }
             _ => return Err(unsupported(span, "calling this kind of expression")),
         };
-        let mut def = self.cx.defs.get(name.as_str()).copied();
-        // Before a shadowing `def` runs, the name still finds the builtin.
-        let pending = def.is_some()
-            && self
-                .defined
-                .as_ref()
-                .is_some_and(|d| !d.contains(name.as_str()));
-        if pending && crate::interp::is_builtin(name) {
+        let mut name = name.as_str();
+        let mut def = self.cx.defs.get(name).copied();
+        // Before a shadowing `def` runs, the name still finds the builtin
+        // of its own name (`print` for a module's `a.print`).
+        let pending = def.is_some() && self.defined.as_ref().is_some_and(|d| !d.contains(name));
+        let builtin = unqualified(name);
+        if pending && crate::interp::is_builtin(builtin) {
             // Inference typed the call by the later `def`; the builtin's
             // result must agree, or the program is outside the subset.
-            if name != "print" || self.ty_at(span)? != Ty::None {
-                let what = format!("calling builtin `{name}` before a `def` that shadows it");
+            if builtin != "print" || self.ty_at(span)? != Ty::None {
+                let what = format!("calling builtin `{builtin}` before a `def` that shadows it");
                 return Err(unsupported(span, &what));
             }
             def = None;
+            name = builtin;
         }
         if def.is_some() && !self.callable(name, func.span)? {
             // Python looks the callee up before evaluating arguments.

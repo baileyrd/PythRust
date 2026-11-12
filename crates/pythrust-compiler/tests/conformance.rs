@@ -32,6 +32,9 @@
 //!   infer) with a diagnostic containing `text`; it implies exit 1. Every
 //!   other program must pass `check`. `corpus_checks` asserts both.
 //!
+//! A program of several files is a directory `examples/modules/<name>/`
+//! whose main file is `main.pyr` ([`modules`]).
+//!
 //! Environment:
 //! - `PYTHON` interpreter to use as the oracle (default `python3`).
 //! - `PYTHRUST_BIN` the `pythrust` binary (default: the one Cargo built for
@@ -70,6 +73,8 @@ use pythrust_compiler::{infer, lexer, lower, parser, rc, TokenKind};
 mod common;
 #[path = "conformance/link.rs"]
 mod link;
+#[path = "conformance/modules.rs"]
+mod modules;
 use common::Scratch;
 
 type Res<T> = std::result::Result<T, String>;
@@ -784,17 +789,22 @@ fn mismatch(case: &Case, got: &Run) -> Option<String> {
 
 /// Checks one case against CPython. A deviation must still differ.
 fn check_cpython(case: &Case) -> Res<Option<String>> {
-    let got = run_cpython(&case.source)?;
+    Ok(cpython_verdict(case, &run_cpython(&case.source)?))
+}
+
+/// Judges CPython's run of `case`; `None` means it agrees, or differs
+/// as a deviation must.
+fn cpython_verdict(case: &Case, got: &Run) -> Option<String> {
     let Some(why) = &case.expect.deviation else {
-        return Ok(mismatch(case, &got));
+        return mismatch(case, got);
     };
     let stale = got.stdout == case.stdout && got.status == case.expect.status;
-    Ok(stale.then(|| {
+    stale.then(|| {
         format!(
             "{}: CPython agrees; stale deviation: {why}",
             case.source.display()
         )
-    }))
+    })
 }
 
 /// Writes `source`'s golden from CPython; the golden may not exist yet.

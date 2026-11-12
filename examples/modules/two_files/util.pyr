@@ -1,0 +1,25 @@
+import sys
+
+LIMIT = 10
+print("util runs first, as", __name__, sys.argv == sys.argv)
+
+
+def total(xs):
+    t = 0
+    for x in xs:
+        t += x
+    return t + LIMIT
+
+
+def len(s: str) -> int:
+    return 42
+
+
+def describe(n: int) -> str:
+    if n < LIMIT:
+        return "klein · ✓"
+    return "groß · 大"
+
+
+if __name__ == "__main__":
+    print("never: util is imported")

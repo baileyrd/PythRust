@@ -4,13 +4,13 @@
 //! is known while parsing: `sys.argv` becomes the name `sys.argv`.
 
 use super::{error, Parser};
-use crate::ast::{Expr, ExprKind, Ident, Stmt, StmtKind, Target, TargetKind};
+use crate::ast::{Expr, ExprKind, Ident, LocalModule, Stmt, StmtKind, Target, TargetKind};
 use crate::diag::Result;
 use crate::span::Span;
 use crate::stdlib::{self, ModuleDef, StdFn};
 use crate::token::TokenKind;
 
-impl Parser<'_> {
+impl<'a> Parser<'a> {
     /// `'import' NAME (',' NAME)* NEWLINE`: an assignment of each
     /// variable of each module from its initializer.
     pub(super) fn import_stmt(&mut self) -> Result<Vec<Stmt>> {
@@ -18,7 +18,7 @@ impl Parser<'_> {
         let mut stmts = Vec::new();
         loop {
             let name = self.expect_name("a module name")?;
-            if self.import_binding(&name)? {
+            if self.import_binding(&name)? || self.import_local(&name) {
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }
@@ -26,12 +26,7 @@ impl Parser<'_> {
             }
             let module = self.import(&name)?;
             self.dotted_import(module, &name)?;
-            stmts.extend(
-                module
-                    .vars
-                    .iter()
-                    .map(|(var, init)| bind(var, *init, name.span)),
-            );
+            stmts.extend(self.initialize(module, name.span));
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
@@ -55,6 +50,17 @@ impl Parser<'_> {
         Ok(stmts.into_iter().map(|s| Stmt { span, ..s }).collect())
     }
 
+    /// The assignments that initialize `module`'s variables, unless an
+    /// import of it has already: every importer shares them (D83).
+    fn initialize(&mut self, module: &'static ModuleDef, span: Span) -> Vec<Stmt> {
+        if self.ready.contains(&module.name) {
+            return Vec::new();
+        }
+        self.ready.push(module.name);
+        let vars = module.vars.iter();
+        vars.map(|(var, init)| bind(var, *init, span)).collect()
+    }
+
     /// After `import concurrent`, the `.futures` it needs: the one
     /// dotted import, as CPython loads `futures` only when named.
     fn dotted_import(&mut self, module: &ModuleDef, name: &Ident) -> Result<()> {
@@ -76,15 +82,53 @@ impl Parser<'_> {
     /// Records the import of the module `name`.
     fn import(&mut self, name: &Ident) -> Result<&'static ModuleDef> {
         let Some(module) = stdlib::module(&name.name) else {
-            return Err(error(
-                name.span,
-                stdlib::not_standard(&name.name, "no pythrust.toml names it"),
-            ));
+            return Err(error(name.span, stdlib::not_found(&name.name)));
         };
         if !self.modules.iter().any(|m| m.name == module.name) {
             self.modules.push(module);
         }
         Ok(module)
+    }
+
+    /// Records the import of the local module `name`, if the program has
+    /// one by that name; whether it does. Its top level runs where the
+    /// driver places it (D83), so the import binds nothing here.
+    fn import_local(&mut self, name: &Ident) -> bool {
+        let Some(local) = self.locals.iter().find(|m| m.name == name.name) else {
+            return false;
+        };
+        if self.imported_local(&name.name).is_none() {
+            self.imported_locals.push(local);
+        }
+        true
+    }
+
+    /// The imported local module named `name`, if any.
+    pub(super) fn imported_local(&self, name: &str) -> Option<&'a LocalModule> {
+        self.imported_locals
+            .iter()
+            .copied()
+            .find(|m| m.name == name)
+    }
+
+    /// After the local module's name (already consumed at `first`), `.x`
+    /// for one of its names: `a.x` as one name. A module is not a value
+    /// (D83).
+    pub(super) fn local_name(&mut self, local: &LocalModule, first: Span) -> Result<Expr> {
+        if !self.eat(&TokenKind::Dot) {
+            let msg = format!(
+                "`{}` is a module, not a value; use one of its names",
+                local.name
+            );
+            return Err(error(first, msg));
+        }
+        let attr = self.expect_name("an attribute name")?;
+        let span = first.merge(attr.span);
+        if !local.names.contains(&attr.name) {
+            let msg = format!("module `{}` has no `{}`", local.name, attr.name);
+            return Err(error(span, msg));
+        }
+        Ok(name_expr(&format!("{}.{}", local.name, attr.name), span))
     }
 
     /// The imported module named `name`, if any.
@@ -158,7 +202,9 @@ impl Parser<'_> {
     /// binding's.
     pub(super) fn binding_name(&mut self, what: &str) -> Result<Ident> {
         let name = self.expect_name(what)?;
-        let kind = if self.imported(&name.name).is_some() {
+        let module =
+            self.imported(&name.name).is_some() || self.imported_local(&name.name).is_some();
+        let kind = if module {
             "module"
         } else if self.imported_binding(&name.name).is_some() {
             "Rust binding"

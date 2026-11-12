@@ -1,0 +1,2 @@
+__name__ = "renamed · ü"
+print("quiet renames itself")

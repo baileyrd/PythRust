@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: circular import: a -> b -> a
+# deviation: a circular import is a compile error (D75); CPython runs it with `a` partly initialized
+import a
+
+print("main")

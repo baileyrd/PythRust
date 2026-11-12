@@ -31,8 +31,8 @@ use std::iter;
 use std::rc::Rc;
 
 use crate::ast::{
-    Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Handler, Ident, LogicalOp,
-    Module, Stmt, StmtKind, Target, TargetKind,
+    unqualified, Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Handler,
+    Ident, LogicalOp, Module, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
@@ -663,7 +663,10 @@ impl<'m> Interp<'m, '_> {
         if let Some(v) = self.globals.get(name) {
             return Ok(v.clone());
         }
+        // A module's global not bound yet (`a.print` before its `def`
+        // runs) falls back to the builtin of its own name, as in CPython.
         Builtin::lookup(name)
+            .or_else(|| Builtin::lookup(unqualified(name)))
             .map(Value::Builtin)
             .ok_or_else(|| rt_err(span, format!("NameError: name '{name}' is not defined")))
     }

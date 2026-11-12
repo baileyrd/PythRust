@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: packages with `__init__.pyr` are not supported yet
+# deviation: a package with `__init__.pyr` is refused (D78); CPython runs its `__init__`
+import pkg
+
+print("main")

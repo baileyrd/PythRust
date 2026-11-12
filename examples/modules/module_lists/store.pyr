@@ -1,0 +1,9 @@
+items: list[str] = []
+
+
+def add(s: str) -> None:
+    items.append(s)
+
+
+def count() -> int:
+    return len(items)

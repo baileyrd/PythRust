@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: tempered `f` can raise ValueError here, so it must declare it
+# A module's call before its own `def int` runs reaches the builtin, so
+# its `raises` counts the builtin's ValueError.
+import a
