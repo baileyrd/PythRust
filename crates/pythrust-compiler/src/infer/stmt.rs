@@ -270,6 +270,11 @@ impl Checker {
                 let out = self.subst.fresh();
                 self.subscript(value, index, Access::ReadWrite, out)?
             }
+            TargetKind::Attr { value, attr } => {
+                let out = self.subst.fresh();
+                self.store_field(value, attr, &out)?;
+                out
+            }
             TargetKind::Tuple(_) => {
                 let msg = "augmented assignment needs a single target".to_string();
                 return Err(error(target.span, msg));
@@ -311,6 +316,7 @@ impl Checker {
                 self.subscript(value, index, Access::Write, ty.clone())?;
                 Ok(())
             }
+            TargetKind::Attr { value, attr } => self.store_field(value, attr, ty),
             TargetKind::Tuple(items) => {
                 let elems: Vec<Type> = items.iter().map(|_| self.subst.fresh()).collect();
                 let need = Need::Unpack {
@@ -333,7 +339,7 @@ impl Checker {
         match &target.kind {
             TargetKind::Name(name) => self.lookup(name),
             TargetKind::Subscript { value, .. } => self.element_of(value),
-            TargetKind::Tuple(_) => None,
+            TargetKind::Attr { .. } | TargetKind::Tuple(_) => None,
         }
     }
 

@@ -1,0 +1,15 @@
+# deviation: D159: storing an attribute that is not a field is a compile error; CPython adds it to the object.
+# expect-error: `Point` has no field `z`; a dataclass's fields are declared in its body
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass
+class Point:
+    x: int
+
+
+p = Point(1)
+p.x = 2
+p.z = 3
+print(p, "é")

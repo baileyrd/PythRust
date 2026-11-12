@@ -35,7 +35,7 @@ fn bound(target: &Target, out: &mut BTreeSet<String>) -> Result<()> {
             Ok(())
         }
         TargetKind::Tuple(items) => items.iter().try_for_each(|t| bound(t, out)),
-        TargetKind::Subscript { .. } => Err(error(
+        TargetKind::Subscript { .. } | TargetKind::Attr { .. } => Err(error(
             target.span,
             "a comprehension target other than a name or a tuple of names is not supported yet",
         )),
@@ -47,7 +47,7 @@ fn rename_target(target: &mut Target, offset: usize) {
     match &mut target.kind {
         TargetKind::Name(n) => *n = comp_name(n, offset),
         TargetKind::Tuple(items) => items.iter_mut().for_each(|t| rename_target(t, offset)),
-        TargetKind::Subscript { .. } => {}
+        TargetKind::Subscript { .. } | TargetKind::Attr { .. } => {}
     }
 }
 

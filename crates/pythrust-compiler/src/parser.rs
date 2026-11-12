@@ -1387,14 +1387,7 @@ fn to_target(expr: Expr) -> Result<Target> {
             let targets = items.into_iter().map(to_target);
             TargetKind::Tuple(targets.collect::<Result<_>>()?)
         }
-        ExprKind::Attr { attr, .. } => {
-            let msg = format!(
-                "cannot assign to field `{}`: records are frozen, and other attribute \
-                 assignment is not supported yet",
-                attr.name
-            );
-            return Err(error(span, msg));
-        }
+        ExprKind::Attr { value, attr } => TargetKind::Attr { value, attr },
         other => {
             let what = expr_noun(&other);
             return Err(error(span, format!("cannot assign to {what}")));

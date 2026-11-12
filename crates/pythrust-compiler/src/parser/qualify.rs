@@ -342,6 +342,7 @@ fn target(t: &mut Target, rename: &mut Rename<'_>) {
             expr(value, rename);
             expr(index, rename);
         }
+        TargetKind::Attr { value, .. } => expr(value, rename),
         TargetKind::Tuple(ts) => ts.iter_mut().for_each(|t| target(t, rename)),
     }
 }

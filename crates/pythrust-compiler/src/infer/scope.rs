@@ -363,7 +363,7 @@ pub(super) fn target_names(target: &Target, out: &mut BTreeSet<String>) {
             out.insert(name.clone());
         }
         TargetKind::Tuple(items) => items.iter().for_each(|t| target_names(t, out)),
-        TargetKind::Subscript { .. } => {}
+        TargetKind::Subscript { .. } | TargetKind::Attr { .. } => {}
     }
 }
 
@@ -527,6 +527,7 @@ fn target_exprs(target: &Target) -> Vec<&Expr> {
     match &target.kind {
         TargetKind::Name(_) => vec![],
         TargetKind::Subscript { value, index } => vec![value, index],
+        TargetKind::Attr { value, .. } => vec![value],
         TargetKind::Tuple(items) => items.iter().flat_map(target_exprs).collect(),
     }
 }

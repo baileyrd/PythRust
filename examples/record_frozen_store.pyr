@@ -1,5 +1,5 @@
 # deviation: D131: assigning a field is a compile error; CPython raises FrozenInstanceError when it runs.
-# expect-error: cannot assign to field `x`
+# expect-error: cannot assign to field `x` of frozen record `Point`
 # expect-exit: 1
 from dataclasses import dataclass
 

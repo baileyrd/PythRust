@@ -901,8 +901,13 @@ impl<'a> FnBuilder<'_, 'a> {
                 if let Some(f) = StdFn::from_name(other) {
                     return self.std(f, ops, span);
                 }
-                match self.cx.types.classes().get(other) {
-                    Some(kind) => self.new_exc(kind, &ops, span),
+                if let Some(kind) = self.cx.types.classes().get(other) {
+                    return self.new_exc(kind, &ops, span);
+                }
+                // A frozen record constructs above; any other is a
+                // mutable class, which lowers in step 5-4 (D160).
+                match self.cx.types.record(other) {
+                    Some(_) => Err(unsupported(span, "classes")),
                     None => Err(unsupported(span, &format!("`{other}`"))),
                 }
             }

@@ -1,0 +1,12 @@
+# deviation: D146: `@dataclass()` and `frozen=False` are refused for the one spelling `@dataclass`; CPython runs them.
+# expect-error: write `@dataclass` or `@dataclass(frozen=True)`; other spellings are not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=False)
+class Point:
+    x: int
+
+
+print(Point(1), "é")

@@ -23,6 +23,9 @@ pub(super) struct Record {
     pub fields: Vec<(String, Type)>,
     /// Its methods' own names.
     pub methods: BTreeSet<String>,
+    /// Whether its fields are never stored (D129); a bare `@dataclass`'s
+    /// are (D146).
+    pub frozen: bool,
 }
 
 impl Record {
@@ -45,8 +48,12 @@ impl Checker {
                 fields.push((f.name.name.clone(), self.annotation(&f.annotation)?));
             }
             let methods = r.methods.iter().map(|m| m.name.clone()).collect();
-            self.records
-                .insert(r.name.name.clone(), Record { fields, methods });
+            let record = Record {
+                fields,
+                methods,
+                frozen: r.frozen,
+            };
+            self.records.insert(r.name.name.clone(), record);
         }
         Ok(())
     }
@@ -83,6 +90,34 @@ impl Checker {
             }
             None => Err(no_member(&record, attr)),
         }
+    }
+
+    /// `value.attr = v`, `v` of type `ty`: a store to a field of a
+    /// mutable record, of the field's one type (D3, D146, D158, D159).
+    /// The current value is `ty` too, for `op=`.
+    pub(super) fn store_field(&mut self, value: &Expr, attr: &Ident, ty: &Type) -> Result<()> {
+        let receiver = self.expr(value)?;
+        let record = self.owner(&receiver, attr, |r| r.field(&attr.name).is_some())?;
+        let Some(r) = self.records.get(&record) else {
+            return Err(no_member(&record, attr));
+        };
+        let shown = source_name(unqualified(&record));
+        let Some(field) = r.field(&attr.name).cloned() else {
+            let msg = format!(
+                "`{shown}` has no field `{}`; a dataclass's fields are declared in its body",
+                attr.name
+            );
+            return Err(error(attr.span, msg));
+        };
+        if r.frozen {
+            let msg = format!(
+                "cannot assign to field `{}` of frozen record `{shown}`",
+                attr.name
+            );
+            return Err(error(attr.span, msg));
+        }
+        let what = format!("field `{}` of `{shown}`", attr.name);
+        self.expect(attr.span, &field, ty, &what)
     }
 
     /// Whether some record has a method `name`.
@@ -143,7 +178,7 @@ impl Checker {
             Type::Var(_) => {}
             other => {
                 let other = self.subst.zonk(&other);
-                let msg = format!("{other} has no attribute `{}`", attr.name);
+                let msg = format!("`{other}` has no field `{}`", attr.name);
                 return Err(error(attr.span, msg));
             }
         }
@@ -267,6 +302,29 @@ mod tests {
         assert!(err("print(P(1, 'a') < P(2, 'b'))\n").contains("no ordering"));
         assert!(err("s = {P(1, 'a')}\n").contains("dict key or set element"));
         assert!(err("print(len(P(1, 'a')))\n").contains("no len()"));
+    }
+
+    const DATA: &str = "@dataclass\nclass Q:\n    n: int\n    tags: list[str]\n\
+                        \x20   def bump(self) -> None:\n        self.n += 1\n";
+
+    #[test]
+    fn a_dataclass_field_is_stored_with_its_one_type() {
+        let ok = format!("{DATA}q = Q(1, [])\nq.n = 2\nq.n += 3\nq.tags = ['é']\nq.bump()\n");
+        assert!(check(&ok).is_ok(), "{:?}", check(&ok));
+        let float = err(&format!("{DATA}q = Q(1, [])\nq.n = 2.5\n"));
+        assert!(float.contains("field `n` of `Q`"), "{float}");
+        let none = err(&format!("{DATA}q = Q(1, [])\nq.k = 2\n"));
+        assert!(
+            none.contains("`Q` has no field `k`; a dataclass's fields are declared in its body"),
+            "{none}"
+        );
+        let frozen = err("p = P(1, 'a')\np.x = 2\n");
+        assert!(
+            frozen.contains("cannot assign to field `x` of frozen record `P`"),
+            "{frozen}"
+        );
+        let list = err("xs = [1]\nxs.n = 2\n");
+        assert!(list.contains("has no field `n`"), "{list}");
     }
 
     #[test]

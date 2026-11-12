@@ -213,6 +213,7 @@ impl FnBuilder<'_, '_> {
                 let v = self.aug_item(op, l, r, span)?;
                 self.store_item(list, index, v, target.span)
             }
+            TargetKind::Attr { .. } => Err(unsupported(target.span, "classes")),
             TargetKind::Tuple(_) => Err(unsupported(target.span, "augmented unpacking")),
         }
     }

@@ -485,7 +485,8 @@ fn file_kind(writes: bool, held: Ty) -> Kind {
 /// Every record's declared fields, by its qualified name.
 fn records(module: &Module, types: &Types) -> HashMap<String, Vec<(String, Type)>> {
     let records = module.body.iter().filter_map(|s| match &s.kind {
-        StmtKind::Record(r) => Some(r.name.name.as_str()),
+        // A mutable record is the backend gap `record` names (D160).
+        StmtKind::Record(r) if r.frozen => Some(r.name.name.as_str()),
         _ => None,
     });
     records
@@ -1126,7 +1127,9 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
 /// types and records declared before it (D129, D135), so this ends.
 fn record(name: &str, seqs: &mut types::SeqTypes, span: Span) -> Result<Ty> {
     let declared = seqs.declared(name).map(<[(String, Type)]>::to_vec);
-    let declared = declared.ok_or_else(|| internal(span, &format!("`{name}` is no record")))?;
+    // Only frozen records are declared to lowering ([`records`]): any
+    // other is a mutable class, which does not lower until 5-4 (D160).
+    let declared = declared.ok_or_else(|| unsupported(span, "classes"))?;
     let mut fields = Vec::new();
     for (_, t) in &declared {
         fields.push(concrete(t, &Subst::new(), seqs, span)?);

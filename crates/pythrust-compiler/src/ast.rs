@@ -221,6 +221,8 @@ pub struct RecordDef {
     pub fields: Vec<Field>,
     /// The methods' own names, `m` of `P.m`, in source order.
     pub methods: Vec<Ident>,
+    /// `@dataclass(frozen=True)`; bare `@dataclass` is mutable (D146).
+    pub frozen: bool,
     pub span: Span,
 }
 
@@ -306,6 +308,11 @@ pub enum TargetKind {
     },
     /// `target_list` with a comma, or `'(' target_list ')'`: unpacks.
     Tuple(Vec<Target>),
+    /// `postfix '.' NAME`: a field of a mutable object (D146, D158).
+    Attr {
+        value: Box<Expr>,
+        attr: Ident,
+    },
 }
 
 /// An expression.

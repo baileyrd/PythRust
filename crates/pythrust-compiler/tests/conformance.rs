@@ -696,6 +696,10 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
          function: its gathered list takes another element type than the items",
     ),
     (
+        "dataclass_mutable",
+        "a mutable dataclass, until classes lower (step 5-4, D160)",
+    ),
+    (
         "user_exception_many",
         "more exception classes than the runtime's handler test holds, a bit per class \
          code (D143)",

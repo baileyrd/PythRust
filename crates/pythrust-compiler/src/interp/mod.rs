@@ -597,6 +597,10 @@ impl<'m> Interp<'m, '_> {
                 let index = self.eval(index)?;
                 set_item(&container, &index, v, target.span)
             }
+            TargetKind::Attr { value, attr } => {
+                let object = self.eval(value)?;
+                set_field(&object, attr, v)
+            }
             TargetKind::Tuple(targets) => self.unpack(targets, v, target.span),
         }
     }
@@ -647,6 +651,16 @@ impl<'m> Interp<'m, '_> {
                 let rhs = self.eval(value)?;
                 let new = in_place(op, current, &rhs, span)?;
                 set_item(&container, &index, new, target.span)
+            }
+            TargetKind::Attr {
+                value: object,
+                attr,
+            } => {
+                let object = self.eval(object)?;
+                let current = field_of(&object, attr)?;
+                let rhs = self.eval(value)?;
+                let new = in_place(op, current, &rhs, span)?;
+                set_field(&object, attr, new)
             }
             TargetKind::Tuple(_) => Err(rt_err(
                 target.span,
@@ -1087,7 +1101,7 @@ impl<'m> Interp<'m, '_> {
     /// `r.attr`: a field's value, or a method bound to `r` (D131).
     fn member(&self, r: Rc<Record<'m>>, attr: &Ident) -> Exec<'m, Value<'m>> {
         if let Some(v) = r.field(&attr.name) {
-            return Ok(v.clone());
+            return Ok(v);
         }
         let name = crate::ast::method_name(&r.def.name.name, &attr.name);
         match self.globals.get(name.as_str()) {
@@ -1188,7 +1202,36 @@ fn construct<'m>(def: &'m RecordDef, args: Args<'m>) -> Result<Value<'m>> {
         })
     });
     let fields = fields.collect::<Result<Box<[Value<'m>]>>>()?;
+    let fields = std::cell::RefCell::new(fields);
     Ok(Value::Record(Rc::new(Record { def, fields })))
+}
+
+/// `object.attr`'s value, for `op=`; inference has checked the field.
+fn field_of<'m>(object: &Value<'m>, attr: &Ident) -> Result<Value<'m>> {
+    let Value::Record(r) = object else {
+        return Err(rt_err(
+            attr.span,
+            "internal: a field of a non-record".into(),
+        ));
+    };
+    let msg = || format!("internal: no field `{}`", attr.name);
+    r.field(&attr.name).ok_or_else(|| rt_err(attr.span, msg()))
+}
+
+/// `object.attr = v` on a mutable record (D146); inference has checked
+/// that `attr` is one of its fields.
+fn set_field<'m>(object: &Value<'m>, attr: &Ident, v: Value<'m>) -> Exec<'m, ()> {
+    let Value::Record(r) = object else {
+        return Err(rt_err(attr.span, "internal: a field of a non-record".into()).into());
+    };
+    let at = r.def.fields.iter().position(|f| f.name.name == attr.name);
+    let mut fields = r.fields.borrow_mut();
+    let Some(slot) = at.and_then(|i| fields.get_mut(i)) else {
+        let msg = format!("internal: no field `{}`", attr.name);
+        return Err(rt_err(attr.span, msg).into());
+    };
+    *slot = v;
+    Ok(())
 }
 
 fn bind<'m>(func: &Func<'m>, args: Args<'m>) -> Result<HashMap<&'m str, Value<'m>>> {
@@ -1415,7 +1458,7 @@ fn collect_target<'m>(target: &'m Target, names: &mut HashSet<&'m str>) {
             names.insert(name);
         }
         TargetKind::Tuple(targets) => targets.iter().for_each(|t| collect_target(t, names)),
-        TargetKind::Subscript { .. } => {}
+        TargetKind::Subscript { .. } | TargetKind::Attr { .. } => {}
     }
 }
 

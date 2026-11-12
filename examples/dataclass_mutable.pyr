@@ -1,0 +1,35 @@
+# Mutable dataclasses (step 5-2, D146): bare `@dataclass` keeps a
+# record's construction, equality and printing, and its fields are
+# stored through any name, `op=` included.
+from dataclasses import dataclass
+
+
+@dataclass
+class Counter:
+    "Counts named things · ü."
+    name: str
+    total: int
+    seen: list[str]
+
+    def add(self, what: str) -> None:
+        self.total += 1
+        self.seen.append(what)
+
+    def reset(self) -> None:
+        self.total = 0
+        self.seen = []
+
+
+c = Counter("clé", 0, [])
+c.add("é")
+c.add("ñ")
+print(c)
+alias = c
+alias.total = 10
+print(c.total, c == alias, c == Counter("clé", 10, ["é", "ñ"]))
+c.reset()
+print(c, alias)
+counters = [Counter("a", 1, []), Counter("b", 2, [])]
+for k in counters:
+    k.total *= 3
+print(counters)
