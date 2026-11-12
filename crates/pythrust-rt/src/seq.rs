@@ -50,6 +50,12 @@ pub(crate) enum Kind {
     /// A frozen record (D129): a tuple of its fields, printed with its
     /// record's and fields' names.
     Record,
+    /// A non-frozen dataclass's object (D146, D150): a record's layout, but
+    /// mutable, so its slots may be unset until `__init__` fills them.
+    Data,
+    /// A plain class's object (D144, D147): the same, compared by identity
+    /// and printed only by its own `__repr__`, which the walker cannot call.
+    Plain,
     Range,
     Opt,
     Exc,
@@ -73,6 +79,8 @@ pub(crate) fn kind(desc: &[u8]) -> Kind {
         Some(b'l') => Kind::List,
         Some(b't') => Kind::Tuple,
         Some(b'c') => Kind::Record,
+        Some(b'm') => Kind::Data,
+        Some(b'p') => Kind::Plain,
         Some(b'r') => Kind::Range,
         Some(b'o') => Kind::Opt,
         Some(b'x') => Kind::Exc,
@@ -95,7 +103,7 @@ fn span(desc: &[u8]) -> usize {
         }
         Kind::View => 2 + span(desc.get(2..).unwrap_or_default()),
         Kind::Tuple => fields_end(desc),
-        Kind::Record => {
+        Kind::Record | Kind::Data | Kind::Plain => {
             let names = usize::from(desc.get(1).copied().unwrap_or(0)) + 1;
             let mut at = fields_end(desc);
             for _ in 0..names {
@@ -218,6 +226,8 @@ pub(crate) fn inc(desc: &[u8], v: u64) {
         Kind::List
         | Kind::Tuple
         | Kind::Record
+        | Kind::Data
+        | Kind::Plain
         | Kind::Range
         | Kind::Exc
         | Kind::Dict
@@ -237,6 +247,10 @@ pub(crate) fn dec(desc: &[u8], v: u64) {
 /// Drops the reference slot `v` of type `desc` owns, if any: a string's
 /// now, a sequence's by pushing it on `todo` for [`free_all`].
 fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
+    // An object's slot is null until `__init__` stores it.
+    if v == 0 {
+        return;
+    }
     match kind(desc) {
         Kind::Opt if v == 0 => {}
         Kind::Opt => dec_into(opt_owner(desc), v, todo),
@@ -249,6 +263,8 @@ fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
         Kind::List
         | Kind::Tuple
         | Kind::Record
+        | Kind::Data
+        | Kind::Plain
         | Kind::Range
         | Kind::Exc
         | Kind::Dict
@@ -320,6 +336,10 @@ fn store(desc: &'static [u8], v: u64, marked: bool) {
 }
 
 fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>, held: &mut Held) {
+    // An object's slot is null until `__init__` stores it.
+    if v == 0 {
+        return;
+    }
     match kind(desc) {
         Kind::Opt if v == 0 => {}
         Kind::Opt => todo.push((opt_owner(desc), v)),
@@ -330,6 +350,8 @@ fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>, h
         Kind::List
         | Kind::Tuple
         | Kind::Record
+        | Kind::Data
+        | Kind::Plain
         | Kind::Range
         | Kind::Exc
         | Kind::Dict
@@ -382,7 +404,7 @@ pub(crate) fn eq(desc: &[u8], a: u64, b: u64) -> bool {
         // SAFETY: object slots hold live objects.
         Kind::Obj => unsafe { obj::borrow(a as *const PtObj).same(obj::borrow(b as *const PtObj)) },
         // SAFETY: sequence slots hold live sequences.
-        Kind::List | Kind::Tuple | Kind::Record | Kind::View => {
+        Kind::List | Kind::Tuple | Kind::Record | Kind::Data | Kind::View => {
             a == b || unsafe { seq_eq(seq(a), seq(b)) }
         }
         // SAFETY: table slots hold live tables.
@@ -421,6 +443,8 @@ pub(crate) fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
         // compiler never asks.
         Kind::Opt
         | Kind::Record
+        | Kind::Data
+        | Kind::Plain
         | Kind::Range
         | Kind::Exc
         | Kind::Dict
@@ -523,6 +547,8 @@ fn repr_holding(
             Kind::List
                 | Kind::Tuple
                 | Kind::Record
+                | Kind::Data
+                | Kind::Plain
                 | Kind::Exc
                 | Kind::Dict
                 | Kind::Set
@@ -555,7 +581,9 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>, hel
         // SAFETY: a sequence slot holds a live sequence.
         Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo, held),
         // SAFETY: a record slot holds a live record.
-        Kind::Record => show_record(unsafe { seq(v) }, out, todo, held),
+        Kind::Record | Kind::Data => show_record(unsafe { seq(v) }, out, todo, held),
+        // The compiler refuses to print a value that holds a plain object.
+        Kind::Plain => out.push_str("<object>"),
         // SAFETY: a range slot holds a live range.
         Kind::Range => out.push_str(&unsafe { range_fields(v as *const PtSeq) }.repr()),
         Kind::Opt if v == 0 => out.push_str("None"),
@@ -839,6 +867,38 @@ pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
         items: Slot::new(items),
         index: Slot::new(index),
     }))
+}
+
+/// A new object described by `desc[..len]` (D150): `n` null slots, which
+/// its `__init__` stores before anything reads or prints it (D145).
+///
+/// # Safety
+///
+/// `desc` points to `len` bytes of the compiler's read-only descriptor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_obj_new(desc: *const u8, len: usize, n: i64) -> *mut PtSeq {
+    // SAFETY: guaranteed by the caller.
+    let desc: &'static [u8] = unsafe { std::slice::from_raw_parts(desc, len) };
+    let n = usize::try_from(n).unwrap_or(0);
+    new_seq(desc, vec![0; n])
+}
+
+/// `s.k = v` on an object: adds a reference to `v`'s target and drops the
+/// old slot's, if it was stored.
+///
+/// # Safety
+///
+/// `s` is a live object whose field `k` has `v`'s type, and `v` is live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_obj_set(s: *const PtSeq, k: i64, v: u64) {
+    // SAFETY: guaranteed by the caller.
+    let s = unsafe { seq(s as u64) };
+    let desc = slot(s.desc, usize::try_from(k).unwrap_or(0));
+    let old = s.items.replace(k, v, |marked| store(desc, v, marked));
+    // Dropped after the borrow ends: freeing may reach other sequences.
+    if let Some(old) = old {
+        dec(desc, old);
+    }
 }
 
 /// Appends `v`, adding a reference to what it points to: list literals,
@@ -1513,6 +1573,69 @@ mod tests {
             pt_seq_dec(a);
             pt_seq_dec(b);
             pt_seq_dec(empty);
+        }
+    }
+
+    /// A new object of type `desc` with `n` null slots.
+    fn object(desc: &'static [u8], n: i64) -> *mut PtSeq {
+        // SAFETY: `desc` is static.
+        unsafe { pt_obj_new(desc.as_ptr(), desc.len(), n) }
+    }
+
+    #[test]
+    fn objects_store_fields_and_release_what_they_replace() {
+        // `P(xs: list[int], n: int)` as a dataclass.
+        let desc: &'static [u8] = b"m\x02lii\x01P\x01n\x02xs";
+        assert_eq!(span(desc), desc.len());
+        let (first, second) = (make(b"li", &[1]), make(b"li", &[2]));
+        let p = object(desc, 2);
+        // SAFETY: `p` and both lists are live; `p` takes its own references,
+        // beside the one each list's maker holds.
+        unsafe {
+            pt_obj_set(p, 0, first as u64);
+            pt_obj_set(p, 1, 7);
+            assert_eq!(seq(first as u64).rc.get(), 2);
+            pt_obj_set(p, 0, second as u64);
+            assert_eq!(seq(first as u64).rc.get(), 1);
+            assert_eq!(seq(second as u64).rc.get(), 2);
+        }
+        assert_eq!(shown(p), "P(xs=[2], n=7)");
+        // SAFETY: each is live and dropped once.
+        unsafe {
+            [first, second, p].into_iter().for_each(|s| pt_seq_dec(s));
+        }
+    }
+
+    #[test]
+    fn an_object_dropped_before_its_init_ran_frees_safely() {
+        // A string and a list slot, both still null: `__init__` raised.
+        let desc: &'static [u8] = b"p\x02sli\x01P\x01b\x01a";
+        let p = object(desc, 2);
+        let keep = make(b"li", &[3]);
+        // SAFETY: `p` is live and unmarked-shared; marking and dropping
+        // must both skip the null slots.
+        unsafe {
+            pt_mark(desc.as_ptr(), desc.len(), p as u64);
+            pt_seq_dec(p);
+            pt_seq_dec(keep);
+        }
+    }
+
+    #[test]
+    fn dataclass_objects_compare_by_fields_and_plain_ones_by_identity() {
+        let data: &'static [u8] = b"m\x01i\x01P\x01x";
+        let plain: &'static [u8] = b"p\x01i\x01P\x01x";
+        for (desc, same) in [(data, true), (plain, false)] {
+            let (a, b) = (object(desc, 1), object(desc, 1));
+            // SAFETY: both live and dropped once.
+            unsafe {
+                pt_obj_set(a, 0, 4);
+                pt_obj_set(b, 0, 4);
+                assert_eq!(pt_seq_eq(a, a), 1);
+                assert_eq!(pt_seq_eq(a, b), u8::from(same));
+                pt_seq_dec(a);
+                pt_seq_dec(b);
+            }
         }
     }
 

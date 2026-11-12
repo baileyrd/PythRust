@@ -1,0 +1,104 @@
+# Plain classes and dataclass objects that build natively (step 5-4, D150,
+# D151): none can refer to itself. `print` and `str` of one call its
+# dunder (D167); a dataclass prints field by field, alone or in a
+# container.
+from dataclasses import dataclass
+
+
+class Counter:
+    "Counts named things."
+
+    def __init__(self, name: str, start: int = 0):
+        self.name = name
+        self.count: int = start
+        self.seen = []
+
+    def bump(self, by: int = 1) -> int:
+        self.count += by
+        self.seen.append(by)
+        return self.count
+
+    def twice(self) -> int:
+        self.bump()
+        return self.bump()
+
+    def __repr__(self) -> str:
+        return "Counter(" + self.name + ", " + str(self.count) + ")"
+
+
+class Item:
+    def __init__(self, value: int):
+        self.value = value
+
+    def __str__(self) -> str:
+        return "item " + str(self.value)
+
+    def __repr__(self) -> str:
+        return "I" + str(self.value)
+
+
+class Safe:
+    def __init__(self, k: int):
+        try:
+            self.ratio = 10 // k
+        except ZeroDivisionError:
+            self.ratio = -1
+        if k > 5:
+            self.size = "big"
+        else:
+            self.size = "small"
+
+    def __str__(self) -> str:
+        return self.size + " " + str(self.ratio)
+
+
+class Empty:
+    pass
+
+
+@dataclass
+class Point:
+    x: int
+    label: str
+
+
+@dataclass
+class Tagged:
+    tag: str
+    point: Point
+    scores: list[int]
+
+
+def total(items: list[Item]) -> int:
+    n = 0
+    for x in items:
+        n += x.value
+    return n
+
+
+def rename(c: Counter, name: str):
+    c.name = name
+
+
+c = Counter("café")
+print(c.bump(), c.bump(2), c.twice(), c.count, c.seen)
+print(c, str(c))
+d = c
+print(c == d, c == Counter("café"), c != Counter("x"), c != d)
+rename(d, "ünï")
+print(c, Counter(start=4, name="k"))
+a = Item(1)
+a.value += 40
+print(a, str(a), total([a, Item(2), Item(3)]))
+print(Safe(0), Safe(2), Safe(9))
+e = Empty()
+print(e == e, e == Empty(), "truthy" if e else "falsy")
+p = Point(3, "é")
+q = Point(3, "é")
+p.x += 4
+print(p, p == q, p != q, [p, q], (q, 1))
+t = Tagged("ß", p, [1, 2])
+t.point = q
+t.scores.append(3)
+print(t, t.point.x)
+print(str(t), len(str(p)))
