@@ -931,7 +931,7 @@ mod tests {
             name: "a",
             tokens: &a,
         }];
-        let module = parser::parse_program(&units, &main, &[]).map_err(|d| d.message)?;
+        let module = parser::parse_program(&units, &[], &main, &[]).map_err(|d| d.message)?;
         infer::infer(&module).map_err(|d| d.message)
     }
 

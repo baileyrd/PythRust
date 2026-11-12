@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-error: assigning to a module's name (`tools.X`) is not supported yet
+# deviation: assigning another module's global is refused (D83); CPython sets it
+import tools
+
+tools.X = 2
+print(tools.X)

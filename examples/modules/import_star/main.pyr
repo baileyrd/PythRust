@@ -1,0 +1,6 @@
+# expect-exit: 1
+# expect-error: `import *` is not supported; import the names you use
+# deviation: `from a import *` is refused (D79); CPython binds the module's public names
+from tools import *
+
+print(greet())

@@ -1572,11 +1572,111 @@ fn import_comes_first_at_module_level() {
         "the standard module `json` is not supported yet; \
          the standard modules are: concurrent.futures, hashlib, os, sys"
     );
-    assert!(src_err("import sys.argv\n").contains("import the top-level module"));
     assert_eq!(
-        src_err("import sys as s\n"),
-        "`import ... as` is not supported yet"
+        src_err("from sys import argv\nx = 1\nfrom os import path\n"),
+        late
     );
+    assert_eq!(
+        src_err("import sys.argv\n"),
+        "`sys.argv` is not a module; the `sys` names are: sys.argv"
+    );
+}
+
+/// D84: `as`, dotted and `from` forms on standard modules, each use
+/// resolving to the module's own dotted name.
+#[test]
+fn standard_modules_take_from_dotted_and_as() {
+    let cases = [
+        ("import sys as s\nprint(s.argv)\n", "(call print sys.argv)"),
+        (
+            "import os.path\nprint(os.path.isdir('a'))\n",
+            "(call print (call os.path.isdir 'a'))",
+        ),
+        (
+            "import os.path as p\nprint(p.isdir('a'))\n",
+            "(call print (call os.path.isdir 'a'))",
+        ),
+        (
+            "from os import path\nprint(path.isdir('a'))\n",
+            "(call print (call os.path.isdir 'a'))",
+        ),
+        (
+            "from os.path import join as j\nprint(j('a', 'b'))\n",
+            "(call print (call os.path.join 'a' 'b'))",
+        ),
+        (
+            "from concurrent.futures import ThreadPoolExecutor\nprint(ThreadPoolExecutor)\n",
+            "(call print concurrent.futures.ThreadPoolExecutor)",
+        ),
+    ];
+    for (src, want) in cases {
+        let m = src_parse(src).unwrap();
+        let last = m.body.last().map(sx_stmt).unwrap_or_default();
+        assert_eq!(last, want, "{src}");
+    }
+}
+
+/// `from` copies a module variable into a global, after the module's
+/// own initializer, so both name one object (D83).
+#[test]
+fn from_copies_a_module_variable() {
+    let m = src_parse("from sys import argv as a\nprint(a)\n").unwrap();
+    let names: Vec<String> = m.body.iter().map(sx_stmt).collect();
+    assert_eq!(
+        names,
+        [
+            "(= sys.argv (call sys.__argv__))",
+            "(= a sys.argv)",
+            "(call print a)"
+        ]
+    );
+}
+
+#[test]
+fn from_and_as_refuse_what_cpython_would_not_bind_here() {
+    let cases = [
+        (
+            "from . import x\n",
+            "relative imports are not supported yet",
+        ),
+        (
+            "from .a import x\n",
+            "relative imports are not supported yet",
+        ),
+        (
+            "from os import *\n",
+            "`import *` is not supported; import the names you use",
+        ),
+        (
+            "from sys import platform\n",
+            "`sys.platform` is not supported; the `sys` names are: sys.argv",
+        ),
+        (
+            "from os import path\npath = 1\n",
+            "`os.path` is a module, not a value",
+        ),
+        (
+            "from os import path\ndef f(path):\n    pass\n",
+            "`path` names an imported module; choose another name",
+        ),
+        (
+            "from os.path import join\ndef join():\n    pass\n",
+            "`join` names an imported function; choose another name",
+        ),
+        (
+            "import sys as os\nprint(os.listdir())\n",
+            "`sys.listdir` is not supported",
+        ),
+        ("import concurrent\n", "write `import concurrent.futures`"),
+        (
+            "from hashlib import sha256\nx = sha256(b)\n",
+            "is supported only as `hashlib.sha256(...).hexdigest()` yet",
+        ),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src}: {got}");
+    }
 }
 
 #[test]

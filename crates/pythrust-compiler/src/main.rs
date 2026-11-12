@@ -304,7 +304,7 @@ fn front(graph: &Graph, rust: &[Binding]) -> pythrust_compiler::Result<(Module, 
             tokens: &m.tokens,
         })
         .collect();
-    let module = parser::parse_program(&locals, &graph.main, rust)?;
+    let module = parser::parse_program(&locals, &graph.packages, &graph.main, rust)?;
     let types = infer::infer(&module)?;
     own::check(&module, &own::analyze(&module, &types))?;
     Ok((module, types))
@@ -795,6 +795,7 @@ mod tests {
             locals: Vec::new(),
             main: lexer::lex(src)?,
             foreign: Vec::new(),
+            packages: Vec::new(),
         };
         front(&graph, &[])
     }

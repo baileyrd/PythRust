@@ -43,6 +43,9 @@ pub struct Binding {
 pub struct LocalModule {
     pub name: String,
     pub names: std::collections::BTreeSet<String>,
+    /// Those of `names` its `def`s bind: `from` aliases a function, and
+    /// copies a variable (D83).
+    pub defs: std::collections::BTreeSet<String>,
 }
 
 /// A stub's `'temper' 'def' NAME '(' [params] ')' '->' type [raises] ':'

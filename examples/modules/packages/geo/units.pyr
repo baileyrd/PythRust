@@ -1,0 +1,6 @@
+print("units as", __name__)
+SCALE = 10
+
+
+def scale(n: int) -> int:
+    return n * SCALE

@@ -56,6 +56,8 @@ pub enum TokenKind {
     As,
     /// `import`, only at module top level (M6a).
     Import,
+    /// `from`, only starting an import at module top level (#1222).
+    From,
     /// `with`, only around an executor (M6c).
     With,
     /// `pause`, marking an expression that waits on a task (M6c).

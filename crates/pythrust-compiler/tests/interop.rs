@@ -1278,3 +1278,21 @@ fn a_binding_function_named_like_a_builtin_raises_only_what_it_declares() {
     let src = "import fx\n\ntemper def f(s: str) -> int:\n    return fx.int(s)\n\nprint(f(\"bad · ✓\"))\n";
     assert_eq!(stdout(build(&dir, src, &[("fx", &fx)])), "10\n");
 }
+
+/// A module inside a directory the manifest names as a binding is the
+/// same clash (D126); the binding's directory alone is not.
+#[test]
+fn a_module_in_a_binding_directory_is_refused() {
+    let dir = scratch("module-in-binding-dir");
+    let digits = binding(&dir, "digits", "", false);
+    fs::write(digits.join("extra.pyr"), "X = 1\n").unwrap();
+    let src = "import digits.extra\n\nprint(digits.extra.X)\n";
+    let out = compile(&dir, "main.pyr", src, &[("digits", &digits)]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = text(&out.stderr);
+    let want = "main.pyr:1:8: parse error: `digits` is both the package of the local module \
+                `digits.extra` and a Rust binding in ";
+    assert!(err.contains(want), "{err}");
+    let fine = "import digits\n\nprint(digits.digits(123))\n";
+    assert_eq!(stdout(build(&dir, fine, &[("digits", &digits)])), "3\n");
+}
