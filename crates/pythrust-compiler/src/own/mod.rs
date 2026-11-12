@@ -384,7 +384,9 @@ fn conservative(module: &Module) -> BTreeMap<String, Summary> {
 fn holds_list(program: &Program, ty: Ty) -> bool {
     match program.compound(ty) {
         Some(Compound::List(_) | Compound::Dict(..) | Compound::Set(_)) => true,
-        Some(Compound::Tuple(fields)) => fields.iter().any(|f| holds_list(program, *f)),
+        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
+            fields.iter().any(|f| holds_list(program, *f))
+        }
         Some(Compound::Opt(present) | Compound::View(_, present)) => holds_list(program, *present),
         None => false,
     }
@@ -408,9 +410,13 @@ fn source(program: &Program, ty: Ty) -> Type {
         Ty::Future => Type::Future(Box::new(Type::None)),
         Ty::Results => Type::Results(Box::new(Type::None)),
         Ty::Held(id) => compound_source(program, Ty::List(id)),
-        Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_) => {
-            compound_source(program, ty)
-        }
+        Ty::List(_)
+        | Ty::Tuple(_)
+        | Ty::Record(_)
+        | Ty::Opt(_)
+        | Ty::Dict(_)
+        | Ty::Set(_)
+        | Ty::View(_) => compound_source(program, ty),
     }
 }
 
@@ -418,7 +424,8 @@ fn compound_source(program: &Program, ty: Ty) -> Type {
     let part = |t: &Ty| Box::new(source(program, *t));
     match program.compound(ty) {
         Some(Compound::List(elem)) => Type::List(part(elem)),
-        Some(Compound::Tuple(fields)) => {
+        // The analyses follow a record's fields as a tuple's (step 4-2).
+        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
             Type::Tuple(fields.iter().map(|f| source(program, *f)).collect())
         }
         Some(Compound::Opt(present)) => Type::Optional(part(present)),

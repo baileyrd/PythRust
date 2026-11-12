@@ -51,6 +51,7 @@ pub struct Types {
     funcs: HashMap<String, FuncType>,
     raises: HashMap<String, Raises>,
     warnings: Vec<Warning>,
+    records: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl Types {
@@ -68,6 +69,12 @@ impl Types {
     /// declared by its `raises` clause (or tempering), else inferred.
     pub fn raises(&self, name: &str) -> Option<&Raises> {
         self.raises.get(name)
+    }
+
+    /// The fields of record `name`, by its qualified name, in declaration
+    /// order with their types (D129).
+    pub fn record(&self, name: &str) -> Option<&[(String, Type)]> {
+        self.records.get(name).map(Vec::as_slice)
     }
 
     /// Lints on the module, in source order: a `raises` clause listing
@@ -515,11 +522,17 @@ impl Checker {
                 (name.clone(), subst.zonk_func(sig))
             })
             .collect();
+        let records = self
+            .records
+            .into_iter()
+            .map(|(name, r)| (name, r.fields))
+            .collect();
         Types {
             nodes,
             funcs,
             raises: HashMap::new(),
             warnings: Vec::new(),
+            records,
         }
     }
 }

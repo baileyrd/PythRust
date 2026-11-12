@@ -1,0 +1,38 @@
+# Records crossing into tasks and back (step 4-2): a record argument and
+# what it holds are marked before a worker sees them, and a record result
+# comes back whole. CI's race job runs it under ThreadSanitizer.
+import concurrent.futures
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Item:
+    name: str
+    sizes: list[int]
+
+
+@dataclass(frozen=True)
+class Total:
+    name: str
+    size: int
+
+
+def weigh(item: Item) -> Total:
+    n = 0
+    for s in item.sizes:
+        n += s
+    return Total(item.name + " ✓", n)
+
+
+def main() -> None:
+    items = [Item("café", [1, 2]), Item("naïve", [3]), Item("ß", [])]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        first = ex.submit(weigh, items[0])
+        rest = ex.map(weigh, items[1:])
+        print(first.result())
+        for t in rest:
+            print(t, t.size)
+    print(items)
+
+
+main()

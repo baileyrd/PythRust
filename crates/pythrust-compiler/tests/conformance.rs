@@ -603,6 +603,9 @@ const NATIVE: &[&str] = &[
     "range_index_error",
     "range_values",
     "raises",
+    "record_temper_method",
+    "records",
+    "records_tasks",
     "recursion_limit",
     "refcount_keeps",
     "refcount_moves",
@@ -667,10 +670,6 @@ const NATIVE: &[&str] = &[
 /// backend gap, with why. `corpus_matches_native` fails when one builds,
 /// so a closed gap moves to `NATIVE`.
 const NATIVE_GAPS: &[(&str, &str)] = &[
-    (
-        "records",
-        "frozen records are not lowered yet (step 4-2); `run` is the reference (D59)",
-    ),
     (
         "exception_list_cycle",
         "an exception may close a reference cycle; native code has no cycle collector",

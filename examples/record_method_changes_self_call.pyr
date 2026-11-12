@@ -1,0 +1,21 @@
+# deviation: D131: a method that changes `self` through a call waits for step 5; CPython runs it.
+# expect-error: a method that changes or keeps `self` is not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+def put(items: list[str], s: str) -> None:
+    items.append(s)
+
+
+@dataclass(frozen=True)
+class Bag:
+    items: list[str]
+
+    def put(self, s: str) -> None:
+        put(self.items, s)
+
+
+b = Bag([])
+b.put("é")
+print(b)

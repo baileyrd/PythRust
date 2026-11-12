@@ -1,0 +1,4 @@
+Total(name='café ✓', size=3)
+Total(name='naïve ✓', size=3) 3
+Total(name='ß ✓', size=0) 0
+[Item(name='café', sizes=[1, 2]), Item(name='naïve', sizes=[3]), Item(name='ß', sizes=[])]

@@ -588,7 +588,9 @@ fn holds(program: &Program, ty: Ty, want: fn(Ty) -> bool) -> bool {
             holds(program, *t, want)
         }
         Some(Compound::Dict(k, v)) => holds(program, *k, want) || holds(program, *v, want),
-        Some(Compound::Tuple(fields)) => fields.iter().any(|f| holds(program, *f, want)),
+        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
+            fields.iter().any(|f| holds(program, *f, want))
+        }
         None => false,
     }
 }

@@ -5,9 +5,10 @@
 //! can fail at run time are explicit: a failing `Rvalue` carries the span
 //! of its `Inst`, and a `Term::Fail` ends the program with a diagnostic.
 //!
-//! Covers ints, floats, bools, `None`, strings, lists, tuples,
-//! optionals (`T | None`), exceptions, dicts, sets and dict views.
-//! List, tuple, optional, dict, set and view types are interned
+//! Covers ints, floats, bools, `None`, strings, lists, tuples, frozen
+//! records, optionals (`T | None`), exceptions, dicts, sets and dict
+//! views. List, tuple, record, optional, dict, set and view types are
+//! interned
 //! in [`Program::types`], so [`Ty`] stays `Copy`.
 //!
 //! Locals other than parameters start zeroed. A local of a
@@ -66,6 +67,9 @@ pub enum Ty {
     /// An immutable, reference-counted tuple; `types[id]` is a
     /// [`Compound::Tuple`].
     Tuple(TypeId),
+    /// A frozen record (D129): immutable and reference-counted, laid out
+    /// as a tuple of its fields; `types[id]` is a [`Compound::Record`].
+    Record(TypeId),
     /// `T | None`; `types[id]` is a [`Compound::Opt`]. Null is `None`;
     /// otherwise a reference to the value, or for an `Int`, `Float` or
     /// `Bool` to a one-field tuple boxing it.
@@ -125,6 +129,7 @@ impl Ty {
             Ty::Str
                 | Ty::List(_)
                 | Ty::Tuple(_)
+                | Ty::Record(_)
                 | Ty::Opt(_)
                 | Ty::Range
                 | Ty::Exc
@@ -150,6 +155,17 @@ pub struct TypeId(pub usize);
 pub enum Compound {
     List(Ty),
     Tuple(Vec<Ty>),
+    /// A record's field types in declaration order, which a value holds
+    /// as a tuple does, and the names it prints with (D133).
+    Record {
+        /// The record's qualified name, which makes it its own type.
+        name: String,
+        /// The name it prints with, as its source spells it.
+        shown: String,
+        /// Its fields' names, in order.
+        names: Vec<String>,
+        fields: Vec<Ty>,
+    },
     /// The present type: never `None` or itself optional.
     Opt(Ty),
     /// Key and value types.
@@ -538,9 +554,13 @@ pub fn holds(types: &[Compound], ty: Ty, leaf: fn(Ty) -> bool) -> bool {
         return true;
     }
     let inner = match ty {
-        Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id) => {
-            types.get(id.0)
-        }
+        Ty::List(id)
+        | Ty::Tuple(id)
+        | Ty::Record(id)
+        | Ty::Opt(id)
+        | Ty::Dict(id)
+        | Ty::Set(id)
+        | Ty::View(id) => types.get(id.0),
         _ => None,
     };
     match inner {
@@ -548,7 +568,9 @@ pub fn holds(types: &[Compound], ty: Ty, leaf: fn(Ty) -> bool) -> bool {
             holds(types, *t, leaf)
         }
         Some(Compound::Dict(k, v)) => holds(types, *k, leaf) || holds(types, *v, leaf),
-        Some(Compound::Tuple(fields)) => fields.iter().any(|t| holds(types, *t, leaf)),
+        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
+            fields.iter().any(|t| holds(types, *t, leaf))
+        }
         None => false,
     }
 }
@@ -584,6 +606,7 @@ impl Program {
         match ty {
             Ty::List(id)
             | Ty::Tuple(id)
+            | Ty::Record(id)
             | Ty::Opt(id)
             | Ty::Dict(id)
             | Ty::Set(id)

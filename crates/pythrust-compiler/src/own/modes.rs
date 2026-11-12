@@ -38,7 +38,11 @@ pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
     if analysis.precision != Precision::Precise {
         return Ok(());
     }
+    let methods = module.methods();
     for def in defs(module) {
+        if methods.contains(&def.name.name) {
+            method_self(def, analysis.funcs.get(&def.name.name))?;
+        }
         if let Some(d) = analysis.aliasing.get(&def.name.name) {
             return Err(d.clone());
         }
@@ -48,6 +52,21 @@ pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A record's method may only read `self` (D131), loose or tempered: a
+/// change through a call that takes it, which the parser cannot see, is
+/// the same named error as one it can.
+fn method_self(def: &FuncDef, summary: Option<&Summary>) -> Result<()> {
+    let mode = summary.and_then(|s| s.params.first()).map(|p| p.mode);
+    let (Some(Mode::Mut | Mode::Owned), Some(slf)) = (mode, def.params.first()) else {
+        return Ok(());
+    };
+    Err(Diagnostic {
+        span: slf.span,
+        message: "a method that changes or keeps `self` is not supported yet".to_string(),
+        kind: DiagKind::Type,
+    })
 }
 
 /// The functions `module` defines.

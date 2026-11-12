@@ -15,6 +15,7 @@ mod globals;
 mod hold;
 mod methods;
 mod opt;
+mod record;
 mod reduce;
 mod seq;
 mod slice;
@@ -138,12 +139,6 @@ pub fn lower_every(module: &Module, types: &Types) -> Result<Program> {
 }
 
 fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Program> {
-    if let Some(record) = module.body.iter().find_map(|s| match &s.kind {
-        StmtKind::Record(r) => Some(r),
-        _ => None,
-    }) {
-        return Err(unsupported(record.name.span, "records"));
-    }
     let mut defs = HashMap::new();
     for s in &module.body {
         if let StmtKind::FuncDef(f) = &s.kind {
@@ -160,7 +155,7 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         instances: HashMap::new(),
         funcs: Vec::new(),
         queue: Vec::new(),
-        seqs: types::SeqTypes::new(reach == Reach::Called),
+        seqs: types::SeqTypes::new(reach == Reach::Called, records(module, types)),
         open: HashMap::new(),
         lowering: 0,
         waits: usize::MAX,
@@ -487,6 +482,17 @@ fn file_kind(writes: bool, held: Ty) -> Kind {
     }
 }
 
+/// Every record's declared fields, by its qualified name.
+fn records(module: &Module, types: &Types) -> HashMap<String, Vec<(String, Type)>> {
+    let records = module.body.iter().filter_map(|s| match &s.kind {
+        StmtKind::Record(r) => Some(r.name.name.as_str()),
+        _ => None,
+    });
+    records
+        .filter_map(|name| Some((name.to_string(), types.record(name)?.to_vec())))
+        .collect()
+}
+
 /// Whether `t` has no variables `subst` leaves unbound.
 fn is_closed(t: &Type, subst: &Subst) -> bool {
     match t {
@@ -533,8 +539,9 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::Exception => Ty::Exc,
         Type::Bytes => Ty::Bytes,
         Type::File(writes, data) => Ty::File(file_kind(*writes, settle(data, subst, bound, seqs))),
-        // Never reached: `lower` refuses a program with records first.
-        Type::Record(_) => Ty::None,
+        // `settle` cannot fail: a record's fields are closed (D135), so
+        // only an unknown record, which inference rules out, gives `None`.
+        Type::Record(name) => record(name, seqs, Span { start: 0, end: 0 }).unwrap_or(Ty::None),
         Type::Dict(k, v) => {
             let (k, v) = (settle(k, subst, bound, seqs), settle(v, subst, bound, seqs));
             seqs.dict(k, v)
@@ -612,6 +619,9 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         | (Type::Exception, Ty::Exc)
         | (Type::Bytes, Ty::Bytes)
         | (Type::Executor, Ty::None) => true,
+        (Type::Record(name), Ty::Record(_)) => {
+            seqs.record_name(ty).is_some_and(|n| n == name.as_str())
+        }
         (Type::File(writes, data), Ty::File(kind)) => {
             let held = match kind.is_text() {
                 true => Ty::Str,
@@ -1072,7 +1082,7 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         // `build` and its task's result for analysis, and `map`'s results
         // are a list of futures in `build` and of results for analysis.
         Type::Executor => Ok(Ty::None),
-        Type::Record(_) => Err(unsupported(span, "records")),
+        Type::Record(name) => record(name, seqs, span),
         Type::Future(_) if seqs.futures => Ok(Ty::Future),
         Type::Future(t) => concrete(t, subst, seqs, span),
         Type::Results(_) if seqs.futures => Ok(Ty::Results),
@@ -1110,6 +1120,18 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
             .copied()
             .ok_or_else(|| unsupported(span, "a value whose type depends on generic code")),
     }
+}
+
+/// The IR type of record `name`. Its fields' types name only closed
+/// types and records declared before it (D129, D135), so this ends.
+fn record(name: &str, seqs: &mut types::SeqTypes, span: Span) -> Result<Ty> {
+    let declared = seqs.declared(name).map(<[(String, Type)]>::to_vec);
+    let declared = declared.ok_or_else(|| internal(span, &format!("`{name}` is no record")))?;
+    let mut fields = Vec::new();
+    for (_, t) in &declared {
+        fields.push(concrete(t, &Subst::new(), seqs, span)?);
+    }
+    Ok(seqs.record(name, fields))
 }
 
 /// [`concrete`], but `None` for a variable nothing binds.
