@@ -84,6 +84,7 @@ D4 applies to a field as it does to a variable. An unannotated `self.next = None
 - Grammar D3, D4 and A5, and tasks rule 4, cover objects as they cover dicts and sets. Their fix-its are prose, since objects have no copy.
 - In the summaries (A8), an object is one abstract container whose contents are its fields' values. An object reached through a field is its own container (A6 choice 1).
 - Tasks marking walks fields, and a store into a marked object marks what it stores.
+- Printing is a call (D167): `print(p)` and `str(p)` call the dunder D147's lookup picks, and printing a value whose type reaches classes passes it to their `__repr__`s, so a `__repr__` that changes or keeps `self` changes or keeps what is printed. `__init__`'s `self` takes no mode (D145): its stores build the new object.
 
 ### Cycles and native code (D151, D152)
 
