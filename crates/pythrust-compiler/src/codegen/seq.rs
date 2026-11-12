@@ -9,7 +9,7 @@ use cranelift_frontend::FunctionBuilder;
 use super::{backend, FnGen, Rt};
 use crate::diag::Result;
 use crate::exc::ExcKind;
-use crate::ir::{CmpOp, Compound, LocalId, Operand, Ty, View};
+use crate::ir::{self, CmpOp, Compound, LocalId, Operand, Ty, View};
 use crate::span::Span;
 
 const LIST_INDEX: &str = "list index out of range";
@@ -39,6 +39,15 @@ impl FnGen<'_, '_, '_> {
             self.call_rt(push, &[s, v]);
         }
         Ok(s)
+    }
+
+    /// A new object of type `ty`: its slots null until `__init__` stores
+    /// them (D145, D150).
+    pub(super) fn new_obj(&mut self, ty: Ty) -> Result<Value> {
+        let (desc, len) = self.descriptor(ty)?;
+        let n = ir::parts(self.types, ty).len();
+        let n = self.b.ins().iconst(types::I64, n as i64);
+        self.call_rt_value(Rt::ObjNew, &[desc, len, n])
     }
 
     /// The descriptor of `ty` as read-only data: its address and length.
@@ -241,7 +250,6 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::Bytes | Ty::File(_) => 'y',
         Ty::Future => 'u',
         Ty::Exec => return Err(backend("an executor in a value".to_string())),
-        Ty::Obj(_) => return Err(backend("an object reached the native backend".to_string())),
         // A list of futures ([`Ty::Results`]).
         Ty::Results => {
             out.push_str("lu");
@@ -251,6 +259,7 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         | Ty::Held(id)
         | Ty::Tuple(id)
         | Ty::Record(id)
+        | Ty::Obj(id)
         | Ty::Opt(id)
         | Ty::Dict(id)
         | Ty::Set(id)
@@ -285,7 +294,6 @@ pub(super) fn push_name(name: &str, what: &str, out: &mut String) -> Result<()> 
 
 fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Result<()> {
     match c {
-        Compound::Object { .. } => Err(backend("an object reached the native backend".to_string())),
         Compound::List(elem) => {
             out.push('l');
             descriptor(types, *elem, out)
@@ -300,8 +308,18 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
             names,
             fields,
             ..
+        }
+        | Compound::Object {
+            shown,
+            names,
+            fields,
+            ..
         } => {
-            out.push('c');
+            out.push(match c {
+                Compound::Object { plain: true, .. } => 'p',
+                Compound::Object { .. } => 'm',
+                _ => 'c',
+            });
             out.push(byte(fields.len(), "a record of over 127 fields")?);
             fields.iter().try_for_each(|f| descriptor(types, *f, out))?;
             // Field names last first, the order the runtime prints them in.
@@ -383,6 +401,22 @@ mod tests {
         assert_eq!(out, "c\u{2}ils\u{3}Pé\u{4}tags\u{1}x");
         let long = vec![Compound::List(Ty::Str), record(&"P".repeat(128))];
         assert!(descriptor(&long, Ty::Record(TypeId(1)), &mut String::new()).is_err());
+    }
+
+    #[test]
+    fn object_descriptors_tell_dataclasses_from_plain_classes() {
+        let object = |plain: bool| Compound::Object {
+            name: "geo.P".to_string(),
+            shown: "P".to_string(),
+            plain,
+            names: vec!["x".to_string()],
+            fields: vec![Ty::Int],
+        };
+        for (plain, code) in [(false, "m"), (true, "p")] {
+            let mut out = String::new();
+            descriptor(&[object(plain)], Ty::Obj(TypeId(0)), &mut out).expect("descriptor");
+            assert_eq!(out, format!("{code}\u{1}i\u{1}P\u{1}x"));
+        }
     }
 
     #[test]

@@ -92,6 +92,14 @@ An exception is a runtime sequence object whose descriptor is `x`, its kind's co
 
 The fatal faults (overflow, recursion depth, out-of-memory, `**`) stay `Term::Fail`s and failing rvalues, never caught.
 
+### Classes (step 5-4, D150, D151, D168)
+
+An object (`Ty::Obj`) is the refcounted sequence object a frozen record is: a vector of 64-bit slots, one per field in the order `__init__` first assigns them, typed by a descriptor. The descriptor is the record's (`c`, a field count, the field types, then the class's and fields' names last first) under a letter that says what the class is: `m` for a non-frozen dataclass, `p` for a plain class. `Rvalue::NewObj` is `pt_obj_new`, which makes the object with every slot null; `__init__` stores each field (D145: on every path), so no program can read a null slot. `Inst::SetField` is `pt_obj_set`: it counts the new value, marking it first when the object is marked for tasks (D150), and drops the old one if the slot was stored. A field read is `pt_seq_get`, as for a record. Dropping or marking an object skips null slots, which is how an object whose `__init__` raised half-way is freed.
+
+A dataclass compares and prints field by field, as a record does (`pt_seq_eq`, `print`, `str`). A plain class's `==` is identity and it prints only through its own dunder: `print(p)`, `str(p)` and an f-string of `p` lower to a call of `__str__` or `__repr__` (D167), so the runtime never sees them. `build` refuses printing a value that merely holds a plain object (`print([p])`, a tuple, a dataclass field), since the runtime's printer cannot call the dunder yet.
+
+`build` refuses, at its first construction, a class whose type graph reaches itself by any route (`Node` holding `Node | None`): "the native backend does not support class `Node`, which can refer to itself, yet", since reference counts alone would leak the cycle (D151, D152).
+
 ### Strings, lists and tuples
 
 A string is a pointer to an immutable runtime object holding a count, its length in chars (so ASCII strings index in O(1)) and its UTF-8 text. Ownership is decided in lowering and spelled out in the IR, so codegen only translates:
@@ -223,6 +231,9 @@ Everything else is a compile error, `backend error: the native backend does not 
 M4's four benchmarks are in `bench/`, with results and analysis in [benchmarks.md](benchmarks.md). Scalar code runs about 20x faster than CPython, list sorting about 8x, string building about the same, and tuple-heavy code about 1.8x; a tuple-free control of the same work runs about 6.8x faster than the tuple version, most of it plausibly boxed tuples (see the confounders there).
 
 ## Known gaps
+
+- **A class that can refer to itself** (`Node` holding `Node | None` or a `list[Node]`) is a backend error until the cycle collector (D152). `classes` and `classes_future` hold it.
+- **Printing a container, dataclass field or tuple that holds a plain-class object** (`print([Counter("a")])`) is a backend error until the printer can call the class's `__repr__` (Q24). A direct `print(p)` builds.
 
 - **An exception whose argument may close a container cycle** (`ValueError([ValueError(0)])`, a dict holding exceptions, or a tuple/optional wrapping either) is a backend error. It is the one value whose reference counts could form a cycle (`xs.append(e)` with `e = ValueError(xs)`), which refcounting would leak and whose `repr` needs Python's `[...]`. Any other value is acyclic: a value is built from values that already exist, so a cycle needs a list changed afterwards to reach back to it, and only an exception hides its argument's type, so the last exception before that list on a cycle holds, by its argument's type, a list whose elements may hold an exception. `codegen::may_cycle` is that test; every other exception holding a list (`ValueError([1])`, `IndexError([['a']])`, `ValueError(([1], ValueError(0)))`) builds. Any exception-typed value counts, whatever its kind (so `list[Exception]` from B4), and a future `dyn` must count as one. `check` and `run` accept these programs; `build` fails at the construct, saying native code has no cycle collector (Nano, 2026-10-29). It lowers, so the `own` stage sees it (as keeping the list). A dict whose values may hold an exception, or a tuple/optional/view wrapping such a container, counts too (`codegen::may_cycle`). Set elements and dict keys cannot hold exceptions or mutable containers: inference requires hashable types, so sets cannot actually form this case. Closing it needs a cycle collector in `pythrust-rt`.
 

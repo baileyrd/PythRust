@@ -1,7 +1,7 @@
 //! List, tuple, optional, dict, set and view types, interned so that
 //! [`Ty`] stays `Copy`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::infer::Type;
 use crate::ir::{Compound, Ty, TypeId, View};
@@ -22,25 +22,19 @@ pub(super) struct SeqTypes {
     named: HashMap<String, TypeId>,
     /// The records of [`Self::records`] that are mutable classes, whose
     /// values are objects (D150).
-    mutable: HashSet<String>,
-    /// Whether objects lower, as for analysis; `build` refuses them
-    /// until they lower to the runtime (D157, D160).
-    pub(super) objects: bool,
+    mutable: HashMap<String, bool>,
 }
 
 impl SeqTypes {
-    /// No types yet; `futures` as [`SeqTypes::futures`] and `objects`
-    /// as [`SeqTypes::objects`]; `records` the program's record and class
-    /// declarations, `mutable` its classes'.
+    /// No types yet; `futures` as [`SeqTypes::futures`]; `records` the
+    /// program's record and class declarations, `mutable` its classes'.
     pub(super) fn new(
         futures: bool,
-        objects: bool,
         records: HashMap<String, Vec<(String, Type)>>,
-        mutable: HashSet<String>,
+        mutable: HashMap<String, bool>,
     ) -> Self {
         SeqTypes {
             futures,
-            objects,
             records,
             mutable,
             ..SeqTypes::default()
@@ -49,7 +43,7 @@ impl SeqTypes {
 
     /// Whether `name` is a mutable class, whose values are objects.
     pub(super) fn is_class(&self, name: &str) -> bool {
-        self.mutable.contains(name)
+        self.mutable.contains_key(name)
     }
 
     /// The declared fields of record `name`.
@@ -84,6 +78,8 @@ impl SeqTypes {
         self.all.push(match self.is_class(&name) {
             true => Compound::Object {
                 name: name.clone(),
+                shown,
+                plain: self.mutable.get(&name).copied().unwrap_or(false),
                 names,
                 fields: Vec::new(),
             },

@@ -143,6 +143,8 @@ enum Rt {
     FloatParse,
     IntParse,
     SeqNew,
+    ObjNew,
+    ObjSet,
     SeqPush,
     SeqLen,
     SeqGet,
@@ -236,7 +238,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 121] = [
+    const ALL: [Rt; 123] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -268,6 +270,8 @@ impl Rt {
         Rt::FloatParse,
         Rt::IntParse,
         Rt::SeqNew,
+        Rt::ObjNew,
+        Rt::ObjSet,
         Rt::SeqPush,
         Rt::SeqLen,
         Rt::SeqGet,
@@ -393,6 +397,8 @@ impl Rt {
             Rt::FloatParse => "pt_float_parse",
             Rt::IntParse => "pt_int_parse",
             Rt::SeqNew => "pt_seq_new",
+            Rt::ObjNew => "pt_obj_new",
+            Rt::ObjSet => "pt_obj_set",
             Rt::SeqPush => "pt_seq_push",
             Rt::SeqLen => "pt_seq_len",
             Rt::SeqGet => "pt_seq_get",
@@ -515,7 +521,8 @@ impl Rt {
             Rt::PowHint => (vec![I64, I64], Some(ptr)),
             Rt::FloatParse => (vec![ptr, ptr], Some(F64)),
             Rt::IntParse => (vec![ptr, ptr], Some(I64)),
-            Rt::SeqNew => (vec![ptr, ptr, I64], Some(ptr)),
+            Rt::SeqNew | Rt::ObjNew => (vec![ptr, ptr, I64], Some(ptr)),
+            Rt::ObjSet => (vec![ptr, I64, I64], None),
             Rt::SeqPush => (vec![ptr, I64], None),
             Rt::SeqLen | Rt::SeqLenHeld => (vec![ptr], Some(I64)),
             Rt::SeqGet | Rt::IntListGet | Rt::SeqGetHeld | Rt::SeqItemHeld => {
@@ -941,7 +948,13 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let v = self.rvalue(value, *dest, *span)?;
                 self.b.def_var(self.vars[dest.0], v);
             }
-            Inst::SetField { .. } => return Err(objects()),
+            Inst::SetField {
+                obj, field, value, ..
+            } => {
+                let (s, v) = (self.operand(*obj), self.slot(*value));
+                let k = self.b.ins().iconst(types::I64, *field as i64);
+                self.call_rt(Rt::ObjSet, &[s, k, v]);
+            }
             Inst::Print { args, sep, end } => {
                 for (i, op) in args.iter().enumerate() {
                     if i > 0 {
@@ -1070,6 +1083,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     /// hold an exception with `str` first, which can fail.
     fn write(&mut self, op: Operand) -> Result<()> {
         let ty = self.func.ty(op);
+        refuse_plain(self.types, ty)?;
         if ir::holds(self.types, ty, ir::is_exc) {
             return Err(backend(
                 "printing an exception not rendered first".to_string(),
@@ -1102,13 +1116,13 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::Dict(_)
             | Ty::Set(_)
             | Ty::View(_) => Rt::WriteSeq,
+            Ty::Obj(_) => Rt::WriteSeq,
             Ty::Bytes | Ty::File(_) => Rt::WriteObj,
             Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
                 return Err(backend(
                     "printing a task's handle or a loop's hold".to_string(),
                 ))
             }
-            Ty::Obj(_) => return Err(objects()),
         };
         self.call_rt(rt, &[v]);
         Ok(())
@@ -1175,7 +1189,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     fn rvalue(&mut self, value: &Rvalue, dest: LocalId, span: Span) -> Result<Value> {
         match value {
             Rvalue::Use(op) => Ok(self.operand(*op)),
-            Rvalue::NewObj => Err(objects()),
+            Rvalue::NewObj => self.new_obj(self.func.locals[dest.0]),
             Rvalue::Int(op @ (IntOp::FloorDiv | IntOp::Mod), a, Operand::Int(2))
                 if self.func.ty(*a) == Ty::Int =>
             {
@@ -1359,6 +1373,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     /// reference. Rendering an exception fails at `span` when it nests
     /// deeper than `run` allows.
     fn str_of_value(&mut self, ty: Ty, v: Value, span: Span) -> Result<Value> {
+        refuse_plain(self.types, ty)?;
         let rt = match ty {
             Ty::Int => Rt::StrFromInt,
             Ty::Bool => Rt::StrFromBool,
@@ -1374,7 +1389,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::View(_) => Rt::StrFromSeq,
             Ty::Bytes | Ty::File(_) => Rt::ObjStr,
             Ty::Exc => Rt::ExcStr,
-            Ty::Obj(_) => return Err(objects()),
+            Ty::Obj(_) => Rt::StrFromSeq,
             Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
                 return Err(backend(
                     "`str` of a task's handle or a loop's hold".to_string(),
@@ -1657,7 +1672,10 @@ fn raises_inline(value: &Rvalue) -> bool {
 /// Whether `ty` is a list, tuple, record or dict view: slots read by
 /// position.
 fn is_seq(ty: Ty) -> bool {
-    matches!(ty, Ty::List(_) | Ty::Tuple(_) | Ty::Record(_) | Ty::View(_))
+    matches!(
+        ty,
+        Ty::List(_) | Ty::Tuple(_) | Ty::Record(_) | Ty::Obj(_) | Ty::View(_)
+    )
 }
 
 /// Whether `ty` is a dict or set: read by key.
@@ -1751,7 +1769,7 @@ fn refuse_cycle(types: &[Compound], func: &Func, inst: &Inst) -> Result<()> {
     };
     let message = match value {
         Rvalue::NewExc(_, Some(arg)) if may_cycle(types, func.ty(*arg)) => CYCLE_GAP.to_string(),
-        Rvalue::NewSeq(_) => match self_reaching(types, func.locals[dest.0]) {
+        Rvalue::NewSeq(_) | Rvalue::NewObj => match self_reaching(types, func.locals[dest.0]) {
             Some(shown) => format!(
                 "the native backend does not support class `{shown}`, which can refer to \
                  itself, yet"
@@ -1771,7 +1789,9 @@ fn refuse_cycle(types: &[Compound], func: &Func, inst: &Inst) -> Result<()> {
 /// type (D162): such a type has no finite runtime descriptor, so it is
 /// a named gap however it reaches itself (D151, D166).
 fn self_reaching(types: &[Compound], ty: Ty) -> Option<&str> {
-    let Some(Compound::Record { shown, .. }) = ir::compound(types, ty) else {
+    let (Some(Compound::Record { shown, .. }) | Some(Compound::Object { shown, .. })) =
+        ir::compound(types, ty)
+    else {
         return None;
     };
     let parts = ir::parts(types, ty).into_iter();
@@ -1797,10 +1817,27 @@ fn may_cycle(types: &[Compound], ty: Ty) -> bool {
     })
 }
 
-/// Objects reach only analysis until they lower to the runtime (#1266,
-/// D157): `lower::lower` refuses them first (D160).
-fn objects() -> Diagnostic {
-    backend("an object reached the native backend".to_string())
+/// Refuses to render a value of type `ty` that holds a plain class's
+/// object: the runtime cannot call its `__repr__` from inside a
+/// container yet (D147, D167). A direct `print(p)` is lowered to a call
+/// of the dunder first, so it never gets here.
+fn refuse_plain(types: &[Compound], ty: Ty) -> Result<()> {
+    let plain = ir::reachable(types, ty).into_iter().any(|t| {
+        matches!(
+            ir::compound(types, t),
+            Some(Compound::Object { plain: true, .. })
+        )
+    });
+    if !plain {
+        return Ok(());
+    }
+    Err(Diagnostic {
+        span: Span { start: 0, end: 0 },
+        message: "the native backend does not support printing a container that holds an \
+                  object yet"
+            .to_string(),
+        kind: DiagKind::Backend,
+    })
 }
 
 fn backend(message: String) -> Diagnostic {
@@ -1869,6 +1906,46 @@ mod tests {
                 true
             }
         }
+    }
+
+    /// The message `emit` refuses `src` with, if it does.
+    fn refusal(src: &str) -> Option<String> {
+        let module = parser::parse(&lexer::lex(src).expect("lex")).expect("parse");
+        let types = infer::infer(&module).expect("infer");
+        let program = lower::lower(&module, &types).expect("lower");
+        let render = |d: &Diagnostic| d.message.clone();
+        emit(&program, &render).err().map(|d| d.message)
+    }
+
+    #[test]
+    fn a_class_that_can_refer_to_itself_is_refused_and_an_acyclic_one_builds() {
+        let node = "class Node:\n    def __init__(self, v: int):\n        self.v = v\n        self.next: Node | None = None\n    def __repr__(self) -> str:\n        return \"N\"\nprint(Node(1))\n";
+        let want =
+            "the native backend does not support class `Node`, which can refer to itself, yet";
+        assert_eq!(
+            refusal(&format!("from __future__ import annotations\n{node}")).as_deref(),
+            Some(want)
+        );
+        let plain = node.replace("        self.next: Node | None = None\n", "");
+        assert_eq!(refusal(&plain), None);
+    }
+
+    #[test]
+    fn printing_a_container_that_holds_a_plain_object_is_refused() {
+        let class = "class B:\n    def __init__(self, v: int):\n        self.v = v\n    def __repr__(self) -> str:\n        return \"B\"\n";
+        let want =
+            "the native backend does not support printing a container that holds an object yet";
+        assert_eq!(
+            refusal(&format!("{class}print([B(1)])\n")).as_deref(),
+            Some(want)
+        );
+        assert_eq!(
+            refusal(&format!("{class}print(str((B(1), 2)))\n")).as_deref(),
+            Some(want)
+        );
+        assert_eq!(refusal(&format!("{class}print(B(1), str(B(2)))\n")), None);
+        let data = "from dataclasses import dataclass\n@dataclass\nclass D:\n    v: int\nprint([D(1)], D(2) == D(2))\n";
+        assert_eq!(refusal(data), None);
     }
 
     /// Inspect pre-optimization CLIF, independent of target instructions.

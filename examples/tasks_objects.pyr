@@ -1,0 +1,56 @@
+# Objects and tasks (step 5-4, D150): tasks read one object's fields,
+# build and change objects of their own, and return a field; the
+# submitter changes the object once the tasks are done.
+import concurrent.futures
+from dataclasses import dataclass
+
+
+class Box:
+    def __init__(self, label: str, n: int):
+        self.label = label
+        self.n = n
+        self.tags: list[str] = []
+
+    def scaled(self, k: int) -> int:
+        return self.n * k
+
+
+@dataclass
+class Span:
+    lo: int
+    hi: int
+
+
+def read(b: Box, k: int) -> str:
+    return b.label + ":" + str(b.scaled(k)) + ":" + str(len(b.tags))
+
+
+def build(n: int) -> int:
+    local = Box("é" + str(n), n)
+    local.n += 1
+    local.tags.append("x")
+    local.tags.append("ß")
+    return local.n + len(local.tags)
+
+
+def width(s: Span) -> int:
+    return s.hi - s.lo
+
+
+def main() -> None:
+    box = Box("shared", 5)
+    box.tags.append("t")
+    span = Span(2, 9)
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        reads = [ex.submit(read, box, k) for k in range(4)]
+        built = [ex.submit(build, n) for n in range(4)]
+        w = ex.submit(width, span)
+    print([f.result() for f in reads])
+    print([f.result() for f in built])
+    print(w.result())
+    box.n = 50
+    box.tags.append("u")
+    print(read(box, 2), span)
+
+
+main()

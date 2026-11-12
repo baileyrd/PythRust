@@ -157,7 +157,6 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         queue: Vec::new(),
         seqs: types::SeqTypes::new(
             reach == Reach::Called,
-            reach == Reach::Every,
             records(module, types),
             classes(module),
         ),
@@ -498,10 +497,13 @@ fn records(module: &Module, types: &Types) -> HashMap<String, Vec<(String, Type)
         .collect()
 }
 
-/// The qualified names of the program's mutable classes (D150).
-fn classes(module: &Module) -> HashSet<String> {
+/// The qualified names of the program's mutable classes (D150), and
+/// whether each is a plain class rather than a dataclass.
+fn classes(module: &Module) -> HashMap<String, bool> {
     let classes = module.body.iter().filter_map(|s| match &s.kind {
-        StmtKind::Record(r) if r.kind != RecordKind::Frozen => Some(r.name.name.clone()),
+        StmtKind::Record(r) if r.kind != RecordKind::Frozen => {
+            Some((r.name.name.clone(), r.kind == RecordKind::Plain))
+        }
         _ => None,
     });
     classes.collect()
@@ -1141,10 +1143,6 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
 fn record(name: &str, seqs: &mut types::SeqTypes, span: Span) -> Result<Ty> {
     if let Some(ty) = seqs.named(name) {
         return Ok(ty);
-    }
-    // A mutable class lowers for analysis only until 5-4 (D157, D160).
-    if seqs.is_class(name) && !seqs.objects {
-        return Err(unsupported(span, "classes"));
     }
     let declared = seqs.declared(name).map(<[(String, Type)]>::to_vec);
     let declared = declared.ok_or_else(|| internal(span, &format!("no class `{name}`")))?;

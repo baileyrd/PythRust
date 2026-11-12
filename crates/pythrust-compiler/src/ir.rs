@@ -177,6 +177,12 @@ pub enum Compound {
     Object {
         /// The class's qualified name, which makes it its own type.
         name: String,
+        /// The name it prints with, as its source spells it.
+        shown: String,
+        /// A plain class (D144), whose `==` is identity and which prints
+        /// only through its own `__repr__` (D147); else a dataclass,
+        /// which compares and prints field by field (D146).
+        plain: bool,
         /// Its fields' names, in order.
         names: Vec<String>,
         fields: Vec<Ty>,
