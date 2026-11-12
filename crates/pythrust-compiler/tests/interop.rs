@@ -1137,18 +1137,28 @@ fn the_link_uses_this_builds_search_paths() {
     assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "12352\n");
     let a = seven_binding(&dir, "0.2.0", 8);
     assert_eq!(stdout(build(&dir, DIGITS, &[("a", &a)])), "12353\n");
-    let builds = fs::read_dir(build_dir(&dir, "main").join("target"))
-        .unwrap()
-        .flatten()
-        .filter_map(|t| fs::read_dir(t.path().join("debug/build")).ok())
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().join("out/libptseven.a").is_file())
-        .count();
+    // Cargo nests a build script's output as `build/a-HASH/out` or, from
+    // 1.100, `build/a/HASH/out`, so count the libraries at any depth.
+    let builds = files_named(&build_dir(&dir, "main").join("target"), "libptseven.a");
     assert!(
         builds >= 2,
         "the old build's library stays in the target dir"
     );
+}
+
+/// How many files named `name` lie anywhere under `dir`.
+#[cfg(target_os = "linux")]
+fn files_named(dir: &Path, name: &str) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| match e.path() {
+            p if p.is_dir() => files_named(&p, name),
+            p => usize::from(p.file_name().is_some_and(|f| f == name)),
+        })
+        .sum()
 }
 
 /// The driver's groups, as a set: each `N bytes:` block with its paths
