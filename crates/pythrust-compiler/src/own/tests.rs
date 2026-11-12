@@ -2453,3 +2453,49 @@ fn d4_loop_target_binding_is_already_iteration() {
         "{message}"
     );
 }
+
+// Objects (step 5-3, D150, D149): an object is a mutable container whose
+// contents are its fields' values.
+
+const COUNTER: &str = "class Counter:\n    def __init__(self, n: int):\n        self.n = n\n        self.seen: list[int] = []\n    def bump(self):\n        self.n += 1\n    def note(self, x: int):\n        self.seen.append(x)\n    def get(self) -> int:\n        return self.n\n    def same(self):\n        return self\n";
+
+#[test]
+fn a_field_store_changes_the_object() {
+    let src = format!("{COUNTER}c = Counter(1)\nc.bump()\nc.note(2)\nprint(c.get(), c.same().n)\n");
+    assert_eq!(
+        modes(&src, "Counter.__init__"),
+        (vec![MUT, READ], vec![false, false])
+    );
+    assert_eq!(modes(&src, "Counter.bump"), (vec![MUT], vec![false]));
+    assert_eq!(
+        modes(&src, "Counter.note"),
+        (vec![MUT, READ], vec![false, false])
+    );
+    assert_eq!(modes(&src, "Counter.get"), (vec![READ], vec![false]));
+    assert_eq!(modes(&src, "Counter.same"), (vec![READ], vec![true]));
+}
+
+#[test]
+fn storing_a_value_in_a_field_keeps_it() {
+    let src = format!("{COUNTER}def adopt(c: Counter, xs: list[int]):\n    c.seen = xs\ndef put(c: Counter, d: Counter):\n    c.n = d.n\nc = Counter(1)\nadopt(c, [1])\nput(c, Counter(2))\nprint(c.n)\n");
+    assert_eq!(modes(&src, "adopt"), (vec![MUT, OWNED], vec![false, false]));
+    assert_eq!(modes(&src, "put"), (vec![MUT, READ], vec![false, false]));
+}
+
+#[test]
+fn tempered_methods_write_the_modes_on_self_their_bodies_need() {
+    let class = "class Box:\n    temper def __init__(self, v: int) -> None:\n        self.v = v\n";
+    let bump =
+        format!("{class}    temper def bump(self) -> None:\n        self.v += 1\nBox(1).bump()\n");
+    assert_eq!(
+        mode_err(&bump),
+        (
+            "tempered `Box.bump` changes `self` in place; write `mut self`".into(),
+            "self".into()
+        )
+    );
+    assert_eq!(
+        checked(&bump.replace("bump(self)", "bump(mut self)")),
+        Ok(())
+    );
+}

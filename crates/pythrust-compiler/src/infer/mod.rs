@@ -545,7 +545,10 @@ impl Checker {
         let records = self
             .records
             .into_iter()
-            .map(|(name, r)| (name, r.fields))
+            .map(|(name, r)| {
+                let fields = r.fields.iter().map(|(f, t)| (f.clone(), subst.zonk(t)));
+                (name, fields.collect())
+            })
             .collect();
         Types {
             nodes,

@@ -380,13 +380,16 @@ fn conservative(module: &Module) -> BTreeMap<String, Summary> {
 }
 
 /// Whether a value of type `ty` is, or may hold, a list. A dict or set
-/// is a list here: a container that changes in place.
+/// is a list here: a container that changes in place; so is an object,
+/// whose contents are its fields' values (D150).
 fn holds_list(program: &Program, ty: Ty) -> bool {
     let reached = crate::ir::reachable(&program.types, ty);
     reached.into_iter().any(|t| {
         matches!(
             program.compound(t),
-            Some(Compound::List(_) | Compound::Dict(..) | Compound::Set(_))
+            Some(
+                Compound::List(_) | Compound::Dict(..) | Compound::Set(_) | Compound::Object { .. }
+            )
         )
     })
 }
@@ -423,9 +426,13 @@ fn source_in(program: &Program, ty: Ty, open: &mut Vec<Ty>) -> Type {
             open.pop();
             t
         }
-        Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_) => {
-            compound_source(program, ty, open)
-        }
+        Ty::List(_)
+        | Ty::Tuple(_)
+        | Ty::Obj(_)
+        | Ty::Opt(_)
+        | Ty::Dict(_)
+        | Ty::Set(_)
+        | Ty::View(_) => compound_source(program, ty, open),
     }
 }
 
@@ -444,6 +451,8 @@ fn compound_source(program: &Program, ty: Ty, open: &mut Vec<Ty>) -> Type {
         }
         Some(Compound::Set(t)) => Type::Set(part(t)),
         Some(Compound::View(view, item)) => Type::View(view_source(*view), part(item)),
+        // An object is its class's type, whose fields are not walked.
+        Some(Compound::Object { name, .. }) => Type::Record(name.clone()),
         None => Type::None,
     }
 }

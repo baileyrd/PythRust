@@ -510,13 +510,15 @@ impl<'a> Body<'a> {
                 | Compound::View(_, t),
             ) => self.within_in(*t, inner, open),
             Some(Compound::Tuple(fields)) => fields.iter().any(|t| self.within_in(*t, inner, open)),
-            Some(Compound::Record { fields, .. }) if !open.contains(&outer) => {
+            Some(Compound::Record { fields, .. } | Compound::Object { fields, .. })
+                if !open.contains(&outer) =>
+            {
                 open.push(outer);
                 let any = fields.iter().any(|t| self.within_in(*t, inner, open));
                 open.pop();
                 any
             }
-            Some(Compound::Record { .. }) | None => false,
+            Some(Compound::Record { .. } | Compound::Object { .. }) | None => false,
         }
     }
 
@@ -702,6 +704,7 @@ impl<'a> Body<'a> {
         match inst {
             Inst::Append { list, .. }
             | Inst::SetItem { list, .. }
+            | Inst::SetField { obj: list, .. }
             | Inst::Extend { list, .. }
             | Inst::Scale { list, .. }
             | Inst::Insert { list, .. }
@@ -1320,6 +1323,7 @@ pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
         }
         Inst::Scale { list, count, .. } => vec![*list, *count],
         Inst::SetGlobal { value, .. } => vec![*value],
+        Inst::SetField { obj, value, .. } => vec![*obj, *value],
         Inst::SetItem {
             list, index, value, ..
         } => vec![*list, *index, *value],
@@ -1347,6 +1351,7 @@ pub(super) fn inst_span(inst: &Inst) -> Option<Span> {
     match inst {
         Inst::Append { span, .. }
         | Inst::SetItem { span, .. }
+        | Inst::SetField { span, .. }
         | Inst::Extend { span, .. }
         | Inst::Scale { span, .. }
         | Inst::Insert { span, .. }

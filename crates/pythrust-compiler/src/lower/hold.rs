@@ -88,6 +88,7 @@ impl FnBuilder<'_, '_> {
             | Inst::Release(_)
             | Inst::Forget(_)
             | Inst::SetGlobal { .. }
+            | Inst::SetField { .. }
             | Inst::DropGlobal(_)
             | Inst::Raise { .. }
             | Inst::Stash
@@ -125,6 +126,7 @@ fn runs_unseen(value: &Rvalue) -> bool {
         | Rvalue::CopyList(_)
         | Rvalue::Slice { .. }
         | Rvalue::NewSeq(_)
+        | Rvalue::NewObj
         | Rvalue::Field(..)
         | Rvalue::Global(_)
         | Rvalue::Wrap(_)

@@ -21,7 +21,9 @@
 //! Diagnostics about the body come only from precise summaries: a
 //! program that does not lower yet has its modes checked once it does.
 
-use crate::ast::{FuncDef, Mode as Temper, Module, ParamMode, StmtKind};
+use std::collections::BTreeSet;
+
+use crate::ast::{method_name, FuncDef, Mode as Temper, Module, ParamMode, RecordKind, StmtKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::infer::Type;
 
@@ -38,9 +40,9 @@ pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
     if analysis.precision != Precision::Precise {
         return Ok(());
     }
-    let methods = module.methods();
+    let frozen = frozen_methods(module);
     for def in defs(module) {
-        if methods.contains(&def.name.name) {
+        if frozen.contains(&def.name.name) {
             method_self(def, analysis.funcs.get(&def.name.name))?;
         }
         if let Some(d) = analysis.aliasing.get(&def.name.name) {
@@ -52,6 +54,18 @@ pub(super) fn check(module: &Module, analysis: &Analysis) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The top-level names of the frozen records' methods: a class's
+/// method may change or keep `self` (D149).
+fn frozen_methods(module: &Module) -> BTreeSet<String> {
+    let records = module.body.iter().filter_map(|s| match &s.kind {
+        StmtKind::Record(r) if r.kind == RecordKind::Frozen => Some(r),
+        _ => None,
+    });
+    records
+        .flat_map(|r| r.methods.iter().map(|m| method_name(&r.name.name, &m.name)))
+        .collect()
 }
 
 /// A record's method may only read `self` (D131), loose or tempered: a
@@ -123,8 +137,11 @@ fn plural(ty: &Type) -> String {
 
 /// Rejects the first parameter of `def` whose written mode its body outgrows.
 pub(super) fn func(def: &FuncDef, summary: &Summary) -> Result<()> {
-    for (p, inferred) in def.params.iter().zip(&summary.params) {
-        if def.mode == Temper::Loose && p.mode == ParamMode::Read {
+    // `__init__` changes the object it makes, so its `self` takes no
+    // mode (D145); its summary applies at `P(...)`.
+    let init = def.name.name.ends_with(".__init__");
+    for (k, (p, inferred)) in def.params.iter().zip(&summary.params).enumerate() {
+        if (init && k == 0) || (def.mode == Temper::Loose && p.mode == ParamMode::Read) {
             continue;
         }
         let (needed, verb, how) = needed(inferred);

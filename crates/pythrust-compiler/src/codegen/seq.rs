@@ -241,6 +241,7 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::Bytes | Ty::File(_) => 'y',
         Ty::Future => 'u',
         Ty::Exec => return Err(backend("an executor in a value".to_string())),
+        Ty::Obj(_) => return Err(backend("an object reached the native backend".to_string())),
         // A list of futures ([`Ty::Results`]).
         Ty::Results => {
             out.push_str("lu");
@@ -284,6 +285,7 @@ pub(super) fn push_name(name: &str, what: &str, out: &mut String) -> Result<()> 
 
 fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Result<()> {
     match c {
+        Compound::Object { .. } => Err(backend("an object reached the native backend".to_string())),
         Compound::List(elem) => {
             out.push('l');
             descriptor(types, *elem, out)

@@ -576,10 +576,15 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
-            // A record defines no `__len__` or `__bool__` (D132).
-            Ty::Exc | Ty::File(_) | Ty::Exec | Ty::Future | Ty::Results | Ty::Record(_) => {
-                Operand::Bool(true)
-            }
+            // A record or object defines no `__len__` or `__bool__`
+            // (D132, D147).
+            Ty::Exc
+            | Ty::File(_)
+            | Ty::Exec
+            | Ty::Future
+            | Ty::Results
+            | Ty::Record(_)
+            | Ty::Obj(_) => Operand::Bool(true),
             Ty::Bytes
             | Ty::Str
             | Ty::List(_)
@@ -1124,6 +1129,7 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Tuple(_) => "tuple",
         // A record's own name only the IR's types know.
         Ty::Record(_) => "record",
+        Ty::Obj(_) => "object",
         Ty::Opt(_) => "optional",
         Ty::Range => "range",
         Ty::Dict(_) => "dict",

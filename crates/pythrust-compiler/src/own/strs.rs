@@ -123,6 +123,9 @@ impl<'a> Held<'a> {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
             Inst::Append { list, value, .. }
             | Inst::SetItem { list, value, .. }
+            | Inst::SetField {
+                obj: list, value, ..
+            }
             | Inst::Insert { list, value, .. } => {
                 let mut value = self.holdings(*value);
                 // A dict keeps its key too.

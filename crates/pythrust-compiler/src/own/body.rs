@@ -334,6 +334,9 @@ impl<'a> Flow<'a> {
             Inst::Assign { dest, value, .. } => self.assign(*dest, value),
             Inst::Append { list, value, .. }
             | Inst::SetItem { list, value, .. }
+            | Inst::SetField {
+                obj: list, value, ..
+            }
             | Inst::Insert { list, value, .. } => {
                 let value = self.of(*value);
                 let lists = self.of(*list);
@@ -682,6 +685,7 @@ impl<'a> Flow<'a> {
             }
             Inst::Append { list, .. }
             | Inst::SetItem { list, .. }
+            | Inst::SetField { obj: list, .. }
             | Inst::Extend { list, .. }
             | Inst::Scale { list, .. }
             | Inst::Insert { list, .. }
