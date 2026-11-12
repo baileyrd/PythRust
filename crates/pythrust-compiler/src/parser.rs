@@ -148,6 +148,9 @@ struct Parser<'a> {
     user_open: bool,
     /// `from dataclasses import dataclass` came first (D132).
     dataclass: bool,
+    /// While a plain class's `__init__` is parsed, the field annotations
+    /// it wrote (`self.x: T = v`, D144).
+    init: Option<Vec<(Ident, TypeExpr)>>,
 }
 
 impl<'a> Parser<'a> {
@@ -182,6 +185,7 @@ impl<'a> Parser<'a> {
             withs: 0,
             user_open: with::defines_open(tokens),
             dataclass: false,
+            init: None,
         })
     }
 
@@ -342,7 +346,10 @@ impl<'a> Parser<'a> {
         if self.at_exc_class() {
             return Ok(vec![self.exc_class()?]);
         }
-        if self.at(&TokenKind::At) || self.at(&TokenKind::Class) {
+        if self.at(&TokenKind::Class) {
+            return self.plain_class();
+        }
+        if self.at(&TokenKind::At) {
             return self.record();
         }
         Ok(vec![self.stmt()?])
@@ -498,6 +505,9 @@ impl<'a> Parser<'a> {
     }
 
     fn ann_assign(&mut self, lhs: Expr) -> Result<StmtKind> {
+        if let Some(field) = self_field(&lhs).filter(|_| self.init.is_some()) {
+            return self.field_init(lhs, field);
+        }
         let ExprKind::Name(name) = lhs.kind else {
             return Err(error(lhs.span, "only a single name can be annotated"));
         };
@@ -513,6 +523,19 @@ impl<'a> Parser<'a> {
             annotation,
             value,
         })
+    }
+
+    /// `self.x: T = v` in a plain class's `__init__` (D144): a store
+    /// to field `x`, which `T` annotates.
+    fn field_init(&mut self, lhs: Expr, field: Ident) -> Result<StmtKind> {
+        let annotation = self.type_expr()?;
+        self.expect(&TokenKind::Assign)?;
+        let value = self.expr()?;
+        if let Some(init) = self.init.as_mut() {
+            init.push((field, annotation));
+        }
+        let target = to_target(lhs)?;
+        Ok(StmtKind::Assign { target, value })
     }
 
     fn aug_assign(&mut self, lhs: Expr, op: BinOp) -> Result<StmtKind> {
@@ -1372,6 +1395,14 @@ impl<'a> Parser<'a> {
 
 // Validation after parsing.
 
+/// `self.x`'s field name `x`.
+fn self_field(e: &Expr) -> Option<Ident> {
+    let ExprKind::Attr { value, attr } = &e.kind else {
+        return None;
+    };
+    matches!(&value.kind, ExprKind::Name(n) if n == "self").then(|| attr.clone())
+}
+
 /// An expression on the left of `=`, `op=` or in a `for` header, as a
 /// `Target`: a name, a subscript, or a non-empty tuple of targets.
 fn to_target(expr: Expr) -> Result<Target> {
@@ -1689,8 +1720,10 @@ fn describe(kind: &TokenKind) -> String {
     format!("`{text}`")
 }
 
+mod class;
 mod exc_class;
 mod imports;
+mod init;
 mod record;
 mod stubs;
 mod with;

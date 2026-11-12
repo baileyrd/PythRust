@@ -1,0 +1,11 @@
+# deviation: D144: storing an attribute that is not a field is a compile error; CPython adds it to the object.
+# expect-error: `Box` has no field `label`; fields are assigned in `__init__`
+# expect-exit: 1
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+
+b = Box(3)
+b.label = "ß"
+print(b.n)

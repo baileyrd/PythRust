@@ -221,9 +221,20 @@ pub struct RecordDef {
     pub fields: Vec<Field>,
     /// The methods' own names, `m` of `P.m`, in source order.
     pub methods: Vec<Ident>,
-    /// `@dataclass(frozen=True)`; bare `@dataclass` is mutable (D146).
-    pub frozen: bool,
+    pub kind: RecordKind,
     pub span: Span,
+}
+
+/// Which class a [`RecordDef`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordKind {
+    /// `@dataclass(frozen=True)` (D129): its fields are never stored.
+    Frozen,
+    /// Bare `@dataclass` (D146): annotated fields, stored anywhere.
+    Data,
+    /// `class P:` (D144): its fields are what `__init__` stores, each
+    /// annotated or not; `__init__`, `__repr__` and `__str__` are its own.
+    Plain,
 }
 
 /// A user exception class (D138-D143): its body holds only `pass` or a
@@ -238,11 +249,13 @@ pub struct ExcClassDef {
     pub span: Span,
 }
 
-/// `NAME ':' type` in a record's body.
+/// `NAME ':' type` in a dataclass's body, or a field a plain class's
+/// `__init__` stores (`self.x = v`, `self.x: T = v`), in first-store
+/// order. Only a plain class's may be unannotated, its type inferred.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub name: Ident,
-    pub annotation: TypeExpr,
+    pub annotation: Option<TypeExpr>,
 }
 
 /// The top-level name of record `record`'s method `method`: `P.m`, which

@@ -700,6 +700,10 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a mutable dataclass, until classes lower (step 5-4, D160)",
     ),
     (
+        "classes",
+        "plain classes, until classes lower (step 5-4, D160)",
+    ),
+    (
         "user_exception_many",
         "more exception classes than the runtime's handler test holds, a bit per class \
          code (D143)",

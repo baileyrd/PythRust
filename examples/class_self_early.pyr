@@ -1,0 +1,15 @@
+# deviation: D145: `__init__` uses `self` only to store and read fields until every field is assigned; CPython runs it.
+# expect-error: `self` is used before every field of `Box` is assigned
+# expect-exit: 1
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+        self.show()
+        self.label = "ü"
+
+    def show(self):
+        print(self.n)
+
+
+b = Box(3)
+print(b.label)

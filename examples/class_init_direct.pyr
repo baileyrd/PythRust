@@ -1,0 +1,11 @@
+# deviation: D145: calling `__init__` directly is not supported yet; CPython runs it again.
+# expect-error: calling `__init__` directly is not supported yet
+# expect-exit: 1
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+
+b = Box(1)
+b.__init__(2)
+print(b.n)

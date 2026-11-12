@@ -1,0 +1,12 @@
+# deviation: D148: a field first assigned None that later holds a value needs an annotation; CPython runs it.
+# expect-error: field `next` of `Node`: expected None, found Node; to allow None, annotate it, as in `self.next: Node | None = None`
+# expect-exit: 1
+class Node:
+    def __init__(self, value: int):
+        self.value = value
+        self.next = None
+
+
+a = Node(1)
+a.next = Node(2)
+print(a.value)

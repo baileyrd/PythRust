@@ -223,7 +223,7 @@ impl Checker {
                 span: u.span,
                 via: None,
             };
-            let solved = solve::solve(&mut self.subst.clone(), vec![narrowed]);
+            let solved = solve::solve(&mut self.subst.clone(), &self.records, vec![narrowed]);
             u.span == err.span && matches!(solved, Ok(rest) if rest.is_empty())
         };
         let Some(TruthUse { name, .. }) = self.frame.truth_uses.iter().find(fixes) else {

@@ -114,9 +114,9 @@ pub fn infer(module: &Module) -> Result<Types> {
     // elements), so the operation never runs. It is accepted, and the
     // variables stay unconstrained in the typed view, except slice bounds
     // need an integer representative even on paths that never produce one.
-    let waiting = solve::default_assigns(&mut c.subst, mem::take(&mut c.pending))?;
+    let waiting = solve::default_assigns(&mut c.subst, &c.records, mem::take(&mut c.pending))?;
     c.resolve_schemes()?;
-    solve::default_slice_bounds(&mut c.subst, waiting)?;
+    solve::default_slice_bounds(&mut c.subst, &c.records, waiting)?;
     c.resolve_schemes()?;
     let mut types = c.finish();
     tasks::check(module, &defs, &types)?;
@@ -296,7 +296,7 @@ impl Checker {
         for f in group {
             self.body(f)?;
         }
-        let waiting = solve::solve(&mut self.subst, mem::take(&mut self.pending))?;
+        let waiting = solve::solve(&mut self.subst, &self.records, mem::take(&mut self.pending))?;
         self.pending = outer;
         self.generalize(group, waiting)
     }
@@ -312,7 +312,11 @@ impl Checker {
                 has_default: p.default.is_some(),
             });
         }
-        let ret = self.hint(f.returns.as_ref())?;
+        // A class's `__init__` returns nothing (D145).
+        let ret = match f.name.name.ends_with(".__init__") {
+            true => Type::None,
+            false => self.hint(f.returns.as_ref())?,
+        };
         Ok(FuncType { params, ret })
     }
 
@@ -393,7 +397,12 @@ impl Checker {
     /// come from globals or defaults, which are both included.
     fn generalize(&mut self, group: &[&FuncDef], waiting: Vec<Constraint>) -> Result<()> {
         let mut env = BTreeSet::new();
-        for t in self.globals.values().chain(&self.defaults) {
+        // A class's field types are every object's, never generic (D144).
+        let fields = self
+            .records
+            .values()
+            .flat_map(|r| r.fields.iter().map(|(_, t)| t));
+        for t in self.globals.values().chain(&self.defaults).chain(fields) {
             self.subst.free_vars(t, &mut env);
         }
         let vars: Vec<BTreeSet<TypeVar>> = waiting
@@ -485,7 +494,7 @@ impl Checker {
             })
             .flatten()
             .collect();
-        solve::solve(&mut self.subst, needs).map(drop)
+        solve::solve(&mut self.subst, &self.records, needs).map(drop)
     }
 
     fn need(&mut self, need: Need, span: Span) {
@@ -498,7 +507,7 @@ impl Checker {
 
     /// Solves what can be solved now, so errors surface where they arise.
     fn settle(&mut self) -> Result<()> {
-        self.pending = solve::solve(&mut self.subst, mem::take(&mut self.pending))?;
+        self.pending = solve::solve(&mut self.subst, &self.records, mem::take(&mut self.pending))?;
         Ok(())
     }
 

@@ -1,0 +1,10 @@
+# deviation: D147: an object is not a dict key or set element yet; CPython hashes it by identity.
+# expect-error: an object as a dict key or set element is not supported yet
+# expect-exit: 1
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+
+seen = {Box(1): "é"}
+print(len(seen))

@@ -1,0 +1,14 @@
+# deviation: D147: an object inside a printed container shows its `__repr__`, which this class lacks; CPython prints its address.
+# expect-error: printing `Point` needs a `__repr__` method
+# expect-exit: 1
+class Point:
+    def __init__(self, x: int):
+        self.x = x
+
+    def __str__(self) -> str:
+        return "Point " + str(self.x)
+
+
+p = Point(1)
+print(p)
+print([p])

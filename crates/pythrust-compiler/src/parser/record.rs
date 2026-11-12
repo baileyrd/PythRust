@@ -9,7 +9,7 @@
 use super::{error, Parser};
 use crate::ast::{
     method_name, Expr, ExprKind, Field, FuncDef, Ident, LocalModule, Module, ParamMode, RecordDef,
-    Stmt, StmtKind, Target, TargetKind, TypeExpr,
+    RecordKind, Stmt, StmtKind, Target, TargetKind, TypeExpr,
 };
 use crate::diag::Result;
 use crate::exc::ExcKind;
@@ -24,9 +24,9 @@ const SPELLING: &str =
 
 /// What a record's body holds, gathered member by member.
 #[derive(Default)]
-struct Body {
-    fields: Vec<Field>,
-    methods: Vec<FuncDef>,
+pub(super) struct Body {
+    pub fields: Vec<Field>,
+    pub methods: Vec<FuncDef>,
 }
 
 impl Body {
@@ -51,7 +51,7 @@ impl Parser<'_> {
         }
         self.bump();
         let name = self.binding_name("a class name")?;
-        self.no_bases(&name)?;
+        self.no_bases(&name, "records")?;
         self.expect(&TokenKind::Colon)?;
         let body = self.record_body(&name, frozen)?;
         let span = self.span_from(start);
@@ -59,7 +59,10 @@ impl Parser<'_> {
             name: name.clone(),
             fields: body.fields,
             methods: body.methods.iter().map(|m| m.name.clone()).collect(),
-            frozen,
+            kind: match frozen {
+                true => RecordKind::Frozen,
+                false => RecordKind::Data,
+            },
             span,
         };
         let methods = body.methods.into_iter().map(|m| method(&name, m));
@@ -72,14 +75,9 @@ impl Parser<'_> {
 
     /// The decorator line before `class`: `@dataclass(frozen=True)`, or
     /// bare `@dataclass` (D146), which makes a mutable record; whether it
-    /// is frozen. A `class` with none is refused.
+    /// is frozen.
     fn decorator(&mut self) -> Result<bool> {
-        let at = self.tok(0).span;
-        if !self.eat(&TokenKind::At) {
-            let msg = "classes without `@dataclass(frozen=True)` are not supported yet; \
-                       use `@dataclass(frozen=True)`";
-            return Err(error(at, msg));
-        }
+        let at = self.expect(&TokenKind::At)?.span;
         let name = self.expect_name("a decorator name")?;
         if name.name != "dataclass" {
             let msg = "decorators are not supported yet, except `@dataclass(frozen=True)` \
@@ -104,13 +102,11 @@ impl Parser<'_> {
     }
 
     /// No base classes and no type parameters (D132, D135); `()` is
-    /// none.
-    fn no_bases(&mut self, name: &Ident) -> Result<()> {
+    /// none. `what` names generic ones: records, or classes.
+    pub(super) fn no_bases(&mut self, name: &Ident, what: &str) -> Result<()> {
         if self.at(&TokenKind::LBracket) {
-            return Err(error(
-                self.tok(0).span,
-                "generic records are not supported yet",
-            ));
+            let msg = format!("generic {what} are not supported yet");
+            return Err(error(self.tok(0).span, msg));
         }
         if !self.eat(&TokenKind::LParen) {
             return Ok(());
@@ -126,7 +122,7 @@ impl Parser<'_> {
             return Err(error(self.tok(0).span, msg));
         }
         let msg = match generic {
-            true => "generic records are not supported yet".to_string(),
+            true => format!("generic {what} are not supported yet"),
             false => format!(
                 "base classes are not supported yet; `{}` stands alone",
                 name.name
@@ -163,7 +159,12 @@ impl Parser<'_> {
             }
             TokenKind::Def | TokenKind::Temper => {
                 let def = self.nested(|p| p.func_head(|p| p.expect_name("a method name")))?;
-                check_method(record, frozen, &def, body)?;
+                let kind = if frozen {
+                    RecordKind::Frozen
+                } else {
+                    RecordKind::Data
+                };
+                check_method(record, kind, &def, body)?;
                 body.methods.push(def);
                 Ok(())
             }
@@ -173,7 +174,7 @@ impl Parser<'_> {
             }
             TokenKind::Name(_) if self.tok(1).kind == TokenKind::Colon => {
                 let field = self.field()?;
-                check_member(&field.name, body)?;
+                check_member(&field.name, body, RecordKind::Frozen)?;
                 body.fields.push(field);
                 Ok(())
             }
@@ -200,7 +201,10 @@ impl Parser<'_> {
             return Err(error(self.tok(0).span, msg));
         }
         self.expect(&TokenKind::Newline)?;
-        Ok(Field { name, annotation })
+        Ok(Field {
+            name,
+            annotation: Some(annotation),
+        })
     }
 }
 
@@ -231,9 +235,10 @@ fn frozen_only(call: &Expr) -> Result<()> {
 }
 
 /// A member's name is new to the record, and not a dunder (D132).
-fn check_member(name: &Ident, body: &Body) -> Result<()> {
+fn check_member(name: &Ident, body: &Body, kind: RecordKind) -> Result<()> {
     let n = &name.name;
-    if n.starts_with("__") && n.ends_with("__") {
+    // A plain class's dunders are checked by `class::check_dunder`.
+    if kind != RecordKind::Plain && n.starts_with("__") && n.ends_with("__") {
         let msg = format!("`{n}` in a record is not supported yet");
         return Err(error(name.span, msg));
     }
@@ -247,8 +252,14 @@ fn check_member(name: &Ident, body: &Body) -> Result<()> {
 /// A method's name is new, and it takes an unannotated `self` first,
 /// which a frozen record's method only reads (D131); a mutable one's may
 /// change or keep it (D149).
-fn check_method(record: &Ident, frozen: bool, def: &FuncDef, body: &Body) -> Result<()> {
-    check_member(&def.name, body)?;
+pub(super) fn check_method(
+    record: &Ident,
+    kind: RecordKind,
+    def: &FuncDef,
+    body: &Body,
+) -> Result<()> {
+    let frozen = kind == RecordKind::Frozen;
+    check_member(&def.name, body, kind)?;
     let Some(first) = def.params.first() else {
         let msg = format!(
             "method `{}` needs `self` as its first parameter",
@@ -358,7 +369,7 @@ fn from_self(e: &Expr) -> bool {
 
 /// Method `def` of `record` as the top-level `def` named `P.m`, `self`
 /// annotated with the record.
-fn method(record: &Ident, mut def: FuncDef) -> Stmt {
+pub(super) fn method(record: &Ident, mut def: FuncDef) -> Stmt {
     def.name.name = method_name(&record.name, &def.name.name);
     if let Some(slf) = def.params.first_mut() {
         slf.annotation = Some(record_type(record, slf.name.span));
@@ -401,7 +412,7 @@ pub(super) fn check_module(body: &[Stmt]) -> Result<()> {
         return Ok(());
     }
     for &(_, r) in &records {
-        check_unbound(&r.name, r.span, "a record", body)?;
+        check_unbound(&r.name, r.span, &format!("a {}", noun(r.kind)), body)?;
     }
     for (at, s) in body.iter().enumerate() {
         let at = runs_at(s, at, &records);
@@ -433,14 +444,20 @@ pub(super) fn check_modules(module: &Module, locals: &[LocalModule]) -> Result<(
             continue;
         };
         if locals.iter().any(|m| m.name == r.name.name) {
-            let msg = format!(
-                "`{}` names both a record and a module; rename the record",
-                r.name.name
-            );
+            let (n, kind) = (&r.name.name, noun(r.kind));
+            let msg = format!("`{n}` names both a {kind} and a module; rename the {kind}");
             return Err(error(r.name.span, msg));
         }
     }
     Ok(())
+}
+
+/// What a record or class is called in messages (D136, D144).
+fn noun(kind: RecordKind) -> &'static str {
+    match kind {
+        RecordKind::Plain => "class",
+        RecordKind::Frozen | RecordKind::Data => "record",
+    }
 }
 
 /// No exception class is named like a builtin one, or rebound (D142).
@@ -495,7 +512,14 @@ fn source(n: &str) -> String {
 /// The annotations statement `s` evaluates when it runs.
 fn evaluated(s: &Stmt) -> Vec<&TypeExpr> {
     match &s.kind {
-        StmtKind::Record(r) => r.fields.iter().map(|f| &f.annotation).collect(),
+        // A plain class's field annotations sit in `__init__`'s body,
+        // which CPython does not evaluate (D151).
+        StmtKind::Record(r) if r.kind == RecordKind::Plain => Vec::new(),
+        StmtKind::Record(r) => r
+            .fields
+            .iter()
+            .filter_map(|f| f.annotation.as_ref())
+            .collect(),
         StmtKind::FuncDef(f) => {
             // A method's `self` is annotated by the parser, not the source.
             let skip = usize::from(f.name.name.contains('.'));
@@ -526,7 +550,7 @@ fn check_defined(t: &TypeExpr, at: usize, records: &[(usize, &RecordDef)]) -> Re
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{Module, StmtKind};
+    use crate::ast::{Module, RecordKind, StmtKind};
     use crate::{lexer, parser};
 
     const IMPORT: &str = "from dataclasses import dataclass\n";
@@ -586,7 +610,7 @@ mod tests {
             let StmtKind::Record(r) = &m.body[0].kind else {
                 panic!("{src}: not a record");
             };
-            assert_eq!(r.frozen, frozen, "{src}");
+            assert_eq!(r.kind == RecordKind::Frozen, frozen, "{src}");
         }
         assert!(err("@dataclass(frozen=False)\nclass P:\n    x: int\n").contains(spelling));
         assert!(err("@dataclass()\nclass P:\n    x: int\n").contains(spelling));
@@ -596,7 +620,8 @@ mod tests {
             "{eq}"
         );
         assert!(err("@dataclass(True)\nclass P:\n    x: int\n").contains("only `frozen=True`"));
-        assert!(err("class P:\n    x: int\n").contains("classes without"));
+        let plain = err("class P:\n    x: int\n");
+        assert!(plain.contains("class-body field declarations"), "{plain}");
         assert!(err("@other\ndef f():\n    pass\n").contains("decorators are not supported yet"));
         let missing = parse("@dataclass(frozen=True)\nclass P:\n    x: int\n").unwrap_err();
         assert!(
@@ -767,5 +792,7 @@ mod tests {
             let msg = err(&format!("{base}{extra}"));
             assert_eq!(msg, "`P` names a record; choose another name", "{extra}");
         }
+        let class = err("class P:\n    pass\nP = 1\n");
+        assert_eq!(class, "`P` names a class; choose another name");
     }
 }
