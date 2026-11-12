@@ -1,5 +1,6 @@
-//! User exception classes (step 4-3, D138-D143): each derives from a
-//! builtin exception class, and is called, raised and caught as one.
+//! User exception classes (step 4-3, D138-D143, D156): each derives
+//! from a builtin exception class or one the program defines before it,
+//! and is called, raised and caught as one.
 
 use std::collections::BTreeSet;
 
@@ -19,37 +20,51 @@ impl Checker {
     /// declares them. Runs after the globals and records are declared,
     /// so a base a variable shadows is told apart.
     pub(super) fn declare_classes(&mut self, module: &Module, defs: &[&FuncDef]) -> Result<()> {
+        let all: Vec<&ExcClassDef> = module
+            .body
+            .iter()
+            .filter_map(|s| match &s.kind {
+                StmtKind::ExcClass(c) => Some(c),
+                _ => None,
+            })
+            .collect();
         let mut seen = BTreeSet::new();
-        for s in &module.body {
-            let StmtKind::ExcClass(c) = &s.kind else {
-                continue;
-            };
-            self.check_base(c, &seen, defs)?;
+        for c in &all {
+            self.check_base(c, &seen, &all, defs)?;
             seen.insert(c.name.name.as_str());
         }
         self.classes = Classes::of(module);
         Ok(())
     }
 
-    /// `c`'s base is a builtin exception class nothing shadows (D138,
-    /// D139); `seen` holds the classes defined before `c`.
-    fn check_base(&self, c: &ExcClassDef, seen: &BTreeSet<&str>, defs: &[&FuncDef]) -> Result<()> {
+    /// `c`'s base is a builtin exception class nothing shadows or a
+    /// class defined before `c`, which `seen` holds (D139, D156); one of
+    /// `all` defined later is not defined yet, as CPython's `NameError`.
+    fn check_base(
+        &self,
+        c: &ExcClassDef,
+        seen: &BTreeSet<&str>,
+        all: &[&ExcClassDef],
+        defs: &[&FuncDef],
+    ) -> Result<()> {
         let base = c.base.name.as_str();
+        if seen.contains(base) {
+            return Ok(());
+        }
+        if all.iter().any(|d| d.name.name == base) {
+            let msg = format!("`{}` is not defined yet", unqualified(base));
+            return Err(error(c.base.span, msg));
+        }
         let def = defs.iter().any(|f| f.name.name == base);
         let shadowed = self.globals.contains_key(base) || def;
         if ExcKind::from_name(base).is_some() && !shadowed {
             return Ok(());
         }
-        if seen.contains(base) {
-            let msg = "deriving from a user exception class is not supported yet; \
-                       derive from a builtin exception class such as `Exception`";
-            return Err(error(c.base.span, msg.to_string()));
-        }
         let known =
             shadowed || self.is_record(base) || builtins::is_builtin(base) || TYPES.contains(&base);
         let msg = match known {
             true => format!(
-                "a class may derive only from a builtin exception class; `{}` is not one",
+                "a class may derive only from an exception class; `{}` is not one",
                 unqualified(base)
             ),
             false => format!("name `{base}` is not defined"),

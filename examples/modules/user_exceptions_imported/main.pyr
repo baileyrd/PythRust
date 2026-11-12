@@ -1,6 +1,7 @@
 # expect-exit: 1
 # A user exception class imported from a module: raised, caught and
-# declared there and here; uncaught, CPython names it `errors.FetchError`.
+# declared there and here, and derived from here (D156); uncaught,
+# CPython names it `errors.FetchError`.
 import errors
 from errors import FetchError
 
@@ -18,4 +19,22 @@ try:
 except OSError as e:
     print("as OSError:", e)
 print(load("a · ü"))
+
+
+class EmptyFetch(errors.FetchError):
+    pass
+
+
+class BlankFetch(FetchError):
+    pass
+
+
+try:
+    raise BlankFetch("blank · ö")
+except errors.FetchError as e:
+    print("derived:", e, [e])
+try:
+    raise EmptyFetch("empty · ø")
+except OSError as e:
+    print("as OSError:", e)
 raise errors.FetchError("left · ñ")

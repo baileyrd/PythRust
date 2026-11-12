@@ -1,0 +1,58 @@
+# User exception classes deriving from one another (D155, D156): a
+# handler or a `raises` clause naming a class covers every class below
+# it, and a class shows its builtin root's message.
+class AppError(Exception):
+    pass
+
+
+class ParseError(AppError):
+    pass
+
+
+class SyntaxProblem(ParseError):
+    "Deeper still · ü."
+
+
+class StoreError(AppError):
+    pass
+
+
+class Missing(KeyError):
+    pass
+
+
+class MissingKey(Missing):
+    pass
+
+
+temper def parse(s: str) -> int raises AppError, ValueError:
+    if s == "":
+        raise SyntaxProblem("empty · é")
+    return int(s)
+
+
+def lookup(k: str) -> int:
+    raise MissingKey(k)
+
+
+for s in ["", "7"]:
+    try:
+        print(parse(s))
+    except StoreError:
+        print("never: a sibling's handler")
+    except ParseError as e:
+        print("parse:", e, [e])
+try:
+    raise StoreError("disk · ñ")
+except ParseError:
+    print("never: a sibling's base")
+except AppError as e:
+    print("app:", e, [e])
+try:
+    lookup("clé")
+except Missing as e:
+    print("missing:", e, [e])
+try:
+    lookup("k")
+except LookupError as e:
+    print("lookup:", e)

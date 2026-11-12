@@ -665,6 +665,7 @@ const NATIVE: &[&str] = &[
     "unbound_local",
     "unbound_loop_target",
     "unpack_list_error",
+    "user_exception_hierarchy",
     "user_exception_uncaught",
     "user_exceptions",
     "zero_division",
