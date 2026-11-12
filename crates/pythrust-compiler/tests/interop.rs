@@ -1143,7 +1143,12 @@ fn the_link_uses_this_builds_search_paths() {
         .filter_map(|t| fs::read_dir(t.path().join("debug/build")).ok())
         .flatten()
         .flatten()
-        .filter(|e| e.path().join("out/libptseven.a").is_file())
+        .flat_map(|e| {
+            // Cargo before 1.100 writes `build/a-<hash>/out`, 1.100 `build/a/<hash>/out`.
+            let nested = fs::read_dir(e.path()).into_iter().flatten().flatten();
+            std::iter::once(e.path()).chain(nested.map(|n| n.path()))
+        })
+        .filter(|p| p.join("out/libptseven.a").is_file())
         .count();
     assert!(
         builds >= 2,

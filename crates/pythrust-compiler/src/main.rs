@@ -74,6 +74,8 @@ const NATIVE_LIBS: &[&str] = &[
     "userenv.lib",
     "ws2_32.lib",
     "dbghelp.lib",
+    // Rust 1.100's `std` imports `WakeByAddressSingle` from it.
+    "synchronization.lib",
     "msvcrt.lib",
 ];
 
