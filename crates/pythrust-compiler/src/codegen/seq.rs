@@ -294,14 +294,17 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
             out.push('c');
             out.push(byte(fields.len(), "a record of over 127 fields")?);
             fields.iter().try_for_each(|f| descriptor(types, *f, out))?;
-            std::iter::once(shown).chain(names).try_for_each(|name| {
-                out.push(byte(
-                    name.len(),
-                    "a record or field name of over 127 bytes",
-                )?);
-                out.push_str(name);
-                Ok(())
-            })
+            // Field names last first, the order the runtime prints them in.
+            std::iter::once(shown)
+                .chain(names.iter().rev())
+                .try_for_each(|name| {
+                    out.push(byte(
+                        name.len(),
+                        "a record or field name of over 127 bytes",
+                    )?);
+                    out.push_str(name);
+                    Ok(())
+                })
         }
         Compound::Opt(present) => {
             out.push('o');
@@ -373,7 +376,7 @@ mod tests {
         let types = vec![Compound::List(Ty::Str), record("Pé")];
         let mut out = String::new();
         descriptor(&types, Ty::Record(TypeId(1)), &mut out).expect("descriptor");
-        assert_eq!(out, "c\u{2}ils\u{3}Pé\u{1}x\u{4}tags");
+        assert_eq!(out, "c\u{2}ils\u{3}Pé\u{4}tags\u{1}x");
         let long = vec![Compound::List(Ty::Str), record(&"P".repeat(128))];
         assert!(descriptor(&long, Ty::Record(TypeId(1)), &mut String::new()).is_err());
     }

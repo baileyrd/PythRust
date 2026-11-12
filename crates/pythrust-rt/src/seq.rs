@@ -10,7 +10,7 @@
 //! Descriptors are a prefix code the compiler emits as read-only data:
 //! `i` int, `f` float, `b` bool, `n` `None`, `s` str, `l` and the element
 //! type for a list, `t`, a field count byte and the field types for a
-//! tuple, `c` for a record ([`record_names`]), `r` for a range (see [`crate::range`]), `x` for an exception
+//! tuple, `c` for a record ([`name_at`]), `r` for a range (see [`crate::range`]), `x` for an exception
 //! (see [`crate::exc`]), `y` for bytes or a file (see [`crate::obj`]). Ownership follows strings: functions borrow
 //! their arguments, and slots read out are new references.
 
@@ -96,12 +96,12 @@ fn span(desc: &[u8]) -> usize {
         Kind::View => 2 + span(desc.get(2..).unwrap_or_default()),
         Kind::Tuple => fields_end(desc),
         Kind::Record => {
-            let n = desc.get(1).copied().unwrap_or(0);
-            let names = usize::from(n) + 1;
-            let end = (0..names).fold(fields_end(desc), |at, _| {
-                at + 1 + usize::from(desc.get(at).copied().unwrap_or(0))
-            });
-            end.min(desc.len())
+            let names = usize::from(desc.get(1).copied().unwrap_or(0)) + 1;
+            let mut at = fields_end(desc);
+            for _ in 0..names {
+                at = name_at(desc, at).1;
+            }
+            at
         }
         _ => 1,
     }
@@ -115,20 +115,17 @@ fn fields_end(desc: &[u8]) -> usize {
     fields.min(desc.len())
 }
 
-/// A record descriptor's names: its record's, then each field's. A
-/// record's descriptor is `c`, its field count byte and field types as
-/// a tuple's, then each name as a length byte and its UTF-8 bytes.
-pub(crate) fn record_names(desc: &'static [u8]) -> Vec<&'static str> {
-    let n = usize::from(desc.get(1).copied().unwrap_or(0));
-    let mut at = fields_end(desc);
-    let mut names = Vec::with_capacity(n + 1);
-    for _ in 0..=n {
-        let len = usize::from(desc.get(at).copied().unwrap_or(0));
-        let bytes = desc.get(at + 1..at + 1 + len).unwrap_or_default();
-        names.push(std::str::from_utf8(bytes).unwrap_or("?"));
-        at += 1 + len;
-    }
-    names
+/// The name at `at` of a record descriptor, and where it ends. A
+/// record's descriptor is `c`, its field count byte and field types as a
+/// tuple's, then its own name and its fields' names last first (the
+/// order [`show_record`] pushes them in), each a length byte and its
+/// UTF-8 bytes.
+fn name_at(desc: &[u8], at: usize) -> (&str, usize) {
+    let end = (at + 1 + usize::from(desc.get(at).copied().unwrap_or(0))).min(desc.len());
+    let name = desc
+        .get(at + 1..end)
+        .and_then(|b| std::str::from_utf8(b).ok());
+    (name.unwrap_or_default(), end)
 }
 
 /// The descriptor of slot `k` of a sequence described by `desc`. An
@@ -594,15 +591,17 @@ fn show_seq(s: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mu
 
 /// `P(x=1, s='a')` (D133).
 fn show_record(r: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
-    let names = record_names(r.desc);
-    out.push_str(names.first().copied().unwrap_or_default());
+    let (name, mut at) = name_at(r.desc, fields_end(r.desc));
+    out.push_str(name);
     out.push('(');
     todo.push(Step::Text(")"));
     let items = r.items.borrow();
     for (k, v) in items.iter().enumerate().rev() {
+        let (field, end) = name_at(r.desc, at);
+        at = end;
         todo.push(Step::Show(slot(r.desc, k), *v));
         todo.push(Step::Text("="));
-        todo.push(Step::Text(names.get(k + 1).copied().unwrap_or_default()));
+        todo.push(Step::Text(field));
         if k > 0 {
             todo.push(Step::Text(", "));
         }
@@ -1444,8 +1443,9 @@ mod tests {
         // `P(x: int, at: Q(s: list[str]))`, `Q` named `Qé`.
         let q: &'static [u8] = b"c\x01ls\x03Q\xc3\xa9\x01s";
         assert_eq!(span(q), q.len());
-        assert_eq!(record_names(q), ["Qé", "s"]);
-        let p = b"c\x02ic\x01ls\x03Q\xc3\xa9\x01s\x01P\x01x\x02at";
+        assert_eq!(name_at(q, 4), ("Qé", 8));
+        assert_eq!(name_at(q, 8), ("s", 10));
+        let p = b"c\x02ic\x01ls\x03Q\xc3\xa9\x01s\x01P\x02at\x01x";
         assert!(slot(p, 1).starts_with(q));
         assert_eq!(span(slot(p, 1)), q.len());
         assert_eq!(span(p), p.len());
@@ -1455,7 +1455,7 @@ mod tests {
     #[test]
     fn records_print_with_their_names_and_compare_by_fields() {
         let inner = make(b"li", &[7]);
-        let desc: &'static [u8] = b"c\x02ili\x01P\x01x\x02xs";
+        let desc: &'static [u8] = b"c\x02ili\x01P\x02xs\x01x";
         let a = make(desc, &[1, inner as u64]);
         // SAFETY: `inner` is live; `b` takes a second reference.
         unsafe { pt_seq_inc(inner) };
