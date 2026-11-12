@@ -1,0 +1,19 @@
+# deviation: D157: a tempered method on a mutable class is the D44 lowering-gap error until objects lower (step 5-3); CPython runs it.
+# expect-error: this program has a tempered function, so its ownership checks cannot be skipped, but they run on the native lowering, which fails here: the native backend does not support classes yet
+# expect-exit: 1
+# A tempered method on a mutable dataclass waits for objects to lower
+# (step 5-3, D157); the loose neighbour is `dataclass_mutable`.
+from dataclasses import dataclass
+
+
+@dataclass
+class Counter:
+    total: int
+
+    temper def add(mut self, k: int) -> None:
+        self.total += k
+
+
+c = Counter(0)
+c.add(2)
+print(c, "é")
