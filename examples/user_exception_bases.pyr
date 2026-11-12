@@ -1,0 +1,8 @@
+# deviation: D139: an exception class has one base yet; CPython runs it.
+# expect-error: multiple base classes are not supported yet
+# expect-exit: 1
+class BothError(ValueError, LookupError):
+    pass
+
+
+print(BothError("é"))

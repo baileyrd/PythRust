@@ -317,7 +317,7 @@ mod tests {
         // SAFETY: `pt_catch` gave the pending exception's reference.
         unsafe { crate::seq::pt_seq_dec(exc) };
         assert_eq!(call_raising(Site::BARE, || Ok(7_i64)), 7);
-        assert_eq!(pt_pending_is(u32::MAX), 0);
+        assert_eq!(pt_pending_is(u64::MAX), 0);
     }
 
     #[test]

@@ -487,7 +487,7 @@ impl Checker {
     }
 
     /// Infers `min..=max` positional arguments, rejecting keywords.
-    fn positional(
+    pub(super) fn positional(
         &mut self,
         name: &str,
         args: &[Arg],

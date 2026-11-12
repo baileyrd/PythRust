@@ -1,0 +1,203 @@
+# A program with more exception classes than native handler tests hold:
+# `run` runs it; `build` refuses it as a named backend gap (D143).
+
+class E0(ValueError):
+    pass
+
+
+class E1(ValueError):
+    pass
+
+
+class E2(ValueError):
+    pass
+
+
+class E3(ValueError):
+    pass
+
+
+class E4(ValueError):
+    pass
+
+
+class E5(ValueError):
+    pass
+
+
+class E6(ValueError):
+    pass
+
+
+class E7(ValueError):
+    pass
+
+
+class E8(ValueError):
+    pass
+
+
+class E9(ValueError):
+    pass
+
+
+class E10(ValueError):
+    pass
+
+
+class E11(ValueError):
+    pass
+
+
+class E12(ValueError):
+    pass
+
+
+class E13(ValueError):
+    pass
+
+
+class E14(ValueError):
+    pass
+
+
+class E15(ValueError):
+    pass
+
+
+class E16(ValueError):
+    pass
+
+
+class E17(ValueError):
+    pass
+
+
+class E18(ValueError):
+    pass
+
+
+class E19(ValueError):
+    pass
+
+
+class E20(ValueError):
+    pass
+
+
+class E21(ValueError):
+    pass
+
+
+class E22(ValueError):
+    pass
+
+
+class E23(ValueError):
+    pass
+
+
+class E24(ValueError):
+    pass
+
+
+class E25(ValueError):
+    pass
+
+
+class E26(ValueError):
+    pass
+
+
+class E27(ValueError):
+    pass
+
+
+class E28(ValueError):
+    pass
+
+
+class E29(ValueError):
+    pass
+
+
+class E30(ValueError):
+    pass
+
+
+class E31(ValueError):
+    pass
+
+
+class E32(ValueError):
+    pass
+
+
+class E33(ValueError):
+    pass
+
+
+class E34(ValueError):
+    pass
+
+
+class E35(ValueError):
+    pass
+
+
+class E36(ValueError):
+    pass
+
+
+class E37(ValueError):
+    pass
+
+
+class E38(ValueError):
+    pass
+
+
+class E39(ValueError):
+    pass
+
+
+class E40(ValueError):
+    pass
+
+
+class E41(ValueError):
+    pass
+
+
+class E42(ValueError):
+    pass
+
+
+class E43(ValueError):
+    pass
+
+
+class E44(ValueError):
+    pass
+
+
+class E45(ValueError):
+    pass
+
+
+class E46(ValueError):
+    pass
+
+
+class E47(ValueError):
+    pass
+
+
+try:
+    raise E47("last · é")
+except E47 as e:
+    print("caught", e)
+try:
+    raise E0("first · ü")
+except ValueError as e:
+    print("as base", e)

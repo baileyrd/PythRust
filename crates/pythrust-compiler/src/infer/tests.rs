@@ -2457,13 +2457,16 @@ fn a_binding_function_is_not_a_task_yet() {
 fn a_stub_raises_what_it_declares() {
     let types = with_fastfs("import fastfs\nfastfs.add(1, 2)\n").unwrap_or_else(|e| panic!("{e}"));
     let escapes = |n: &str| {
-        types
-            .raises(n)
-            .map(|r| r.escapes().map(|e| e.name()).collect::<Vec<_>>())
+        types.raises(n).map(|r| {
+            r.escapes()
+                .map(|e| e.name().to_string())
+                .collect::<Vec<_>>()
+        })
     };
-    assert_eq!(escapes("fastfs.file_xxh3"), Some(vec!["OSError"]));
-    assert_eq!(escapes("fastfs.add"), Some(vec![]));
-    assert_eq!(escapes("fastfs.any_error"), Some(vec!["Exception"]));
+    let names = |n: &[&str]| Some(n.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    assert_eq!(escapes("fastfs.file_xxh3"), names(&["OSError"]));
+    assert_eq!(escapes("fastfs.add"), names(&[]));
+    assert_eq!(escapes("fastfs.any_error"), names(&["Exception"]));
     // A tempered caller must declare what a stub raises, and need not
     // declare what one does not.
     let quiet = "import fastfs\ntemper def f() -> int:\n    return fastfs.add(1, 2)\n";
@@ -2923,4 +2926,80 @@ fn a_comprehension_iterates_what_for_iterates() {
                es = [i + n for i, n in enumerate([5])]\nzs = [a + b for a, b in zip([\"a\"], [\"b\"])]\n";
     assert_eq!(src_err(src), "no error");
     assert_eq!(src_err("ys = [z for z in 5]\n"), "int is not iterable");
+}
+
+const APP: &str = "class AppError(ValueError):\n    pass\n\n\n";
+
+#[test]
+fn an_exception_class_derives_from_a_builtin_one_only() {
+    let base = |b: &str| {
+        src_err(&format!(
+            "x = 1\n\n\ndef f() -> int:\n    return 1\n\n\nclass E({b}):\n    pass\n"
+        ))
+    };
+    let not_one = "a class may derive only from a builtin exception class";
+    for b in ["int", "object", "x", "f", "print"] {
+        let msg = base(b);
+        assert!(
+            msg.contains(not_one) && msg.contains(&format!("`{b}` is not one")),
+            "{b}: {msg}"
+        );
+    }
+    assert!(base("Nope").contains("name `Nope` is not defined"));
+    let user = src_err(&format!("{APP}class E(AppError):\n    pass\n"));
+    assert!(
+        user.contains("deriving from a user exception class is not supported yet"),
+        "{user}"
+    );
+    let shadowed = src_err("ValueError = 3\n\n\nclass E(ValueError):\n    pass\n");
+    assert!(shadowed.contains("`ValueError` is not one"), "{shadowed}");
+    assert!(infer_src(&format!("{APP}raise AppError(\"é\")\n")).is_ok());
+}
+
+#[test]
+fn an_exception_class_is_called_raised_and_caught_not_used_as_a_value() {
+    let ok =
+        format!("{APP}try:\n    raise AppError\nexcept (AppError, KeyError) as e:\n    print(e)\n");
+    assert!(infer_src(&ok).is_ok(), "{:?}", infer_src(&ok).err());
+    let value = src_err(&format!("{APP}c = AppError\n"));
+    assert!(value.contains("can't be held in variables"), "{value}");
+    let two = src_err(&format!("{APP}raise AppError(1, 2)\n"));
+    assert!(two.contains("argument"), "{two}");
+}
+
+#[test]
+fn raises_sets_hold_user_classes_and_their_bases_admit_them() {
+    let raised = |head: &str| {
+        let src = format!("{APP}temper def f(s: str) -> int{head}:\n    raise AppError(s)\n");
+        infer_src(&src)
+    };
+    for admits in [
+        " raises AppError",
+        " raises ValueError",
+        " raises Exception",
+    ] {
+        assert!(
+            raised(admits).is_ok(),
+            "{admits}: {:?}",
+            raised(admits).err()
+        );
+    }
+    let msg = raised(" raises KeyError").err().unwrap_or_default();
+    assert!(
+        msg.contains("can raise AppError here") && msg.contains("raises AppError, KeyError"),
+        "{msg}"
+    );
+    let missing = raised("").err().unwrap_or_default();
+    assert!(missing.contains("-> int raises AppError"), "{missing}");
+    let loose = infer_src(&format!(
+        "{APP}def g() -> None:\n    try:\n        raise AppError\n    except ValueError:\n        pass\n    raise AppError(1)\n"
+    ));
+    let escapes = loose.map(|t| {
+        t.raises("g").map(|r| {
+            r.escapes()
+                .map(|e| e.name().to_string())
+                .collect::<Vec<_>>()
+        })
+    });
+    assert_eq!(escapes, Ok(Some(vec!["AppError".to_string()])));
 }

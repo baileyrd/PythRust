@@ -11,8 +11,15 @@
 //! └── ValueError
 //!     └── UnicodeError: UnicodeDecodeError
 //! ```
+//!
+//! A program's own exception classes (step 4-3, D138-D143) each derive
+//! from one of these: a [`Class`] is either.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use crate::ast::{unqualified, Module, StmtKind};
 
 /// A builtin exception class. The runtime knows each by its index in
 /// [`ExcKind::ALL`], so new classes go at the end.
@@ -137,9 +144,143 @@ impl PartialOrd for ExcKind {
     }
 }
 
+/// An exception class: a builtin one, or a program's own (D138).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Class {
+    Builtin(ExcKind),
+    User(Arc<UserClass>),
+}
+
+/// A program's own exception class, which derives from a builtin one
+/// and adds nothing to it (D139).
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct UserClass {
+    /// Its global name, qualified as any module's global is (D127).
+    pub name: String,
+    pub base: ExcKind,
+    /// The runtime's code: the next after the builtins', in the order
+    /// the program defines its classes (D143).
+    pub code: u16,
+}
+
+impl Class {
+    /// The name `raises` sets, messages and `repr` show: the class's
+    /// own, `E` even when module `a` defines it (D140).
+    pub fn name(&self) -> &str {
+        match self {
+            Class::Builtin(k) => k.name(),
+            Class::User(u) => unqualified(&u.name),
+        }
+    }
+
+    /// The name an uncaught exception's last line shows, as CPython's
+    /// traceback: `E` from the main file, `a.E` from module `a` (D141).
+    pub fn shown(&self) -> &str {
+        match self {
+            Class::Builtin(k) => k.name(),
+            Class::User(u) => u.name.strip_prefix("__main__.").unwrap_or(&u.name),
+        }
+    }
+
+    /// The builtin class this one is or derives from.
+    pub fn builtin(&self) -> ExcKind {
+        match self {
+            Class::Builtin(k) => *k,
+            Class::User(u) => u.base,
+        }
+    }
+
+    /// Whether an instance of this class is one of `class`, as `except
+    /// class` tests: a user class is only itself or one of its base's.
+    pub fn is_a(&self, class: &Class) -> bool {
+        match class {
+            Class::User(_) => self == class,
+            Class::Builtin(k) => self.builtin().is_a(*k),
+        }
+    }
+
+    /// The runtime's code for this class.
+    pub fn code(&self) -> u16 {
+        match self {
+            Class::Builtin(k) => u16::from(k.code()),
+            Class::User(u) => u.code,
+        }
+    }
+}
+
+impl From<ExcKind> for Class {
+    fn from(k: ExcKind) -> Self {
+        Class::Builtin(k)
+    }
+}
+
+/// By shown name, so a set of classes prints sorted.
+impl Ord for Class {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.name(), self.shown()).cmp(&(other.name(), other.shown()))
+    }
+}
+
+impl PartialOrd for Class {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// A program's exception classes, by name.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Classes {
+    user: BTreeMap<String, Class>,
+}
+
+impl Classes {
+    /// The classes `module` defines, coded in the order it runs them.
+    /// Each base names a builtin class, as inference checks (D138); one
+    /// that does not makes no class here.
+    pub fn of(module: &Module) -> Classes {
+        let defs = module.body.iter().filter_map(|s| match &s.kind {
+            StmtKind::ExcClass(c) => Some(c),
+            _ => None,
+        });
+        let mut user = BTreeMap::new();
+        let first = u16::try_from(ExcKind::ALL.len()).unwrap_or(u16::MAX);
+        for (code, def) in (first..).zip(defs) {
+            let Some(base) = ExcKind::from_name(&def.base.name) else {
+                continue;
+            };
+            let class = UserClass {
+                name: def.name.name.clone(),
+                base,
+                code,
+            };
+            user.insert(def.name.name.clone(), Class::User(Arc::new(class)));
+        }
+        Classes { user }
+    }
+
+    /// The user class named `name`, by its qualified name.
+    pub fn user(&self, name: &str) -> Option<&Class> {
+        self.user.get(name)
+    }
+
+    /// The class `name` names: a user class, else a builtin one. The
+    /// caller checks that no variable shadows a builtin's name.
+    pub fn get(&self, name: &str) -> Option<Class> {
+        self.user
+            .get(name)
+            .cloned()
+            .or_else(|| ExcKind::from_name(name).map(Class::Builtin))
+    }
+
+    /// Every user class, in no particular order.
+    pub fn users(&self) -> impl Iterator<Item = &Class> {
+        self.user.values()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ExcKind;
+    use super::{Class, Classes, ExcKind, UserClass};
 
     #[test]
     fn names_round_trip_and_codes_are_positions() {
@@ -173,6 +314,53 @@ mod tests {
         assert!(ExcKind::NotADirectory.is_a(ExcKind::Os));
         assert!(ExcKind::IsADirectory.is_a(ExcKind::Os));
         assert!(!ExcKind::Os.is_a(ExcKind::FileNotFound));
+    }
+
+    fn module(src: &str) -> crate::ast::Module {
+        let tokens = crate::lexer::lex(src).unwrap_or_else(|d| panic!("{}", d.message));
+        crate::parser::parse(&tokens).unwrap_or_else(|d| panic!("{}", d.message))
+    }
+
+    #[test]
+    fn user_classes_follow_the_builtins_in_definition_order() {
+        let m = module("class B(KeyError):\n    pass\n\n\nclass A(Exception):\n    pass\n");
+        let classes = Classes::of(&m);
+        let (a, b) = (classes.get("A"), classes.get("B"));
+        let codes = (a.as_ref().map(Class::code), b.as_ref().map(Class::code));
+        assert_eq!(codes, (Some(18), Some(17)));
+        assert_eq!(classes.get("KeyError"), Some(Class::Builtin(ExcKind::Key)));
+        assert_eq!(classes.get("C"), None);
+        assert_eq!(classes.users().count(), 2);
+    }
+
+    #[test]
+    fn a_user_class_is_itself_and_its_bases_only() {
+        let m = module("class B(KeyError):\n    pass\n\n\nclass A(Exception):\n    pass\n");
+        let classes = Classes::of(&m);
+        let (Some(a), Some(b)) = (classes.get("A"), classes.get("B")) else {
+            panic!("both declared");
+        };
+        let lookup = Class::from(ExcKind::Lookup);
+        assert!(b.is_a(&b) && b.is_a(&lookup) && b.is_a(&ExcKind::Exception.into()));
+        assert!(!b.is_a(&a) && !a.is_a(&b) && !a.is_a(&lookup));
+        assert!(!lookup.is_a(&b), "a base is not its subclass");
+        assert_eq!(b.builtin(), ExcKind::Key);
+    }
+
+    #[test]
+    fn a_class_shows_its_module_but_names_itself() {
+        let class = |name: &str| {
+            let user = UserClass {
+                name: name.to_string(),
+                base: ExcKind::Value,
+                code: 17,
+            };
+            Class::User(std::sync::Arc::new(user))
+        };
+        let names = |c: Class| (c.name().to_string(), c.shown().to_string());
+        assert_eq!(names(class("E")), ("E".into(), "E".into()));
+        assert_eq!(names(class("pkg.a.E")), ("E".into(), "pkg.a.E".into()));
+        assert_eq!(names(class("__main__.E")), ("E".into(), "E".into()));
     }
 
     #[test]

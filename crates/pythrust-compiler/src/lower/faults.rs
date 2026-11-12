@@ -130,6 +130,7 @@ impl<'a> Sites<'a> {
             }
             StmtKind::FuncDef(_)
             | StmtKind::Record(_)
+            | StmtKind::ExcClass(_)
             | StmtKind::Break
             | StmtKind::Continue
             | StmtKind::Pass => {}

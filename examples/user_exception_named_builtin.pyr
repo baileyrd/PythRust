@@ -1,0 +1,8 @@
+# deviation: D142: an exception class is not named like a builtin one; CPython runs it.
+# expect-error: `ValueError` names a builtin exception class; choose another name
+# expect-exit: 1
+class ValueError(Exception):
+    pass
+
+
+print(ValueError("é"))

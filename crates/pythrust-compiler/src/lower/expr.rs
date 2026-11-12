@@ -4,7 +4,6 @@ use crate::ast::{
     self, unqualified, Arg, BinOp, Expr, ExprKind, FuncDef, LogicalOp, StubDef, UnaryOp,
 };
 use crate::diag::{Diagnostic, Result};
-use crate::exc::ExcKind;
 use crate::infer::Type;
 use crate::ir::{CmpOp, FloatOp, FuncId, Inst, IntOp, LocalId, Operand, Rvalue, Term, Ty, View};
 use crate::span::Span;
@@ -902,7 +901,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 if let Some(f) = StdFn::from_name(other) {
                     return self.std(f, ops, span);
                 }
-                match ExcKind::from_name(other) {
+                match self.cx.types.classes().get(other) {
                     Some(kind) => self.new_exc(kind, &ops, span),
                     None => Err(unsupported(span, &format!("`{other}`"))),
                 }

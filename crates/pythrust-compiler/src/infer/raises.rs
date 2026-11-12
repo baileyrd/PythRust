@@ -28,7 +28,7 @@ use crate::ast::{
     Target, TargetKind,
 };
 use crate::diag::{Result, Warning};
-use crate::exc::ExcKind;
+use crate::exc::{Class, Classes, ExcKind};
 use crate::span::Span;
 use crate::stdlib::{Kind, StdFn};
 
@@ -40,13 +40,13 @@ use super::{error, scope, Type, Types};
 /// escapes from (a `raise`, a call, or the `raises` clause).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Raises {
-    sites: BTreeMap<ExcKind, Span>,
+    sites: BTreeMap<Class, Span>,
 }
 
 impl Raises {
     /// The classes of the escaping exceptions, sorted by name.
-    pub fn escapes(&self) -> impl Iterator<Item = ExcKind> + '_ {
-        self.sites.keys().copied()
+    pub fn escapes(&self) -> impl Iterator<Item = Class> + '_ {
+        self.sites.keys().cloned()
     }
 
     /// Whether nothing escapes.
@@ -54,8 +54,8 @@ impl Raises {
         self.sites.is_empty()
     }
 
-    fn add(&mut self, e: ExcKind, at: Span) {
-        self.sites.entry(e).or_insert(at);
+    fn add(&mut self, e: impl Into<Class>, at: Span) {
+        self.sites.entry(e.into()).or_insert(at);
     }
 
     fn extend(&mut self, other: Raises) {
@@ -66,15 +66,14 @@ impl Raises {
     /// derived from none of them. One of a base class (an `Exception` of
     /// unknown class, an `ArithmeticError`) may or may not be of a handler's
     /// subclass, so it still escapes.
-    fn caught(mut self, classes: &[ExcKind]) -> Raises {
-        self.sites
-            .retain(|e, _| !classes.iter().any(|c| e.is_a(*c)));
+    fn caught(mut self, classes: &[Class]) -> Raises {
+        self.sites.retain(|e, _| !classes.iter().any(|c| e.is_a(c)));
         self
     }
 
     /// As a declared set: whether it admits `e`, as one of its classes.
-    fn covers(&self, e: ExcKind) -> bool {
-        self.sites.keys().any(|d| e.is_a(*d))
+    fn covers(&self, e: &Class) -> bool {
+        self.sites.keys().any(|d| e.is_a(d))
     }
 
     fn same_escapes(&self, other: &Raises) -> bool {
@@ -93,7 +92,7 @@ pub(super) fn check(
     bindings(&module.body, &mut globals);
     let mut declared = HashMap::new();
     for f in defs {
-        if let Some(set) = declaration(f, defs, &globals)? {
+        if let Some(set) = declaration(f, defs, &globals, types.classes())? {
             declared.insert(f.name.name.as_str(), set);
         }
     }
@@ -171,13 +170,18 @@ fn binds_own_name(s: &Stmt) -> bool {
 
 /// `f`'s declared set: its `raises` clause, or nothing for a tempered
 /// function without one. `None` when the set is inferred.
-fn declaration(f: &FuncDef, defs: &[&FuncDef], globals: &Bindings) -> Result<Option<Raises>> {
+fn declaration(
+    f: &FuncDef,
+    defs: &[&FuncDef],
+    globals: &Bindings,
+    classes: &Classes,
+) -> Result<Option<Raises>> {
     if f.raises.is_empty() {
         return Ok((f.mode == Mode::Tempered).then(Raises::default));
     }
     let mut set = Raises::default();
     for name in &f.raises {
-        let e = declared_escape(name, defs, globals)?;
+        let e = declared_escape(name, defs, globals, classes)?;
         if set.sites.contains_key(&e) {
             let msg = format!("`{}` is listed twice in `raises`", name.name);
             return Err(error(name.span, msg));
@@ -204,10 +208,18 @@ fn stub_declaration(f: &StubDef) -> Result<Raises> {
     Ok(set)
 }
 
-/// A name in a `raises` clause: a builtin exception class nothing
-/// redefines; `Exception` admits any.
-fn declared_escape(name: &Ident, defs: &[&FuncDef], globals: &Bindings) -> Result<ExcKind> {
+/// A name in a `raises` clause: the program's exception class, or a
+/// builtin one nothing redefines; `Exception` admits any.
+fn declared_escape(
+    name: &Ident,
+    defs: &[&FuncDef],
+    globals: &Bindings,
+    classes: &Classes,
+) -> Result<Class> {
     let n = name.name.as_str();
+    if let Some(user) = classes.user(n) {
+        return Ok(user.clone());
+    }
     let Some(builtin) = ExcKind::from_name(unqualified(n)) else {
         let names = builtins::exception_names();
         let msg = format!("`{n}` is not an exception; `raises` lists one of {names}");
@@ -217,13 +229,13 @@ fn declared_escape(name: &Ident, defs: &[&FuncDef], globals: &Bindings) -> Resul
         let msg = format!("`{n}` is redefined, so it no longer names the builtin exception");
         return Err(error(name.span, msg));
     }
-    Ok(builtin)
+    Ok(builtin.into())
 }
 
 /// The names that would hide builtin `e` from `f`'s `raises` clause:
 /// `a.ValueError` for a function of module `a`; for the main file's,
 /// `ValueError` or, where a module reads that name, `__main__.ValueError`.
-fn scope_names(f: &FuncDef, e: ExcKind) -> Vec<String> {
+fn scope_names(f: &FuncDef, e: &Class) -> Vec<String> {
     match f.name.name.rsplit_once('.') {
         Some((module, _)) if module != "__main__" => vec![format!("{module}.{}", e.name())],
         _ => vec![e.name().to_string(), format!("__main__.{}", e.name())],
@@ -240,8 +252,8 @@ fn shadowed<'a>(n: &str, globals: &Bindings, mut defs: impl Iterator<Item = &'a 
 #[derive(Debug)]
 enum Source<'a> {
     Value(&'a Expr),
-    /// `except Name as e`.
-    Caught(ExcKind),
+    /// `except Name as e`, by the class's name.
+    Caught(&'a str),
     /// A parameter, loop target or unpacked element.
     Opaque,
 }
@@ -319,13 +331,11 @@ fn opaque<'a>(target: &'a Target, out: &mut Bindings<'a>) {
     }
 }
 
-fn caught<'a>(binding: Option<&'a Ident>, classes: &[Ident], out: &mut Bindings<'a>) {
+fn caught<'a>(binding: Option<&'a Ident>, classes: &'a [Ident], out: &mut Bindings<'a>) {
     let Some(b) = binding else {
         return;
     };
-    let sources = classes
-        .iter()
-        .map(|c| ExcKind::from_name(&c.name).map_or(Source::Opaque, Source::Caught));
+    let sources = classes.iter().map(|c| Source::Caught(&c.name));
     out.entry(&b.name).or_default().extend(sources);
 }
 
@@ -409,10 +419,10 @@ impl<'a> Analysis<'a> {
         let missing = got
             .sites
             .iter()
-            .filter(|(e, _)| !declared.covers(**e))
+            .filter(|(e, _)| !declared.covers(e))
             .min_by_key(|(_, at)| at.start);
         let Some((e, at)) = missing else {
-            let nameable = |e: ExcKind| {
+            let nameable = |e: &Class| {
                 let shadows = |n: &str| shadowed(n, &self.globals, self.defs.keys().copied());
                 !scope_names(f, e).iter().any(|n| shadows(n))
             };
@@ -420,16 +430,16 @@ impl<'a> Analysis<'a> {
         };
         let mut all = declared.clone();
         all.extend(got.clone());
-        Err(error(*at, undeclared(f, *e, &all, self.types)))
+        Err(error(*at, undeclared(f, e, &all, self.types)))
     }
 }
 
 /// The message for `f` letting `e` escape undeclared, with the clause
 /// that would admit everything in `all`.
-fn undeclared(f: &FuncDef, e: ExcKind, all: &Raises, types: &Types) -> String {
+fn undeclared(f: &FuncDef, e: &Class, all: &Raises, types: &Types) -> String {
     let name = &f.name.name;
     let what = match e {
-        ExcKind::Exception => {
+        Class::Builtin(ExcKind::Exception) => {
             "any exception here (an `Exception`, or a value whose class is known only when \
              it runs)"
                 .to_string()
@@ -462,19 +472,17 @@ fn vacuous(
     f: &FuncDef,
     declared: &Raises,
     got: &Raises,
-    nameable: impl Fn(ExcKind) -> bool,
+    nameable: impl Fn(&Class) -> bool,
 ) -> Option<Warning> {
-    let at = *declared.sites.get(&ExcKind::Exception)?;
-    if got.sites.contains_key(&ExcKind::Exception) {
+    let any = Class::Builtin(ExcKind::Exception);
+    let at = *declared.sites.get(&any)?;
+    if got.sites.contains_key(&any) {
         return None;
     }
     let mut narrow = got.clone();
-    let listed = declared
-        .sites
-        .iter()
-        .filter(|(e, _)| **e != ExcKind::Exception);
-    listed.for_each(|(e, s)| narrow.add(*e, *s));
-    if !clause_classes(&narrow).into_iter().all(nameable) {
+    let listed = declared.sites.iter().filter(|(e, _)| **e != any);
+    listed.for_each(|(e, s)| narrow.add(e.clone(), *s));
+    if !clause_classes(&narrow).iter().all(nameable) {
         return None;
     }
     let escapes = match clause(got) {
@@ -496,14 +504,15 @@ fn vacuous(
 /// The clause admitting every escape in `set`: the classes no other one
 /// there derives from (`Exception` admits all).
 fn clause(set: &Raises) -> String {
-    let names: Vec<&str> = clause_classes(set).into_iter().map(ExcKind::name).collect();
+    let classes = clause_classes(set);
+    let names: Vec<&str> = classes.iter().map(Class::name).collect();
     names.join(", ")
 }
 
 /// The classes [`clause`] names.
-fn clause_classes(set: &Raises) -> Vec<ExcKind> {
-    let derived = |e: ExcKind| set.escapes().any(|d| d != e && e.is_a(d));
-    set.escapes().filter(|e| !derived(*e)).collect()
+fn clause_classes(set: &Raises) -> Vec<Class> {
+    let derived = |e: &Class| set.sites.keys().any(|d| d != e && e.is_a(d));
+    set.escapes().filter(|e| !derived(e)).collect()
 }
 
 /// One scope being walked: a function body, or the module for globals.
@@ -582,10 +591,11 @@ impl<'a> Cx<'_, 'a> {
                 handlers,
                 finally,
             } => {
-                let classes: Vec<ExcKind> = handlers
+                let known = self.a.types.classes();
+                let classes: Vec<Class> = handlers
                     .iter()
                     .flat_map(|h| &h.classes)
-                    .filter_map(|c| ExcKind::from_name(&c.name))
+                    .filter_map(|c| known.get(&c.name))
                     .collect();
                 out.extend(self.block(body).caught(&classes));
                 handlers
@@ -601,6 +611,7 @@ impl<'a> Cx<'_, 'a> {
             }
             StmtKind::FuncDef(_)
             | StmtKind::Record(_)
+            | StmtKind::ExcClass(_)
             | StmtKind::Break
             | StmtKind::Continue
             | StmtKind::Pass => {}
@@ -799,13 +810,14 @@ impl<'a> Cx<'_, 'a> {
 
     /// Which exceptions `raise value` may raise. `seen` cuts cycles
     /// between variables (`a = b`, `b = a`), which add nothing new.
-    fn kinds(&self, value: &'a Expr, seen: &mut BTreeSet<&'a str>) -> BTreeSet<ExcKind> {
-        let unknown = BTreeSet::from([ExcKind::Exception]);
+    fn kinds(&self, value: &'a Expr, seen: &mut BTreeSet<&'a str>) -> BTreeSet<Class> {
+        let unknown = BTreeSet::from([Class::Builtin(ExcKind::Exception)]);
         match &value.kind {
             ExprKind::Name(name) => self.name_kinds(name, seen),
             ExprKind::Call { func, .. } => match &func.kind {
                 ExprKind::Name(name) if !self.a.defs.contains_key(name.as_str()) => {
-                    ExcKind::from_name(name).map_or(unknown, |k| BTreeSet::from([k]))
+                    let class = self.a.types.classes().get(name);
+                    class.map_or(unknown, |k| BTreeSet::from([k]))
                 }
                 _ => unknown,
             },
@@ -826,7 +838,7 @@ impl<'a> Cx<'_, 'a> {
     /// A variable's kinds, from all its bindings. A module-level name
     /// may also be read before it is bound, which finds the builtin
     /// exception of that name (`raise ValueError`); a local cannot.
-    fn name_kinds(&self, name: &'a str, seen: &mut BTreeSet<&'a str>) -> BTreeSet<ExcKind> {
+    fn name_kinds(&self, name: &'a str, seen: &mut BTreeSet<&'a str>) -> BTreeSet<Class> {
         if !self.module {
             if let Some(sources) = self.locals.get(name) {
                 return self.sources(name, sources, seen);
@@ -839,11 +851,11 @@ impl<'a> Cx<'_, 'a> {
             };
             return module.name_kinds(name, &mut BTreeSet::new());
         }
-        let mut out: BTreeSet<ExcKind> = ExcKind::from_name(name).into_iter().collect();
+        let mut out: BTreeSet<Class> = self.a.types.classes().get(name).into_iter().collect();
         match self.locals.get(name) {
             Some(sources) => out.extend(self.sources(name, sources, seen)),
             None if out.is_empty() => {
-                out.insert(ExcKind::Exception);
+                out.insert(ExcKind::Exception.into());
             }
             None => {}
         }
@@ -856,18 +868,24 @@ impl<'a> Cx<'_, 'a> {
         name: &'a str,
         sources: &[Source<'a>],
         seen: &mut BTreeSet<&'a str>,
-    ) -> BTreeSet<ExcKind> {
+    ) -> BTreeSet<Class> {
         if !seen.insert(name) {
             return BTreeSet::new();
         }
         sources.iter().flat_map(|s| self.source(s, seen)).collect()
     }
 
-    fn source(&self, s: &Source<'a>, seen: &mut BTreeSet<&'a str>) -> BTreeSet<ExcKind> {
+    fn source(&self, s: &Source<'a>, seen: &mut BTreeSet<&'a str>) -> BTreeSet<Class> {
+        let any = || BTreeSet::from([Class::Builtin(ExcKind::Exception)]);
         match s {
             Source::Value(v) => self.kinds(v, seen),
-            Source::Caught(k) => BTreeSet::from([*k]),
-            Source::Opaque => BTreeSet::from([ExcKind::Exception]),
+            Source::Caught(name) => self
+                .a
+                .types
+                .classes()
+                .get(name)
+                .map_or_else(any, |k| BTreeSet::from([k])),
+            Source::Opaque => any(),
         }
     }
 }

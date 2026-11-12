@@ -7,7 +7,7 @@
 
 use crate::ast::{Block, Expr, ExprKind, Handler};
 use crate::diag::Result;
-use crate::exc::ExcKind;
+use crate::exc::{Class, Classes, ExcKind};
 use crate::ir::Rvalue::Unstash;
 use crate::ir::{Inst, LocalId, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
@@ -157,10 +157,11 @@ impl FnBuilder<'_, '_> {
                 .classes
                 .iter()
                 .map(|c| {
-                    ExcKind::from_name(&c.name)
-                        .ok_or_else(|| internal(c.span, "a handler of no builtin exception"))
+                    let known = self.cx.types.classes().get(&c.name);
+                    known.ok_or_else(|| internal(c.span, "a handler of no exception class"))
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let classes = caught_by(classes, self.cx.types.classes());
             let (catch, next) = (self.new_block(), self.new_block());
             let cond = self.temp(Ty::Bool, Rvalue::PendingIs(classes), h.span);
             self.terminate(Term::Branch {
@@ -302,18 +303,23 @@ impl FnBuilder<'_, '_> {
         b
     }
 
-    /// The builtin exception `name` names here, unless a variable or
-    /// function shadows it.
-    pub(super) fn exc_class(&self, name: &str) -> Option<ExcKind> {
+    /// The exception class `name` names here: the program's own (D138),
+    /// or a builtin one unless a variable or function shadows it.
+    pub(super) fn exc_class(&self, name: &str) -> Option<Class> {
+        if let Some(user) = self.cx.types.classes().user(name) {
+            return Some(user.clone());
+        }
         let shadowed =
             self.scope.contains(name) || self.cx.defs.contains_key(name) || self.cx.is_shared(name);
-        ExcKind::from_name(name).filter(|_| !shadowed)
+        ExcKind::from_name(name)
+            .filter(|_| !shadowed)
+            .map(Class::from)
     }
 
     /// `kind(args)`: a new exception holding the one argument, if any.
     pub(super) fn new_exc(
         &mut self,
-        kind: ExcKind,
+        kind: impl Into<Class>,
         args: &[Operand],
         span: Span,
     ) -> Result<Operand> {
@@ -322,7 +328,7 @@ impl FnBuilder<'_, '_> {
             [arg] => Some(*arg),
             _ => return Err(internal(span, "an exception of several arguments")),
         };
-        Ok(self.temp(Ty::Exc, Rvalue::NewExc(kind, arg), span))
+        Ok(self.temp(Ty::Exc, Rvalue::NewExc(kind.into(), arg), span))
     }
 
     /// Whether a call to top-level `name` may raise: its `raises` set
@@ -361,4 +367,17 @@ impl FnBuilder<'_, '_> {
     pub(super) fn holds(&self, ty: Ty, leaf: fn(Ty) -> bool) -> bool {
         crate::ir::holds(self.cx.seqs.all(), ty, leaf)
     }
+}
+
+/// The classes a handler for `listed` catches by code: those, and every
+/// program class derived from one of them, which the runtime knows only
+/// by its own code.
+fn caught_by(mut listed: Vec<Class>, classes: &Classes) -> Vec<Class> {
+    let derived: Vec<Class> = classes
+        .users()
+        .filter(|u| !listed.contains(u) && listed.iter().any(|c| u.is_a(c)))
+        .cloned()
+        .collect();
+    listed.extend(derived);
+    listed
 }

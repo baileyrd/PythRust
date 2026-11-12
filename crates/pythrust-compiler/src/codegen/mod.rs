@@ -488,7 +488,7 @@ impl Rt {
 
     /// Parameter and result types; `ptr` is a pointer, such as a string.
     fn sig(self, ptr: types::Type) -> (Vec<types::Type>, Option<types::Type>) {
-        use types::{F64, I32, I64, I8};
+        use types::{F64, I64, I8};
         match self {
             Rt::WriteInt => (vec![I64], None),
             Rt::WriteBool | Rt::WriteByte => (vec![I8], None),
@@ -537,7 +537,7 @@ impl Rt {
             Rt::Raise => (vec![ptr; 5], None),
             Rt::RaiseValue => (vec![ptr; 7], None),
             Rt::RaiseMsg => (vec![I8, ptr, ptr, ptr, ptr, ptr, ptr], None),
-            Rt::PendingIs => (vec![I32], Some(I8)),
+            Rt::PendingIs => (vec![I64], Some(I8)),
             Rt::Catch | Rt::Unstash => (vec![], Some(ptr)),
             Rt::Stash | Rt::Restore => (vec![], None),
             Rt::Uncaught => (vec![], None),
@@ -1340,7 +1340,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Rvalue::FloatToInt(a) => self.float_to_int(*a, span),
             Rvalue::ParseFloat(s) => self.parse_float(*s, span),
             Rvalue::ParseInt(s) => self.parse_int(*s, span),
-            Rvalue::NewExc(kind, arg) => self.new_exc(*kind, *arg),
+            Rvalue::NewExc(kind, arg) => self.new_exc(kind, *arg),
             Rvalue::Raised => Ok(self.pending_flag()),
             Rvalue::PendingIs(classes) => self.pending_is(classes),
             Rvalue::Catch => self.call_rt_value(Rt::Catch, &[]),
@@ -1723,13 +1723,15 @@ const CYCLE_GAP: &str = "the native backend does not support an exception holdin
                          or dict that may hold exceptions yet: it could form a reference \
                          cycle, and native code has no cycle collector";
 
-/// Rejects what lowering expresses but this backend does not: an
+/// Rejects what lowering expresses but this backend does not: more
+/// exception classes than the runtime's handler test holds, and an
 /// exception whose argument holds a list that may hold an exception,
 /// whose reference counts could form a cycle (a list holding an
 /// exception holding that list). See [`may_cycle`].
 fn refuse_gaps(program: &Program) -> Result<()> {
     for func in &program.funcs {
         for inst in func.blocks.iter().flat_map(|b| &b.insts) {
+            exc::refuse_codes(inst)?;
             let Inst::Assign {
                 value: Rvalue::NewExc(_, Some(arg)),
                 span,

@@ -792,7 +792,7 @@ mod tests {
         let bad = submit(exec, fails, &[], INT);
         let good = submit(exec, add, &[2, 3], INT);
         assert_eq!(result(good), 5);
-        assert_eq!(exc::pt_pending_is(u32::MAX), 0);
+        assert_eq!(exc::pt_pending_is(u64::MAX), 0);
         drop_fut(bad);
         drop_fut(good);
         end(exec);

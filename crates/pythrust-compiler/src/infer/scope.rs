@@ -201,6 +201,7 @@ fn own_exprs(s: &Stmt) -> Vec<&Expr> {
         }
         StmtKind::FuncDef(_)
         | StmtKind::Record(_)
+        | StmtKind::ExcClass(_)
         | StmtKind::Try { .. }
         | StmtKind::Break
         | StmtKind::Continue
@@ -514,6 +515,7 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
         }
         StmtKind::FuncDef(_)
         | StmtKind::Record(_)
+        | StmtKind::ExcClass(_)
         | StmtKind::Break
         | StmtKind::Continue
         | StmtKind::Pass => {}

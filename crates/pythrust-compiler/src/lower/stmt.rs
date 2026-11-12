@@ -123,7 +123,7 @@ impl FnBuilder<'_, '_> {
             StmtKind::Pass => Ok(()),
             StmtKind::FuncDef(f) => self.def_stmt(f),
             // A record is no value (D136); its methods are `def`s of their own.
-            StmtKind::Record(_) => Ok(()),
+            StmtKind::Record(_) | StmtKind::ExcClass(_) => Ok(()),
             StmtKind::If {
                 branch,
                 elifs,

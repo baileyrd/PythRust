@@ -1,0 +1,9 @@
+# deviation: D142: an exception class name is not rebound; CPython rebinds it.
+# expect-error: `AppError` names an exception class; choose another name
+# expect-exit: 1
+class AppError(Exception):
+    pass
+
+
+AppError = 3
+print(AppError)

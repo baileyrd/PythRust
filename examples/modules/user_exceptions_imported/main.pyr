@@ -1,0 +1,21 @@
+# expect-exit: 1
+# A user exception class imported from a module: raised, caught and
+# declared there and here; uncaught, CPython names it `errors.FetchError`.
+import errors
+from errors import FetchError
+
+
+temper def load(owned path: str) -> str raises errors.FetchError:
+    return errors.strict(path)
+
+
+try:
+    load("")
+except FetchError as e:
+    print("caught:", e, [e])
+try:
+    errors.fetch("")
+except OSError as e:
+    print("as OSError:", e)
+print(load("a · ü"))
+raise errors.FetchError("left · ñ")

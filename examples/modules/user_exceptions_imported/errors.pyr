@@ -1,0 +1,12 @@
+class FetchError(OSError):
+    pass
+
+
+temper def fetch(owned path: str) -> str raises FetchError:
+    if path == "":
+        raise FetchError("no path · é")
+    return path
+
+
+temper def strict(owned path: str) -> str raises FetchError:
+    return fetch(path)

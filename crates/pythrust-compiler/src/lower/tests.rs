@@ -1,5 +1,5 @@
 use crate::diag::{DiagKind, Diagnostic};
-use crate::exc::ExcKind;
+use crate::exc::{Class, ExcKind};
 use crate::ir::{Compound, Func, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
 use crate::{infer, lexer, parser};
 
@@ -174,7 +174,7 @@ fn list_unpacking_checks_every_short_length() {
     let p = lowered("a, b, c = [1, 2, 3]\nprint(a, b, c)\n");
     // One raise for too many items, one per shorter length (0, 1, 2),
     // each a catchable `ValueError`, not a fault.
-    let value = |r: &Rvalue| matches!(r, Rvalue::NewExc(ExcKind::Value, Some(_)));
+    let value = |r: &Rvalue| matches!(r, Rvalue::NewExc(Class::Builtin(ExcKind::Value), Some(_)));
     assert_eq!((assigns(&p, value), fails(&p)), (4, 0));
 }
 
@@ -851,11 +851,11 @@ fn a_call_into_open_or_a_file_read_is_tested_after_though_its_raises_is_empty() 
 fn handlers_test_their_kinds_in_order() {
     let src = "try:\n    raise IndexError\nexcept ValueError:\n    pass\nexcept IndexError as e:\n    print(e)\n";
     let p = lowered(src);
-    let tests = |kind| move |r: &Rvalue| *r == Rvalue::PendingIs(vec![kind]);
+    let tests = |kind: ExcKind| move |r: &Rvalue| *r == Rvalue::PendingIs(vec![kind.into()]);
     assert_eq!(assigns(&p, tests(ExcKind::Value)), 1);
     assert_eq!(assigns(&p, tests(ExcKind::Index)), 1);
     assert_eq!(assigns(&p, |r| matches!(r, Rvalue::Catch)), 2);
-    let new = |r: &Rvalue| matches!(r, Rvalue::NewExc(ExcKind::Index, None));
+    let new = |r: &Rvalue| matches!(r, Rvalue::NewExc(Class::Builtin(ExcKind::Index), None));
     assert_eq!(assigns(&p, new), 1);
 }
 
@@ -863,7 +863,7 @@ fn handlers_test_their_kinds_in_order() {
 fn a_tuple_handler_tests_its_classes_at_once() {
     let src = "try:\n    raise IndexError\nexcept (ValueError, LookupError) as e:\n    print(e)\n";
     let p = lowered(src);
-    let both = Rvalue::PendingIs(vec![ExcKind::Value, ExcKind::Lookup]);
+    let both = Rvalue::PendingIs(vec![ExcKind::Value.into(), ExcKind::Lookup.into()]);
     assert_eq!(assigns(&p, |r| *r == both), 1);
     assert_eq!(assigns(&p, |r| matches!(r, Rvalue::PendingIs(_))), 1);
 }

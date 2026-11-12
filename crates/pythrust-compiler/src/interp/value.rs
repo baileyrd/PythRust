@@ -12,7 +12,7 @@ use super::rt_err;
 use super::table::{Key, Table, TableRef};
 use crate::ast::{unqualified, CmpOp, FuncDef, RecordDef};
 use crate::diag::Result;
-use crate::exc::ExcKind;
+use crate::exc::{Class, ExcKind};
 use crate::infer::View;
 use crate::span::Span;
 
@@ -57,6 +57,9 @@ pub(super) enum Value<'m> {
     Results(Rc<RefCell<VecDeque<Outcome<'m>>>>),
     /// A record's class, which constructs it (D132).
     Class(&'m RecordDef),
+    /// A program's own exception class (D138), which builds, raises
+    /// and catches as a builtin one does.
+    ExcClass(&'m Class),
     /// A frozen record (D129).
     Record(Rc<Record<'m>>),
     /// A record's method bound to its receiver: `p.m`.
@@ -93,7 +96,7 @@ pub(super) type Outcome<'m> = std::result::Result<Value<'m>, (Rc<Exc<'m>>, Span)
 /// An exception value: its kind and the argument it was built with.
 #[derive(Debug)]
 pub(super) struct Exc<'m> {
-    pub kind: ExcKind,
+    pub kind: Class,
     pub arg: ExcArg<'m>,
 }
 
@@ -141,7 +144,7 @@ impl Exc<'_> {
                     let path = path.unwrap_or_default();
                     return Ok(format!("[Errno {errno}] {strerror}{path}"));
                 }
-                ExcArg::One(v) if exc.kind == ExcKind::Key => return v.repr(span),
+                ExcArg::One(v) if exc.kind.builtin() == ExcKind::Key => return v.repr(span),
                 ExcArg::One(Value::Exc(inner)) => exc = inner,
                 ExcArg::One(v) => return v.to_str(span),
             }
@@ -152,7 +155,7 @@ impl Exc<'_> {
     /// `ValueError: bad`, or only the name when the message is empty.
     pub fn uncaught(&self, span: Span) -> Result<String> {
         let message = self.message(span)?;
-        let name = self.kind.name();
+        let name = self.kind.shown();
         Ok(match message.is_empty() {
             true => name.to_string(),
             false => format!("{name}: {message}"),
@@ -246,6 +249,7 @@ impl<'m> Value<'m> {
             | Value::Future(_)
             | Value::Results(_)
             | Value::Class(_)
+            | Value::ExcClass(_)
             | Value::Record(_)
             | Value::Bound(_) => true,
         }
@@ -268,14 +272,16 @@ impl<'m> Value<'m> {
             Value::Func(_) => "function",
             Value::Builtin(b) if b.exception().is_some() => "type",
             Value::Builtin(_) | Value::Method(_) => "builtin_function_or_method",
-            Value::Exc(e) => e.kind.name(),
+            // A user class's base: inference refuses every operation whose
+            // message would name a user exception's type.
+            Value::Exc(e) => e.kind.builtin().name(),
             Value::Bytes(_) => "bytes",
             Value::File(f) => f.file.borrow().kind().qualified(),
             Value::Executor => "ThreadPoolExecutor",
             Value::Future(_) => "Future",
             Value::Results(_) => "generator",
             // Inference checks every use of these, so no message names one.
-            Value::Class(_) => "type",
+            Value::Class(_) | Value::ExcClass(_) => "type",
             Value::Record(_) => "object",
             Value::Bound(_) => "method",
         }
@@ -762,6 +768,7 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
         Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
         Value::Func(f) => format!("<function {}>", f.def.name.name),
         Value::Class(def) => format!("<class '{}'>", unqualified(&def.name.name)),
+        Value::ExcClass(class) => format!("<class '{}'>", class.name()),
         Value::Bound(b) => format!("<bound method {}>", b.func.def.name.name),
         Value::Builtin(b) if b.exception().is_some() => format!("<class '{}'>", b.name()),
         Value::Builtin(b) => format!("<built-in function {}>", b.name()),

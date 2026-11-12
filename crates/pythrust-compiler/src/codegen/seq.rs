@@ -274,6 +274,14 @@ fn byte(n: usize, what: &str) -> Result<char> {
     Ok(char::from(n))
 }
 
+/// `name` as a runtime descriptor holds one: its length in bytes as one
+/// byte, then its UTF-8 bytes; the backend error `what` past 127 bytes.
+pub(super) fn push_name(name: &str, what: &str, out: &mut String) -> Result<()> {
+    out.push(byte(name.len(), what)?);
+    out.push_str(name);
+    Ok(())
+}
+
 fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Result<()> {
     match c {
         Compound::List(elem) => {
@@ -295,16 +303,10 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
             out.push(byte(fields.len(), "a record of over 127 fields")?);
             fields.iter().try_for_each(|f| descriptor(types, *f, out))?;
             // Field names last first, the order the runtime prints them in.
+            let what = "a record or field name of over 127 bytes";
             std::iter::once(shown)
                 .chain(names.iter().rev())
-                .try_for_each(|name| {
-                    out.push(byte(
-                        name.len(),
-                        "a record or field name of over 127 bytes",
-                    )?);
-                    out.push_str(name);
-                    Ok(())
-                })
+                .try_for_each(|name| push_name(name, what, out))
         }
         Compound::Opt(present) => {
             out.push('o');
