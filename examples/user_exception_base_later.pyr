@@ -1,0 +1,13 @@
+# expect-error: `AppError` is not defined yet
+# expect-exit: 1
+# A base runs when its class statement does, so it is defined before
+# the class (D156); CPython raises `NameError` here too.
+class ParseError(AppError):
+    pass
+
+
+class AppError(Exception):
+    pass
+
+
+print("é")

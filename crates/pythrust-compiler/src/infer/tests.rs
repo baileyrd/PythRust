@@ -2931,13 +2931,13 @@ fn a_comprehension_iterates_what_for_iterates() {
 const APP: &str = "class AppError(ValueError):\n    pass\n\n\n";
 
 #[test]
-fn an_exception_class_derives_from_a_builtin_one_only() {
+fn an_exception_class_derives_from_an_exception_class_defined_before_it() {
     let base = |b: &str| {
         src_err(&format!(
             "x = 1\n\n\ndef f() -> int:\n    return 1\n\n\nclass E({b}):\n    pass\n"
         ))
     };
-    let not_one = "a class may derive only from a builtin exception class";
+    let not_one = "a class may derive only from an exception class";
     for b in ["int", "object", "x", "f", "print"] {
         let msg = base(b);
         assert!(
@@ -2946,11 +2946,10 @@ fn an_exception_class_derives_from_a_builtin_one_only() {
         );
     }
     assert!(base("Nope").contains("name `Nope` is not defined"));
-    let user = src_err(&format!("{APP}class E(AppError):\n    pass\n"));
-    assert!(
-        user.contains("deriving from a user exception class is not supported yet"),
-        "{user}"
-    );
+    let user = format!("{APP}class E(AppError):\n    pass\n\n\nclass F(E):\n    pass\n");
+    assert!(infer_src(&format!("{user}raise F(\"é\")\n")).is_ok());
+    let later = src_err(&format!("class E(AppError):\n    pass\n\n\n{APP}"));
+    assert!(later.contains("`AppError` is not defined yet"), "{later}");
     let shadowed = src_err("ValueError = 3\n\n\nclass E(ValueError):\n    pass\n");
     assert!(shadowed.contains("`ValueError` is not one"), "{shadowed}");
     assert!(infer_src(&format!("{APP}raise AppError(\"é\")\n")).is_ok());

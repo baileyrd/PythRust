@@ -16,12 +16,12 @@ use crate::span::Span;
 impl FnGen<'_, '_, '_> {
     /// A new exception of `kind`, holding `arg` if there is one. Its
     /// descriptor is `x`, the kind's code ([`code_char`]), and `arg`'s
-    /// type; a program's own class has its base's code and its two names
+    /// type; a program's own class has its builtin root's code and its two names
     /// before the type (D143).
     pub(super) fn new_exc(&mut self, kind: &Class, arg: Option<Operand>) -> Result<Value> {
         let mut text = format!("x{}", code_char(kind)?);
         if let Class::User(u) = kind {
-            text.push(u.base.code_char());
+            text.push(u.base.builtin().code_char());
             let what = "an exception class name of over 127 bytes";
             push_name(kind.shown(), what, &mut text)?;
             push_name(kind.name(), what, &mut text)?;
@@ -179,7 +179,7 @@ mod tests {
 
     fn user(code: u16) -> Class {
         let name = format!("E{code}");
-        let base = ExcKind::Value;
+        let base = ExcKind::Value.into();
         Class::User(Arc::new(UserClass { name, base, code }))
     }
 

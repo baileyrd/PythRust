@@ -152,12 +152,12 @@ pub enum Class {
 }
 
 /// A program's own exception class, which derives from a builtin one
-/// and adds nothing to it (D139).
+/// or another of the program's and adds nothing to it (D139, D156).
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UserClass {
     /// Its global name, qualified as any module's global is (D127).
     pub name: String,
-    pub base: ExcKind,
+    pub base: Class,
     /// The runtime's code: the next after the builtins', in the order
     /// the program defines its classes (D143).
     pub code: u16,
@@ -182,20 +182,21 @@ impl Class {
         }
     }
 
-    /// The builtin class this one is or derives from.
+    /// The builtin class at the root of this one's chain of bases.
     pub fn builtin(&self) -> ExcKind {
         match self {
             Class::Builtin(k) => *k,
-            Class::User(u) => u.base,
+            Class::User(u) => u.base.builtin(),
         }
     }
 
     /// Whether an instance of this class is one of `class`, as `except
-    /// class` tests: a user class is only itself or one of its base's.
+    /// class` tests: the class itself or any class up its chain.
     pub fn is_a(&self, class: &Class) -> bool {
-        match class {
-            Class::User(_) => self == class,
-            Class::Builtin(k) => self.builtin().is_a(*k),
+        match (self, class) {
+            (Class::User(u), _) => self == class || u.base.is_a(class),
+            (Class::Builtin(k), Class::Builtin(c)) => k.is_a(*c),
+            (Class::Builtin(_), Class::User(_)) => false,
         }
     }
 
@@ -235,8 +236,8 @@ pub struct Classes {
 
 impl Classes {
     /// The classes `module` defines, coded in the order it runs them.
-    /// Each base names a builtin class, as inference checks (D138); one
-    /// that does not makes no class here.
+    /// Each base names a builtin class or one defined before, as
+    /// inference checks (D156); one that does not makes no class here.
     pub fn of(module: &Module) -> Classes {
         let defs = module.body.iter().filter_map(|s| match &s.kind {
             StmtKind::ExcClass(c) => Some(c),
@@ -245,7 +246,9 @@ impl Classes {
         let mut user = BTreeMap::new();
         let first = u16::try_from(ExcKind::ALL.len()).unwrap_or(u16::MAX);
         for (code, def) in (first..).zip(defs) {
-            let Some(base) = ExcKind::from_name(&def.base.name) else {
+            let known = user.get(&def.base.name).cloned();
+            let builtin = || ExcKind::from_name(&def.base.name).map(Class::Builtin);
+            let Some(base) = known.or_else(builtin) else {
                 continue;
             };
             let class = UserClass {
@@ -348,11 +351,28 @@ mod tests {
     }
 
     #[test]
+    fn a_user_class_is_each_class_up_its_chain() {
+        let src = "class A(KeyError):\n    pass\n\n\nclass B(A):\n    pass\n\n\n\
+                   class C(B):\n    pass\n\n\nclass D(A):\n    pass\n";
+        let classes = Classes::of(&module(src));
+        let get = |n: &str| classes.get(n).unwrap_or_else(|| panic!("{n} declared"));
+        let (a, b, c, d) = (get("A"), get("B"), get("C"), get("D"));
+        let lookup = Class::from(ExcKind::Lookup);
+        assert!(c.is_a(&c) && c.is_a(&b) && c.is_a(&a) && c.is_a(&lookup));
+        assert!(
+            !c.is_a(&d) && !d.is_a(&b) && !a.is_a(&b),
+            "siblings and bases"
+        );
+        assert_eq!((c.builtin(), d.builtin()), (ExcKind::Key, ExcKind::Key));
+        assert_eq!(c.code(), 19);
+    }
+
+    #[test]
     fn a_class_shows_its_module_but_names_itself() {
         let class = |name: &str| {
             let user = UserClass {
                 name: name.to_string(),
-                base: ExcKind::Value,
+                base: ExcKind::Value.into(),
                 code: 17,
             };
             Class::User(std::sync::Arc::new(user))

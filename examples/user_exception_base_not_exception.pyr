@@ -1,5 +1,5 @@
-# deviation: D139: a class derives only from a builtin exception class yet; CPython runs it.
-# expect-error: a class may derive only from a builtin exception class; `int` is not one
+# deviation: D139, D156: a class derives only from an exception class yet; CPython runs it.
+# expect-error: a class may derive only from an exception class; `int` is not one
 # expect-exit: 1
 class Count(int):
     pass

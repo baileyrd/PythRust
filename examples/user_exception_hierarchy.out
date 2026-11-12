@@ -1,0 +1,5 @@
+parse: empty · é [SyntaxProblem('empty · é')]
+7
+app: disk · ñ [StoreError('disk · ñ')]
+missing: 'clé' [MissingKey('clé')]
+lookup: 'k'
