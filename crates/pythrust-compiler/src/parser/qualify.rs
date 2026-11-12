@@ -460,6 +460,27 @@ mod tests {
     }
 
     #[test]
+    fn a_records_name_methods_and_annotations_are_qualified() {
+        let src = "from dataclasses import dataclass\n\
+                   @dataclass(frozen=True)\nclass P:\n    x: int\n\
+                   \x20   def m(self, o: int) -> int:\n        return self.x + o\n\
+                   def f(p: P) -> list[P]:\n    q: P = P(1)\n    return [p, q]\n";
+        let (m, local) = qualified(src, "a");
+        assert!(local.defs.contains("P"), "{:?}", local.defs);
+        assert!(
+            !local.defs.iter().any(|d| d.contains('.')),
+            "{:?}",
+            local.defs
+        );
+        let tree = format!("{m:?}");
+        assert!(tree.contains("\"a.P.m\""), "{tree}");
+        assert!(
+            !tree.contains("\"P\""),
+            "an unqualified `P` is left: {tree}"
+        );
+    }
+
+    #[test]
     fn a_local_shadowing_a_global_stays_local() {
         let src = "x = 1\ndef f():\n    x = 2\n    return x\n";
         let (m, _) = qualified(src, "a");

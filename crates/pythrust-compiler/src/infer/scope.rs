@@ -67,7 +67,7 @@ pub(super) fn annotated(block: &Block) -> Vec<(&str, &TypeExpr)> {
 }
 
 /// Visits every statement of `block` and of the blocks nested in it.
-fn walk<'a>(block: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
+pub(crate) fn walk<'a>(block: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
     for s in block {
         f(s);
         bodies(s).into_iter().for_each(|(b, _)| walk(b, f));

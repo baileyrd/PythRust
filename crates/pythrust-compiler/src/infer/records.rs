@@ -189,3 +189,121 @@ fn no_member(record: &str, attr: &Ident) -> crate::diag::Diagnostic {
     );
     error(attr.span, msg)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{infer, lexer, parser};
+
+    const HEAD: &str = "from dataclasses import dataclass\n\
+                        @dataclass(frozen=True)\n\
+                        class P:\n    x: int\n    s: str\n\
+                        \x20   def m(self, k: int) -> int:\n        return self.x + k\n";
+
+    /// `src` after [`HEAD`], checked: `Ok` or the first diagnostic.
+    fn check(src: &str) -> Result<infer::Types, String> {
+        let tokens = lexer::lex(&format!("{HEAD}{src}")).map_err(|d| d.message)?;
+        let module = parser::parse(&tokens).map_err(|d| d.message)?;
+        infer::infer(&module).map_err(|d| d.message)
+    }
+
+    fn err(src: &str) -> String {
+        match check(src) {
+            Ok(_) => panic!("expected an error for:\n{src}"),
+            Err(msg) => msg,
+        }
+    }
+
+    #[test]
+    fn construction_binds_fields_by_position_and_keyword() {
+        assert!(check("p = P(1, 'a')\nq = P(s='b', x=2)\nprint(p == q)\n").is_ok());
+        assert_eq!(err("P(1)\n"), "`P` is missing argument `s`");
+        assert!(err("P(1, 's', 2)\n").contains("takes"), "too many");
+        assert!(err("P(1, 'a', y=3)\n").contains("`y`"), "unknown keyword");
+        assert!(err("P('a', 1)\n").contains("argument `x` of `P`"));
+    }
+
+    #[test]
+    fn fields_and_methods_are_typed() {
+        let src = "def f(p: P) -> str:\n    return p.s + str(p.m(1))\nprint(f(P(1, 'é')))\n";
+        assert!(check(src).is_ok());
+        assert!(err("p = P(1, 'a')\ny = p.x + 'a'\n").contains("str"));
+        assert_eq!(
+            err("p = P(1, 'a')\nprint(p.z)\n"),
+            "record `P` has no field or method `z`"
+        );
+        assert_eq!(
+            err("p = P(1, 'a')\nprint(p.m)\n"),
+            "methods can only be called: `.m(...)`"
+        );
+        assert!(err("print(P(1, 'a').m('k'))\n").contains("argument `k` of `P.m`"));
+    }
+
+    #[test]
+    fn an_unknown_receiver_takes_the_one_record_with_the_member() {
+        let src = "def g(p):\n    return p.s\nprint(g(P(1, 'a')))\n";
+        assert!(check(src).is_ok());
+        let two = "@dataclass(frozen=True)\nclass Q:\n    s: str\n\
+                   def g(p):\n    return p.s\n";
+        let msg = err(two);
+        assert!(msg.contains("could be a member of P or Q"), "{msg}");
+        assert_eq!(
+            err("def g(p):\n    return p.nothing\n"),
+            "no record has a field or method `nothing`"
+        );
+    }
+
+    #[test]
+    fn a_method_named_like_a_builtin_method_is_the_records() {
+        let src = "@dataclass(frozen=True)\nclass C:\n    n: int\n\
+                   \x20   def count(self, k: int) -> int:\n        return self.n * k\n\
+                   print(C(2).count(3), [1, 1].count(1))\n";
+        assert!(check(src).is_ok());
+    }
+
+    #[test]
+    fn records_compare_but_do_not_order_or_hash() {
+        assert!(check("print(P(1, 'a') == P(1, 'a'), P(1, 'a') != P(2, 'b'))\n").is_ok());
+        assert!(err("print(P(1, 'a') == 1)\n").contains("never equal"));
+        assert!(err("print(P(1, 'a') < P(2, 'b'))\n").contains("no ordering"));
+        assert!(err("s = {P(1, 'a')}\n").contains("dict key or set element"));
+        assert!(err("print(len(P(1, 'a')))\n").contains("no len()"));
+    }
+
+    #[test]
+    fn a_record_is_not_a_value() {
+        assert!(err("f = P\n").contains("`P` is a record, not a value"));
+    }
+
+    #[test]
+    fn a_methods_raises_reach_its_callers() {
+        let src = "@dataclass(frozen=True)\nclass R:\n    s: str\n\
+                   \x20   temper def n(self) -> int raises ValueError:\n\
+                   \x20       return int(self.s)\n\
+                   temper def f(r: R) -> int:\n    return r.n()\n";
+        let msg = err(src);
+        assert!(msg.contains("`f`") && msg.contains("ValueError"), "{msg}");
+        let declared = src.replace(
+            "temper def f(r: R) -> int:",
+            "temper def f(r: R) -> int raises ValueError:",
+        );
+        assert!(check(&declared).is_ok());
+    }
+
+    #[test]
+    fn tempered_code_calls_only_tempered_methods() {
+        let src = "temper def f(p: P) -> int:\n    return p.m(1)\n";
+        assert_eq!(
+            err(src),
+            "tempered `f` calls loose `P.m`; temper `P.m` first"
+        );
+        let ok = "from dataclasses import dataclass\n\
+                  @dataclass(frozen=True)\nclass T:\n    x: int\n\
+                  \x20   temper def m(self) -> int:\n        return self.x\n\
+                  temper def f(t: T) -> int:\n    return t.m()\n";
+        let tokens = lexer::lex(ok).map_err(|d| d.message);
+        let module = tokens.and_then(|t| parser::parse(&t).map_err(|d| d.message));
+        assert!(module
+            .and_then(|m| infer::infer(&m).map_err(|d| d.message))
+            .is_ok());
+    }
+}

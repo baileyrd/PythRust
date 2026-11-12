@@ -15,6 +15,14 @@ use super::{
     scratch, stderr_mismatch, universal_newlines, write, Case, Res, TIMEOUT,
 };
 
+/// The programs `run` accepts that `build` refuses, each a named backend
+/// gap with why, as [`super::NATIVE_GAPS`]; a listed one that builds
+/// fails, so a closed gap leaves the list.
+const NATIVE_GAPS: &[(&str, &str)] = &[(
+    "records_imported",
+    "frozen records are not lowered yet (step 4-2); `run` is the reference (D59)",
+)];
+
 /// Every multi-file program, by its main file, sorted.
 fn cases() -> Res<Vec<Case>> {
     let dir = super::corpus_dir()?.join("modules");
@@ -129,9 +137,19 @@ fn corpus_matches_native_modules() -> Res<()> {
             continue;
         }
         let main = staged(&case, &dir, false)?;
-        if let Err(stderr) = pythrust("build", &main)? {
-            failures.push(format!("{}: build failed:\n{stderr}", name(&case)));
-            continue;
+        let gap = NATIVE_GAPS.iter().any(|(g, _)| *g == name(&case));
+        match (pythrust("build", &main)?, gap) {
+            (Err(stderr), true) if stderr.contains(super::NATIVE_UNSUPPORTED) => continue,
+            (Err(stderr), _) => {
+                failures.push(format!("{}: build failed:\n{stderr}", name(&case)));
+                continue;
+            }
+            (Ok(()), true) => {
+                let msg = "builds now; remove it from the modules' `NATIVE_GAPS`";
+                failures.push(format!("{}: {msg}", name(&case)));
+                continue;
+            }
+            (Ok(()), false) => {}
         }
         let exe = main.with_extension(std::env::consts::EXE_EXTENSION);
         let got = run(&mut native(&case, &exe, false), TIMEOUT)?;

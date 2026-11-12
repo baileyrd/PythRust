@@ -1,0 +1,12 @@
+# deviation: D135: generic records are not supported yet; CPython runs them.
+# expect-error: generic records are not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Box[T]:
+    item: T
+
+
+print(Box(1))

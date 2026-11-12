@@ -1,0 +1,14 @@
+# deviation: D134: records have no ordering; CPython raises TypeError when it runs.
+# expect-error: records have no ordering
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+    y: int
+
+
+print("before")
+print(Point(1, 2) < Point(2, 1))

@@ -1,0 +1,16 @@
+# deviation: D131: decorators on methods are not supported yet; CPython runs them.
+# expect-error: decorators on methods are not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+
+    @staticmethod
+    def origin() -> int:
+        return 0
+
+
+print(Point.origin())

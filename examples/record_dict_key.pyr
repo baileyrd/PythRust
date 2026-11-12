@@ -1,0 +1,14 @@
+# deviation: D130: a record is not a dict key or set element yet; CPython hashes a frozen record.
+# expect-error: a record as a dict key or set element is not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+    y: int
+
+
+seen = {Point(1, 2): "ä"}
+print(seen)

@@ -90,7 +90,9 @@ pub fn parse_program(
     }
     let mut module = parse_in(main, bindings, &done, packages, &mut ready)?;
     qualify::main_name(&mut module, &parts);
-    Ok(qualify::link(parts, module))
+    let module = qualify::link(parts, module);
+    record::check_modules(&module, &done)?;
+    Ok(module)
 }
 
 /// Parses the stub of the Rust binding `name`: only `temper def`

@@ -403,15 +403,12 @@ impl<'a> Parser<'a> {
     /// `from` imported, or a module's `a.P`, by its qualified name
     /// (D136); any other name as written.
     pub(super) fn imported_type(&mut self, name: String, first: Span) -> Result<String> {
-        match self.imported(&name).cloned() {
-            Some(Imported::Func(path)) => Ok(path),
-            Some(Imported::Module(Module::Local(local))) => {
-                let expr = self.local_name(local, first)?;
-                match expr.kind {
-                    ExprKind::Name(path) => Ok(path),
-                    _ => Ok(name),
-                }
-            }
+        let Some(imported) = self.imported(&name).cloned() else {
+            return Ok(name);
+        };
+        let expr = self.imported_expr(imported, first)?;
+        match expr.kind {
+            ExprKind::Name(path) => Ok(path),
             _ => Ok(name),
         }
     }

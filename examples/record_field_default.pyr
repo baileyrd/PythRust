@@ -1,0 +1,13 @@
+# deviation: D132: field defaults are not supported yet; CPython runs them.
+# expect-error: field defaults are not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+    y: int = 0
+
+
+print(Point(1))

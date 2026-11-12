@@ -350,7 +350,14 @@ fn loosen(src: &str) -> Option<String> {
     changed.then(|| lines.join("\n") + "\n")
 }
 
+/// `line` loosened; a method's `def` is indented in its record's body.
 fn loosen_line(line: &str) -> String {
+    let body = line.trim_start_matches(' ');
+    let indent = &line[..line.len() - body.len()];
+    format!("{indent}{}", loosen_def(body))
+}
+
+fn loosen_def(line: &str) -> String {
     let line = line.strip_prefix("temper ").unwrap_or(line);
     if !line.starts_with("def ") {
         return line.to_string();
@@ -1100,6 +1107,9 @@ fn loosen_strips_only_the_prefix() {
     let src = "temper def f() -> None:\n    print(\"temper \")\n";
     let want = "def f() -> None:\n    print(\"temper \")\n";
     assert_eq!(loosen(src).as_deref(), Some(want));
+    let method = "class P:\n    temper def m(self) -> int raises ValueError:\n        return 1\n";
+    let want = "class P:\n    def m(self) -> int:\n        return 1\n";
+    assert_eq!(loosen(method).as_deref(), Some(want));
 }
 
 #[test]

@@ -1,0 +1,23 @@
+# Records imported from other modules (step 4-1, D136): `from`, a
+# package path and `as`, in annotations too; two modules' `Point`s are
+# different records, each printing its own name.
+from geo.shapes import Point, Segment as Seg, origin
+import geo.shapes
+import units
+
+
+def span(s: Seg) -> int:
+    return s.length1()
+
+
+def farther(a: geo.shapes.Point, b: Point) -> Point:
+    if a.norm1() >= b.norm1():
+        return a
+    return b
+
+
+p = Point(3, -4)
+s = Seg(origin(), p)
+print(p, s, span(s), s.end == geo.shapes.Point(3, -4))
+print(farther(p, Point(1, 1)).label("ñ"), origin())
+print(units.Point("café"), units.Point("x") == units.Point("x"))

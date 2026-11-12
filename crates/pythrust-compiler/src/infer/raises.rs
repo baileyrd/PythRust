@@ -658,6 +658,14 @@ impl<'a> Cx<'_, 'a> {
                     ExprKind::Name(name) => self.call(name, args, e.span, out),
                     ExprKind::Attr { value, attr } => {
                         self.expr(value, out);
+                        if let Some(Type::Record(r)) = self.a.types.at(value.span) {
+                            // A method is never a builtin, so only its set counts.
+                            let name = crate::ast::method_name(r, &attr.name);
+                            if let Some(set) = self.a.sets.get(name.as_str()) {
+                                set.escapes().for_each(|k| out.add(k, e.span));
+                            }
+                            return;
+                        }
                         let kinds = self.method(value, &attr.name, args);
                         kinds.into_iter().for_each(|k| out.add(k, e.span));
                     }

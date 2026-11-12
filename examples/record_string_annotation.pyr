@@ -1,0 +1,15 @@
+# deviation: D129: string annotations are not supported yet; CPython runs them.
+# expect-error: string annotations are not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+
+    def moved(self) -> "Point":
+        return Point(self.x + 1)
+
+
+print(Point(1).moved())

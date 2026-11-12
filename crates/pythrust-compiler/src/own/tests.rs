@@ -1654,6 +1654,26 @@ grow([1])\n";
     assert_eq!(checked(loose), Ok(()));
 }
 
+#[test]
+fn a_tempered_method_never_falls_back_silently() {
+    // D44 for methods (#108 carried to step 4-1): a record's `temper def`
+    // is a top-level function `P.m`, so `needs_checks` finds it, and
+    // records do not lower yet.
+    let src = "from dataclasses import dataclass\n\
+@dataclass(frozen=True)\nclass P:\n    x: int\n\
+\x20   temper def m(self) -> int:\n        return self.x\n\
+print(P(1).m())\n";
+    let (msg, span) = mode_err(src);
+    assert!(
+        msg.contains("has a tempered function, so its ownership checks cannot be skipped"),
+        "{msg}"
+    );
+    assert!(msg.contains("does not support records yet"), "{msg}");
+    assert_eq!(span, "P");
+    // A loose method keeps the conservative fallback.
+    assert_eq!(checked(&src.replace("temper def", "def")), Ok(()));
+}
+
 /// Task functions for rule 4's programs.
 const PARTIES: &str = "import concurrent.futures\n\
 log: list[int] = []\nother: list[int] = []\n\

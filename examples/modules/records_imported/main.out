@@ -1,0 +1,3 @@
+Point(x=3, y=-4) Segment(start=Point(x=0, y=0), end=Point(x=3, y=-4)) 7 True
+ñ@7 Point(x=0, y=0)
+Point(name='café') True

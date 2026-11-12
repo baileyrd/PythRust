@@ -8,8 +8,8 @@
 
 use super::{error, Parser};
 use crate::ast::{
-    method_name, Expr, ExprKind, Field, FuncDef, Ident, ParamMode, RecordDef, Stmt, StmtKind,
-    TypeExpr,
+    method_name, Expr, ExprKind, Field, FuncDef, Ident, LocalModule, Module, ParamMode, RecordDef,
+    Stmt, StmtKind, Target, TargetKind, TypeExpr,
 };
 use crate::diag::Result;
 use crate::infer::scope;
@@ -262,7 +262,81 @@ fn check_method(record: &Ident, def: &FuncDef, body: &Body) -> Result<()> {
         );
         return Err(error(first.span, msg));
     }
-    Ok(())
+    match changes_self(&def.body) {
+        Some(at) => {
+            let msg = "a method that changes or keeps `self` is not supported yet";
+            Err(error(at, msg))
+        }
+        None => Ok(()),
+    }
+}
+
+/// The builtin methods that change their receiver in place.
+const MUTATORS: [&str; 9] = [
+    "append",
+    "pop",
+    "extend",
+    "insert",
+    "remove",
+    "sort",
+    "add",
+    "setdefault",
+    "update",
+];
+
+/// Where `body` visibly changes a value reached through `self` (D131):
+/// a changing method call, an item store or a `del` on it. A change
+/// through a call that takes it is found by `own` once records lower
+/// (step 4-2).
+fn changes_self(body: &[Stmt]) -> Option<Span> {
+    let call = scope::exprs(body).into_iter().find_map(|e| {
+        let ExprKind::Call { func, .. } = &e.kind else {
+            return None;
+        };
+        let ExprKind::Attr { value, attr } = &func.kind else {
+            return None;
+        };
+        let reached = !matches!(&value.kind, ExprKind::Name(n) if n == "self");
+        let changes = MUTATORS.contains(&attr.name.as_str());
+        (reached && changes && from_self(value)).then_some(e.span)
+    });
+    call.or_else(|| stores(body))
+}
+
+/// An item store, augmented or not, or a `del` on a value reached
+/// through `self`, in `body` or a block inside it.
+fn stores(body: &[Stmt]) -> Option<Span> {
+    let mut found = None;
+    scope::walk(body, &mut |s| {
+        let hit = match &s.kind {
+            StmtKind::Assign { target, .. } | StmtKind::AugAssign { target, .. } => {
+                target_from_self(target)
+            }
+            StmtKind::Del { value, .. } => from_self(value),
+            _ => false,
+        };
+        if hit && found.is_none() {
+            found = Some(s.span);
+        }
+    });
+    found
+}
+
+fn target_from_self(t: &Target) -> bool {
+    match &t.kind {
+        TargetKind::Name(_) => false,
+        TargetKind::Subscript { value, .. } => from_self(value),
+        TargetKind::Tuple(ts) => ts.iter().any(target_from_self),
+    }
+}
+
+/// Whether `e` is `self`, or reached from it by fields and items.
+fn from_self(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Name(n) => n == "self",
+        ExprKind::Attr { value, .. } | ExprKind::Subscript { value, .. } => from_self(value),
+        _ => false,
+    }
 }
 
 /// Method `def` of `record` as the top-level `def` named `P.m`, `self`
@@ -333,6 +407,24 @@ fn runs_at(s: &Stmt, at: usize, records: &[(usize, &RecordDef)]) -> usize {
     own.map_or(at, |(i, _)| *i)
 }
 
+/// No record of the linked `module` has a local module's name, which
+/// its methods' names `P.m` would share with that module's globals.
+pub(super) fn check_modules(module: &Module, locals: &[LocalModule]) -> Result<()> {
+    for s in &module.body {
+        let StmtKind::Record(r) = &s.kind else {
+            continue;
+        };
+        if locals.iter().any(|m| m.name == r.name.name) {
+            let msg = format!(
+                "`{}` names both a record and a module; rename the record",
+                r.name.name
+            );
+            return Err(error(r.name.span, msg));
+        }
+    }
+    Ok(())
+}
+
 /// No variable, parameter, function or other record takes `r`'s name.
 fn check_unbound(r: &RecordDef, body: &[Stmt]) -> Result<()> {
     let name = r.name.name.as_str();
@@ -392,4 +484,242 @@ fn check_defined(t: &TypeExpr, at: usize, records: &[(usize, &RecordDef)]) -> Re
     t.args
         .iter()
         .try_for_each(|a| check_defined(a, at, records))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ast::{Module, StmtKind};
+    use crate::{lexer, parser};
+
+    const IMPORT: &str = "from dataclasses import dataclass\n";
+
+    fn parse(src: &str) -> Result<Module, String> {
+        let tokens = lexer::lex(src).map_err(|d| d.message)?;
+        parser::parse(&tokens).map_err(|d| d.message)
+    }
+
+    /// The parser's message for `src` after the import.
+    fn err(src: &str) -> String {
+        match parse(&format!("{IMPORT}{src}")) {
+            Ok(_) => panic!("expected an error for:\n{src}"),
+            Err(msg) => msg,
+        }
+    }
+
+    fn record(body: &str) -> String {
+        format!("@dataclass(frozen=True)\nclass P:\n{body}")
+    }
+
+    #[test]
+    fn a_record_is_followed_by_its_methods_as_defs() {
+        let src = format!(
+            "{IMPORT}{}",
+            record("    \"Doc.\"\n    x: int\n    def m(self, k: int) -> int:\n        return k\n")
+        );
+        let m = parse(&src).unwrap();
+        let StmtKind::Record(r) = &m.body[0].kind else {
+            panic!("a record first: {:?}", m.body)
+        };
+        assert_eq!(r.name.name, "P");
+        assert_eq!(r.fields.len(), 1);
+        assert_eq!(r.methods[0].name, "m");
+        let StmtKind::FuncDef(f) = &m.body[1].kind else {
+            panic!("then its method")
+        };
+        assert_eq!(f.name.name, "P.m");
+        let slf = f.params[0]
+            .annotation
+            .as_ref()
+            .map(|t| t.name.name.as_str());
+        assert_eq!(slf, Some("P"));
+        assert!(parse(&format!("{IMPORT}{}", record("    pass\n"))).is_ok());
+        assert!(parse(&format!(
+            "{IMPORT}@dataclass(frozen=True)\nclass P():\n    pass\n"
+        ))
+        .is_ok());
+    }
+
+    #[test]
+    fn only_the_frozen_dataclass_form_is_a_record() {
+        let not_frozen = "`@dataclass` without `frozen=True` is not supported yet";
+        assert!(err("@dataclass\nclass P:\n    x: int\n").contains(not_frozen));
+        assert!(err("@dataclass(frozen=False)\nclass P:\n    x: int\n").contains(not_frozen));
+        let eq = err("@dataclass(frozen=True, eq=True)\nclass P:\n    x: int\n");
+        assert!(
+            eq.contains("`@dataclass(eq=...)` is not supported yet"),
+            "{eq}"
+        );
+        assert!(err("@dataclass(True)\nclass P:\n    x: int\n").contains("only `frozen=True`"));
+        assert!(err("class P:\n    x: int\n").contains("classes without"));
+        assert!(err("@other\ndef f():\n    pass\n").contains("decorators are not supported yet"));
+        let missing = parse("@dataclass(frozen=True)\nclass P:\n    x: int\n").unwrap_err();
+        assert!(
+            missing.contains("add `from dataclasses import dataclass`"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn the_dataclasses_import_has_one_form() {
+        let msg = parse("import dataclasses\n").unwrap_err();
+        assert!(
+            msg.contains("write `from dataclasses import dataclass`"),
+            "{msg}"
+        );
+        let msg = parse("from dataclasses import dataclass as dc\n").unwrap_err();
+        assert!(
+            msg.contains("only `from dataclasses import dataclass`"),
+            "{msg}"
+        );
+        let msg = parse("from dataclasses import replace\n").unwrap_err();
+        assert!(
+            msg.contains("`dataclasses.replace` is not supported yet"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn a_records_body_holds_fields_and_methods_only() {
+        let cases = [
+            ("    x: int = 0\n", "field defaults are not supported yet"),
+            ("    k = 3\n", "class attributes are not supported yet"),
+            ("    x: ClassVar[int]\n", "`ClassVar` is not supported yet"),
+            ("    x: int\n    x: str\n", "`x` is declared twice"),
+            (
+                "    def x(self):\n        pass\n    x: int\n",
+                "`x` is declared twice",
+            ),
+            (
+                "    __slots__: int\n",
+                "`__slots__` in a record is not supported yet",
+            ),
+            (
+                "    def __eq__(self, o):\n        return True\n",
+                "`__eq__` in a record",
+            ),
+            (
+                "    @property\n    def m(self):\n        pass\n",
+                "decorators on methods",
+            ),
+            (
+                "    def m():\n        pass\n",
+                "needs `self` as its first parameter",
+            ),
+            ("    def m(me):\n        pass\n", "not `me`"),
+            (
+                "    def m(self: int):\n        pass\n",
+                "drop its annotation",
+            ),
+        ];
+        for (body, want) in cases {
+            let msg = err(&record(body));
+            assert!(msg.contains(want), "{body}: {msg}");
+        }
+        assert!(err("@dataclass(frozen=True)\nclass P[T]:\n    x: T\n").contains("generic"));
+        assert!(
+            err("@dataclass(frozen=True)\nclass P(Generic[T]):\n    x: T\n").contains("generic")
+        );
+        assert!(err("@dataclass(frozen=True)\nclass P(Q):\n    x: int\n").contains("base classes"));
+    }
+
+    #[test]
+    fn a_method_changing_self_is_refused() {
+        let msg = "a method that changes or keeps `self` is not supported yet";
+        for body in [
+            "        self.xs.append(1)\n",
+            "        self.xs[0] = 1\n",
+            "        self.xs[0] += 1\n",
+            "        del self.xs[0]\n",
+            "        if True:\n            self.d.update({})\n",
+        ] {
+            let src = record(&format!("    xs: list[int]\n    def m(self):\n{body}"));
+            assert_eq!(err(&src), msg, "{body}");
+        }
+        let src = record("    xs: list[int]\n    def m(mut self):\n        pass\n");
+        assert_eq!(err(&src), msg);
+        // Reading, or changing a copy, is fine.
+        let ok = record(
+            "    xs: list[int]\n    def m(self):\n        ys = list(self.xs)\n\
+             \x20       ys.append(len(self.xs))\n        return ys\n",
+        );
+        assert!(parse(&format!("{IMPORT}{ok}")).is_ok());
+    }
+
+    #[test]
+    fn a_class_is_defined_at_top_level() {
+        let src = format!(
+            "def f():\n    {}",
+            record("    x: int\n").replace('\n', "\n    ")
+        );
+        let msg = err(&src);
+        assert!(msg.contains("top level of a module"), "{msg}");
+    }
+
+    #[test]
+    fn annotations_name_records_defined_before_them() {
+        let later = "`Q` is not defined yet";
+        let src = format!(
+            "def f(q: Q) -> int:\n    return 1\n{}",
+            "@dataclass(frozen=True)\nclass Q:\n    x: int\n"
+        );
+        assert!(err(&src).contains(later));
+        assert!(err(&record("    nxt: P | None\n")).contains("`P` is not defined yet"));
+        let own = record("    x: int\n    def m(self, o: P) -> int:\n        return 1\n");
+        assert!(err(&own).contains("`P` is not defined yet"));
+        let own = record("    x: int\n    def m(self) -> list[P]:\n        return []\n");
+        assert!(err(&own).contains("`P` is not defined yet"));
+        // A body may name a later record; an earlier one anywhere.
+        let ok = format!(
+            "def make():\n    return Q(1)\n{}{}",
+            "@dataclass(frozen=True)\nclass Q:\n    x: int\n",
+            "@dataclass(frozen=True)\nclass R:\n    q: Q\n    def m(self, o: Q) -> Q:\n        return o\n"
+        );
+        assert!(parse(&format!("{IMPORT}{ok}")).is_ok());
+        assert!(err(&record("    x: \"P\"\n")).contains("string annotations are not supported yet"));
+    }
+
+    #[test]
+    fn a_record_is_not_named_like_a_module() {
+        let util = lexer::lex("def m():\n    return 1\n").unwrap();
+        let other = lexer::lex("import util\nx = util.m()\n").unwrap();
+        let main = format!(
+            "{IMPORT}import other\n{}",
+            record("    x: int\n").replace("class P", "class util")
+        );
+        let main = lexer::lex(&main).unwrap();
+        let units = [
+            parser::Unit {
+                name: "util",
+                tokens: &util,
+            },
+            parser::Unit {
+                name: "other",
+                tokens: &other,
+            },
+        ];
+        let msg = parser::parse_program(&units, &[], &main, &[])
+            .unwrap_err()
+            .message;
+        assert_eq!(
+            msg,
+            "`util` names both a record and a module; rename the record"
+        );
+    }
+
+    #[test]
+    fn a_records_name_is_no_other_binding() {
+        let base = record("    x: int\n");
+        for extra in [
+            "P = 1\n",
+            "def P():\n    pass\n",
+            "def f(P):\n    pass\n",
+            "def f():\n    P = 2\n",
+            "for P in []:\n    pass\n",
+            "print([P for P in []])\n",
+            &record("    y: int\n"),
+        ] {
+            let msg = err(&format!("{base}{extra}"));
+            assert_eq!(msg, "`P` names a record; choose another name", "{extra}");
+        }
+    }
 }

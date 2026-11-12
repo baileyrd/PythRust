@@ -1,0 +1,26 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+    y: int
+
+    def norm1(self) -> int:
+        return abs(self.x) + abs(self.y)
+
+    def label(self, name: str) -> str:
+        return name + "@" + str(self.norm1())
+
+
+@dataclass(frozen=True)
+class Segment:
+    start: Point
+    end: Point
+
+    def length1(self) -> int:
+        return abs(self.end.x - self.start.x) + abs(self.end.y - self.start.y)
+
+
+def origin() -> Point:
+    return Point(0, 0)

@@ -1,0 +1,7 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    "Another module's `Point`: a different record."
+    name: str

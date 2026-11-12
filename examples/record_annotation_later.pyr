@@ -1,0 +1,14 @@
+# expect-error: `Point` is not defined yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+
+    def closer(self, other: Point) -> bool:
+        return abs(self.x) < abs(other.x)
+
+
+print(Point(1).closer(Point(2)))
