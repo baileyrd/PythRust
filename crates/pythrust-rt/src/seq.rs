@@ -10,7 +10,7 @@
 //! Descriptors are a prefix code the compiler emits as read-only data:
 //! `i` int, `f` float, `b` bool, `n` `None`, `s` str, `l` and the element
 //! type for a list, `t`, a field count byte and the field types for a
-//! tuple, `r` for a range (see [`crate::range`]), `x` for an exception
+//! tuple, `c` for a record ([`record_names`]), `r` for a range (see [`crate::range`]), `x` for an exception
 //! (see [`crate::exc`]), `y` for bytes or a file (see [`crate::obj`]). Ownership follows strings: functions borrow
 //! their arguments, and slots read out are new references.
 
@@ -47,6 +47,9 @@ pub(crate) enum Kind {
     Str,
     List,
     Tuple,
+    /// A frozen record (D129): a tuple of its fields, printed with its
+    /// record's and fields' names.
+    Record,
     Range,
     Opt,
     Exc,
@@ -69,6 +72,7 @@ pub(crate) fn kind(desc: &[u8]) -> Kind {
         Some(b's') => Kind::Str,
         Some(b'l') => Kind::List,
         Some(b't') => Kind::Tuple,
+        Some(b'c') => Kind::Record,
         Some(b'r') => Kind::Range,
         Some(b'o') => Kind::Opt,
         Some(b'x') => Kind::Exc,
@@ -90,13 +94,41 @@ fn span(desc: &[u8]) -> usize {
             (key + span(desc.get(key..).unwrap_or_default())).min(desc.len())
         }
         Kind::View => 2 + span(desc.get(2..).unwrap_or_default()),
-        Kind::Tuple => {
+        Kind::Tuple => fields_end(desc),
+        Kind::Record => {
             let n = desc.get(1).copied().unwrap_or(0);
-            let fields = (0..n).fold(2, |at, _| at + span(desc.get(at..).unwrap_or_default()));
-            fields.min(desc.len())
+            let names = usize::from(n) + 1;
+            let end = (0..names).fold(fields_end(desc), |at, _| {
+                at + 1 + usize::from(desc.get(at).copied().unwrap_or(0))
+            });
+            end.min(desc.len())
         }
         _ => 1,
     }
+}
+
+/// Where the field types of a tuple or record descriptor end: its
+/// count byte, then that many types.
+fn fields_end(desc: &[u8]) -> usize {
+    let n = desc.get(1).copied().unwrap_or(0);
+    let fields = (0..n).fold(2, |at, _| at + span(desc.get(at..).unwrap_or_default()));
+    fields.min(desc.len())
+}
+
+/// A record descriptor's names: its record's, then each field's. A
+/// record's descriptor is `c`, its field count byte and field types as
+/// a tuple's, then each name as a length byte and its UTF-8 bytes.
+pub(crate) fn record_names(desc: &'static [u8]) -> Vec<&'static str> {
+    let n = usize::from(desc.get(1).copied().unwrap_or(0));
+    let mut at = fields_end(desc);
+    let mut names = Vec::with_capacity(n + 1);
+    for _ in 0..=n {
+        let len = usize::from(desc.get(at).copied().unwrap_or(0));
+        let bytes = desc.get(at + 1..at + 1 + len).unwrap_or_default();
+        names.push(std::str::from_utf8(bytes).unwrap_or("?"));
+        at += 1 + len;
+    }
+    names
 }
 
 /// The descriptor of slot `k` of a sequence described by `desc`. An
@@ -187,6 +219,7 @@ pub(crate) fn inc(desc: &[u8], v: u64) {
         // SAFETY: a sequence slot holds a live sequence.
         Kind::List
         | Kind::Tuple
+        | Kind::Record
         | Kind::Range
         | Kind::Exc
         | Kind::Dict
@@ -217,6 +250,7 @@ fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
         Kind::Fut => unsafe { task::pt_fut_dec(v as *const PtFut) },
         Kind::List
         | Kind::Tuple
+        | Kind::Record
         | Kind::Range
         | Kind::Exc
         | Kind::Dict
@@ -297,6 +331,7 @@ fn mark_one(desc: &'static [u8], v: u64, todo: &mut Vec<(&'static [u8], u64)>, h
         Kind::Obj => obj::mark(unsafe { obj::borrow(v as *const PtObj) }),
         Kind::List
         | Kind::Tuple
+        | Kind::Record
         | Kind::Range
         | Kind::Exc
         | Kind::Dict
@@ -349,7 +384,9 @@ pub(crate) fn eq(desc: &[u8], a: u64, b: u64) -> bool {
         // SAFETY: object slots hold live objects.
         Kind::Obj => unsafe { obj::borrow(a as *const PtObj).same(obj::borrow(b as *const PtObj)) },
         // SAFETY: sequence slots hold live sequences.
-        Kind::List | Kind::Tuple | Kind::View => a == b || unsafe { seq_eq(seq(a), seq(b)) },
+        Kind::List | Kind::Tuple | Kind::Record | Kind::View => {
+            a == b || unsafe { seq_eq(seq(a), seq(b)) }
+        }
         // SAFETY: table slots hold live tables.
         Kind::Dict | Kind::Set => a == b || unsafe { table::same(seq(a), seq(b)) },
         // SAFETY: range slots hold live ranges.
@@ -382,9 +419,10 @@ pub(crate) fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple => unsafe { seq_cmp(seq(a), seq(b)) },
         Kind::Bool | Kind::None => Some(a.cmp(&b)),
-        // Python cannot order `None`, ranges or exceptions; the compiler
-        // never asks.
+        // Python cannot order `None`, ranges, exceptions or records; the
+        // compiler never asks.
         Kind::Opt
+        | Kind::Record
         | Kind::Range
         | Kind::Exc
         | Kind::Dict
@@ -484,7 +522,13 @@ fn repr_holding(
         };
         let nests = matches!(
             kind(desc),
-            Kind::List | Kind::Tuple | Kind::Exc | Kind::Dict | Kind::Set | Kind::View
+            Kind::List
+                | Kind::Tuple
+                | Kind::Record
+                | Kind::Exc
+                | Kind::Dict
+                | Kind::Set
+                | Kind::View
         );
         if nests {
             if depth >= MAX_NESTING {
@@ -512,6 +556,8 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>, hel
         Kind::Obj => out.push_str(&unsafe { obj::borrow(v as *const PtObj) }.repr()),
         // SAFETY: a sequence slot holds a live sequence.
         Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo, held),
+        // SAFETY: a record slot holds a live record.
+        Kind::Record => show_record(unsafe { seq(v) }, out, todo, held),
         // SAFETY: a range slot holds a live range.
         Kind::Range => out.push_str(&unsafe { range_fields(v as *const PtSeq) }.repr()),
         Kind::Opt if v == 0 => out.push_str("None"),
@@ -539,6 +585,24 @@ fn show_seq(s: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mu
     }));
     for (k, v) in items.iter().enumerate().rev() {
         todo.push(Step::Show(slot(s.desc, k), *v));
+        if k > 0 {
+            todo.push(Step::Text(", "));
+        }
+    }
+    held.push(items);
+}
+
+/// `P(x=1, s='a')` (D133).
+fn show_record(r: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
+    let names = record_names(r.desc);
+    out.push_str(names.first().copied().unwrap_or_default());
+    out.push('(');
+    todo.push(Step::Text(")"));
+    let items = r.items.borrow();
+    for (k, v) in items.iter().enumerate().rev() {
+        todo.push(Step::Show(slot(r.desc, k), *v));
+        todo.push(Step::Text("="));
+        todo.push(Step::Text(names.get(k + 1).copied().unwrap_or_default()));
         if k > 0 {
             todo.push(Step::Text(", "));
         }
@@ -1373,6 +1437,39 @@ mod tests {
         assert_eq!(slot(desc, 1), b"sf");
         assert_eq!(slot(desc, 2), b"f");
         assert_eq!(span(b"t\x02lit\x01fs"), 7);
+    }
+
+    #[test]
+    fn record_descriptors_skip_their_names() {
+        // `P(x: int, at: Q(s: list[str]))`, `Q` named `Qé`.
+        let q: &'static [u8] = b"c\x01ls\x03Q\xc3\xa9\x01s";
+        assert_eq!(span(q), q.len());
+        assert_eq!(record_names(q), ["Qé", "s"]);
+        let p = b"c\x02ic\x01ls\x03Q\xc3\xa9\x01s\x01P\x01x\x02at";
+        assert!(slot(p, 1).starts_with(q));
+        assert_eq!(span(slot(p, 1)), q.len());
+        assert_eq!(span(p), p.len());
+        assert_eq!(span(b"c\x00\x01E"), 4);
+    }
+
+    #[test]
+    fn records_print_with_their_names_and_compare_by_fields() {
+        let inner = make(b"li", &[7]);
+        let desc: &'static [u8] = b"c\x02ili\x01P\x01x\x02xs";
+        let a = make(desc, &[1, inner as u64]);
+        // SAFETY: `inner` is live; `b` takes a second reference.
+        unsafe { pt_seq_inc(inner) };
+        let b = make(desc, &[1, inner as u64]);
+        assert_eq!(shown(a), "P(x=1, xs=[7])");
+        assert!(eq(desc, a as u64, b as u64));
+        let empty = make(b"c\x00\x01E", &[]);
+        assert_eq!(shown(empty), "E()");
+        // SAFETY: each is live and dropped once; the records own `inner`.
+        unsafe {
+            pt_seq_dec(a);
+            pt_seq_dec(b);
+            pt_seq_dec(empty);
+        }
     }
 
     #[test]
