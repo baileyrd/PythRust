@@ -67,9 +67,12 @@ const NATIVE_LIBS: &[&str] = &[
 ];
 /// `msvcrt.lib` is the dynamic C runtime, as Rust's MSVC targets use;
 /// it also supplies `mainCRTStartup`, which calls the runtime's `main`.
+/// `synchronization.lib` holds `WaitOnAddress` and `WakeByAddress*`, which
+/// newer standard libraries' `Mutex` and `Condvar` call.
 #[cfg(windows)]
 const NATIVE_LIBS: &[&str] = &[
     "kernel32.lib",
+    "synchronization.lib",
     "ntdll.lib",
     "userenv.lib",
     "ws2_32.lib",
