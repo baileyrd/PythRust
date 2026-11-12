@@ -1,6 +1,6 @@
 # Post-M6 step 5: mutable classes
 
-**Status: decided 2026-11-12.** Nano chose the first cut on 2026-11-03 (gap list, decisions 4 and 5); the expert settled the rest as [default] rows D144-D153. Q22 (annotations naming their own class) is open and blocks nothing. Code follows in the [PR order](#pr-order) below.
+**Status: decided 2026-11-12.** Nano chose the first cut on 2026-11-03 (gap list, decisions 4 and 5); the expert settled the rest as [default] rows D144-D153. Nano answered Q22 on 2026-11-12 (D154): `from __future__ import annotations`, in a card after 5-2. Code follows in the [PR order](#pr-order) below.
 
 ## Objective
 
@@ -89,7 +89,7 @@ D4 applies to a field as it does to a variable. An unannotated `self.next = None
 
 - A class is **cycle-capable** when its type graph reaches itself through field types, list elements, dict values, tuple and record parts, or optionals. This includes mutual recursion. Records alone form a DAG (D129), so every such cycle passes through a mutable class.
 - Until 5-5, `build` fails at the first construction of a cycle-capable class with a named gap, extending `codegen::may_cycle`. `check` and `run` accept the class. Each such fixture is in `NATIVE_GAPS`, and the stale-gap check fails once it builds.
-- A method annotation naming its own class stays D129's "not defined yet" error, as CPython raises `NameError`. So tempered methods cannot take their own class until Q22 is answered.
+- A method annotation naming its own class stays D129's "not defined yet" error, as CPython raises `NameError`. So tempered methods cannot take their own class until D154's card (#1454) lands.
 - The collector (5-5) is synchronous Bacon-Rajan trial deletion, over cycle-capable values only:
   - A value is buffered as a candidate when its count drops to nonzero.
   - Collection runs past a threshold and at exit.
@@ -103,20 +103,21 @@ D4 applies to a field as it does to a variable. An unannotated `self.next = None
 - `raises` counts the block's escapes plus those of `__enter__` and `__exit__`.
 - A tempered `__exit__`, or a `with` on an object in tempered code, is "not supported yet".
 
-## Open
+## Decided after the note
 
-- **Q22:** should method annotations name their own or a later class (`def add(self, child: Node) -> Node`)? The expert recommends recognizing `from __future__ import annotations` in a card after 5-2. Until Nano answers, D129's error stays.
+- **D154 (Q22):** a module whose first statement is `from __future__ import annotations` has lazy annotations, so methods may name their own or a later class. It gets its own card (#1454) after 5-2. Until then D129's error stays.
 
 ## PR order
 
 One PR each (cards under step 5):
 
-1. **Design note (#1260):** this note, the grammar entries, the roadmap items, D144-D153 and Q22.
+1. **Design note (#1260):** this note, the grammar entries, the roadmap items, D144-D154.
 2. **Front end and `run` (#1262):** plain classes and `@dataclass` through `parse`, `infer` and `interp` (D144-D149), with `build` refusing classes as a named gap. Exit: CPython-checked corpus programs (fields, methods, `__repr__`/`__str__`, a None-first field, a module importing a class); each named error has a fixture beside an accepted neighbour.
-3. **Ownership for objects (#1264):** D150 in `own` and the tasks rules. Exit: fixtures for D3, D4, A5 and rule 4 through fields, each with an accepted neighbour, plus inferred `mut self`/`owned self` and the tempered missing-mode error.
-4. **Native classes (#1266):** objects lower to the runtime, and `build` refuses only cycle-capable classes (D151). Exit: the 5-2 corpus in `NATIVE` (valgrind-clean), and cycle-capable fixtures in `NATIVE_GAPS` with the stale-gap check.
-5. **Cycle collector (#1268):** D152, with the details agreed with the expert in the PR. Exit: the cycle-capable fixtures build and run memcheck-clean, `NATIVE_GAPS` drops them, and the benchmarks are reported as tables. Classes are done.
-6. **User context managers (#1270):** D153. Exit: CPython-checked corpus programs for `with` on an object (normal exit, an exception, suppression, `raises`), with the named errors beside accepted neighbours.
+3. **Future annotations (#1454):** D154. Recognize `from __future__ import annotations` as a module's first statement and make that module's annotations lazy. Exit: CPython-checked corpus programs with a method taking and returning its own class, and a fixture for the error without the import.
+4. **Ownership for objects (#1264):** D150 in `own` and the tasks rules. Exit: fixtures for D3, D4, A5 and rule 4 through fields, each with an accepted neighbour, plus inferred `mut self`/`owned self` and the tempered missing-mode error.
+5. **Native classes (#1266):** objects lower to the runtime, and `build` refuses only cycle-capable classes (D151). Exit: the 5-2 corpus in `NATIVE` (valgrind-clean), and cycle-capable fixtures in `NATIVE_GAPS` with the stale-gap check.
+6. **Cycle collector (#1268):** D152, with the details agreed with the expert in the PR. Exit: the cycle-capable fixtures build and run memcheck-clean, `NATIVE_GAPS` drops them, and the benchmarks are reported as tables. Classes are done.
+7. **User context managers (#1270):** D153. Exit: CPython-checked corpus programs for `with` on an object (normal exit, an exception, suppression, `raises`), with the named errors beside accepted neighbours.
 
 ## Deviations
 
