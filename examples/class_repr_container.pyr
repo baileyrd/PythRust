@@ -1,0 +1,46 @@
+# Containers, dataclass fields and f-strings that hold plain objects print
+# natively by calling the class's own __repr__ (D167, #1458).
+from dataclasses import dataclass
+
+
+class Item:
+    def __init__(self, value: int, name: str):
+        self.value = value
+        self.name = name
+
+    def __repr__(self) -> str:
+        return "Item<" + self.name + ":" + str(self.value) + ">"
+
+
+class Wrap:
+    def __init__(self, inner: Item):
+        self.inner = inner
+
+    def __repr__(self) -> str:
+        return "Wrap(" + repr_of(self.inner) + ")"
+
+
+def repr_of(i: Item) -> str:
+    return "[" + str(i.value) + "]"
+
+
+@dataclass
+class Box:
+    label: str
+    item: Item
+    extra: list[Item]
+
+
+a = Item(1, "é")
+b = Item(2, "ß")
+print([a, b])
+print((a, 1), [[a], [b, a]])
+print({1: a, 2: b}, {"k": [a]})
+print(str([a, b]), len(str((a,))))
+x: Item | None = None
+print([x], [a])
+bx = Box("ünï", a, [b])
+print(bx)
+print([bx, bx])
+w = Wrap(a)
+print([w], w)

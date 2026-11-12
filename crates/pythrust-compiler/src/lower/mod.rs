@@ -149,6 +149,7 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
     let mut cx = Cx {
         types,
         stubs: stubs.collect(),
+        reprs: Vec::new(),
         globals: globals::Globals::new(module, &defs),
         faulting: faults::faulting(&defs, types),
         defs,
@@ -203,6 +204,7 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         types: cx.seqs.into_vec(),
         globals,
         global_names,
+        reprs: cx.reprs,
     })
 }
 
@@ -220,6 +222,9 @@ struct Cx<'a> {
     funcs: Vec<Option<Func>>,
     queue: Vec<Job<'a>>,
     seqs: types::SeqTypes,
+    /// The `__repr__` instances a container's rendering reaches
+    /// ([`crate::ir::Program::reprs`]).
+    reprs: Vec<FuncId>,
     globals: globals::Globals,
     /// Instances lowered by [`Cx::open_instance`], by function name and
     /// argument types.

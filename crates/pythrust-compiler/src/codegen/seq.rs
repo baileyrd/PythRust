@@ -267,7 +267,14 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
             let compound = types
                 .get(id.0)
                 .ok_or_else(|| backend("an unknown sequence type".to_string()))?;
-            return compound_descriptor(types, compound, out);
+            compound_descriptor(types, compound, out)?;
+            // A plain class's descriptor ends with its number, which finds
+            // its registered `__repr__` (two 7-bit bytes).
+            if let (Ty::Obj(id), Compound::Object { plain: true, .. }) = (ty, compound) {
+                out.push(byte(id.0 & 127, "a class number")?);
+                out.push(byte(id.0 >> 7, "over 16384 types")?);
+            }
+            return Ok(());
         }
     };
     out.push(code);
@@ -415,7 +422,8 @@ mod tests {
         for (plain, code) in [(false, "m"), (true, "p")] {
             let mut out = String::new();
             descriptor(&[object(plain)], Ty::Obj(TypeId(0)), &mut out).expect("descriptor");
-            assert_eq!(out, format!("{code}\u{1}i\u{1}P\u{1}x"));
+            let class = if plain { "\0\0" } else { "" };
+            assert_eq!(out, format!("{code}\u{1}i\u{1}P\u{1}x{class}"));
         }
     }
 

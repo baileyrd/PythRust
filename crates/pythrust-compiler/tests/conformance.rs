@@ -698,8 +698,7 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
     ),
     (
         "classes",
-        "a class that can refer to itself (`Node`) and printing a container that holds a plain \
-         object, until the cycle collector and the walker's `__repr__` callback (D151, D152)",
+        "a class that can refer to itself (`Node`), until the cycle collector (D151, D152)",
     ),
     (
         "classes_future",

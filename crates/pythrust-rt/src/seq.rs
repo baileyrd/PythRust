@@ -18,6 +18,8 @@
 
 use crate::sync::{Count, Ref, Slot};
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::sync::{PoisonError, RwLock};
 
 use crate::obj::{self, PtObj};
 use crate::range::Range;
@@ -103,16 +105,17 @@ fn span(desc: &[u8]) -> usize {
         }
         Kind::View => 2 + span(desc.get(2..).unwrap_or_default()),
         Kind::Tuple => fields_end(desc),
-        Kind::Record | Kind::Data | Kind::Plain => {
-            let names = usize::from(desc.get(1).copied().unwrap_or(0)) + 1;
-            let mut at = fields_end(desc);
-            for _ in 0..names {
-                at = name_at(desc, at).1;
-            }
-            at
-        }
+        Kind::Record | Kind::Data => names_end(desc),
+        // A plain class's descriptor ends with its class's two bytes.
+        Kind::Plain => (names_end(desc) + 2).min(desc.len()),
         _ => 1,
     }
+}
+
+/// Where the names of a record descriptor end: its own, then its fields'.
+fn names_end(desc: &[u8]) -> usize {
+    let names = usize::from(desc.get(1).copied().unwrap_or(0)) + 1;
+    (0..names).fold(fields_end(desc), |at, _| name_at(desc, at).1)
 }
 
 /// Where the field types of a tuple or record descriptor end: its
@@ -561,14 +564,20 @@ fn repr_holding(
             depth += 1;
             todo.push(Step::Leave);
         }
-        show(desc, v, out, &mut todo, held);
+        show(desc, v, out, &mut todo, held)?;
     }
     Ok(())
 }
 
 /// Writes what of slot `v` of type `desc` comes first, and pushes the
 /// rest on `todo`, last first.
-fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
+fn show(
+    desc: &'static [u8],
+    v: u64,
+    out: &mut String,
+    todo: &mut Vec<Step>,
+    held: &mut Held,
+) -> Result<(), TooDeep> {
     match kind(desc) {
         Kind::Int => out.push_str(&(v as i64).to_string()),
         Kind::Float => out.push_str(&crate::num::repr(f64::from_bits(v))),
@@ -582,8 +591,7 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>, hel
         Kind::List | Kind::Tuple => show_seq(unsafe { seq(v) }, out, todo, held),
         // SAFETY: a record slot holds a live record.
         Kind::Record | Kind::Data => show_record(unsafe { seq(v) }, out, todo, held),
-        // The compiler refuses to print a value that holds a plain object.
-        Kind::Plain => out.push_str("<object>"),
+        Kind::Plain => out.push_str(&plain_repr(desc, v)?),
         // SAFETY: a range slot holds a live range.
         Kind::Range => out.push_str(&unsafe { range_fields(v as *const PtSeq) }.repr()),
         Kind::Opt if v == 0 => out.push_str("None"),
@@ -596,6 +604,60 @@ fn show(desc: &'static [u8], v: u64, out: &mut String, todo: &mut Vec<Step>, hel
         Kind::View => show_view(unsafe { seq(v) }, out, todo, held),
         // Inference never lets a future be printed.
         Kind::Fut => out.push_str("<Future>"),
+    }
+    Ok(())
+}
+
+/// A plain class's `__repr__`, as compiled: takes the thread's context and
+/// a borrowed object, gives a new string; null when it raised (the
+/// exception stays pending) or the call depth ran out.
+pub type ReprFn = unsafe extern "C" fn(*const crate::exc::PtCtx, *const PtSeq) -> *mut PtStr;
+
+/// The registered `__repr__`s by class (a type's number in the program).
+/// Written once each, before any code runs.
+static REPRS: RwLock<BTreeMap<u16, ReprFn>> = RwLock::new(BTreeMap::new());
+
+/// Registers `f` as the `__repr__` of class `class`.
+///
+/// # Safety
+/// `f` is a function of the [`ReprFn`] shape that stays valid for the
+/// whole run.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_register_repr(class: u64, f: ReprFn) {
+    let mut reprs = REPRS.write().unwrap_or_else(PoisonError::into_inner);
+    reprs.insert(class as u16, f);
+}
+
+/// The class a plain object's descriptor names: its last two bytes.
+fn class_of(desc: &[u8]) -> u16 {
+    let end = span(desc);
+    let (lo, hi) = (end.saturating_sub(2), end.saturating_sub(1));
+    let byte = |k| u16::from(desc.get(k).copied().unwrap_or(0));
+    byte(lo) | byte(hi) << 7
+}
+
+/// `repr` of plain object `v` of type `desc`: what its class's
+/// `__repr__` returns. An object whose class registered none (the
+/// compiler refuses those) shows as `<object>`. Failing leaves the
+/// exception the call raised pending.
+fn plain_repr(desc: &'static [u8], v: u64) -> Result<String, TooDeep> {
+    let reprs = REPRS.read().unwrap_or_else(PoisonError::into_inner);
+    let Some(f) = reprs.get(&class_of(desc)).copied() else {
+        return Ok("<object>".to_string());
+    };
+    drop(reprs);
+    // SAFETY: `f` was registered as a `__repr__`, `v` is a live object.
+    let s = unsafe { f(crate::exc::pt_ctx(), v as *const PtSeq) };
+    if s.is_null() {
+        return Err(TooDeep);
+    }
+    // SAFETY: a non-null result is a live string we own.
+    let text = unsafe { pstr::borrow(s) }.text().to_string();
+    // SAFETY: as above; its reference is ours to give up.
+    unsafe { pstr::pt_str_dec(s) };
+    match crate::exc::is_pending() {
+        true => Err(TooDeep),
+        false => Ok(text),
     }
 }
 
@@ -1636,6 +1698,51 @@ mod tests {
                 pt_seq_dec(a);
                 pt_seq_dec(b);
             }
+        }
+    }
+
+    unsafe extern "C" fn fake_repr(_: *const crate::exc::PtCtx, o: *const PtSeq) -> *mut PtStr {
+        // SAFETY: the walker passes a live object.
+        let n = unsafe { seq(o as u64) }.items.borrow()[0];
+        pstr::into_ptr(PtStr::new(format!("P#{n}").into()))
+    }
+
+    unsafe extern "C" fn failing_repr(_: *const crate::exc::PtCtx, _: *const PtSeq) -> *mut PtStr {
+        std::ptr::null_mut()
+    }
+
+    /// A plain object in a container shows as what its registered
+    /// `__repr__` returns; one whose call fails stops the walk.
+    #[test]
+    fn plain_objects_show_through_their_registered_repr() {
+        const OK: &[u8] = b"p\x01i\x01P\x01x\x05\x00";
+        const BAD: &[u8] = b"p\x01i\x01P\x01x\x06\x00";
+        // SAFETY: the functions match `ReprFn`.
+        unsafe {
+            pt_register_repr(5, fake_repr);
+            pt_register_repr(6, failing_repr);
+        }
+        assert_eq!((class_of(OK), class_of(BAD)), (5, 6));
+        let (ok, bad) = (object(OK, 1), object(BAD, 1));
+        // SAFETY: both live; slot 0 is an int.
+        unsafe {
+            pt_obj_set(ok, 0, 7);
+            pt_obj_set(bad, 0, 7);
+        }
+        let mut list_desc = b"l".to_vec();
+        list_desc.extend_from_slice(OK);
+        let list = make(
+            Box::leak(list_desc.into_boxed_slice()),
+            &[ok as u64, ok as u64],
+        );
+        assert_eq!(shown(list), "[P#7, P#7]");
+        let mut out = String::new();
+        assert_eq!(repr(BAD, bad as u64, &mut out), Err(TooDeep));
+        // SAFETY: each is live and dropped once.
+        unsafe {
+            pt_seq_dec(list);
+            pt_seq_dec(ok);
+            pt_seq_dec(bad);
         }
     }
 
