@@ -66,19 +66,19 @@ pub(super) enum Value<'m> {
     Bound(Rc<Bound<'m>>),
 }
 
-/// A frozen record: its definition and its fields' values, in
-/// declaration order.
+/// A record: its definition and its fields' values, in declaration
+/// order, which only a mutable record's stores change (D146).
 #[derive(Debug)]
 pub(super) struct Record<'m> {
     pub def: &'m RecordDef,
-    pub fields: Box<[Value<'m>]>,
+    pub fields: RefCell<Box<[Value<'m>]>>,
 }
 
 impl<'m> Record<'m> {
     /// The value of field `name`, if the record has one.
-    pub fn field(&self, name: &str) -> Option<&Value<'m>> {
+    pub fn field(&self, name: &str) -> Option<Value<'m>> {
         let at = self.def.fields.iter().position(|f| f.name.name == name)?;
-        self.fields.get(at)
+        self.fields.borrow().get(at).cloned()
     }
 }
 
@@ -505,9 +505,12 @@ fn eq_at<'m>(a: &Value<'m>, b: &Value<'m>, depth: usize, span: Span) -> Result<b
         (Value::Future(x), Value::Future(y)) => Rc::ptr_eq(x, y),
         (Value::Results(x), Value::Results(y)) => Rc::ptr_eq(x, y),
         (Value::Record(x), Value::Record(y)) if Rc::ptr_eq(x, y) => true,
-        (Value::Record(x), Value::Record(y)) if std::ptr::eq(x.def, y.def) => {
-            seq_eq(&x.fields, &y.fields, deeper(depth, span)?, span)?
-        }
+        (Value::Record(x), Value::Record(y)) if std::ptr::eq(x.def, y.def) => seq_eq(
+            &x.fields.borrow(),
+            &y.fields.borrow(),
+            deeper(depth, span)?,
+            span,
+        )?,
         _ => false,
     })
 }
@@ -790,10 +793,13 @@ fn write_record(
     out: &mut String,
     span: Span,
 ) -> Result<()> {
+    // No record reaches itself: a field's annotation names only records
+    // defined before it (D129, D148), so D146's `...` guard has no case.
     enter_repr(active, std::ptr::from_ref(r).cast::<()>(), span)?;
     out.push_str(unqualified(&r.def.name.name));
     out.push('(');
-    for (i, (field, value)) in r.def.fields.iter().zip(r.fields.iter()).enumerate() {
+    let fields = r.fields.borrow();
+    for (i, (field, value)) in r.def.fields.iter().zip(fields.iter()).enumerate() {
         if i > 0 {
             out.push_str(", ");
         }

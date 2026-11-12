@@ -256,6 +256,7 @@ impl FnBuilder<'_, '_> {
                 self.write(name, v, target.span)
             }
             TargetKind::Subscript { value, index } => self.set_item(value, index, v, target.span),
+            TargetKind::Attr { .. } => Err(super::unsupported(target.span, "classes")),
             TargetKind::Tuple(targets) => self.unpack(targets, v, target.span),
         }
     }

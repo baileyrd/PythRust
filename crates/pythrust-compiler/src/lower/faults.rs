@@ -146,6 +146,7 @@ impl<'a> Sites<'a> {
                 self.expr(index);
                 self.faults = true;
             }
+            TargetKind::Attr { value, .. } => self.expr(value),
             TargetKind::Tuple(items) => {
                 self.faults |= !value.is_some_and(|v| self.is_tuple(v));
                 items.iter().for_each(|t| self.target(t, None));

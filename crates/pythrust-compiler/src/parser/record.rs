@@ -17,9 +17,10 @@ use crate::infer::scope;
 use crate::span::Span;
 use crate::token::TokenKind;
 
-/// D38's message for `@dataclass` without `frozen=True`.
-const NOT_FROZEN: &str =
-    "`@dataclass` without `frozen=True` is not supported yet; use `@dataclass(frozen=True)`";
+/// D146's message for a spelling other than `@dataclass` and
+/// `@dataclass(frozen=True)`.
+const SPELLING: &str =
+    "write `@dataclass` or `@dataclass(frozen=True)`; other spellings are not supported yet";
 
 /// What a record's body holds, gathered member by member.
 #[derive(Default)]
@@ -38,11 +39,11 @@ impl Body {
 }
 
 impl Parser<'_> {
-    /// `'@' 'dataclass' '(' 'frozen' '=' 'True' ')' NEWLINE 'class' NAME
-    /// ':' body`: the record, then its methods.
+    /// `'@' 'dataclass' ['(' 'frozen' '=' 'True' ')'] NEWLINE 'class'
+    /// NAME ':' body`: the record, then its methods.
     pub(super) fn record(&mut self) -> Result<Vec<Stmt>> {
         let start = self.tok(0).span;
-        self.decorator()?;
+        let frozen = self.decorator()?;
         if !self.at(&TokenKind::Class) {
             let msg = "decorators are not supported yet, except `@dataclass(frozen=True)` \
                        on a class";
@@ -52,12 +53,13 @@ impl Parser<'_> {
         let name = self.binding_name("a class name")?;
         self.no_bases(&name)?;
         self.expect(&TokenKind::Colon)?;
-        let body = self.record_body(&name)?;
+        let body = self.record_body(&name, frozen)?;
         let span = self.span_from(start);
         let record = RecordDef {
             name: name.clone(),
             fields: body.fields,
             methods: body.methods.iter().map(|m| m.name.clone()).collect(),
+            frozen,
             span,
         };
         let methods = body.methods.into_iter().map(|m| method(&name, m));
@@ -68,9 +70,10 @@ impl Parser<'_> {
         Ok(std::iter::once(first).chain(methods).collect())
     }
 
-    /// The decorator line before `class`, which must be exactly
-    /// `@dataclass(frozen=True)`; a `class` with none is refused.
-    fn decorator(&mut self) -> Result<()> {
+    /// The decorator line before `class`: `@dataclass(frozen=True)`, or
+    /// bare `@dataclass` (D146), which makes a mutable record; whether it
+    /// is frozen. A `class` with none is refused.
+    fn decorator(&mut self) -> Result<bool> {
         let at = self.tok(0).span;
         if !self.eat(&TokenKind::At) {
             let msg = "classes without `@dataclass(frozen=True)` are not supported yet; \
@@ -88,7 +91,8 @@ impl Parser<'_> {
             return Err(error(name.span, msg));
         }
         if !self.at(&TokenKind::LParen) {
-            return Err(error(at.merge(name.span), NOT_FROZEN));
+            self.expect(&TokenKind::Newline)?;
+            return Ok(false);
         }
         let call = self.call(Expr {
             kind: ExprKind::Name(name.name.clone()),
@@ -96,7 +100,7 @@ impl Parser<'_> {
         })?;
         frozen_only(&call)?;
         self.expect(&TokenKind::Newline)?;
-        Ok(())
+        Ok(true)
     }
 
     /// No base classes and no type parameters (D132, D135); `()` is
@@ -133,7 +137,7 @@ impl Parser<'_> {
 
     /// `NEWLINE INDENT member+ DEDENT`: a leading docstring, `pass`,
     /// fields and methods.
-    fn record_body(&mut self, record: &Ident) -> Result<Body> {
+    fn record_body(&mut self, record: &Ident, frozen: bool) -> Result<Body> {
         self.ellipsis_stmt(" on its own indented line")?;
         self.expect(&TokenKind::Newline)?;
         self.expect(&TokenKind::Indent)?;
@@ -143,13 +147,13 @@ impl Parser<'_> {
             self.bump();
         }
         while !self.eat(&TokenKind::Dedent) {
-            self.member(record, &mut body)?;
+            self.member(record, frozen, &mut body)?;
         }
         Ok(body)
     }
 
     /// One member of a record's body.
-    fn member(&mut self, record: &Ident, body: &mut Body) -> Result<()> {
+    fn member(&mut self, record: &Ident, frozen: bool, body: &mut Body) -> Result<()> {
         let tok = self.tok(0);
         match &tok.kind {
             TokenKind::Pass => {
@@ -159,7 +163,7 @@ impl Parser<'_> {
             }
             TokenKind::Def | TokenKind::Temper => {
                 let def = self.nested(|p| p.func_head(|p| p.expect_name("a method name")))?;
-                check_method(record, &def, body)?;
+                check_method(record, frozen, &def, body)?;
                 body.methods.push(def);
                 Ok(())
             }
@@ -200,10 +204,10 @@ impl Parser<'_> {
     }
 }
 
-/// The decorator's arguments: `frozen=True` alone (D38, D132).
+/// The decorator's arguments: `frozen=True` alone (D132, D146).
 fn frozen_only(call: &Expr) -> Result<()> {
     let ExprKind::Call { args, .. } = &call.kind else {
-        return Err(error(call.span, NOT_FROZEN));
+        return Err(error(call.span, SPELLING));
     };
     let mut frozen = false;
     for arg in args {
@@ -222,7 +226,7 @@ fn frozen_only(call: &Expr) -> Result<()> {
     }
     match frozen {
         true => Ok(()),
-        false => Err(error(call.span, NOT_FROZEN)),
+        false => Err(error(call.span, SPELLING)),
     }
 }
 
@@ -240,9 +244,10 @@ fn check_member(name: &Ident, body: &Body) -> Result<()> {
     Ok(())
 }
 
-/// A method's name is new, and it takes an unannotated, read `self`
-/// first (D131).
-fn check_method(record: &Ident, def: &FuncDef, body: &Body) -> Result<()> {
+/// A method's name is new, and it takes an unannotated `self` first,
+/// which a frozen record's method only reads (D131); a mutable one's may
+/// change or keep it (D149).
+fn check_method(record: &Ident, frozen: bool, def: &FuncDef, body: &Body) -> Result<()> {
     check_member(&def.name, body)?;
     let Some(first) = def.params.first() else {
         let msg = format!(
@@ -258,7 +263,7 @@ fn check_method(record: &Ident, def: &FuncDef, body: &Body) -> Result<()> {
         );
         return Err(error(first.name.span, msg));
     }
-    if first.mode != ParamMode::Read {
+    if frozen && first.mode != ParamMode::Read {
         let msg = "a method that changes or keeps `self` is not supported yet";
         return Err(error(first.span, msg));
     }
@@ -269,7 +274,7 @@ fn check_method(record: &Ident, def: &FuncDef, body: &Body) -> Result<()> {
         );
         return Err(error(first.span, msg));
     }
-    match changes_self(&def.body) {
+    match changes_self(&def.body).filter(|_| frozen) {
         Some(at) => {
             let msg = "a method that changes or keeps `self` is not supported yet";
             Err(error(at, msg))
@@ -333,6 +338,11 @@ fn target_from_self(t: &Target) -> bool {
     match &t.kind {
         TargetKind::Name(_) => false,
         TargetKind::Subscript { value, .. } => from_self(value),
+        // `self.x = v` is a field store, which inference refuses on a
+        // frozen record (D158); `self.a.x = v` changes what `self` reaches.
+        TargetKind::Attr { value, .. } => {
+            !matches!(&value.kind, ExprKind::Name(n) if n == "self") && from_self(value)
+        }
         TargetKind::Tuple(ts) => ts.iter().any(target_from_self),
     }
 }
@@ -568,10 +578,18 @@ mod tests {
     }
 
     #[test]
-    fn only_the_frozen_dataclass_form_is_a_record() {
-        let not_frozen = "`@dataclass` without `frozen=True` is not supported yet";
-        assert!(err("@dataclass\nclass P:\n    x: int\n").contains(not_frozen));
-        assert!(err("@dataclass(frozen=False)\nclass P:\n    x: int\n").contains(not_frozen));
+    fn a_record_is_frozen_or_a_bare_dataclass() {
+        let spelling = "write `@dataclass` or `@dataclass(frozen=True)`";
+        for (src, frozen) in [("@dataclass", false), ("@dataclass(frozen=True)", true)] {
+            let m = parse(&format!("{IMPORT}{src}\nclass P:\n    x: int\n"));
+            let m = m.unwrap_or_else(|e| panic!("{src}: {e}"));
+            let StmtKind::Record(r) = &m.body[0].kind else {
+                panic!("{src}: not a record");
+            };
+            assert_eq!(r.frozen, frozen, "{src}");
+        }
+        assert!(err("@dataclass(frozen=False)\nclass P:\n    x: int\n").contains(spelling));
+        assert!(err("@dataclass()\nclass P:\n    x: int\n").contains(spelling));
         let eq = err("@dataclass(frozen=True, eq=True)\nclass P:\n    x: int\n");
         assert!(
             eq.contains("`@dataclass(eq=...)` is not supported yet"),

@@ -316,6 +316,7 @@ fn sx_target(t: &Target) -> String {
     match &t.kind {
         TargetKind::Name(n) => n.clone(),
         TargetKind::Subscript { value, index } => format!("(sub {} {})", sx(value), sx(index)),
+        TargetKind::Attr { value, attr } => format!("(. {} {})", sx(value), attr.name),
         TargetKind::Tuple(items) => format!("(tuple {})", join(items.iter().map(sx_target))),
     }
 }
@@ -476,6 +477,8 @@ fn assignment_and_unpacking() {
     );
     assert_eq!(ok("( a ) = 1 NL"), "(= a 1)");
     assert_eq!(ok("x [ i ] = 2 NL"), "(= (sub x i) 2)");
+    assert_eq!(ok("p . x = 2 NL"), "(= (. p x) 2)");
+    assert_eq!(ok("p . q . x += 2 NL"), "(+= (. (. p q) x) 2)");
     assert_eq!(ok("f ( ) [ 0 ] = 2 NL"), "(= (sub (call f) 0) 2)");
 }
 
@@ -490,11 +493,6 @@ fn invalid_assignment_targets() {
         "cannot assign to an operator expression"
     );
     assert_eq!(err("a , 1 = x NL"), "cannot assign to a literal");
-    assert_eq!(
-        err("a . b = 1 NL"),
-        "cannot assign to field `b`: records are frozen, and other attribute assignment \
-         is not supported yet"
-    );
     assert_eq!(err("a = b = 1 NL"), "chained assignment is not supported");
 }
 

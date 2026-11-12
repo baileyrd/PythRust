@@ -327,7 +327,7 @@ fn opaque<'a>(target: &'a Target, out: &mut Bindings<'a>) {
     match &target.kind {
         TargetKind::Name(name) => out.entry(name).or_default().push(Source::Opaque),
         TargetKind::Tuple(items) => items.iter().for_each(|t| opaque(t, out)),
-        TargetKind::Subscript { .. } => {}
+        TargetKind::Subscript { .. } | TargetKind::Attr { .. } => {}
     }
 }
 
@@ -627,6 +627,7 @@ impl<'a> Cx<'_, 'a> {
                 self.expr(value, out);
                 self.expr(index, out);
             }
+            TargetKind::Attr { value, .. } => self.expr(value, out),
             TargetKind::Tuple(items) => items.iter().for_each(|t| self.target(t, out)),
         }
     }

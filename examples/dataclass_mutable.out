@@ -1,0 +1,4 @@
+Counter(name='clé', total=2, seen=['é', 'ñ'])
+10 True True
+Counter(name='clé', total=0, seen=[]) Counter(name='clé', total=0, seen=[])
+[Counter(name='a', total=3, seen=[]), Counter(name='b', total=6, seen=[])]
