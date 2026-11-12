@@ -492,6 +492,12 @@ impl<'a> Body<'a> {
 
     /// Whether a value of type `outer` is, or may hold, one of `inner`.
     fn within(&self, outer: Ty, inner: Ty) -> bool {
+        self.within_in(outer, inner, &mut Vec::new())
+    }
+
+    /// [`Self::within`], past the records in `open`: one reached again
+    /// inside itself (D162) adds nothing.
+    fn within_in(&self, outer: Ty, inner: Ty, open: &mut Vec<Ty>) -> bool {
         if outer == inner {
             return true;
         }
@@ -502,11 +508,15 @@ impl<'a> Body<'a> {
                 | Compound::Set(t)
                 | Compound::Dict(_, t)
                 | Compound::View(_, t),
-            ) => self.within(*t, inner),
-            Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
-                fields.iter().any(|t| self.within(*t, inner))
+            ) => self.within_in(*t, inner, open),
+            Some(Compound::Tuple(fields)) => fields.iter().any(|t| self.within_in(*t, inner, open)),
+            Some(Compound::Record { fields, .. }) if !open.contains(&outer) => {
+                open.push(outer);
+                let any = fields.iter().any(|t| self.within_in(*t, inner, open));
+                open.pop();
+                any
             }
-            None => false,
+            Some(Compound::Record { .. }) | None => false,
         }
     }
 
@@ -927,16 +937,16 @@ impl<'a> Body<'a> {
     /// Only immutable element shapes prove that copying the outer list
     /// separates it. An exception, for example, may carry a mutable value.
     fn copy_separates(&self, ty: Ty) -> bool {
-        match self.program.compound(ty) {
-            Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
-                fields.iter().all(|t| self.copy_separates(*t))
-            }
-            Some(Compound::Opt(t)) => self.copy_separates(*t),
-            _ => matches!(
-                ty,
-                Ty::Int | Ty::Float | Ty::Bool | Ty::None | Ty::Str | Ty::Bytes | Ty::Range
-            ),
-        }
+        crate::ir::reachable(&self.program.types, ty)
+            .into_iter()
+            .all(|t| match self.program.compound(t) {
+                Some(Compound::Tuple(_) | Compound::Record { .. } | Compound::Opt(_)) => true,
+                Some(_) => false,
+                None => matches!(
+                    t,
+                    Ty::Int | Ty::Float | Ty::Bool | Ty::None | Ty::Str | Ty::Bytes | Ty::Range
+                ),
+            })
     }
 
     /// Whether `value` may hold a global's list, or one the body stored
@@ -961,16 +971,16 @@ impl<'a> Body<'a> {
 
     /// The list types a value of type `ty` is or may hold.
     fn list_types(&self, ty: Ty, out: &mut BTreeSet<Ty>) {
-        let inner: Vec<Ty> = match self.program.compound(ty) {
-            Some(Compound::List(t) | Compound::Set(t) | Compound::Dict(_, t)) => {
-                out.insert(ty);
-                vec![*t]
+        // A key holds no list, so reaching through keys finds no more.
+        for t in crate::ir::reachable(&self.program.types, ty) {
+            let compound = self.program.compound(t);
+            if matches!(
+                compound,
+                Some(Compound::List(_) | Compound::Set(_) | Compound::Dict(..))
+            ) {
+                out.insert(t);
             }
-            Some(Compound::Opt(t) | Compound::View(_, t)) => vec![*t],
-            Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => fields.clone(),
-            None => Vec::new(),
-        };
-        inner.into_iter().for_each(|t| self.list_types(t, out));
+        }
     }
 
     /// Whether a name that may be `seen` sees a change to `changed`.

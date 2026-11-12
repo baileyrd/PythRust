@@ -1732,24 +1732,46 @@ fn refuse_gaps(program: &Program) -> Result<()> {
     for func in &program.funcs {
         for inst in func.blocks.iter().flat_map(|b| &b.insts) {
             exc::refuse_codes(inst)?;
-            let Inst::Assign {
-                value: Rvalue::NewExc(_, Some(arg)),
-                span,
-                ..
-            } = inst
-            else {
-                continue;
-            };
-            if may_cycle(&program.types, func.ty(*arg)) {
-                return Err(Diagnostic {
-                    span: *span,
-                    message: CYCLE_GAP.into(),
-                    kind: DiagKind::Backend,
-                });
-            }
+            refuse_cycle(&program.types, func, inst)?;
         }
     }
     Ok(())
+}
+
+/// Refuses `inst` if it makes an exception that may close a reference
+/// cycle, or a record that can hold one of its own type (D166).
+fn refuse_cycle(types: &[Compound], func: &Func, inst: &Inst) -> Result<()> {
+    let Inst::Assign { dest, value, span } = inst else {
+        return Ok(());
+    };
+    let message = match value {
+        Rvalue::NewExc(_, Some(arg)) if may_cycle(types, func.ty(*arg)) => CYCLE_GAP.to_string(),
+        Rvalue::NewSeq(_) => match self_reaching(types, func.locals[dest.0]) {
+            Some(shown) => format!(
+                "the native backend does not support class `{shown}`, which can refer to \
+                 itself, yet"
+            ),
+            None => return Ok(()),
+        },
+        _ => return Ok(()),
+    };
+    Err(Diagnostic {
+        span: *span,
+        message,
+        kind: DiagKind::Backend,
+    })
+}
+
+/// The name of record type `ty` if a value of it can hold one of its own
+/// type (D162): such a type has no finite runtime descriptor, so it is
+/// a named gap however it reaches itself (D151, D166).
+fn self_reaching(types: &[Compound], ty: Ty) -> Option<&str> {
+    let Some(Compound::Record { shown, .. }) = ir::compound(types, ty) else {
+        return None;
+    };
+    let parts = ir::parts(types, ty).into_iter();
+    let mut reached = parts.flat_map(|p| ir::reachable(types, p));
+    reached.any(|t| t == ty).then_some(shown.as_str())
 }
 
 /// Whether an exception's argument of type `ty` may close a reference
@@ -1762,25 +1784,12 @@ fn refuse_gaps(program: &Program) -> Result<()> {
 /// "An exception" is any `Ty::Exc`, whatever its kind, so a future
 /// `list[Exception]` counts; a future `dyn` must count as one too.
 fn may_cycle(types: &[Compound], ty: Ty) -> bool {
-    let (Ty::List(id)
-    | Ty::Tuple(id)
-    | Ty::Record(id)
-    | Ty::Opt(id)
-    | Ty::Dict(id)
-    | Ty::Set(id)
-    | Ty::View(id)) = ty
-    else {
-        return false;
-    };
-    match types.get(id.0) {
-        Some(Compound::List(t) | Compound::Set(t)) => ir::holds(types, *t, ir::is_exc),
+    let reached = ir::reachable(types, ty);
+    reached.into_iter().any(|t| match ir::compound(types, t) {
+        Some(Compound::List(e) | Compound::Set(e)) => ir::holds(types, *e, ir::is_exc),
         Some(Compound::Dict(_, v)) => ir::holds(types, *v, ir::is_exc),
-        Some(Compound::Opt(t) | Compound::View(_, t)) => may_cycle(types, *t),
-        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
-            fields.iter().any(|t| may_cycle(types, *t))
-        }
-        None => false,
-    }
+        _ => false,
+    })
 }
 
 fn backend(message: String) -> Diagnostic {
@@ -2132,6 +2141,35 @@ mod tests {
                 assert!(refused_as_cycle(&src), "{src}");
             }
         }
+    }
+
+    /// A record that can hold its own type is a named gap however it
+    /// reaches itself; one whose methods only name it builds (D166).
+    #[test]
+    fn a_record_holding_its_own_type_is_a_named_gap() {
+        let head = "from __future__ import annotations\nfrom dataclasses import dataclass\n\
+                    @dataclass(frozen=True)\nclass P:\n";
+        let refusal = |fields: &str, make: &str| {
+            let src = format!("{head}{fields}p = {make}\n");
+            let module = parser::parse(&lexer::lex(&src).expect("lex")).expect("parse");
+            let types = infer::infer(&module).expect("infer");
+            let program = lower::lower(&module, &types).expect("lower");
+            emit(&program, &|d: &Diagnostic| d.message.clone())
+                .err()
+                .map(|d| d.message)
+        };
+        let gap = "the native backend does not support class `P`, which can refer to itself, yet";
+        let cases = [
+            ("    nxt: P | None\n", "P(None)"),
+            ("    kids: list[P]\n", "P([])"),
+            ("    pair: tuple[int, P | None]\n", "P((1, None))"),
+            ("    by: dict[str, P]\n", "P({})"),
+        ];
+        for (fields, make) in cases {
+            assert_eq!(refusal(fields, make).as_deref(), Some(gap), "{fields}");
+        }
+        let method = "    x: int\n    def same(self, o: P) -> P:\n        return o\n";
+        assert_eq!(refusal(method, "P(1).same(P(2))"), None);
     }
 
     #[test]

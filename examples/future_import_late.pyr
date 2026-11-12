@@ -1,0 +1,6 @@
+# expect-error: `from __future__` imports must occur at the beginning of the file
+# expect-exit: 1
+import sys
+from __future__ import annotations
+
+print("été", len(sys.argv))

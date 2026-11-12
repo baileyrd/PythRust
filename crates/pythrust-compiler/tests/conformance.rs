@@ -606,6 +606,7 @@ const NATIVE: &[&str] = &[
     "range_index_error",
     "range_values",
     "raises",
+    "record_future",
     "record_temper_method",
     "records",
     "records_tasks",
@@ -702,6 +703,14 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
     (
         "classes",
         "plain classes, until classes lower (step 5-4, D160)",
+    ),
+    (
+        "classes_future",
+        "plain classes, until classes lower (step 5-4, D160)",
+    ),
+    (
+        "record_recursive",
+        "a record that can hold its own type has no finite runtime descriptor yet (D166)",
     ),
     (
         "user_exception_many",

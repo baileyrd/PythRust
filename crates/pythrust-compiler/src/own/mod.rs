@@ -382,18 +382,24 @@ fn conservative(module: &Module) -> BTreeMap<String, Summary> {
 /// Whether a value of type `ty` is, or may hold, a list. A dict or set
 /// is a list here: a container that changes in place.
 fn holds_list(program: &Program, ty: Ty) -> bool {
-    match program.compound(ty) {
-        Some(Compound::List(_) | Compound::Dict(..) | Compound::Set(_)) => true,
-        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
-            fields.iter().any(|f| holds_list(program, *f))
-        }
-        Some(Compound::Opt(present) | Compound::View(_, present)) => holds_list(program, *present),
-        None => false,
-    }
+    let reached = crate::ir::reachable(&program.types, ty);
+    reached.into_iter().any(|t| {
+        matches!(
+            program.compound(t),
+            Some(Compound::List(_) | Compound::Dict(..) | Compound::Set(_))
+        )
+    })
 }
 
 /// The language-level type an IR type lowers.
 fn source(program: &Program, ty: Ty) -> Type {
+    source_in(program, ty, &mut Vec::new())
+}
+
+/// [`source`], within the records in `open`: a record reached again
+/// inside itself (D162) is `None` there, since its fields are already
+/// in the outer one.
+fn source_in(program: &Program, ty: Ty, open: &mut Vec<Ty>) -> Type {
     match ty {
         Ty::Int => Type::Int,
         Ty::Float => Type::Float,
@@ -409,27 +415,33 @@ fn source(program: &Program, ty: Ty) -> Type {
         Ty::Exec => Type::Executor,
         Ty::Future => Type::Future(Box::new(Type::None)),
         Ty::Results => Type::Results(Box::new(Type::None)),
-        Ty::Held(id) => compound_source(program, Ty::List(id)),
-        Ty::List(_)
-        | Ty::Tuple(_)
-        | Ty::Record(_)
-        | Ty::Opt(_)
-        | Ty::Dict(_)
-        | Ty::Set(_)
-        | Ty::View(_) => compound_source(program, ty),
+        Ty::Held(id) => compound_source(program, Ty::List(id), open),
+        Ty::Record(_) if open.contains(&ty) => Type::None,
+        Ty::Record(_) => {
+            open.push(ty);
+            let t = compound_source(program, ty, open);
+            open.pop();
+            t
+        }
+        Ty::List(_) | Ty::Tuple(_) | Ty::Opt(_) | Ty::Dict(_) | Ty::Set(_) | Ty::View(_) => {
+            compound_source(program, ty, open)
+        }
     }
 }
 
-fn compound_source(program: &Program, ty: Ty) -> Type {
-    let part = |t: &Ty| Box::new(source(program, *t));
+fn compound_source(program: &Program, ty: Ty, open: &mut Vec<Ty>) -> Type {
+    let mut part = |t: &Ty| Box::new(source_in(program, *t, open));
     match program.compound(ty) {
         Some(Compound::List(elem)) => Type::List(part(elem)),
         // The analyses follow a record's fields as a tuple's (step 4-2).
         Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
-            Type::Tuple(fields.iter().map(|f| source(program, *f)).collect())
+            Type::Tuple(fields.iter().map(|f| *part(f)).collect())
         }
         Some(Compound::Opt(present)) => Type::Optional(part(present)),
-        Some(Compound::Dict(k, v)) => Type::Dict(part(k), part(v)),
+        Some(Compound::Dict(k, v)) => {
+            let k = part(k);
+            Type::Dict(k, part(v))
+        }
         Some(Compound::Set(t)) => Type::Set(part(t)),
         Some(Compound::View(view, item)) => Type::View(view_source(*view), part(item)),
         None => Type::None,

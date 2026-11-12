@@ -1123,18 +1123,23 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
     }
 }
 
-/// The IR type of record `name`. Its fields' types name only closed
-/// types and records declared before it (D129, D135), so this ends.
+/// The IR type of record `name`. Its fields' types are closed and may
+/// name it (D162): it is made before them, so this ends.
 fn record(name: &str, seqs: &mut types::SeqTypes, span: Span) -> Result<Ty> {
+    if let Some(ty) = seqs.named(name) {
+        return Ok(ty);
+    }
     let declared = seqs.declared(name).map(<[(String, Type)]>::to_vec);
     // Only frozen records are declared to lowering ([`records`]): any
     // other is a mutable class, which does not lower until 5-4 (D160).
     let declared = declared.ok_or_else(|| unsupported(span, "classes"))?;
+    let ty = seqs.reserve(name);
     let mut fields = Vec::new();
     for (_, t) in &declared {
         fields.push(concrete(t, &Subst::new(), seqs, span)?);
     }
-    Ok(seqs.record(name, fields))
+    seqs.fill(ty, fields);
+    Ok(ty)
 }
 
 /// [`concrete`], but `None` for a variable nothing binds.

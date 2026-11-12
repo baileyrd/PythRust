@@ -1693,6 +1693,55 @@ fn from_and_as_refuse_what_cpython_would_not_bind_here() {
 }
 
 #[test]
+fn future_annotations_start_a_module_and_make_its_annotations_lazy() {
+    let later = "def f(n: Node) -> Node:\n    return n\nclass Node:\n    pass\n";
+    let rec =
+        "from dataclasses import dataclass\n@dataclass(frozen=True)\nclass P:\n    nxt: P | None\n";
+    for src in [
+        format!("from __future__ import annotations\n{later}"),
+        format!("from __future__ import annotations\nfrom __future__ import (annotations,)\n{rec}"),
+    ] {
+        assert!(src_parse(&src).is_ok(), "{src}");
+    }
+    assert!(src_err(later).contains("`Node` is not defined yet"));
+    assert!(src_err(rec).contains("`P` is not defined yet"));
+    let cases = [
+        (
+            "import sys\nfrom __future__ import annotations\n",
+            "`from __future__` imports must occur at the beginning of the file",
+        ),
+        (
+            "x = 1\nfrom __future__ import division\n",
+            "`from __future__` imports must occur at the beginning of the file",
+        ),
+        (
+            "from __future__ import annotations, division\n",
+            "`from __future__ import division` is not supported yet",
+        ),
+        (
+            "from __future__ import braces\n",
+            "future feature `braces` is not defined",
+        ),
+        (
+            "from __future__ import *\n",
+            "future feature `*` is not defined",
+        ),
+        (
+            "from __future__ import annotations as a\n",
+            "`as` on a `__future__` import is not supported yet",
+        ),
+        (
+            "import __future__\n",
+            "the standard module `__future__` is not supported yet",
+        ),
+    ];
+    for (src, want) in cases {
+        let got = src_err(src);
+        assert!(got.contains(want), "{src}: {got}");
+    }
+}
+
+#[test]
 fn a_module_is_not_a_value_and_exposes_only_its_names() {
     assert_eq!(
         src_err("import sys\nx = sys\n"),

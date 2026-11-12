@@ -31,9 +31,7 @@ use super::alias::{inst_operands, inst_span};
 use super::body::{self, Flow, Obj, Objs};
 use super::{holds_list, Mode, Summary};
 use crate::diag::{DiagKind, Diagnostic, Result};
-use crate::ir::{
-    BlockId, Compound, Func, GlobalId, Inst, LocalId, Operand, Program, Rvalue, Task, Term, Ty,
-};
+use crate::ir::{BlockId, Func, GlobalId, Inst, LocalId, Operand, Program, Rvalue, Task, Term, Ty};
 use crate::span::Span;
 
 /// Checks every executor block of `program` against rule 4.
@@ -580,19 +578,7 @@ fn module_value(program: &Program, ty: Ty) -> bool {
 /// Whether a value of `ty` is or holds one `want` picks (a file, an
 /// exception).
 fn holds(program: &Program, ty: Ty, want: fn(Ty) -> bool) -> bool {
-    if want(ty) {
-        return true;
-    }
-    match program.compound(ty) {
-        Some(Compound::List(t) | Compound::Set(t) | Compound::Opt(t) | Compound::View(_, t)) => {
-            holds(program, *t, want)
-        }
-        Some(Compound::Dict(k, v)) => holds(program, *k, want) || holds(program, *v, want),
-        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
-            fields.iter().any(|f| holds(program, *f, want))
-        }
-        None => false,
-    }
+    crate::ir::holds(&program.types, ty, want)
 }
 
 fn is_file(ty: Ty) -> bool {

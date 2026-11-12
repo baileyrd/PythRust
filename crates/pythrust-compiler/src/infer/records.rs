@@ -484,6 +484,28 @@ mod tests {
         }
     }
 
+    /// A record holding its own type prints, and a plain class without
+    /// `__repr__` anywhere inside it is still found (D162).
+    #[test]
+    fn a_record_holding_its_own_type_prints() {
+        let lazy = |src: &str| {
+            let tokens = lexer::lex(src).map_err(|d| d.message)?;
+            let module = parser::parse(&tokens).map_err(|d| d.message)?;
+            infer::infer(&module).map_err(|d| d.message)
+        };
+        let head = "from __future__ import annotations\nfrom dataclasses import dataclass\n\
+                    class R:\n    pass\n\
+                    @dataclass(frozen=True)\nclass P:\n    kids: list[P]\n    nxt: P | None\n";
+        let ok = format!("{head}print(P([], None))\n");
+        assert!(lazy(&ok).is_ok(), "{ok}");
+        let blank = head.replace("nxt: P | None", "nxt: tuple[P, R] | None");
+        let got = lazy(&format!("{blank}print(P([], None))\n")).err();
+        assert_eq!(
+            got.as_deref(),
+            Some("printing `R` needs a `__repr__` method")
+        );
+    }
+
     #[test]
     fn a_field_has_one_type_and_d4s_fix_it() {
         let src = "class N:\n    def __init__(self):\n        self.next = None\n\

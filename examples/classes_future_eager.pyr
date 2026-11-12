@@ -1,0 +1,16 @@
+# expect-error: `Tree` is not defined yet
+# expect-exit: 1
+class Tree:
+    def __init__(self, label: str):
+        self.label = label
+        self.kids: list[Tree] = []
+
+    def add(self, child: Tree) -> Tree:
+        self.kids.append(child)
+        return self
+
+    def __repr__(self) -> str:
+        return "Tree(" + self.label + ")"
+
+
+print(Tree("racine").add(Tree("élan")))

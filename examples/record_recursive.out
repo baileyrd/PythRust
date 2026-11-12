@@ -1,0 +1,7 @@
+3
+Link(value='ä', nxt=Link(value='ö', nxt=Link(value='ü', nxt=None)))
+True
+4
+Tree(name='é', kids=[Tree(name='a', kids=[]), Tree(name='b', kids=[Tree(name='c', kids=[])])])
+Tree(name='é', kids=[Tree(name='a', kids=[]), Tree(name='b', kids=[Tree(name='c', kids=[])]), ...])
+True
