@@ -101,9 +101,12 @@ pub(super) fn check(
         declared.insert(f.name.name.as_str(), stub_declaration(f)?);
     }
     let early = early(module);
+    // A method `P.int` shadows no builtin: only `p.int()` names it.
+    let methods = module.methods();
     let late_shadow = defs
         .iter()
         .map(|f| f.name.name.as_str())
+        .filter(|n| !methods.contains(*n))
         .any(|n| builtins::is_builtin(unqualified(n)) && !early.contains(n));
     let mut a = Analysis {
         types,
@@ -113,7 +116,7 @@ pub(super) fn check(
         globals,
         sets: declared.clone(),
     };
-    for group in scope::groups(defs) {
+    for group in scope::groups(defs, &methods) {
         a.infer_group(&group, &declared);
     }
     let mut warnings = Vec::new();
@@ -596,7 +599,11 @@ impl<'a> Cx<'_, 'a> {
                 self.expr(value, &mut out);
                 out.extend(self.block(body));
             }
-            StmtKind::FuncDef(_) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+            StmtKind::FuncDef(_)
+            | StmtKind::Record(_)
+            | StmtKind::Break
+            | StmtKind::Continue
+            | StmtKind::Pass => {}
         }
         out
     }
@@ -651,6 +658,14 @@ impl<'a> Cx<'_, 'a> {
                     ExprKind::Name(name) => self.call(name, args, e.span, out),
                     ExprKind::Attr { value, attr } => {
                         self.expr(value, out);
+                        if let Some(Type::Record(r)) = self.a.types.at(value.span) {
+                            // A method is never a builtin, so only its set counts.
+                            let name = crate::ast::method_name(r, &attr.name);
+                            if let Some(set) = self.a.sets.get(name.as_str()) {
+                                set.escapes().for_each(|k| out.add(k, e.span));
+                            }
+                            return;
+                        }
                         let kinds = self.method(value, &attr.name, args);
                         kinds.into_iter().for_each(|k| out.add(k, e.span));
                     }

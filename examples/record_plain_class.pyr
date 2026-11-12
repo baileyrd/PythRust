@@ -1,0 +1,8 @@
+# deviation: D132: a class needs `@dataclass(frozen=True)` yet; CPython runs it.
+# expect-error: classes without `@dataclass(frozen=True)` are not supported yet
+# expect-exit: 1
+class Point:
+    pass
+
+
+print(1)

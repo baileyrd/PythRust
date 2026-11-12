@@ -32,7 +32,7 @@ use std::rc::Rc;
 
 use crate::ast::{
     unqualified, Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Handler,
-    Ident, LogicalOp, Module, Stmt, StmtKind, Target, TargetKind,
+    Ident, LogicalOp, Module, RecordDef, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::ExcKind;
@@ -41,7 +41,7 @@ use crate::span::Span;
 use builtins::{Args, Builtin};
 use methods::Method;
 use table::{Key, Table};
-use value::{Exc, ExcArg, Func, Value};
+use value::{Bound, Exc, ExcArg, Func, Record, Value};
 
 /// Python's default recursion limit.
 pub(crate) const MAX_DEPTH: usize = 1000;
@@ -248,6 +248,7 @@ impl<'m> Interp<'m, '_> {
                 del_item(&container, &index, stmt.span)?;
             }
             StmtKind::FuncDef(def) => self.define(def)?,
+            StmtKind::Record(def) => self.store(&def.name.name, Value::Class(def)),
             StmtKind::If {
                 branch,
                 elifs,
@@ -731,7 +732,10 @@ impl<'m> Interp<'m, '_> {
                 [start.as_deref(), stop.as_deref(), step.as_deref()],
                 e.span,
             ),
-            ExprKind::Attr { value, attr } => Ok(methods::bind(self.eval(value)?, attr)?),
+            ExprKind::Attr { value, attr } => match self.eval(value)? {
+                Value::Record(r) => self.member(r, attr),
+                v => Ok(methods::bind(v, attr)?),
+            },
             ExprKind::Comp { gather, clauses } => {
                 let keyed = self.int_keyed(e.span);
                 let mut out = Gathered::new(gather, keyed);
@@ -866,6 +870,11 @@ impl<'m> Interp<'m, '_> {
             Value::Builtin(Builtin::Std(f)) => self.std(f, &evaluated)?,
             Value::Builtin(b) => builtins::call(b, evaluated, self.out)?,
             Value::Method(m) => methods::call(&m, evaluated)?,
+            Value::Class(def) => construct(def, evaluated)?,
+            Value::Bound(b) => {
+                evaluated.positional.insert(0, b.receiver.clone());
+                self.call_func(Rc::clone(&b.func), evaluated)?
+            }
             other => {
                 let msg = format!("TypeError: '{}' object is not callable", other.type_name());
                 return Err(rt_err(span, msg).into());
@@ -1055,6 +1064,24 @@ impl<'m> Interp<'m, '_> {
         Ok(Pending::Value(self.eval(e)?, e.span))
     }
 
+    /// `r.attr`: a field's value, or a method bound to `r` (D131).
+    fn member(&self, r: Rc<Record<'m>>, attr: &Ident) -> Exec<'m, Value<'m>> {
+        if let Some(v) = r.field(&attr.name) {
+            return Ok(v.clone());
+        }
+        let name = crate::ast::method_name(&r.def.name.name, &attr.name);
+        match self.globals.get(name.as_str()) {
+            Some(Value::Func(f)) => Ok(Value::Bound(Rc::new(Bound {
+                func: Rc::clone(f),
+                receiver: Value::Record(r),
+            }))),
+            _ => {
+                let msg = format!("AttributeError: record has no attribute '{}'", attr.name);
+                Err(rt_err(attr.span, msg).into())
+            }
+        }
+    }
+
     fn call_func(&mut self, func: Rc<Func<'m>>, args: Args<'m>) -> Exec<'m, Value<'m>> {
         if self.frames.len() >= MAX_DEPTH {
             return Err(rt_err(
@@ -1121,6 +1148,29 @@ fn live_view<'m>(d: &Value<'m>, view: View, span: Span) -> Result<value::Iter<'m
 
 /// Binds call arguments to parameters, as Python does: positional first,
 /// then keywords by name, then defaults.
+/// `P(...)`: each field from its positional or keyword argument, which
+/// inference has matched one to one (D132).
+fn construct<'m>(def: &'m RecordDef, args: Args<'m>) -> Result<Value<'m>> {
+    let mut slots: Vec<Option<Value<'m>>> = vec![None; def.fields.len()];
+    for (slot, v) in slots.iter_mut().zip(args.positional) {
+        *slot = Some(v);
+    }
+    for (name, v) in args.keywords {
+        let at = def.fields.iter().position(|f| f.name.name == name.name);
+        if let Some(slot) = at.and_then(|i| slots.get_mut(i)) {
+            *slot = Some(v);
+        }
+    }
+    let fields = slots.into_iter().zip(&def.fields).map(|(v, f)| {
+        v.ok_or_else(|| {
+            let msg = format!("TypeError: missing argument '{}'", f.name.name);
+            rt_err(args.span, msg)
+        })
+    });
+    let fields = fields.collect::<Result<Box<[Value<'m>]>>>()?;
+    Ok(Value::Record(Rc::new(Record { def, fields })))
+}
+
 fn bind<'m>(func: &Func<'m>, args: Args<'m>) -> Result<HashMap<&'m str, Value<'m>>> {
     let (params, fname) = (&func.def.params, &func.def.name.name);
     if args.positional.len() > params.len() {

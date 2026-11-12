@@ -49,6 +49,9 @@ pub enum Type {
     Future(Box<Type>),
     /// What `ex.map(f, xs)` returns: `f`'s results, in order, for `for`.
     Results(Box<Type>),
+    /// A frozen record (step 4, D129), by its qualified name: nominal,
+    /// so two records with the same fields are different types.
+    Record(String),
     Var(TypeVar),
 }
 
@@ -104,7 +107,8 @@ impl Type {
             | Type::File(..)
             | Type::Executor
             | Type::Future(_)
-            | Type::Results(_) => Some(true),
+            | Type::Results(_)
+            | Type::Record(_) => Some(true),
             _ => self.any_part(Type::holds_heap),
         }
     }
@@ -143,6 +147,8 @@ impl Type {
             Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::File(..) | Type::Executor => {
                 Some(true)
             }
+            // Whether a field reaches one is the record's, not known here.
+            Type::Record(_) => None,
             _ => self.any_part(Type::reaches_mutable),
         }
     }
@@ -209,6 +215,7 @@ impl fmt::Display for Type {
             Type::Tuple(elems) if elems.is_empty() => f.write_str("tuple[()]"),
             Type::Tuple(elems) => write!(f, "tuple[{}]", join(elems)),
             Type::Optional(inner) => write!(f, "{inner} | None"),
+            Type::Record(name) => f.write_str(name),
             Type::Var(TypeVar(n)) => write!(f, "T{n}"),
         }
     }

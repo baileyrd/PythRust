@@ -1,0 +1,14 @@
+# deviation: D136: a class is defined at a module's top level; CPython runs it anywhere.
+# expect-error: a class must be defined at the top level of a module
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+def make():
+    @dataclass(frozen=True)
+    class Point:
+        x: int
+    return 1
+
+
+print(make())

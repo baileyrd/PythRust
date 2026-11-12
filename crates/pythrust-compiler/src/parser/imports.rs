@@ -13,6 +13,9 @@ use crate::span::Span;
 use crate::stdlib::{self, ModuleDef, StdFn};
 use crate::token::TokenKind;
 
+/// The standard module whose `dataclass` makes records (D132).
+const DATACLASSES: &str = "dataclasses";
+
 /// A module an import names.
 #[derive(Clone)]
 pub(super) enum Module<'a> {
@@ -73,6 +76,11 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
         loop {
             let path = self.path()?;
+            if path.text() == DATACLASSES {
+                let msg = "`import dataclasses` is not supported yet; \
+                           write `from dataclasses import dataclass`";
+                return Err(error(path.span(), msg));
+            }
             let module = self.import_module(&path, &mut stmts)?;
             if self.eat(&TokenKind::As) {
                 let alias = self.binding_name("a name for the module")?;
@@ -96,6 +104,9 @@ impl<'a> Parser<'a> {
         }
         let path = self.path()?;
         self.expect(&TokenKind::Import)?;
+        if path.text() == DATACLASSES {
+            return self.import_dataclass();
+        }
         if self.at(&TokenKind::Star) {
             let msg = "`import *` is not supported; import the names you use";
             return Err(error(self.tok(0).span, msg));
@@ -119,6 +130,25 @@ impl<'a> Parser<'a> {
             self.expect(&TokenKind::RParen)?;
         }
         Ok(stmts)
+    }
+
+    /// `from dataclasses import dataclass`, the one form (D132): it
+    /// binds nothing a value can name, only the decorator.
+    fn import_dataclass(&mut self) -> Result<Vec<Stmt>> {
+        let name = self.expect_name("`dataclass`")?;
+        if name.name != "dataclass" {
+            let msg = format!(
+                "`dataclasses.{}` is not supported yet; only `dataclass` is",
+                name.name
+            );
+            return Err(error(name.span, msg));
+        }
+        if self.at(&TokenKind::As) || self.at(&TokenKind::Comma) {
+            let msg = "only `from dataclasses import dataclass` is supported yet";
+            return Err(error(self.tok(0).span, msg));
+        }
+        self.dataclass = true;
+        Ok(Vec::new())
     }
 
     /// `NAME ('.' NAME)*`.
@@ -367,6 +397,20 @@ impl<'a> Parser<'a> {
             span: self.span_from(call.span),
             ..call
         })
+    }
+
+    /// The type `name` (already consumed at `first`) names: a record
+    /// `from` imported, or a module's `a.P`, by its qualified name
+    /// (D136); any other name as written.
+    pub(super) fn imported_type(&mut self, name: String, first: Span) -> Result<String> {
+        let Some(imported) = self.imported(&name).cloned() else {
+            return Ok(name);
+        };
+        let expr = self.imported_expr(imported, first)?;
+        match expr.kind {
+            ExprKind::Name(path) => Ok(path),
+            _ => Ok(name),
+        }
     }
 
     /// A name a statement binds: not one an import bound.

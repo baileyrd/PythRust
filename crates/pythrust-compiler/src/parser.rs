@@ -90,7 +90,9 @@ pub fn parse_program(
     }
     let mut module = parse_in(main, bindings, &done, packages, &mut ready)?;
     qualify::main_name(&mut module, &parts);
-    Ok(qualify::link(parts, module))
+    let module = qualify::link(parts, module);
+    record::check_modules(&module, &done)?;
+    Ok(module)
 }
 
 /// Parses the stub of the Rust binding `name`: only `temper def`
@@ -144,6 +146,8 @@ struct Parser<'a> {
     /// The program defines its own `open`, so `with open(...)` is an
     /// executor item (D115).
     user_open: bool,
+    /// `from dataclasses import dataclass` came first (D132).
+    dataclass: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -177,6 +181,7 @@ impl<'a> Parser<'a> {
             pauses: Vec::new(),
             withs: 0,
             user_open: with::defines_open(tokens),
+            dataclass: false,
         })
     }
 
@@ -319,6 +324,7 @@ impl<'a> Parser<'a> {
         while !self.at(&TokenKind::EndMarker) {
             body.extend(self.stmts()?);
         }
+        record::check_module(&body)?;
         Ok(Module {
             body,
             stubs: std::mem::take(&mut self.stubs),
@@ -332,6 +338,9 @@ impl<'a> Parser<'a> {
     fn stmts(&mut self) -> Result<Vec<Stmt>> {
         if self.at(&TokenKind::With) {
             return self.with_stmt();
+        }
+        if self.at(&TokenKind::At) || self.at(&TokenKind::Class) {
+            return self.record();
         }
         Ok(vec![self.stmt()?])
     }
@@ -374,6 +383,10 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), TokenKind::Def | TokenKind::Temper) {
             let span = self.tok(0).span;
             return Err(error(span, "`def` is only allowed at module top level"));
+        }
+        if matches!(self.peek(), TokenKind::At | TokenKind::Class) {
+            let msg = "a class must be defined at the top level of a module";
+            return Err(error(self.tok(0).span, msg));
         }
         self.stmts()
     }
@@ -510,6 +523,17 @@ impl<'a> Parser<'a> {
     }
 
     fn func_def(&mut self) -> Result<Stmt> {
+        let def = self.func_head(|p| p.binding_name("a function name"))?;
+        let span = def.span;
+        Ok(Stmt {
+            kind: StmtKind::FuncDef(def),
+            span,
+        })
+    }
+
+    /// `['temper'] 'def' NAME '(' ...` through its body, the name read
+    /// by `name`.
+    fn func_head(&mut self, name: Rule<'a, Ident>) -> Result<FuncDef> {
         let start = self.tok(0).span;
         let mode = if self.eat(&TokenKind::Temper) {
             Mode::Tempered
@@ -517,7 +541,7 @@ impl<'a> Parser<'a> {
             Mode::Loose
         };
         self.expect(&TokenKind::Def)?;
-        let name = self.binding_name("a function name")?;
+        let name = name(self)?;
         self.expect(&TokenKind::LParen)?;
         let params = if self.at(&TokenKind::RParen) {
             Vec::new()
@@ -536,19 +560,14 @@ impl<'a> Parser<'a> {
         self.in_func = true;
         let body = self.block();
         self.in_func = false;
-        let span = self.span_from(start);
-        let def = FuncDef {
+        Ok(FuncDef {
             mode,
             name,
             params,
             returns,
             raises,
             body: body?,
-            span,
-        };
-        Ok(Stmt {
-            kind: StmtKind::FuncDef(def),
-            span,
+            span: self.span_from(start),
         })
     }
 
@@ -811,9 +830,14 @@ impl<'a> Parser<'a> {
         let name = match &tok.kind {
             TokenKind::Name(name) => name.clone(),
             TokenKind::None => "None".to_string(),
+            TokenKind::Str(_) => {
+                let msg = "string annotations are not supported yet";
+                return Err(error(tok.span, msg));
+            }
             _ => return Err(self.unexpected("a type")),
         };
         self.bump();
+        let name = self.imported_type(name, tok.span)?;
         let mut args = Vec::new();
         if self.eat(&TokenKind::LBracket) {
             args.push(self.nested(Self::type_expr)?);
@@ -1360,8 +1384,13 @@ fn to_target(expr: Expr) -> Result<Target> {
             let targets = items.into_iter().map(to_target);
             TargetKind::Tuple(targets.collect::<Result<_>>()?)
         }
-        ExprKind::Attr { .. } => {
-            return Err(error(span, "attribute assignment is not supported yet"));
+        ExprKind::Attr { attr, .. } => {
+            let msg = format!(
+                "cannot assign to field `{}`: records are frozen, and other attribute \
+                 assignment is not supported yet",
+                attr.name
+            );
+            return Err(error(span, msg));
         }
         other => {
             let what = expr_noun(&other);
@@ -1625,7 +1654,9 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::As => "as",
         TokenKind::With => "with",
         TokenKind::Pause => "pause",
+        TokenKind::Class => "class",
         TokenKind::Pipe => "|",
+        TokenKind::At => "@",
         TokenKind::Plus => "+",
         TokenKind::Minus => "-",
         TokenKind::Star => "*",
@@ -1663,6 +1694,7 @@ fn describe(kind: &TokenKind) -> String {
 }
 
 mod imports;
+mod record;
 mod stubs;
 mod with;
 

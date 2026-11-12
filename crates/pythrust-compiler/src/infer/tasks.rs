@@ -32,11 +32,16 @@ impl Checker {
     /// `ex.submit(f, *args)`, a future of `f`'s result, or `ex.map(f,
     /// xs)`, `f`'s results over `xs`. `f` is a `def`, its arguments
     /// checked as a call's.
-    pub(super) fn task(&mut self, value: &Expr, attr: &Ident, args: &[Arg]) -> Result<Type> {
+    pub(super) fn task(
+        &mut self,
+        value: &Expr,
+        receiver: &Type,
+        attr: &Ident,
+        args: &[Arg],
+    ) -> Result<Type> {
         let method = attr.name.as_str();
-        let receiver = self.expr(value)?;
         let needs = format!("`{method}` needs an executor");
-        self.expect(value.span, &Type::Executor, &receiver, &needs)?;
+        self.expect(value.span, &Type::Executor, receiver, &needs)?;
         if let Some(arg) = args.iter().find(|a| a.name.is_some()) {
             let msg = format!("`{method}` takes positional arguments only yet");
             return Err(error(arg.span, msg));

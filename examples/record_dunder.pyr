@@ -1,0 +1,15 @@
+# deviation: D132: a dunder in a record is not supported yet; CPython runs it.
+# expect-error: `__post_init__` in a record is not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+
+    def __post_init__(self):
+        print("made")
+
+
+print(Point(1))

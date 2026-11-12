@@ -1,0 +1,6 @@
+# deviation: D132: only `dataclass` is imported from `dataclasses` yet; CPython has `field`.
+# expect-error: `dataclasses.field` is not supported yet
+# expect-exit: 1
+from dataclasses import field
+
+print(1)

@@ -1,0 +1,14 @@
+# deviation: D136: a record's name is not rebound; CPython rebinds it.
+# expect-error: `Point` names a record; choose another name
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+    y: int
+
+
+Point = 3
+print(Point)

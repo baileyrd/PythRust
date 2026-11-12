@@ -28,7 +28,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>> {
 
 /// Words reserved for later phases. The lexer rejects them.
 const RESERVED: &[&str] = &[
-    "assert", "class", "lambda", "yield", "async", "await", "global", "nonlocal", "shared",
+    "assert", "lambda", "yield", "async", "await", "global", "nonlocal", "shared",
 ];
 
 /// Python string prefixes, rejected with a clear message.
@@ -593,6 +593,7 @@ fn keyword(text: &str) -> Option<TokenKind> {
         "from" => From,
         "with" => With,
         "pause" => Pause,
+        "class" => Class,
         _ => return Option::None,
     };
     Some(kind)
@@ -635,6 +636,7 @@ fn operator(rest: &[u8]) -> Option<(TokenKind, usize)> {
         [b':', ..] => (Colon, 1),
         [b'.', ..] => (Dot, 1),
         [b'|', ..] => (Pipe, 1),
+        [b'@', ..] => (At, 1),
         _ => return Option::None,
     };
     Some(op)
@@ -1010,10 +1012,11 @@ mod tests {
     #[test]
     fn keywords_and_names() {
         let src = "def return if elif else while for in break continue pass and or not \
-                   True False None temper try except finally raise del as import from with pause";
+                   True False None temper try except finally raise del as import from with pause class";
         let expected = vec![
             Def, Return, If, Elif, Else, While, For, In, Break, Continue, Pass, And, Or, Not, True,
             False, None, Temper, Try, Except, Finally, Raise, Del, As, Import, From, With, Pause,
+            Class,
         ];
         assert_eq!(line(src), expected);
         assert_eq!(
@@ -1232,7 +1235,7 @@ mod tests {
 
     #[test]
     fn characters_outside_the_grammar() {
-        for (src, c) in [("a ; b", ';'), ("a & b", '&'), ("!x", '!'), ("@d", '@')] {
+        for (src, c) in [("a ; b", ';'), ("a & b", '&'), ("!x", '!'), ("$d", '$')] {
             let d = lex_err(src);
             assert!(d.message.contains(&format!("{c:?}")), "{d}");
         }

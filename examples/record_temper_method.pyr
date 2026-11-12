@@ -1,0 +1,16 @@
+# deviation: D44: records do not lower yet, so a tempered method cannot be ownership-checked; CPython runs it loosened.
+# expect-error: ownership checks cannot be skipped
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    x: int
+    y: int
+
+    temper def norm1(self) -> int:
+        return abs(self.x) + abs(self.y)
+
+
+print(Point(1, -2).norm1())

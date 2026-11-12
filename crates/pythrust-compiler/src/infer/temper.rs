@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{FuncDef, Mode, TypeExpr};
+use crate::ast::{method_name, ExprKind, FuncDef, Mode, TypeExpr};
 use crate::diag::Result;
 
 use super::{error, scope, Type, Types};
@@ -22,6 +22,7 @@ pub(super) fn check(defs: &[&FuncDef], types: &Types) -> Result<()> {
     for f in defs.iter().filter(|f| f.mode == Mode::Tempered) {
         signature(f, types)?;
         calls(f, &modes)?;
+        method_calls(f, &modes, types)?;
     }
     Ok(())
 }
@@ -90,7 +91,8 @@ fn spellable(t: &Type) -> bool {
         | Type::Bool
         | Type::None
         | Type::Exception
-        | Type::Bytes => true,
+        | Type::Bytes
+        | Type::Record(_) => true,
     }
 }
 
@@ -109,6 +111,31 @@ fn calls(f: &FuncDef, modes: &HashMap<&str, Mode>) -> Result<()> {
         f.name.name
     );
     Err(error(span, msg))
+}
+
+/// D5 for methods (D131): `x.m(...)` on a record calls `P.m`, which
+/// must be tempered too.
+fn method_calls(f: &FuncDef, modes: &HashMap<&str, Mode>, types: &Types) -> Result<()> {
+    for e in scope::exprs(&f.body) {
+        let ExprKind::Call { func, .. } = &e.kind else {
+            continue;
+        };
+        let ExprKind::Attr { value, attr } = &func.kind else {
+            continue;
+        };
+        let Some(Type::Record(r)) = types.at(value.span) else {
+            continue;
+        };
+        let callee = method_name(r, &attr.name);
+        if modes.get(callee.as_str()) == Some(&Mode::Loose) {
+            let msg = format!(
+                "tempered `{}` calls loose `{callee}`; temper `{callee}` first",
+                f.name.name
+            );
+            return Err(error(attr.span, msg));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -110,6 +110,11 @@ fn lookup(table: &[Method], name: &str, here: Option<Owner>) -> Option<Method> {
     Some(own.unwrap_or(first))
 }
 
+/// Whether a builtin type has a method `name`.
+pub(super) fn is_builtin_method(name: &str) -> bool {
+    matches!(name, "submit" | "map") || METHODS.iter().any(|m| m.name == name)
+}
+
 /// Whether `name` is typed by a [`Need::Method`] once the receiver's
 /// type is known: the list and dict methods of D70, and a name several
 /// types share.
@@ -209,13 +214,26 @@ impl Checker {
     /// future's `.result`. The receiver's type picks the method; while it
     /// is unknown, the one type that has the name fixes it, and a name
     /// several types share waits for it (D52).
-    pub(super) fn method(&mut self, value: &Expr, attr: &Ident, args: &[Arg]) -> Result<Type> {
+    ///
+    /// A record's receiver, or a name no builtin type has, calls a
+    /// record's method instead (D131).
+    pub(super) fn method(
+        &mut self,
+        value: &Expr,
+        attr: &Ident,
+        args: &[Arg],
+        span: Span,
+    ) -> Result<Type> {
         let name = attr.name.as_str();
+        let receiver = self.expr(value)?;
+        let record = matches!(self.subst.resolve(&receiver), Type::Record(_));
+        if record || (!is_builtin_method(name) && self.any_method(name)) {
+            return self.record_method(&receiver, value, attr, args, span);
+        }
         if matches!(name, "submit" | "map") {
-            return self.task(value, attr, args);
+            return self.task(value, &receiver, attr, args);
         }
         if FILE_GAPS.contains(&name) {
-            let receiver = self.expr(value)?;
             if let Type::File(..) = self.subst.resolve(&receiver) {
                 let msg = format!("`{name}` of a file is not supported yet");
                 return Err(error(attr.span, msg));
@@ -235,7 +253,6 @@ impl Checker {
             );
             return Err(error(attr.span, msg));
         };
-        let receiver = self.expr(value)?;
         let here = Owner::of(&self.subst.resolve(&receiver));
         // A file method fixes an unknown receiver as a file that is
         // written or read, its data still open, so a generic function's

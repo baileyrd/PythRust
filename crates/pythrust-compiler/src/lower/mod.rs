@@ -138,6 +138,12 @@ pub fn lower_every(module: &Module, types: &Types) -> Result<Program> {
 }
 
 fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Program> {
+    if let Some(record) = module.body.iter().find_map(|s| match &s.kind {
+        StmtKind::Record(r) => Some(r),
+        _ => None,
+    }) {
+        return Err(unsupported(record.name.span, "records"));
+    }
     let mut defs = HashMap::new();
     for s in &module.body {
         if let StmtKind::FuncDef(f) = &s.kind {
@@ -495,7 +501,7 @@ fn is_closed(t: &Type, subst: &Subst) -> bool {
         Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
         Type::File(_, data) => is_closed(data, subst),
-        Type::Exception | Type::Bytes | Type::Executor => true,
+        Type::Exception | Type::Bytes | Type::Executor | Type::Record(_) => true,
     }
 }
 
@@ -527,6 +533,8 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::Exception => Ty::Exc,
         Type::Bytes => Ty::Bytes,
         Type::File(writes, data) => Ty::File(file_kind(*writes, settle(data, subst, bound, seqs))),
+        // Never reached: `lower` refuses a program with records first.
+        Type::Record(_) => Ty::None,
         Type::Dict(k, v) => {
             let (k, v) = (settle(k, subst, bound, seqs), settle(v, subst, bound, seqs));
             seqs.dict(k, v)
@@ -1064,6 +1072,7 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         // `build` and its task's result for analysis, and `map`'s results
         // are a list of futures in `build` and of results for analysis.
         Type::Executor => Ok(Ty::None),
+        Type::Record(_) => Err(unsupported(span, "records")),
         Type::Future(_) if seqs.futures => Ok(Ty::Future),
         Type::Future(t) => concrete(t, subst, seqs, span),
         Type::Results(_) if seqs.futures => Ok(Ty::Results),

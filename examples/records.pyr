@@ -1,0 +1,64 @@
+# Frozen dataclass records (step 4-1, D129-D136): construction, fields,
+# equality, the printable form and methods reading `self`.
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Point:
+    "A point on a grid."
+    x: int
+    y: int
+
+    def norm1(self) -> int:
+        return abs(self.x) + abs(self.y)
+
+    def moved(self, dx: int, dy: int = 0):
+        return Point(self.x + dx, self.y + dy)
+
+
+@dataclass(frozen=True)
+class Label:
+    text: str
+    at: Point
+    tags: list[str]
+    weight: float | None
+
+    def describe(self, prefix: str) -> str:
+        return prefix + self.text + " @ " + str(self.at.norm1())
+
+
+@dataclass(frozen=True)
+class Empty:
+    pass
+
+
+def total(points: list[Point]) -> int:
+    n = 0
+    for p in points:
+        n += p.norm1()
+    return n
+
+
+p = Point(1, -2)
+q = Point(y=-2, x=1)
+print(p, q, p == q, p != q, p == Point(2, 2))
+print(p.x, p.y, p.norm1())
+lab = Label("café ünï", p, ["a", "ß"], None)
+print(lab)
+print(str(lab), len(str(p)))
+print(p.moved(2), p.moved(dy=5, dx=0), p.moved(1).moved(1) == Point(3, -2))
+print(lab.describe("» "))
+lab.tags.append("x")
+print(lab.tags, lab == Label("café ünï", Point(1, -2), ["a", "ß", "x"], None))
+print(Label("t", Point(0, 0), [], 1.5))
+pts = [Point(i, i * 2) for i in range(3)]
+print(pts, total(pts))
+by = {"origin": Point(0, 0)}
+print(by, by["origin"].norm1())
+pair = (p, Empty())
+print(pair, Empty() == Empty())
+best: Point | None = None
+for c in pts:
+    if best is None or c.norm1() > best.norm1():
+        best = c
+print("truthy" if p else "falsy", best)

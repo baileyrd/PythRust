@@ -224,6 +224,19 @@ fn sx_stmt(s: &Stmt) -> String {
             binding,
             body,
         } => format!("(with {} {} {})", sx(value), binding.name, sx_block(body)),
+        StmtKind::Record(r) => {
+            let fields = r
+                .fields
+                .iter()
+                .map(|f| format!(" (: {} {})", f.name.name, sx_type(&f.annotation)));
+            let methods = r.methods.iter().map(|m| format!(" {}", m.name));
+            format!(
+                "(record {}{}{})",
+                r.name.name,
+                fields.collect::<String>(),
+                methods.collect::<String>()
+            )
+        }
     }
 }
 
@@ -478,7 +491,8 @@ fn invalid_assignment_targets() {
     assert_eq!(err("a , 1 = x NL"), "cannot assign to a literal");
     assert_eq!(
         err("a . b = 1 NL"),
-        "attribute assignment is not supported yet"
+        "cannot assign to field `b`: records are frozen, and other attribute assignment \
+         is not supported yet"
     );
     assert_eq!(err("a = b = 1 NL"), "chained assignment is not supported");
 }
