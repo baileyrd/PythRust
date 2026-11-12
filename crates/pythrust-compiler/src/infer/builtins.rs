@@ -88,7 +88,11 @@ impl Checker {
             }
             "range" => self.range(args, span),
             "str" | "bool" => {
-                self.positional(name, args, 0, 1, span)?;
+                for (t, at) in self.positional(name, args, 0, 1, span)? {
+                    if name == "str" {
+                        self.printed(t, at);
+                    }
+                }
                 Ok(if name == "str" { Type::Str } else { Type::Bool })
             }
             "int" => self.number("int", Type::Int, args, span),
@@ -281,6 +285,7 @@ impl Checker {
         for arg in args {
             let t = self.expr(&arg.value)?;
             let Some(kw) = &arg.name else {
+                self.printed(t, arg.value.span);
                 continue;
             };
             if kw.name != "sep" && kw.name != "end" {
@@ -291,6 +296,15 @@ impl Checker {
             self.expect(arg.value.span, &Type::Str, &t, &what)?;
         }
         Ok(Type::None)
+    }
+
+    /// `t` is shown by `print` or `str` (D147).
+    fn printed(&mut self, value: Type, span: Span) {
+        let need = Need::Printable {
+            value,
+            nested: false,
+        };
+        self.need(need, span);
     }
 
     /// `list(x)`: a new list of a list's elements (a shallow copy), a

@@ -1,0 +1,11 @@
+# deviation: D147: printing an object without `__repr__` or `__str__` is a compile error; CPython prints its address.
+# expect-error: printing `Point` needs a `__repr__` method
+# expect-exit: 1
+class Point:
+    def __init__(self, x: int):
+        self.x = x
+
+
+p = Point(1)
+print(p.x)
+print(p)

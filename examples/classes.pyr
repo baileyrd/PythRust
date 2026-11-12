@@ -1,0 +1,101 @@
+# Plain classes (step 5-2, D144-D150): fields from `__init__`, methods
+# that change `self`, `__repr__`/`__str__` printing and identity `==`.
+from dataclasses import dataclass
+
+
+class Counter:
+    "Counts named things."
+
+    def __init__(self, name: str, start: int = 0):
+        self.name = name
+        self.count: int = start
+        self.seen = []
+
+    def bump(self, by: int = 1) -> int:
+        self.count += by
+        self.seen.append(by)
+        return self.count
+
+    def twice(self) -> int:
+        self.bump()
+        return self.bump()
+
+    def __repr__(self) -> str:
+        return "Counter(" + self.name + ", " + str(self.count) + ")"
+
+
+class Node:
+    def __init__(self, value: int):
+        self.value = value
+        self.next: Node | None = None
+
+    def __str__(self) -> str:
+        return "node " + str(self.value)
+
+    def __repr__(self) -> str:
+        return "N" + str(self.value)
+
+
+class Safe:
+    def __init__(self, k: int):
+        try:
+            self.ratio = 10 // k
+        except ZeroDivisionError:
+            self.ratio = -1
+        if k > 5:
+            self.size = "big"
+        else:
+            self.size = "small"
+
+    def __str__(self) -> str:
+        return self.size + " " + str(self.ratio)
+
+
+class Empty:
+    pass
+
+
+@dataclass
+class Tagged:
+    tag: str
+    node: Node
+
+
+def total(nodes: list[Node]) -> int:
+    n = 0
+    for x in nodes:
+        n += x.value
+    return n
+
+
+def rename(c: Counter, name: str):
+    c.name = name
+
+
+def show(x):
+    print("»", x)
+
+
+c = Counter("café")
+print(c.bump(), c.bump(2), c.twice(), c.count, c.seen)
+print(c, [c], str(c), (c, 1))
+d = c
+print(c == d, c == Counter("café"), c != Counter("x"), c != d)
+rename(d, "ünï")
+print(c, Counter(start=4, name="k"))
+a = Node(1)
+b = Node(2)
+a.next = b
+print(a, [a, b], a.next, {"a": a}, total([a, b, Node(3)]))
+n = a.next
+if n is not None:
+    n.value += 40
+print(b, a.next)
+print(Safe(0), Safe(2), Safe(9))
+e = Empty()
+print(e == e, e == Empty(), "truthy" if e else "falsy")
+print(Tagged("ß", b))
+show(c)
+show(a)
+nodes = [Node(i) for i in range(3)]
+print(nodes, len(str(nodes[0])))

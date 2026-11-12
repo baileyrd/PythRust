@@ -32,7 +32,7 @@ mod tests;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::ast::{FuncDef, Module, StmtKind, StubDef};
+use crate::ast::{FuncDef, Module, RecordKind, StmtKind, StubDef};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::infer::{scope, Type, TypeVar, Types};
 use crate::ir::{
@@ -486,7 +486,7 @@ fn file_kind(writes: bool, held: Ty) -> Kind {
 fn records(module: &Module, types: &Types) -> HashMap<String, Vec<(String, Type)>> {
     let records = module.body.iter().filter_map(|s| match &s.kind {
         // A mutable record is the backend gap `record` names (D160).
-        StmtKind::Record(r) if r.frozen => Some(r.name.name.as_str()),
+        StmtKind::Record(r) if r.kind == RecordKind::Frozen => Some(r.name.name.as_str()),
         _ => None,
     });
     records

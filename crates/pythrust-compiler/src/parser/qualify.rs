@@ -100,7 +100,8 @@ fn types(body: &mut [Stmt], rename: &mut Rename<'_>) {
             StmtKind::Record(r) => {
                 r.fields
                     .iter_mut()
-                    .for_each(|f| type_expr(&mut f.annotation, rename));
+                    .filter_map(|f| f.annotation.as_mut())
+                    .for_each(|t| type_expr(t, rename));
             }
             StmtKind::FuncDef(f) => {
                 let params = f.params.iter_mut().filter_map(|p| p.annotation.as_mut());

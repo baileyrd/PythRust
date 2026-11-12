@@ -199,10 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn a_class_without_a_base_is_still_a_record_error() {
-        let msg = "classes without `@dataclass(frozen=True)` are not supported yet";
-        assert!(err("class E:\n    pass\n").contains(msg));
-        assert!(err("class E():\n    pass\n").contains(msg));
+    fn a_class_without_a_base_is_a_plain_class() {
+        for src in ["class E:\n    pass\n", "class E():\n    pass\n"] {
+            let m = parse(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+            assert!(matches!(&m.body[0].kind, StmtKind::Record(_)), "{src}");
+        }
         let nested = err("def f():\n    class E(Exception):\n        pass\n");
         assert!(nested.contains("`def` is only allowed") || nested.contains("top level"));
         let in_if = err("if True:\n    class E(Exception):\n        pass\n");

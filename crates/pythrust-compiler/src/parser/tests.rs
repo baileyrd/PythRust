@@ -226,10 +226,10 @@ fn sx_stmt(s: &Stmt) -> String {
         } => format!("(with {} {} {})", sx(value), binding.name, sx_block(body)),
         StmtKind::ExcClass(c) => format!("(class {} {})", c.name.name, c.base.name),
         StmtKind::Record(r) => {
-            let fields = r
-                .fields
-                .iter()
-                .map(|f| format!(" (: {} {})", f.name.name, sx_type(&f.annotation)));
+            let fields = r.fields.iter().map(|f| match &f.annotation {
+                Some(t) => format!(" (: {} {})", f.name.name, sx_type(t)),
+                None => format!(" {}", f.name.name),
+            });
             let methods = r.methods.iter().map(|m| format!(" {}", m.name));
             format!(
                 "(record {}{}{})",

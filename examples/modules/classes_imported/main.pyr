@@ -1,0 +1,16 @@
+# Plain classes imported from another module (step 5-2, D144): `import`
+# and `from`, construction through `__init__`, methods and printing.
+import shapes
+from shapes import Box as B
+
+b = shapes.Box(1)
+print(b.grow(), b.n)
+c = B(5, label="ß")
+print(b, [c], b == c, c == c)
+
+
+def bigger(x: B) -> int:
+    return x.grow()
+
+
+print(bigger(c), c)

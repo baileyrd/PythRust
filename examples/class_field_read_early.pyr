@@ -1,0 +1,10 @@
+# expect-error: field `n` of `Box` is read before it is assigned
+# expect-exit: 1
+class Box:
+    def __init__(self, n: int):
+        self.twice = self.n * 2
+        self.n = n
+
+
+b = Box(3)
+print(b.twice)

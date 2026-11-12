@@ -1,0 +1,11 @@
+class Box:
+    def __init__(self, n: int, label: str = "é"):
+        self.n = n
+        self.label = label
+
+    def grow(self) -> int:
+        self.n += 1
+        return self.n
+
+    def __repr__(self) -> str:
+        return "Box(" + self.label + str(self.n) + ")"

@@ -176,7 +176,7 @@ pub(crate) fn exprs(block: &[Stmt]) -> Vec<&Expr> {
 }
 
 /// The expressions a statement holds outside its nested blocks.
-fn own_exprs(s: &Stmt) -> Vec<&Expr> {
+pub(crate) fn own_exprs(s: &Stmt) -> Vec<&Expr> {
     match &s.kind {
         StmtKind::Assign { target, value } | StmtKind::AugAssign { target, value, .. } => {
             let mut out = vec![value];
@@ -389,9 +389,12 @@ pub(super) fn groups<'a>(
             let methods = methods
                 .iter()
                 .filter(|m| called.contains(crate::ast::unqualified(m)));
-            let refs = references(f);
-            refs.iter()
-                .chain(methods)
+            // `P(...)` runs `P.__init__` (D145).
+            let inits = references(f)
+                .into_iter()
+                .flat_map(|n| [crate::ast::method_name(&n, "__init__"), n]);
+            inits
+                .chain(methods.cloned())
                 .filter_map(|n| index.get(n.as_str()).copied())
                 .collect()
         })

@@ -10,8 +10,8 @@ use super::builtins::Builtin;
 use super::methods::Method;
 use super::rt_err;
 use super::table::{Key, Table, TableRef};
-use crate::ast::{unqualified, CmpOp, FuncDef, RecordDef};
-use crate::diag::Result;
+use crate::ast::{unqualified, CmpOp, FuncDef, RecordDef, RecordKind};
+use crate::diag::{Diagnostic, Result};
 use crate::exc::{Class, ExcKind};
 use crate::infer::View;
 use crate::span::Span;
@@ -287,20 +287,36 @@ impl<'m> Value<'m> {
         }
     }
 
-    /// Python's `str(x)`.
+    /// Python's `str(x)`, for a value no plain object reaches.
     pub fn to_str(&self, span: Span) -> Result<String> {
+        self.to_str_with(span, &mut |_, _| Err(unshown(span)))
+    }
+
+    /// Python's `str(x)`, plain objects shown by `show`.
+    pub fn to_str_with(&self, span: Span, show: Show<'_, 'm>) -> Result<String> {
         match self {
             Value::Str(s) => Ok(s.to_string()),
             Value::Exc(e) => e.message(span),
-            other => other.repr(span),
+            Value::Record(r) if r.def.kind == RecordKind::Plain => show(r, false),
+            other => other.repr_with(span, show),
         }
     }
 
-    /// Python's `repr(x)`. A list that contains itself renders as `[...]`,
-    /// as in Python; nesting deeper than `MAX_NESTING` is an error.
+    /// Python's `repr(x)`, for a value no plain object reaches.
     pub fn repr(&self, span: Span) -> Result<String> {
+        self.repr_with(span, &mut |_, _| Err(unshown(span)))
+    }
+
+    /// Python's `repr(x)`, plain objects shown by `show`. A list that
+    /// contains itself renders as `[...]`, as in Python; nesting deeper
+    /// than `MAX_NESTING` is an error.
+    pub fn repr_with(&self, span: Span, show: Show<'_, 'm>) -> Result<String> {
         let mut out = String::new();
-        write_repr(self, &mut Vec::new(), &mut out, span)?;
+        let mut cx = Render {
+            active: Vec::new(),
+            show,
+        };
+        write_repr(self, &mut cx, &mut out, span)?;
         Ok(out)
     }
 
@@ -505,6 +521,8 @@ fn eq_at<'m>(a: &Value<'m>, b: &Value<'m>, depth: usize, span: Span) -> Result<b
         (Value::Future(x), Value::Future(y)) => Rc::ptr_eq(x, y),
         (Value::Results(x), Value::Results(y)) => Rc::ptr_eq(x, y),
         (Value::Record(x), Value::Record(y)) if Rc::ptr_eq(x, y) => true,
+        // A plain object is equal only to itself (D147).
+        (Value::Record(x), _) if x.def.kind == RecordKind::Plain => false,
         (Value::Record(x), Value::Record(y)) if std::ptr::eq(x.def, y.def) => seq_eq(
             &x.fields.borrow(),
             &y.fields.borrow(),
@@ -708,51 +726,71 @@ fn cmp_symbol(op: CmpOp) -> &'static str {
     }
 }
 
+/// A plain object's text (D147): its `__str__`, else its `__repr__`;
+/// only its `__repr__` when `nested` in another value's form.
+pub(super) type Show<'s, 'm> = &'s mut dyn FnMut(&Rc<Record<'m>>, bool) -> Result<String>;
+
+/// The state of one rendering: the containers being rendered, outermost
+/// first, and how plain objects show.
+pub(super) struct Render<'s, 'm> {
+    active: Vec<*const ()>,
+    show: Show<'s, 'm>,
+}
+
 /// Writes `v`'s repr. `active` holds the containers being rendered,
 /// outermost first: meeting one again means a cycle, shown as `[...]`
 /// or `(...)` as in Python.
-fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Span) -> Result<()> {
+fn write_repr<'m>(
+    v: &Value<'m>,
+    cx: &mut Render<'_, 'm>,
+    out: &mut String,
+    span: Span,
+) -> Result<()> {
     let text = match v {
         Value::List(l) => {
             let id = Rc::as_ptr(l).cast::<()>();
-            if active.contains(&id) {
+            if cx.active.contains(&id) {
                 out.push_str("[...]");
                 return Ok(());
             }
-            return write_items(&l.borrow(), id, ("[", "]"), active, out, span);
+            return write_items(&l.borrow(), id, ("[", "]"), cx, out, span);
         }
         Value::Tuple(t) => {
             let id = Rc::as_ptr(t).cast::<()>();
-            if active.contains(&id) {
+            if cx.active.contains(&id) {
                 out.push_str("(...)");
                 return Ok(());
             }
             let close = if t.len() == 1 { ",)" } else { ")" };
-            return write_items(t, id, ("(", close), active, out, span);
+            return write_items(t, id, ("(", close), cx, out, span);
         }
-        Value::Dict(t) | Value::Set(t) => return write_table(v, t, active, out, span),
-        Value::Record(r) => return write_record(r, active, out, span),
+        Value::Dict(t) | Value::Set(t) => return write_table(v, t, cx, out, span),
+        Value::Record(r) if r.def.kind == RecordKind::Plain => {
+            out.push_str(&(cx.show)(r, true)?);
+            return Ok(());
+        }
+        Value::Record(r) => return write_record(r, cx, out, span),
         Value::View(view, items) => {
             out.push_str(view.name());
             out.push('(');
             let id = Rc::as_ptr(items).cast::<()>();
-            write_items(items, id, ("[", "]"), active, out, span)?;
+            write_items(items, id, ("[", "]"), cx, out, span)?;
             out.push(')');
             return Ok(());
         }
         Value::Exc(e) => {
-            enter_repr(active, Rc::as_ptr(e).cast::<()>(), span)?;
+            enter_repr(&mut cx.active, Rc::as_ptr(e).cast::<()>(), span)?;
             out.push_str(e.kind.name());
             out.push('(');
             match &e.arg {
                 ExcArg::None => {}
-                ExcArg::One(arg) => write_repr(arg, active, out, span)?,
+                ExcArg::One(arg) => write_repr(arg, cx, out, span)?,
                 ExcArg::Errno {
                     errno, strerror, ..
                 } => out.push_str(&format!("{errno}, {}", str_repr(strerror))),
             }
             out.push(')');
-            active.pop();
+            cx.active.pop();
             return Ok(());
         }
         Value::None => "None".to_string(),
@@ -787,15 +825,15 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
 
 /// `P(x=1, y='a')`: the record's own name, then each field's `repr`
 /// (D133).
-fn write_record(
-    r: &Record,
-    active: &mut Vec<*const ()>,
+fn write_record<'m>(
+    r: &Rc<Record<'m>>,
+    cx: &mut Render<'_, 'm>,
     out: &mut String,
     span: Span,
 ) -> Result<()> {
     // No record reaches itself: a field's annotation names only records
     // defined before it (D129, D148), so D146's `...` guard has no case.
-    enter_repr(active, std::ptr::from_ref(r).cast::<()>(), span)?;
+    enter_repr(&mut cx.active, Rc::as_ptr(r).cast::<()>(), span)?;
     out.push_str(unqualified(&r.def.name.name));
     out.push('(');
     let fields = r.fields.borrow();
@@ -805,10 +843,10 @@ fn write_record(
         }
         out.push_str(&field.name.name);
         out.push('=');
-        write_repr(value, active, out, span)?;
+        write_repr(value, cx, out, span)?;
     }
     out.push(')');
-    active.pop();
+    cx.active.pop();
     Ok(())
 }
 
@@ -828,15 +866,15 @@ fn enter_repr(active: &mut Vec<*const ()>, id: *const (), span: Span) -> Result<
 
 /// `{k: v, ...}` for a dict, `{a, ...}` for a set, `set()` for an empty
 /// set. A dict that contains itself renders as `{...}`, as in Python.
-fn write_table(
-    v: &Value,
-    t: &TableRef,
-    active: &mut Vec<*const ()>,
+fn write_table<'m>(
+    v: &Value<'m>,
+    t: &TableRef<'m>,
+    cx: &mut Render<'_, 'm>,
     out: &mut String,
     span: Span,
 ) -> Result<()> {
     let id = Rc::as_ptr(t).cast::<()>();
-    if active.contains(&id) {
+    if cx.active.contains(&id) {
         out.push_str("{...}");
         return Ok(());
     }
@@ -846,42 +884,50 @@ fn write_table(
         out.push_str("set()");
         return Ok(());
     }
-    enter_repr(active, id, span)?;
+    enter_repr(&mut cx.active, id, span)?;
     out.push('{');
     for (i, (k, value)) in table.entries().iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
         }
-        write_repr(k, active, out, span)?;
+        write_repr(k, cx, out, span)?;
         if !is_set {
             out.push_str(": ");
-            write_repr(value, active, out, span)?;
+            write_repr(value, cx, out, span)?;
         }
     }
     out.push('}');
-    active.pop();
+    cx.active.pop();
     Ok(())
 }
 
-fn write_items(
-    items: &[Value],
+fn write_items<'m>(
+    items: &[Value<'m>],
     id: *const (),
     (open, close): (&str, &str),
-    active: &mut Vec<*const ()>,
+    cx: &mut Render<'_, 'm>,
     out: &mut String,
     span: Span,
 ) -> Result<()> {
-    enter_repr(active, id, span)?;
+    enter_repr(&mut cx.active, id, span)?;
     out.push_str(open);
     for (i, item) in items.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
         }
-        write_repr(item, active, out, span)?;
+        write_repr(item, cx, out, span)?;
     }
     out.push_str(close);
-    active.pop();
+    cx.active.pop();
     Ok(())
+}
+
+/// A plain object met where no interpreter can call its `__repr__`.
+fn unshown(span: Span) -> Diagnostic {
+    rt_err(
+        span,
+        "internal: a plain object shown without its `__repr__`".to_string(),
+    )
 }
 
 /// Python's `repr` of a string, shared with the runtime (D54).

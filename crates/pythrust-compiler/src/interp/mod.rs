@@ -32,7 +32,7 @@ use std::rc::Rc;
 
 use crate::ast::{
     unqualified, Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Handler,
-    Ident, LogicalOp, Module, RecordDef, Stmt, StmtKind, Target, TargetKind,
+    Ident, LogicalOp, Module, RecordDef, RecordKind, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::{Class, ExcKind};
@@ -895,8 +895,15 @@ impl<'m> Interp<'m, '_> {
         let out = match callee {
             Value::Func(f) => self.call_func(f, evaluated)?,
             Value::Builtin(Builtin::Std(f)) => self.std(f, &evaluated)?,
+            Value::Builtin(b @ (Builtin::Print | Builtin::Str)) => {
+                let evaluated = self.shown(evaluated)?;
+                builtins::call(b, evaluated, self.out)?
+            }
             Value::Builtin(b) => builtins::call(b, evaluated, self.out)?,
             Value::Method(m) => methods::call(&m, evaluated)?,
+            Value::Class(def) if def.kind == RecordKind::Plain => {
+                self.new_object(def, evaluated)?
+            }
             Value::Class(def) => construct(def, evaluated)?,
             Value::ExcClass(class) => {
                 let arg = evaluated.positional.into_iter().next();
@@ -1112,6 +1119,80 @@ impl<'m> Interp<'m, '_> {
             _ => {
                 let msg = format!("AttributeError: record has no attribute '{}'", attr.name);
                 Err(rt_err(attr.span, msg).into())
+            }
+        }
+    }
+
+    /// `P(...)` of plain class `P`: a new object, its fields then set by
+    /// `P.__init__` (D145), which assigns each before any is read.
+    fn new_object(&mut self, def: &'m RecordDef, mut args: Args<'m>) -> Exec<'m, Value<'m>> {
+        let fields = vec![Value::None; def.fields.len()].into_boxed_slice();
+        let object = Value::Record(Rc::new(Record {
+            def,
+            fields: std::cell::RefCell::new(fields),
+        }));
+        let init = crate::ast::method_name(&def.name.name, "__init__");
+        if let Some(Value::Func(f)) = self.globals.get(init.as_str()) {
+            args.positional.insert(0, object.clone());
+            self.call_func(Rc::clone(f), args)?;
+        }
+        Ok(object)
+    }
+
+    /// `print`'s or `str`'s arguments with each positional value as the
+    /// text it shows, its plain objects through their `__str__` or
+    /// `__repr__` (D147).
+    fn shown(&mut self, mut args: Args<'m>) -> Exec<'m, Args<'m>> {
+        let span = args.span;
+        for v in args.positional.iter_mut() {
+            if matches!(v, Value::Str(_)) {
+                continue;
+            }
+            let mut raised = None;
+            let text = v.to_str_with(span, &mut |r, nested| {
+                self.show(r, nested, span).map_err(|u| match u {
+                    Unwind::Fault(d) => d,
+                    u => {
+                        raised = Some(u);
+                        rt_err(span, String::new())
+                    }
+                })
+            });
+            if let Some(u) = raised {
+                return Err(u);
+            }
+            *v = Value::str(&text?);
+        }
+        Ok(args)
+    }
+
+    /// Plain object `r`'s text: `__str__`'s result, else `__repr__`'s,
+    /// and `__repr__`'s when `nested`; inference has checked one exists.
+    fn show(&mut self, r: &Rc<Record<'m>>, nested: bool, span: Span) -> Exec<'m, String> {
+        let class = &r.def.name.name;
+        let has = |m: &str| r.def.methods.iter().any(|x| x.name == m);
+        let dunder = if !nested && has("__str__") {
+            "__str__"
+        } else {
+            "__repr__"
+        };
+        let name = crate::ast::method_name(class, dunder);
+        let Some(Value::Func(f)) = self.globals.get(name.as_str()) else {
+            return Err(rt_err(span, format!("internal: `{name}` is not defined")).into());
+        };
+        let args = Args {
+            positional: vec![Value::Record(Rc::clone(r))],
+            keywords: Vec::new(),
+            span,
+        };
+        match self.call_func(Rc::clone(f), args)? {
+            Value::Str(s) => Ok(s.to_string()),
+            other => {
+                let msg = format!(
+                    "TypeError: {dunder} returned non-string (type {})",
+                    other.type_name()
+                );
+                Err(rt_err(span, msg).into())
             }
         }
     }

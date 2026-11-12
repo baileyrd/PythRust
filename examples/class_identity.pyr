@@ -1,0 +1,9 @@
+# deviation: D147: comparing an object with a value of another type is a compile error; CPython gives False.
+# expect-error: cannot compare Box with int: they are never equal
+# expect-exit: 1
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+
+print(Box(1) == 1)

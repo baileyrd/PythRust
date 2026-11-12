@@ -1,0 +1,12 @@
+# deviation: D145: a field `__init__` may leave unassigned is a compile error; CPython raises AttributeError at the read.
+# expect-error: field `size` of `Box` is not assigned on every path through `__init__`
+# expect-exit: 1
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+        if n > 2:
+            self.size = "big"
+
+
+b = Box(3)
+print(b.n)

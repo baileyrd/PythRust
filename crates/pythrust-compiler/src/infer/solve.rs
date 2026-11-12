@@ -7,11 +7,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ast::BinOp;
+use crate::ast::{source_name, unqualified, BinOp, RecordKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 
 use super::methods;
+use super::records::Record;
 use super::subst::{Clash, Subst};
 use super::ty::{Type, TypeVar, View};
 
@@ -75,6 +76,12 @@ pub(super) enum Need {
     /// A dict key or set element type: `int`, `str`, `bool`, `None`, or
     /// a tuple or optional of them.
     Hashable(Type),
+    /// A value `print` or `str` shows; `nested` inside a container's or a
+    /// record's printed form, which shows its `__repr__` (D147).
+    Printable {
+        value: Type,
+        nested: bool,
+    },
     /// `==` on a value of this type: no dict view inside it.
     Comparable(Type),
     /// `index` is a key of a dict keyed by `key` (`d.get(index)`).
@@ -174,12 +181,17 @@ enum Step {
 }
 
 /// Solves until no constraint makes progress. Returns those still waiting.
-pub(super) fn solve(s: &mut Subst, mut pending: Vec<Constraint>) -> Result<Vec<Constraint>> {
+/// `records` are the program's records and classes, by name.
+pub(super) fn solve(
+    s: &mut Subst,
+    records: &HashMap<String, Record>,
+    mut pending: Vec<Constraint>,
+) -> Result<Vec<Constraint>> {
     loop {
         let mut waiting = Vec::new();
         let mut progressed = false;
         for c in pending {
-            match step(s, &c)? {
+            match step(s, records, &c)? {
                 Step::Waiting => waiting.push(c),
                 Step::Done(more) => {
                     progressed = true;
@@ -261,6 +273,10 @@ pub(super) fn rename(s: &Subst, need: &Need, map: &HashMap<TypeVar, Type>) -> Ne
         },
         Need::SliceBound(t) => Need::SliceBound(r(t)),
         Need::Hashable(t) => Need::Hashable(r(t)),
+        Need::Printable { value, nested } => Need::Printable {
+            value: r(value),
+            nested: *nested,
+        },
         Need::Comparable(t) => Need::Comparable(r(t)),
         Need::Key { key, index } => Need::Key {
             key: r(key),
@@ -315,6 +331,7 @@ fn need_types(need: &Need) -> Vec<&Type> {
         Need::Len(t)
         | Need::SliceBound(t)
         | Need::Hashable(t)
+        | Need::Printable { value: t, .. }
         | Need::Comparable(t)
         | Need::ToNumber { arg: t, .. } => {
             vec![t]
@@ -342,7 +359,7 @@ fn need_types(need: &Need) -> Vec<&Type> {
     }
 }
 
-fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
+fn step(s: &mut Subst, records: &HashMap<String, Record>, c: &Constraint) -> Result<Step> {
     match &c.need {
         Need::Binary(b) => binary(s, c, b),
         Need::Negate { operand, out } => negate(s, c, operand, out),
@@ -364,7 +381,8 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
         } => index_of(s, c, value, index, *literal, out, *access),
         Need::Slice { value, bounds, out } => slice_of(s, c, value, bounds, out),
         Need::Unpack { value, elems } => unpack(s, c, value, elems),
-        Need::Hashable(t) => hashable(s, c, t),
+        Need::Hashable(t) => hashable(s, records, c, t),
+        Need::Printable { value, nested } => printable(s, records, c, value, *nested),
         Need::Comparable(t) => comparable(s, c, t),
         Need::OrNone { value, out } => or_none(s, c, value, out),
         Need::Probe { container, item } => probe(s, container, item),
@@ -383,6 +401,55 @@ fn step(s: &mut Subst, c: &Constraint) -> Result<Step> {
             args,
             out,
         } => method(s, c, name, receiver, args, out),
+    }
+}
+
+/// [`Need::Printable`]: a plain object shows its `__str__`, else its
+/// `__repr__`, and only its `__repr__` when nested; a record shows its
+/// fields (D133, D147).
+fn printable(
+    s: &mut Subst,
+    records: &HashMap<String, Record>,
+    c: &Constraint,
+    t: &Type,
+    nested: bool,
+) -> Result<Step> {
+    let Some(t) = known(s, t) else {
+        return Ok(Step::Waiting);
+    };
+    let inner = |ts: Vec<Type>| {
+        let needs = ts.into_iter().map(|value| Need::Printable {
+            value,
+            nested: true,
+        });
+        Ok(Step::Done(needs.collect()))
+    };
+    match t {
+        Type::List(e) | Type::Set(e) | Type::View(_, e) => inner(vec![*e]),
+        Type::Dict(k, v) => inner(vec![*k, *v]),
+        Type::Tuple(items) => inner(items),
+        Type::Optional(present) => Ok(Step::Done(vec![Need::Printable {
+            value: *present,
+            nested,
+        }])),
+        Type::Record(name) => {
+            let Some(r) = records.get(&name) else {
+                return Ok(Step::Done(vec![]));
+            };
+            if r.kind != RecordKind::Plain {
+                return inner(r.fields.iter().map(|(_, t)| t.clone()).collect());
+            }
+            let shows = r.methods.contains("__repr__") || !nested && r.methods.contains("__str__");
+            if shows {
+                return Ok(Step::Done(vec![]));
+            }
+            let shown = source_name(unqualified(&name));
+            Err(error(
+                c,
+                format!("printing `{shown}` needs a `__repr__` method"),
+            ))
+        }
+        _ => Ok(Step::Done(vec![])),
     }
 }
 
@@ -956,7 +1023,12 @@ fn unpack(s: &mut Subst, c: &Constraint, value: &Type, elems: &[Type]) -> Result
 /// The dict key and set element types, for messages.
 const KEY_TYPES: &str = "a key or element is int, str, bool, None or a tuple of them";
 
-fn hashable(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
+fn hashable(
+    s: &mut Subst,
+    records: &HashMap<String, Record>,
+    c: &Constraint,
+    t: &Type,
+) -> Result<Step> {
     let Some(t) = known(s, t) else {
         return Ok(Step::Waiting);
     };
@@ -970,9 +1042,13 @@ fn hashable(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
             Err(error(c, msg))
         }
         // Hashable in Python when every field is (D130).
-        Type::Record(_) => {
-            let msg = "a record as a dict key or set element is not supported yet";
-            Err(error(c, msg.to_string()))
+        Type::Record(name) => {
+            let plain = records
+                .get(&name)
+                .is_some_and(|r| r.kind == RecordKind::Plain);
+            let what = if plain { "an object" } else { "a record" };
+            let msg = format!("{what} as a dict key or set element is not supported yet");
+            Err(error(c, msg))
         }
         // Hashable in Python: floats wait on NaN and `-0.0` keys.
         other => {
@@ -1139,8 +1215,12 @@ pub(super) fn assigns(deferred: Vec<(Type, Type)>, what: &str) -> Vec<Need> {
 /// `xs` never filled makes `xs` a `list[int | None]`), and so does a
 /// `d.get(k)` of a dict never filled. The rest stays waiting, as in
 /// `solve`.
-pub(super) fn default_assigns(s: &mut Subst, pending: Vec<Constraint>) -> Result<Vec<Constraint>> {
-    let mut waiting = solve(s, pending)?;
+pub(super) fn default_assigns(
+    s: &mut Subst,
+    records: &HashMap<String, Record>,
+    pending: Vec<Constraint>,
+) -> Result<Vec<Constraint>> {
+    let mut waiting = solve(s, records, pending)?;
     while let Some(i) = waiting.iter().position(|c| {
         matches!(
             c.need,
@@ -1154,7 +1234,7 @@ pub(super) fn default_assigns(s: &mut Subst, pending: Vec<Constraint>) -> Result
             Need::Key { key, index } => expect(s, &c, key, index)?,
             _ => {}
         }
-        waiting = solve(s, waiting)?;
+        waiting = solve(s, records, waiting)?;
     }
     Ok(waiting)
 }
@@ -1269,9 +1349,10 @@ fn slice_bound(s: &Subst, c: &Constraint, bound: &Type) -> Result<Step> {
 /// instructions still verify, without defaulting original generic schemes.
 pub(super) fn default_slice_bounds(
     s: &mut Subst,
+    records: &HashMap<String, Record>,
     pending: Vec<Constraint>,
 ) -> Result<Vec<Constraint>> {
-    let mut waiting = solve(s, pending)?;
+    let mut waiting = solve(s, records, pending)?;
     while let Some(i) = waiting.iter().position(
         |c| matches!(&c.need, Need::SliceBound(t) if matches!(s.resolve(t), Type::Var(_))),
     ) {
@@ -1281,7 +1362,7 @@ pub(super) fn default_slice_bounds(
         }
         // Propagate the representative through producer/result constraints,
         // and validate other bounds before choosing any further default.
-        waiting = solve(s, waiting)?;
+        waiting = solve(s, records, waiting)?;
     }
     Ok(waiting)
 }
