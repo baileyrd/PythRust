@@ -1,0 +1,13 @@
+# expect-exit: 1
+# An uncaught user exception ends the program named by its class.
+class ConfigError(RuntimeError):
+    pass
+
+
+try:
+    raise ConfigError("caught · é")
+except ArithmeticError:
+    print("never")
+except ConfigError as e:
+    print("caught:", e)
+raise ConfigError("bad setting · ü")

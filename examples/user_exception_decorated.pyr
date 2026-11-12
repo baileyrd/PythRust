@@ -1,0 +1,12 @@
+# deviation: D139: a decorator on an exception class is not supported yet; CPython runs it.
+# expect-error: decorators on an exception class are not supported yet
+# expect-exit: 1
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class CodeError(Exception):
+    code: int
+
+
+print(CodeError(3))

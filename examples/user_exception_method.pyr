@@ -1,0 +1,9 @@
+# deviation: D139: methods on an exception class wait for classes; CPython runs them.
+# expect-error: methods on an exception class are not supported yet
+# expect-exit: 1
+class LoudError(Exception):
+    def __str__(self) -> str:
+        return "loud · é"
+
+
+print(LoudError())

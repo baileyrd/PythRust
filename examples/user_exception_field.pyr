@@ -1,0 +1,8 @@
+# deviation: D139: fields on an exception class wait for classes; CPython runs them.
+# expect-error: fields on an exception class are not supported yet
+# expect-exit: 1
+class CodeError(Exception):
+    code: int
+
+
+print(CodeError("é"))

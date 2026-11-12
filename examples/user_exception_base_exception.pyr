@@ -1,0 +1,8 @@
+# deviation: D139: `BaseException` is not supported yet; CPython runs it.
+# expect-error: `BaseException` is not supported yet; derive from `Exception`
+# expect-exit: 1
+class Stop(BaseException):
+    pass
+
+
+print(Stop("é"))
