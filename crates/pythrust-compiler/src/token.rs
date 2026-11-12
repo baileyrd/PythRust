@@ -62,6 +62,8 @@ pub enum TokenKind {
     With,
     /// `pause`, marking an expression that waits on a task (M6c).
     Pause,
+    /// `class`, only under `@dataclass(frozen=True)` (step 4, D132).
+    Class,
 
     // Arithmetic operators.
     Plus,
@@ -105,6 +107,8 @@ pub enum TokenKind {
     Arrow,
     /// `|`, only in `T | None` annotations.
     Pipe,
+    /// `@`, only before a `class` as `@dataclass(frozen=True)` (D132).
+    At,
 
     // Layout.
     Newline,

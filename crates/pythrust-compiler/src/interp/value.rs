@@ -10,7 +10,7 @@ use super::builtins::Builtin;
 use super::methods::Method;
 use super::rt_err;
 use super::table::{Key, Table, TableRef};
-use crate::ast::{CmpOp, FuncDef};
+use crate::ast::{unqualified, CmpOp, FuncDef, RecordDef};
 use crate::diag::Result;
 use crate::exc::ExcKind;
 use crate::infer::View;
@@ -55,6 +55,35 @@ pub(super) enum Value<'m> {
     /// What `map` returned: how each task ended, in order, taken by
     /// iterating once, as Python's generator is.
     Results(Rc<RefCell<VecDeque<Outcome<'m>>>>),
+    /// A record's class, which constructs it (D132).
+    Class(&'m RecordDef),
+    /// A frozen record (D129).
+    Record(Rc<Record<'m>>),
+    /// A record's method bound to its receiver: `p.m`.
+    Bound(Rc<Bound<'m>>),
+}
+
+/// A frozen record: its definition and its fields' values, in
+/// declaration order.
+#[derive(Debug)]
+pub(super) struct Record<'m> {
+    pub def: &'m RecordDef,
+    pub fields: Box<[Value<'m>]>,
+}
+
+impl<'m> Record<'m> {
+    /// The value of field `name`, if the record has one.
+    pub fn field(&self, name: &str) -> Option<&Value<'m>> {
+        let at = self.def.fields.iter().position(|f| f.name.name == name)?;
+        self.fields.get(at)
+    }
+}
+
+/// A method and the record it is called on, passed as `self`.
+#[derive(Debug)]
+pub(super) struct Bound<'m> {
+    pub func: Rc<Func<'m>>,
+    pub receiver: Value<'m>,
 }
 
 /// How a task ended: its result, or the exception that escaped it and
@@ -215,7 +244,10 @@ impl<'m> Value<'m> {
             | Value::File(_)
             | Value::Executor
             | Value::Future(_)
-            | Value::Results(_) => true,
+            | Value::Results(_)
+            | Value::Class(_)
+            | Value::Record(_)
+            | Value::Bound(_) => true,
         }
     }
 
@@ -242,6 +274,10 @@ impl<'m> Value<'m> {
             Value::Executor => "ThreadPoolExecutor",
             Value::Future(_) => "Future",
             Value::Results(_) => "generator",
+            // Inference checks every use of these, so no message names one.
+            Value::Class(_) => "type",
+            Value::Record(_) => "object",
+            Value::Bound(_) => "method",
         }
     }
 
@@ -462,6 +498,10 @@ fn eq_at<'m>(a: &Value<'m>, b: &Value<'m>, depth: usize, span: Span) -> Result<b
         (Value::File(x), Value::File(y)) => Rc::ptr_eq(x, y),
         (Value::Future(x), Value::Future(y)) => Rc::ptr_eq(x, y),
         (Value::Results(x), Value::Results(y)) => Rc::ptr_eq(x, y),
+        (Value::Record(x), Value::Record(y)) if Rc::ptr_eq(x, y) => true,
+        (Value::Record(x), Value::Record(y)) if std::ptr::eq(x.def, y.def) => {
+            seq_eq(&x.fields, &y.fields, deeper(depth, span)?, span)?
+        }
         _ => false,
     })
 }
@@ -682,6 +722,7 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
             return write_items(t, id, ("(", close), active, out, span);
         }
         Value::Dict(t) | Value::Set(t) => return write_table(v, t, active, out, span),
+        Value::Record(r) => return write_record(r, active, out, span),
         Value::View(view, items) => {
             out.push_str(view.name());
             out.push('(');
@@ -720,6 +761,8 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
         Value::Range(r) if r.step == 1 => format!("range({}, {})", r.start, r.stop),
         Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
         Value::Func(f) => format!("<function {}>", f.def.name.name),
+        Value::Class(def) => format!("<class '{}'>", unqualified(&def.name.name)),
+        Value::Bound(b) => format!("<bound method {}>", b.func.def.name.name),
         Value::Builtin(b) if b.exception().is_some() => format!("<class '{}'>", b.name()),
         Value::Builtin(b) => format!("<built-in function {}>", b.name()),
         Value::Method(m) => format!(
@@ -729,6 +772,30 @@ fn write_repr(v: &Value, active: &mut Vec<*const ()>, out: &mut String, span: Sp
         ),
     };
     out.push_str(&text);
+    Ok(())
+}
+
+/// `P(x=1, y='a')`: the record's own name, then each field's `repr`
+/// (D133).
+fn write_record(
+    r: &Record,
+    active: &mut Vec<*const ()>,
+    out: &mut String,
+    span: Span,
+) -> Result<()> {
+    enter_repr(active, std::ptr::from_ref(r).cast::<()>(), span)?;
+    out.push_str(unqualified(&r.def.name.name));
+    out.push('(');
+    for (i, (field, value)) in r.def.fields.iter().zip(r.fields.iter()).enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&field.name.name);
+        out.push('=');
+        write_repr(value, active, out, span)?;
+    }
+    out.push(')');
+    active.pop();
     Ok(())
 }
 

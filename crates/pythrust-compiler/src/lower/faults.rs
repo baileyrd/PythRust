@@ -128,7 +128,11 @@ impl<'a> Sites<'a> {
                 self.expr(value);
                 self.block(body);
             }
-            StmtKind::FuncDef(_) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+            StmtKind::FuncDef(_)
+            | StmtKind::Record(_)
+            | StmtKind::Break
+            | StmtKind::Continue
+            | StmtKind::Pass => {}
         }
     }
 

@@ -18,6 +18,7 @@ mod expr;
 mod methods;
 mod pause;
 mod raises;
+mod records;
 pub(crate) mod scope;
 mod solve;
 mod stmt;
@@ -80,9 +81,10 @@ impl Types {
 pub fn infer(module: &Module) -> Result<Types> {
     let defs = top_level_defs(module)?;
     let mut c = Checker::default();
+    c.declare_records(module)?;
     c.declare_globals(module, &defs)?;
     c.declare_stubs(&module.stubs, &defs)?;
-    for group in scope::groups(&defs) {
+    for group in scope::groups(&defs, &module.methods()) {
         c.infer_group(&group)?;
     }
     for s in &module.body {
@@ -192,6 +194,8 @@ struct Checker {
     /// The generator expression being checked as a reducer's argument
     /// (D119): anywhere else it is not a value yet (D121).
     reduced: Option<Span>,
+    /// The program's records, by qualified name (D129).
+    records: HashMap<String, records::Record>,
 }
 
 impl Checker {

@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use crate::ast::{
     Expr, ExprKind, FuncDef, Ident, LocalModule, Module, Stmt, StmtKind, Target, TargetKind,
-    COMP_MARK,
+    TypeExpr, COMP_MARK,
 };
 use crate::infer::scope;
 use crate::span::Span;
@@ -30,16 +30,21 @@ const MAIN: &str = "__main__";
 pub fn qualify(module: &mut Module, name: &str) -> LocalModule {
     bind_name(module, name);
     let globals = globals(&module.body);
+    let records = records(&module.body);
     let defs = module
         .body
         .iter()
         .filter_map(|s| match &s.kind {
-            StmtKind::FuncDef(f) => Some(f.name.name.clone()),
+            StmtKind::FuncDef(f) if !f.name.name.contains('.') => Some(f.name.name.clone()),
             _ => None,
         })
+        .chain(records.iter().cloned())
         .collect();
-    let mut rename = |n: &str| globals.contains(n).then(|| format!("{name}.{n}"));
+    let mut rename = |n: &str| owned(n, &globals, &records).then(|| format!("{name}.{n}"));
     block(&mut module.body, &mut rename);
+    types(&mut module.body, &mut |n| {
+        records.contains(n).then(|| format!("{name}.{n}"))
+    });
     LocalModule {
         name: name.to_string(),
         names: globals,
@@ -56,8 +61,89 @@ pub fn main_name(module: &mut Module, parts: &[Module]) {
     }
     let free: BTreeSet<String> = parts.iter().flat_map(|p| free(&p.body)).collect();
     let clash: BTreeSet<String> = globals(&module.body).intersection(&free).cloned().collect();
-    let mut rename = |n: &str| clash.contains(n).then(|| format!("{MAIN}.{n}"));
+    let records: BTreeSet<String> = records(&module.body)
+        .intersection(&clash)
+        .cloned()
+        .collect();
+    let mut rename = |n: &str| owned(n, &clash, &records).then(|| format!("{MAIN}.{n}"));
     block(&mut module.body, &mut rename);
+    types(&mut module.body, &mut |n| {
+        records.contains(n).then(|| format!("{MAIN}.{n}"))
+    });
+}
+
+/// Whether `n` is one of `names`, or a method `P.m` of one of `records`.
+fn owned(n: &str, names: &BTreeSet<String>, records: &BTreeSet<String>) -> bool {
+    let method = n
+        .split_once('.')
+        .is_some_and(|(r, m)| records.contains(r) && !m.contains('.'));
+    names.contains(n) || method
+}
+
+/// The records the top level of `body` defines.
+fn records(body: &[Stmt]) -> BTreeSet<String> {
+    body.iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::Record(r) => Some(r.name.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Renames by `rename` the type names of every annotation in `body`: a
+/// record's fields, a function's parameters and result, and each
+/// annotated assignment, a function's included.
+fn types(body: &mut [Stmt], rename: &mut Rename<'_>) {
+    for s in body {
+        match &mut s.kind {
+            StmtKind::Record(r) => {
+                r.fields
+                    .iter_mut()
+                    .for_each(|f| type_expr(&mut f.annotation, rename));
+            }
+            StmtKind::FuncDef(f) => {
+                let params = f.params.iter_mut().filter_map(|p| p.annotation.as_mut());
+                params
+                    .chain(f.returns.as_mut())
+                    .for_each(|t| type_expr(t, rename));
+                types(&mut f.body, rename);
+            }
+            StmtKind::AnnAssign { annotation, .. } => type_expr(annotation, rename),
+            _ => nested(s).into_iter().for_each(|b| types(b, rename)),
+        }
+    }
+}
+
+/// The blocks a statement holds.
+fn nested(s: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
+    match &mut s.kind {
+        StmtKind::If {
+            branch,
+            elifs,
+            orelse,
+        } => std::iter::once(branch)
+            .chain(elifs)
+            .map(|b| &mut b.body)
+            .chain([orelse])
+            .collect(),
+        StmtKind::While { branch, orelse } => vec![&mut branch.body, orelse],
+        StmtKind::For { body, orelse, .. } => vec![body, orelse],
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => std::iter::once(body)
+            .chain(handlers.iter_mut().map(|h| &mut h.body))
+            .chain(finally.as_mut())
+            .collect(),
+        StmtKind::With { body, .. } => vec![body],
+        _ => Vec::new(),
+    }
+}
+
+fn type_expr(t: &mut TypeExpr, rename: &mut Rename<'_>) {
+    ident(&mut t.name, rename);
+    t.args.iter_mut().for_each(|a| type_expr(a, rename));
 }
 
 /// The program as one module (D76): the bodies of `parts`, in the
@@ -129,6 +215,7 @@ fn globals(body: &[Stmt]) -> BTreeSet<String> {
     scope::assigned(body)
         .into_iter()
         .chain(defs)
+        .chain(records(body))
         .filter(|n| !n.contains(COMP_MARK) && !n.contains('.'))
         .collect()
 }
@@ -168,6 +255,7 @@ fn stmt(s: &mut Stmt, rename: &mut Rename<'_>) {
         StmtKind::Expr(e) | StmtKind::Raise(e) => expr(e, rename),
         StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
         StmtKind::FuncDef(f) => func(f, rename),
+        StmtKind::Record(r) => ident(&mut r.name, rename),
         StmtKind::If {
             branch,
             elifs,

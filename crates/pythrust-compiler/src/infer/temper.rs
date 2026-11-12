@@ -90,7 +90,8 @@ fn spellable(t: &Type) -> bool {
         | Type::Bool
         | Type::None
         | Type::Exception
-        | Type::Bytes => true,
+        | Type::Bytes
+        | Type::Record(_) => true,
     }
 }
 

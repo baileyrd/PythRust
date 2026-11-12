@@ -127,10 +127,7 @@ impl Checker {
                 );
                 Ok(out)
             }
-            ExprKind::Attr { attr, .. } => {
-                let msg = format!("methods can only be called: `.{}(...)`", attr.name);
-                Err(error(attr.span, msg))
-            }
+            ExprKind::Attr { value, attr } => self.field(value, attr),
             ExprKind::Comp {
                 gather: Gather::Gen(_),
                 ..
@@ -278,6 +275,11 @@ impl Checker {
         }
         if self.funcs.contains_key(name) || builtins::is_builtin(name) {
             let msg = format!("`{name}` is a function; functions are not values yet");
+            return Err(error(span, msg));
+        }
+        if self.is_record(name) {
+            let msg =
+                format!("`{name}` is a record, not a value; construct one with `{name}(...)`");
             return Err(error(span, msg));
         }
         Err(error(span, format!("name `{name}` is not defined")))
@@ -440,7 +442,7 @@ impl Checker {
     fn call(&mut self, func: &Expr, args: &[Arg], span: Span) -> Result<Type> {
         match &func.kind {
             ExprKind::Name(name) => self.call_name(name, func.span, args, span),
-            ExprKind::Attr { value, attr } => self.method(value, attr, args),
+            ExprKind::Attr { value, attr } => self.method(value, attr, args, span),
             _ => Err(error(
                 func.span,
                 "only named functions can be called".to_string(),
@@ -465,6 +467,9 @@ impl Checker {
                  so it can be neither declared nor caught; rename the program's `{class}`"
             );
             return Err(error(at, msg));
+        }
+        if self.is_record(name) {
+            return self.construct(name, args, span);
         }
         let sig = match self.funcs.get(name).cloned() {
             Some(Func::Mono(sig)) => sig,
@@ -632,6 +637,7 @@ impl Checker {
                 return Err(error(t.span, msg.to_string()));
             }
             "tuple" => return Ok(Type::Tuple(args)),
+            _ if self.is_record(name) => Type::Record(name.to_string()),
             _ => return Err(error(t.name.span, format!("unknown type `{name}`"))),
         };
         if !args.is_empty() {

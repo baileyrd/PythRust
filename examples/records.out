@@ -1,0 +1,12 @@
+Point(x=1, y=-2) Point(x=1, y=-2) True False False
+1 -2 3
+Label(text='café ünï', at=Point(x=1, y=-2), tags=['a', 'ß'], weight=None)
+Label(text='café ünï', at=Point(x=1, y=-2), tags=['a', 'ß'], weight=None) 16
+Point(x=3, y=-2) Point(x=1, y=3) True
+» café ünï @ 3
+['a', 'ß', 'x'] True
+Label(text='t', at=Point(x=0, y=0), tags=[], weight=1.5)
+[Point(x=0, y=0), Point(x=1, y=2), Point(x=2, y=4)] 9
+{'origin': Point(x=0, y=0)} 0
+(Point(x=1, y=-2), Empty()) True
+truthy Point(x=2, y=4)

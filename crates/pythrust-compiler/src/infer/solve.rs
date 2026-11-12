@@ -717,6 +717,10 @@ fn order(s: &mut Subst, c: &Constraint, l: &Type, r: &Type) -> Result<Step> {
         (Type::Tuple(a), Type::Tuple(b)) => Ok(Step::Done(
             a.iter().zip(b).map(|(x, y)| pair(x, y)).collect(),
         )),
+        (Type::Record(_), _) | (_, Type::Record(_)) => {
+            let msg = "records have no ordering; `order=True` is not supported yet";
+            Err(error(c, msg.to_string()))
+        }
         _ => {
             let msg = format!("cannot order {} against {}", s.zonk(&l), s.zonk(&r));
             Err(error(c, msg))
@@ -964,6 +968,11 @@ fn hashable(s: &mut Subst, c: &Constraint, t: &Type) -> Result<Step> {
         Type::List(_) | Type::Dict(..) | Type::Set(_) | Type::View(..) => {
             let msg = format!("unhashable type: {}; {KEY_TYPES}", s.zonk(&t));
             Err(error(c, msg))
+        }
+        // Hashable in Python when every field is (D130).
+        Type::Record(_) => {
+            let msg = "a record as a dict key or set element is not supported yet";
+            Err(error(c, msg.to_string()))
         }
         // Hashable in Python: floats wait on NaN and `-0.0` keys.
         other => {

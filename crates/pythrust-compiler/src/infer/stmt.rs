@@ -68,6 +68,8 @@ impl Checker {
                 let out = self.subst.fresh();
                 self.subscript(value, index, Access::Delete, out).map(drop)
             }
+            // Declared up front (`Checker::declare_records`).
+            StmtKind::Record(_) => Ok(()),
             StmtKind::FuncDef(f) => Err(error(
                 f.name.span,
                 "`def` is only allowed at module top level".to_string(),

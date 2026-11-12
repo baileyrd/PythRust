@@ -661,6 +661,10 @@ const NATIVE: &[&str] = &[
 /// so a closed gap moves to `NATIVE`.
 const NATIVE_GAPS: &[(&str, &str)] = &[
     (
+        "records",
+        "frozen records are not lowered yet (step 4-2); `run` is the reference (D59)",
+    ),
+    (
         "exception_list_cycle",
         "an exception may close a reference cycle; native code has no cycle collector",
     ),

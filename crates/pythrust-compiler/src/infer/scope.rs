@@ -200,6 +200,7 @@ fn own_exprs(s: &Stmt) -> Vec<&Expr> {
             out
         }
         StmtKind::FuncDef(_)
+        | StmtKind::Record(_)
         | StmtKind::Try { .. }
         | StmtKind::Break
         | StmtKind::Continue
@@ -368,7 +369,13 @@ pub(super) fn target_names(target: &Target, out: &mut BTreeSet<String>) {
 /// Functions in an order where each group's dependencies come first.
 /// A group is a set of mutually recursive functions (a strongly connected
 /// component of the call graph), inferred together.
-pub(super) fn groups<'a>(funcs: &[&'a FuncDef]) -> Vec<Vec<&'a FuncDef>> {
+///
+/// A call `x.m(...)` may call any record's method `m` among `methods`
+/// (D131): which one waits for `x`'s type, so each counts.
+pub(super) fn groups<'a>(
+    funcs: &[&'a FuncDef],
+    methods: &BTreeSet<String>,
+) -> Vec<Vec<&'a FuncDef>> {
     let index: HashMap<&str, usize> = funcs
         .iter()
         .enumerate()
@@ -377,8 +384,13 @@ pub(super) fn groups<'a>(funcs: &[&'a FuncDef]) -> Vec<Vec<&'a FuncDef>> {
     let edges: Vec<Vec<usize>> = funcs
         .iter()
         .map(|f| {
+            let called = method_calls(f);
+            let methods = methods
+                .iter()
+                .filter(|m| called.contains(crate::ast::unqualified(m)));
             let refs = references(f);
             refs.iter()
+                .chain(methods)
                 .filter_map(|n| index.get(n.as_str()).copied())
                 .collect()
         })
@@ -392,6 +404,22 @@ pub(super) fn groups<'a>(funcs: &[&'a FuncDef]) -> Vec<Vec<&'a FuncDef>> {
             g.into_iter()
                 .filter_map(|i| funcs.get(i).copied())
                 .collect()
+        })
+        .collect()
+}
+
+/// The method names `f` calls, `m` of each `x.m(...)`, its defaults'
+/// included.
+fn method_calls(f: &FuncDef) -> BTreeSet<&str> {
+    let defaults = f.params.iter().filter_map(|p| p.default.as_ref());
+    let roots = exprs(&f.body).into_iter().chain(defaults.flat_map(tree));
+    roots
+        .filter_map(|e| match &e.kind {
+            ExprKind::Call { func, .. } => match &func.kind {
+                ExprKind::Attr { attr, .. } => Some(attr.name.as_str()),
+                _ => None,
+            },
+            _ => None,
         })
         .collect()
 }
@@ -484,7 +512,11 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
             e(value);
             body.iter().for_each(|s| stmt_names(s, out));
         }
-        StmtKind::FuncDef(_) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+        StmtKind::FuncDef(_)
+        | StmtKind::Record(_)
+        | StmtKind::Break
+        | StmtKind::Continue
+        | StmtKind::Pass => {}
     }
 }
 

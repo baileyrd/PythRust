@@ -22,6 +22,19 @@ pub struct Module {
     pub span: Span,
 }
 
+impl Module {
+    /// The top-level names of every record's methods, `P.m` (D131).
+    pub fn methods(&self) -> std::collections::BTreeSet<String> {
+        let records = self.body.iter().filter_map(|s| match &s.kind {
+            StmtKind::Record(r) => Some(r),
+            _ => None,
+        });
+        records
+            .flat_map(|r| r.methods.iter().map(|m| method_name(&r.name.name, &m.name)))
+            .collect()
+    }
+}
+
 /// A `pause` marker (M6c): the keyword, and the expression it covers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pause {
@@ -43,8 +56,8 @@ pub struct Binding {
 pub struct LocalModule {
     pub name: String,
     pub names: std::collections::BTreeSet<String>,
-    /// Those of `names` its `def`s bind: `from` aliases a function, and
-    /// copies a variable (D83).
+    /// Those of `names` its `def`s and records bind: `from` aliases a
+    /// function or record, and copies a variable (D83, D136).
     pub defs: std::collections::BTreeSet<String>,
 }
 
@@ -115,6 +128,8 @@ pub enum StmtKind {
     /// A bare `expr_list` evaluated for effect.
     Expr(Expr),
     FuncDef(FuncDef),
+    /// `@dataclass(frozen=True) class NAME: ...` (step 4, D129-D136).
+    Record(RecordDef),
     /// `'if' expr ':' block ('elif' expr ':' block)* ['else' ':' block]`
     If {
         branch: Branch,
@@ -189,6 +204,34 @@ pub struct FuncDef {
     pub raises: Vec<Ident>,
     pub body: Block,
     pub span: Span,
+}
+
+/// A frozen record (step 4, D129-D136): `@dataclass(frozen=True)
+/// class NAME:` with annotated fields, at a module's top level. Its
+/// methods follow it in the module's body as `def`s named by
+/// [`method_name`], `self` annotated with the record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordDef {
+    pub name: Ident,
+    /// In declaration order, which construction and printing follow.
+    /// Names are distinct, and none is a method's.
+    pub fields: Vec<Field>,
+    /// The methods' own names, `m` of `P.m`, in source order.
+    pub methods: Vec<Ident>,
+    pub span: Span,
+}
+
+/// `NAME ':' type` in a record's body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub name: Ident,
+    pub annotation: TypeExpr,
+}
+
+/// The top-level name of record `record`'s method `method`: `P.m`, which
+/// no source name can be, so the method is an ordinary function.
+pub fn method_name(record: &str, method: &str) -> String {
+    format!("{record}.{method}")
 }
 
 /// Tempering level of a function.

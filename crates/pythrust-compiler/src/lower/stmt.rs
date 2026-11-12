@@ -122,6 +122,7 @@ impl FnBuilder<'_, '_> {
             StmtKind::Continue => self.loop_jump(s.span, |l| l.next),
             StmtKind::Pass => Ok(()),
             StmtKind::FuncDef(f) => self.def_stmt(f),
+            StmtKind::Record(r) => Err(super::unsupported(r.name.span, "records")),
             StmtKind::If {
                 branch,
                 elifs,
