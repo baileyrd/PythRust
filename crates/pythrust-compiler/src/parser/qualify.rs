@@ -80,11 +80,12 @@ fn owned(n: &str, names: &BTreeSet<String>, records: &BTreeSet<String>) -> bool 
     names.contains(n) || method
 }
 
-/// The records the top level of `body` defines.
+/// The records and exception classes the top level of `body` defines.
 fn records(body: &[Stmt]) -> BTreeSet<String> {
     body.iter()
         .filter_map(|s| match &s.kind {
             StmtKind::Record(r) => Some(r.name.name.clone()),
+            StmtKind::ExcClass(c) => Some(c.name.name.clone()),
             _ => None,
         })
         .collect()
@@ -256,6 +257,10 @@ fn stmt(s: &mut Stmt, rename: &mut Rename<'_>) {
         StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
         StmtKind::FuncDef(f) => func(f, rename),
         StmtKind::Record(r) => ident(&mut r.name, rename),
+        StmtKind::ExcClass(c) => {
+            ident(&mut c.name, rename);
+            ident(&mut c.base, rename);
+        }
         StmtKind::If {
             branch,
             elifs,

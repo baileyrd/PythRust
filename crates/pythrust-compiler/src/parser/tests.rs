@@ -224,6 +224,7 @@ fn sx_stmt(s: &Stmt) -> String {
             binding,
             body,
         } => format!("(with {} {} {})", sx(value), binding.name, sx_block(body)),
+        StmtKind::ExcClass(c) => format!("(class {} {})", c.name.name, c.base.name),
         StmtKind::Record(r) => {
             let fields = r
                 .fields

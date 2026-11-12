@@ -12,6 +12,7 @@ use crate::ast::{
     Stmt, StmtKind, Target, TargetKind, TypeExpr,
 };
 use crate::diag::Result;
+use crate::exc::ExcKind;
 use crate::infer::scope;
 use crate::span::Span;
 use crate::token::TokenKind;
@@ -114,6 +115,12 @@ impl Parser<'_> {
             return Ok(());
         }
         let generic = matches!(self.peek(), TokenKind::Name(n) if n == "Generic");
+        let exception =
+            matches!(self.peek(), TokenKind::Name(n) if ExcKind::from_name(n).is_some());
+        if exception {
+            let msg = "decorators on an exception class are not supported yet";
+            return Err(error(self.tok(0).span, msg));
+        }
         let msg = match generic {
             true => "generic records are not supported yet".to_string(),
             false => format!(
@@ -371,6 +378,7 @@ fn record_type(record: &Ident, span: Span) -> TypeExpr {
 /// statement runs (a field's, a `def`'s parameters and result) names
 /// only records defined before it.
 pub(super) fn check_module(body: &[Stmt]) -> Result<()> {
+    check_exc_classes(body)?;
     let records: Vec<(usize, &RecordDef)> = body
         .iter()
         .enumerate()
@@ -383,7 +391,7 @@ pub(super) fn check_module(body: &[Stmt]) -> Result<()> {
         return Ok(());
     }
     for &(_, r) in &records {
-        check_unbound(r, body)?;
+        check_unbound(&r.name, r.span, "a record", body)?;
     }
     for (at, s) in body.iter().enumerate() {
         let at = runs_at(s, at, &records);
@@ -425,9 +433,28 @@ pub(super) fn check_modules(module: &Module, locals: &[LocalModule]) -> Result<(
     Ok(())
 }
 
-/// No variable, parameter, function or other record takes `r`'s name.
-fn check_unbound(r: &RecordDef, body: &[Stmt]) -> Result<()> {
-    let name = r.name.name.as_str();
+/// No exception class is named like a builtin one, or rebound (D142).
+fn check_exc_classes(body: &[Stmt]) -> Result<()> {
+    for s in body {
+        let StmtKind::ExcClass(c) = &s.kind else {
+            continue;
+        };
+        if ExcKind::from_name(&c.name.name).is_some() {
+            let msg = format!(
+                "`{}` names a builtin exception class; choose another name",
+                c.name.name
+            );
+            return Err(error(c.name.span, msg));
+        }
+        check_unbound(&c.name, c.span, "an exception class", body)?;
+    }
+    Ok(())
+}
+
+/// No variable, parameter, function or other class takes the name of
+/// `what` (a record or an exception class) `class`, defined at `at`.
+fn check_unbound(class: &Ident, at: Span, what: &str, body: &[Stmt]) -> Result<()> {
+    let name = class.name.as_str();
     let mut bound = scope::assigned(body).into_iter().map(|n| source(&n));
     let mut clash = bound.any(|n| n == name);
     for s in body {
@@ -437,15 +464,16 @@ fn check_unbound(r: &RecordDef, body: &[Stmt]) -> Result<()> {
                 clash |= f.params.iter().any(|p| p.name.name == name);
                 clash |= scope::assigned(&f.body).iter().any(|n| source(n) == name);
             }
-            StmtKind::Record(other) => clash |= other.span != r.span && other.name.name == name,
+            StmtKind::Record(other) => clash |= other.span != at && other.name.name == name,
+            StmtKind::ExcClass(other) => clash |= other.span != at && other.name.name == name,
             _ => {}
         }
     }
     match clash {
         false => Ok(()),
         true => {
-            let msg = format!("`{name}` names a record; choose another name");
-            Err(error(r.name.span, msg))
+            let msg = format!("`{name}` names {what}; choose another name");
+            Err(error(class.span, msg))
         }
     }
 }

@@ -12,7 +12,7 @@ class Missing(KeyError):
     pass
 
 
-def parse(s: str) -> int:
+temper def parse(s: str) -> int raises ParseError, ValueError:
     if s == "":
         raise ParseError("empty · é")
     return int(s)
@@ -32,19 +32,19 @@ for s in ["12", "", "x"]:
     try:
         print(strict(s))
     except ParseError as e:
-        print("parse:", e, repr(e))
+        print("parse:", e, [e])
     except ValueError as e:
         print("value:", e)
 
 try:
     check(-1)
 except AppError as e:
-    print("app:", repr(e), str(e) == "")
+    print("app:", [e], str(e) == "")
 
 try:
     raise Missing("k · ✓")
 except LookupError as e:
-    print("lookup:", e, repr(e))
+    print("lookup:", e, [e])
 
 try:
     raise ParseError("tuple · ñ")
@@ -54,7 +54,7 @@ except (AppError, ParseError) as e:
 try:
     raise AppError(3)
 except Exception as e:
-    print("base:", e, repr(e))
+    print("base:", e, [e])
 
 
 def wrap() -> None:
@@ -68,5 +68,5 @@ try:
     wrap()
 except AppError as e:
     print("wrapped:", e)
-print(f"{ParseError('f · é')}")
+print(str(ParseError("s · é")))
 print(check(4))

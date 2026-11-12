@@ -35,7 +35,7 @@ use crate::ast::{
     Ident, LogicalOp, Module, RecordDef, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
-use crate::exc::ExcKind;
+use crate::exc::{Class, ExcKind};
 use crate::infer::{scope, Type, Types, View};
 use crate::span::Span;
 use builtins::{Args, Builtin};
@@ -153,6 +153,7 @@ type Exec<'m, T> = std::result::Result<T, Unwind<'m>>;
 /// wrong unpacking arity.
 fn raised<'m>(kind: ExcKind, message: String, span: Span) -> Unwind<'m> {
     let arg = ExcArg::One(Value::str(&message));
+    let kind = kind.into();
     Unwind::Raise(Rc::new(Exc { kind, arg }), span)
 }
 
@@ -249,6 +250,13 @@ impl<'m> Interp<'m, '_> {
             }
             StmtKind::FuncDef(def) => self.define(def)?,
             StmtKind::Record(def) => self.store(&def.name.name, Value::Class(def)),
+            StmtKind::ExcClass(def) => {
+                let Some(class) = self.types.classes().user(&def.name.name) else {
+                    let msg = "internal: an exception class inference did not declare";
+                    return Err(rt_err(def.span, msg.to_string()).into());
+                };
+                self.store(&def.name.name, Value::ExcClass(class));
+            }
             StmtKind::If {
                 branch,
                 elifs,
@@ -294,7 +302,11 @@ impl<'m> Interp<'m, '_> {
         match self.eval(value)? {
             Value::Exc(exc) => Ok(exc),
             Value::Builtin(Builtin::Exception(kind)) => Ok(Rc::new(Exc {
-                kind,
+                kind: kind.into(),
+                arg: ExcArg::None,
+            })),
+            Value::ExcClass(class) => Ok(Rc::new(Exc {
+                kind: class.clone(),
                 arg: ExcArg::None,
             })),
             _ => Err(rt_err(
@@ -333,7 +345,7 @@ impl<'m> Interp<'m, '_> {
             done => return done,
         };
         for h in handlers {
-            if self.catches(h, exc.kind)? {
+            if self.catches(h, &exc.kind)? {
                 return self.exec_handler(h, exc);
             }
         }
@@ -342,18 +354,19 @@ impl<'m> Interp<'m, '_> {
 
     /// Whether one of `h`'s classes is `kind` or a class it derives from.
     /// Every name is looked up now, as Python evaluates the tuple whole.
-    fn catches(&self, h: &Handler, kind: ExcKind) -> Result<bool> {
+    fn catches(&self, h: &Handler, kind: &Class) -> Result<bool> {
         let mut caught = false;
         for name in &h.classes {
-            let Value::Builtin(Builtin::Exception(class)) = self.lookup(&name.name, name.span)?
-            else {
-                return Err(rt_err(
-                    name.span,
-                    "TypeError: catching classes that do not inherit from BaseException is not allowed"
-                        .to_string(),
-                ));
+            let class = match self.lookup(&name.name, name.span)? {
+                Value::Builtin(Builtin::Exception(k)) => Class::Builtin(k),
+                Value::ExcClass(class) => class.clone(),
+                _ => {
+                    let msg = "TypeError: catching classes that do not inherit from \
+                               BaseException is not allowed";
+                    return Err(rt_err(name.span, msg.to_string()));
+                }
             };
-            caught |= kind.is_a(class);
+            caught |= kind.is_a(&class);
         }
         Ok(caught)
     }
@@ -871,6 +884,13 @@ impl<'m> Interp<'m, '_> {
             Value::Builtin(b) => builtins::call(b, evaluated, self.out)?,
             Value::Method(m) => methods::call(&m, evaluated)?,
             Value::Class(def) => construct(def, evaluated)?,
+            Value::ExcClass(class) => {
+                let arg = evaluated.positional.into_iter().next();
+                Value::Exc(Rc::new(Exc {
+                    kind: class.clone(),
+                    arg: ExcArg::of(arg),
+                }))
+            }
             Value::Bound(b) => {
                 evaluated.positional.insert(0, b.receiver.clone());
                 self.call_func(Rc::clone(&b.func), evaluated)?
@@ -1545,7 +1565,7 @@ fn missing_key<'m>(key: &Value<'m>, span: Span) -> Unwind<'m> {
     let arg = ExcArg::One(key.clone());
     Unwind::Raise(
         Rc::new(Exc {
-            kind: ExcKind::Key,
+            kind: ExcKind::Key.into(),
             arg,
         }),
         span,

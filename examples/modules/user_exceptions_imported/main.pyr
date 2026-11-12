@@ -5,14 +5,14 @@ import errors
 from errors import FetchError
 
 
-temper def load(path: str) -> str raises errors.FetchError:
+temper def load(owned path: str) -> str raises errors.FetchError:
     return errors.strict(path)
 
 
 try:
     load("")
 except FetchError as e:
-    print("caught:", e, repr(e))
+    print("caught:", e, [e])
 try:
     errors.fetch("")
 except OSError as e:

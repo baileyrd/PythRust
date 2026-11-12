@@ -1,10 +1,10 @@
 12
-parse: empty · é ParseError('empty · é')
+parse: empty · é [ParseError('empty · é')]
 value: invalid literal for int() with base 10: 'x'
-app: AppError() True
-lookup: 'k · ✓' Missing('k · ✓')
+app: [AppError()] True
+lookup: 'k · ✓' [Missing('k · ✓')]
 tuple: tuple · ñ
-base: 3 AppError(3)
+base: 3 [AppError(3)]
 wrapped: empty · é
-f · é
+s · é
 4

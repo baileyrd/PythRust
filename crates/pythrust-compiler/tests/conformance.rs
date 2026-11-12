@@ -371,7 +371,10 @@ fn loosen_def(line: &str) -> String {
     };
     let is_list = names.split(',').all(|n| {
         let n = n.trim();
-        !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        // A module's class is dotted: `raises errors.FetchError`.
+        !n.is_empty()
+            && n.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
     });
     if is_list {
         format!("{head}:")
@@ -662,6 +665,8 @@ const NATIVE: &[&str] = &[
     "unbound_local",
     "unbound_loop_target",
     "unpack_list_error",
+    "user_exception_uncaught",
+    "user_exceptions",
     "zero_division",
 ];
 
@@ -688,6 +693,11 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "genexp_generic_float",
         "a float `sum` of a comprehension or generator expression in a generic \
          function: its gathered list takes another element type than the items",
+    ),
+    (
+        "user_exception_many",
+        "more exception classes than the runtime's handler test holds, a bit per class \
+         code (D143)",
     ),
     (
         "list_index_mixed_number",
@@ -1171,6 +1181,9 @@ fn loosen_strips_raises_clauses() {
     let want = "def g(s):\n    print(\" raises X:\")\n";
     assert_eq!(loosen(loose).as_deref(), Some(want));
     assert_eq!(loosen("def raises(raises):\n    pass\n"), None);
+    let dotted = "temper def h() -> None raises errors.FetchError:\n    pass\n";
+    let want = "def h() -> None:\n    pass\n";
+    assert_eq!(loosen(dotted).as_deref(), Some(want));
 }
 
 /// A native program that failed must print exactly what `pythrust run`

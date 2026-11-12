@@ -227,7 +227,13 @@ fn os_error<'m>(e: &io::Error, p: Option<&str>, span: Span) -> super::Unwind<'m>
             None => strerror,
         })),
     };
-    super::Unwind::Raise(Rc::new(Exc { kind, arg }), span)
+    super::Unwind::Raise(
+        Rc::new(Exc {
+            kind: kind.into(),
+            arg,
+        }),
+        span,
+    )
 }
 
 /// The `OSError` subclass `e`'s kind names, its errno if the system gave

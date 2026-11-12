@@ -69,7 +69,7 @@ impl Checker {
                 self.subscript(value, index, Access::Delete, out).map(drop)
             }
             // Declared up front (`Checker::declare_records`).
-            StmtKind::Record(_) => Ok(()),
+            StmtKind::Record(_) | StmtKind::ExcClass(_) => Ok(()),
             StmtKind::FuncDef(f) => Err(error(
                 f.name.span,
                 "`def` is only allowed at module top level".to_string(),
@@ -169,12 +169,13 @@ impl Checker {
         not_an_exception(name)
     }
 
-    /// Whether `name` here is a builtin exception: one of D6's names that
-    /// no variable or `def` shadows.
+    /// Whether `name` here is an exception class: the program's own
+    /// (D138), or one of D6's names that no variable or `def` shadows.
     pub(super) fn is_exception_name(&self, name: &str) -> bool {
-        builtins::is_exception(name)
+        let builtin = builtins::is_exception(name)
             && self.lookup(name).is_none()
-            && !self.funcs.contains_key(name)
+            && !self.funcs.contains_key(name);
+        builtin || self.classes.user(name).is_some()
     }
 
     /// A clause's test narrows its body by holding and the later

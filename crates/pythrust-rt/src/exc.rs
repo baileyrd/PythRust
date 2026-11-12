@@ -45,6 +45,10 @@ const NAMES: [&str; 17] = [
     "UnicodeDecodeError",
 ];
 
+/// How many builtin classes there are: a program's own classes' codes
+/// follow (D143).
+pub(crate) const BUILTINS: usize = NAMES.len();
+
 /// The kind code of `ValueError`.
 pub(crate) const VALUE_ERROR: u8 = 0;
 
@@ -134,7 +138,8 @@ pub(crate) const TOO_DEEP: &str =
 /// bad`, or only the name when the message is empty. A message too deep
 /// to render is `run`'s `RecursionError` instead, at the same place.
 fn uncaught_line(e: u64) -> String {
-    let name = name(seq::exc_kind(e));
+    // SAFETY: the pending exception is live.
+    let name = seq::exc_names(unsafe { seq::seq(e) }).0;
     match seq::exc_message(e) {
         Ok(m) if m.is_empty() => name.to_string(),
         Ok(m) => format!("{name}: {m}"),
@@ -333,9 +338,9 @@ pub(crate) fn raise_errno(
 
 /// Whether the pending exception's kind is in `codes`, a bit per kind
 /// code (the compiler sets a class's bit and those of the classes derived
-/// from it): 1 or 0.
+/// from it, a program's own included): 1 or 0.
 #[unsafe(no_mangle)]
-pub extern "C" fn pt_pending_is(codes: u32) -> u8 {
+pub extern "C" fn pt_pending_is(codes: u64) -> u8 {
     let found = PENDING.with_borrow(|slot| slot.as_ref().map(|p| seq::exc_kind(p.exc as u64)));
     u8::from(found.is_some_and(|code| codes.checked_shr(u32::from(code)).unwrap_or(0) & 1 == 1))
 }
@@ -602,6 +607,30 @@ mod tests {
             let empty = seq::pt_seq_new(b"x9".as_ptr(), 2, 0);
             assert_eq!(uncaught_line(empty as u64), "KeyError");
             seq::pt_seq_dec(empty);
+        }
+    }
+
+    #[test]
+    fn a_programs_own_class_has_its_names_and_its_bases_message() {
+        // `Missing(KeyError)` from module `a`, code 17 (`A`), holding `'k'`.
+        let desc: &[u8] = b"xA9\x09a.Missing\x07Missings";
+        // SAFETY: as above; each object is live until its last dec.
+        unsafe {
+            let s = pstr::into_ptr(PtStr::new("k · é".into()));
+            let e = seq::pt_seq_new(desc.as_ptr(), desc.len(), 1);
+            seq::pt_seq_push(e, s as u64);
+            assert_eq!(uncaught_line(e as u64), "a.Missing: 'k · é'");
+            assert_eq!(seq::exc_names(seq::seq(e as u64)), ("a.Missing", "Missing"));
+            let text = pt_exc_str(e);
+            assert_eq!(pstr::borrow(text).text(), "'k · é'");
+            pstr::pt_str_dec(text);
+            set_pending(e, b"", b"");
+            assert_eq!(pt_pending_is(1 << 17), 1);
+            assert_eq!(pt_pending_is(1 << KEY_ERROR), 0);
+            seq::pt_seq_dec(pt_catch());
+            let bare = seq::pt_seq_new(b"xB0\x01E\x01E".as_ptr(), 7, 0);
+            assert_eq!(uncaught_line(bare as u64), "E");
+            seq::pt_seq_dec(bare);
         }
     }
 }

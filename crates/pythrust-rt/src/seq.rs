@@ -131,13 +131,14 @@ fn name_at(desc: &[u8], at: usize) -> (&str, usize) {
 /// The descriptor of slot `k` of a sequence described by `desc`. An
 /// exception's own descriptor is `x`, its kind's code and the type of
 /// its one slot, if it has one; an `OSError` the runtime raised has `E`
-/// before it ([`errno_form`]).
+/// before it ([`errno_form`]). A program's own class (D143) has its
+/// base's code and its two names ([`exc_names`]) before that type.
 pub(crate) fn slot(desc: &'static [u8], k: usize) -> &'static [u8] {
     match kind(desc) {
         Kind::List | Kind::Set => return desc.get(1..).unwrap_or_default(),
         Kind::Range => return b"i",
         Kind::Exc => {
-            let arg = desc.get(2..).unwrap_or_default();
+            let arg = desc.get(exc_arg_at(desc)..).unwrap_or_default();
             return arg.strip_prefix(b"E").unwrap_or(arg);
         }
         Kind::View => return desc.get(2..).unwrap_or_default(),
@@ -652,7 +653,7 @@ fn show_view(v: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &m
 
 /// `ValueError('bad')`, or `ValueError()` without an argument.
 fn show_exc(e: &'static PtSeq, out: &mut String, todo: &mut Vec<Step>, held: &mut Held) {
-    out.push_str(crate::exc::name(exc_kind(e as *const PtSeq as u64)));
+    out.push_str(exc_names(e).1);
     out.push('(');
     if let Some(os) = errno_form(e) {
         out.push_str(&format!("{}, {})", os.errno, pstr::repr(os.strerror)));
@@ -713,7 +714,50 @@ pub(crate) fn errno_form(e: &PtSeq) -> Option<Errno<'_>> {
 pub(crate) fn exc_kind(e: u64) -> u8 {
     // SAFETY: guaranteed by the caller.
     let desc = unsafe { seq(e) }.desc;
-    desc.get(1).map_or(u8::MAX, |c| c.wrapping_sub(b'0'))
+    code_at(desc, 1)
+}
+
+/// The kind code at `at` of an exception descriptor.
+fn code_at(desc: &[u8], at: usize) -> u8 {
+    desc.get(at).map_or(u8::MAX, |c| c.wrapping_sub(b'0'))
+}
+
+/// Whether exception descriptor `desc` is of a program's own class,
+/// whose code follows the builtins' (D143).
+fn is_user_exc(desc: &[u8]) -> bool {
+    let code = code_at(desc, 1);
+    code != u8::MAX && usize::from(code) >= crate::exc::BUILTINS
+}
+
+/// Where an exception descriptor's argument type starts: after `x` and
+/// the code, and for a program's own class after its base's code and
+/// its two names.
+fn exc_arg_at(desc: &[u8]) -> usize {
+    if !is_user_exc(desc) {
+        return 2;
+    }
+    let shown = name_at(desc, 3).1;
+    name_at(desc, shown).1
+}
+
+/// The builtin class exception `e` is or derives from, by kind code.
+fn exc_base(e: &PtSeq) -> u8 {
+    match is_user_exc(e.desc) {
+        true => code_at(e.desc, 2),
+        false => code_at(e.desc, 1),
+    }
+}
+
+/// Exception `e`'s class names: the one an uncaught exception shows,
+/// module-qualified (`a.E`), and its own, which `repr` shows (D140,
+/// D141). A builtin class has one name for both.
+pub(crate) fn exc_names(e: &PtSeq) -> (&'static str, &'static str) {
+    if !is_user_exc(e.desc) {
+        let name = crate::exc::name(code_at(e.desc, 1));
+        return (name, name);
+    }
+    let (shown, at) = name_at(e.desc, 3);
+    (shown, name_at(e.desc, at).0)
 }
 
 /// `str(e)` of a live exception `e`: its argument as a string, or empty
@@ -736,7 +780,7 @@ pub(crate) fn exc_message(mut e: u64) -> Result<String, TooDeep> {
         if kind(desc) == Kind::Opt && v != 0 {
             (desc, v) = (opt(desc).0, present(desc, v));
         }
-        let key_error = exc_kind(e) == crate::exc::KEY_ERROR;
+        let key_error = exc_base(s) == crate::exc::KEY_ERROR;
         match kind(desc) {
             Kind::Exc if !key_error => e = v,
             // SAFETY: a string slot holds a live string.

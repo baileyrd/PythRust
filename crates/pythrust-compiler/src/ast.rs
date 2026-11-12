@@ -130,6 +130,9 @@ pub enum StmtKind {
     FuncDef(FuncDef),
     /// `@dataclass(frozen=True) class NAME: ...` (step 4, D129-D136).
     Record(RecordDef),
+    /// `class NAME '(' base ')' ':' body`, a user exception class (step
+    /// 4-3, D138-D143).
+    ExcClass(ExcClassDef),
     /// `'if' expr ':' block ('elif' expr ':' block)* ['else' ':' block]`
     If {
         branch: Branch,
@@ -218,6 +221,18 @@ pub struct RecordDef {
     pub fields: Vec<Field>,
     /// The methods' own names, `m` of `P.m`, in source order.
     pub methods: Vec<Ident>,
+    pub span: Span,
+}
+
+/// A user exception class (D138-D143): its body holds only `pass` or a
+/// docstring, so the class is its name and its base, at a module's top
+/// level like a record (D136).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExcClassDef {
+    pub name: Ident,
+    /// The class it derives from, as written or qualified as any name
+    /// is; a builtin exception class, which inference checks (D138).
+    pub base: Ident,
     pub span: Span,
 }
 

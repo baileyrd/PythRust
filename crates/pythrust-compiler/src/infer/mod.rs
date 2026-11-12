@@ -14,6 +14,7 @@
 //! of those nodes share a span.
 
 mod builtins;
+mod classes;
 mod expr;
 mod methods;
 mod pause;
@@ -35,6 +36,7 @@ use std::mem;
 
 use crate::ast::{Block, FuncDef, Module, StmtKind, StubDef, TypeExpr};
 use crate::diag::{DiagKind, Diagnostic, Result, Warning};
+use crate::exc::Classes;
 use crate::span::Span;
 
 pub use builtins::{is_builtin, reads_results};
@@ -52,6 +54,7 @@ pub struct Types {
     raises: HashMap<String, Raises>,
     warnings: Vec<Warning>,
     records: HashMap<String, Vec<(String, Type)>>,
+    classes: Classes,
 }
 
 impl Types {
@@ -77,6 +80,11 @@ impl Types {
         self.records.get(name).map(Vec::as_slice)
     }
 
+    /// The program's exception classes (D138).
+    pub fn classes(&self) -> &Classes {
+        &self.classes
+    }
+
     /// Lints on the module, in source order: a `raises` clause listing
     /// `Exception` that its body does not need.
     pub fn warnings(&self) -> &[Warning] {
@@ -90,6 +98,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     let mut c = Checker::default();
     c.declare_records(module)?;
     c.declare_globals(module, &defs)?;
+    c.declare_classes(module, &defs)?;
     c.declare_stubs(&module.stubs, &defs)?;
     for group in scope::groups(&defs, &module.methods()) {
         c.infer_group(&group)?;
@@ -203,6 +212,8 @@ struct Checker {
     reduced: Option<Span>,
     /// The program's records, by qualified name (D129).
     records: HashMap<String, records::Record>,
+    /// The program's exception classes (D138).
+    classes: Classes,
 }
 
 impl Checker {
@@ -533,6 +544,7 @@ impl Checker {
             raises: HashMap::new(),
             warnings: Vec::new(),
             records,
+            classes: self.classes,
         }
     }
 }

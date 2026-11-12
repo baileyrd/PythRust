@@ -168,7 +168,10 @@ pub(super) fn call<'m>(b: Builtin, args: Args<'m>, out: &mut dyn Write) -> Exec<
         }
         Builtin::Exception(kind) => {
             let arg = ExcArg::of(opt(b, pos, span)?.cloned());
-            Value::Exc(Rc::new(Exc { kind, arg }))
+            Value::Exc(Rc::new(Exc {
+                kind: kind.into(),
+                arg,
+            }))
         }
         Builtin::Std(_) | Builtin::Enumerate | Builtin::Zip => {
             let msg = format!("internal: `{}` needs the interpreter", b.name());

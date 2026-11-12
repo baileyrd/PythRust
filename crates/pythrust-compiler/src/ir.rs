@@ -47,7 +47,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diag::Diagnostic;
-use crate::exc::ExcKind;
+use crate::exc::Class;
 use crate::span::Span;
 use crate::stdlib::{Kind, StdFn};
 
@@ -78,7 +78,7 @@ pub enum Ty {
     /// three ints, `start`, `stop` and a nonzero `step` ([`Rvalue::Field`]
     /// reads them), whose elements are the ints they produce.
     Range,
-    /// An immutable, reference-counted exception: its [`ExcKind`] and
+    /// An immutable, reference-counted exception: its [`Class`] and
     /// at most one argument. The native backend rejects one holding a
     /// list that may hold an exception (`codegen`); the analyses see it.
     Exc,
@@ -453,13 +453,13 @@ pub enum Rvalue {
     ParseInt(Operand),
     /// A new exception of this kind holding the operand, if any, which
     /// gains a reference.
-    NewExc(ExcKind, Option<Operand>),
+    NewExc(Class, Option<Operand>),
     /// Whether an exception is pending: a `Bool`.
     Raised,
     /// Whether the pending exception, which there is, is one of these
     /// classes: of one or of a class derived from one, as `except` tests.
     /// Never empty.
-    PendingIs(Vec<ExcKind>),
+    PendingIs(Vec<Class>),
     /// The pending exception, which there is, with its reference; none
     /// is pending after.
     Catch,

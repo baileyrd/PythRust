@@ -339,6 +339,9 @@ impl<'a> Parser<'a> {
         if self.at(&TokenKind::With) {
             return self.with_stmt();
         }
+        if self.at_exc_class() {
+            return Ok(vec![self.exc_class()?]);
+        }
         if self.at(&TokenKind::At) || self.at(&TokenKind::Class) {
             return self.record();
         }
@@ -578,9 +581,9 @@ impl<'a> Parser<'a> {
             return Ok(Vec::new());
         }
         self.bump();
-        let mut names = vec![self.expect_name("an exception name after `raises`")?];
+        let mut names = vec![self.exc_name("an exception name after `raises`")?];
         while self.eat(&TokenKind::Comma) {
-            names.push(self.expect_name("an exception name after `,`")?);
+            names.push(self.exc_name("an exception name after `,`")?);
         }
         Ok(names)
     }
@@ -768,7 +771,7 @@ impl<'a> Parser<'a> {
                        list every class in one tuple, as in `except (A, B, C):`";
             return Err(error(self.tok(0).span, msg));
         }
-        self.expect_name("an exception name, such as `ValueError`")
+        self.exc_name("an exception name, such as `ValueError`")
     }
 
     /// `target_list` before `in`. Parsed at `postfix` level so the `in`
@@ -1693,6 +1696,7 @@ fn describe(kind: &TokenKind) -> String {
     format!("`{text}`")
 }
 
+mod exc_class;
 mod imports;
 mod record;
 mod stubs;

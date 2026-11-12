@@ -471,6 +471,10 @@ impl Checker {
         if self.is_record(name) {
             return self.construct(name, args, span);
         }
+        if self.classes.user(name).is_some() {
+            self.positional(source_name(name), args, 0, 1, span)?;
+            return Ok(Type::Exception);
+        }
         let sig = match self.funcs.get(name).cloned() {
             Some(Func::Mono(sig)) => sig,
             Some(Func::Poly(scheme)) => self.instantiate(name, &scheme, span),
