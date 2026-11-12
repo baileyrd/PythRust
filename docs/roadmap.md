@@ -259,8 +259,9 @@ Nano's post-M6 order (2026-11-03), step 4: `@dataclass(frozen=True)` records wit
 
 Nano's post-M6 order (2026-11-03), step 5: plain classes with `__init__`, fields and methods, and the non-frozen `@dataclass`, designed in [research/classes.md](research/classes.md) (D144-D154). One PR each, in order:
 
-- [ ] *Design note (#1260):* the note, the grammar entries, these items, D144-D154.
-- [ ] *Front end and `run` (#1262):* plain classes and `@dataclass` through `check` and `run` (D144-D149); `build` refuses classes as a named gap. Exit: CPython-checked corpus programs for fields, methods, `__repr__`/`__str__`, a None-first field and a class imported from a module; each named error has a fixture beside an accepted neighbour.
+- [x] *Design note (#1260):* the note, the grammar entries, these items, D144-D154.
+- [x] *Mutable dataclasses, 5-2a (#1262):* the non-frozen `@dataclass` and attribute stores `p.x = v`, `p.x op= v` through `check` and `run` (D146, D158, D159); `build` refuses mutable classes as a named gap (D160); a `temper def` beside a class is D44's lowering-gap error until objects lower in #1264 (D157). Step 5-2 is two PRs (D161). Done: corpus `dataclass_mutable` in `NATIVE_GAPS`; `dataclass_no_field`, `dataclass_spelling`, `dataclass_temper_method` and `record_frozen_store` hold the named errors.
+- [ ] *Plain classes, 5-2b (#1455):* plain classes through `check` and `run` (D144, D145, D147-D149). Exit: CPython-checked corpus programs for fields, methods, `__repr__`/`__str__`, a None-first field and a class imported from a module; each named error has a fixture beside an accepted neighbour.
 - [ ] *Future annotations (#1454):* `from __future__ import annotations` as a module's first statement makes its annotations lazy, so methods may name their own or a later class (D154). Exit: CPython-checked corpus programs, and the eager error's fixture kept beside them.
 - [ ] *Ownership for objects (#1264):* D150 in `own` and the tasks rules. Exit: fixtures for D3, D4, A5 and rule 4 through fields beside accepted neighbours; inferred `mut self`/`owned self` and the tempered missing-mode error.
 - [ ] *Native classes (#1266):* objects lower to the runtime and `build` refuses only cycle-capable classes (D151). Exit: the 5-2 corpus in `NATIVE`, valgrind-clean; cycle-capable fixtures in `NATIVE_GAPS` with the stale-gap check.
