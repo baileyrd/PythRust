@@ -155,7 +155,12 @@ fn lower_reaching(module: &Module, types: &Types, reach: Reach) -> Result<Progra
         instances: HashMap::new(),
         funcs: Vec::new(),
         queue: Vec::new(),
-        seqs: types::SeqTypes::new(reach == Reach::Called, records(module, types)),
+        seqs: types::SeqTypes::new(
+            reach == Reach::Called,
+            reach == Reach::Every,
+            records(module, types),
+            classes(module),
+        ),
         open: HashMap::new(),
         lowering: 0,
         waits: usize::MAX,
@@ -482,16 +487,24 @@ fn file_kind(writes: bool, held: Ty) -> Kind {
     }
 }
 
-/// Every record's declared fields, by its qualified name.
+/// Every record's and class's declared fields, by its qualified name.
 fn records(module: &Module, types: &Types) -> HashMap<String, Vec<(String, Type)>> {
     let records = module.body.iter().filter_map(|s| match &s.kind {
-        // A mutable record is the backend gap `record` names (D160).
-        StmtKind::Record(r) if r.kind == RecordKind::Frozen => Some(r.name.name.as_str()),
+        StmtKind::Record(r) => Some(r.name.name.as_str()),
         _ => None,
     });
     records
         .filter_map(|name| Some((name.to_string(), types.record(name)?.to_vec())))
         .collect()
+}
+
+/// The qualified names of the program's mutable classes (D150).
+fn classes(module: &Module) -> HashSet<String> {
+    let classes = module.body.iter().filter_map(|s| match &s.kind {
+        StmtKind::Record(r) if r.kind != RecordKind::Frozen => Some(r.name.name.clone()),
+        _ => None,
+    });
+    classes.collect()
 }
 
 /// Whether `t` has no variables `subst` leaves unbound.
@@ -620,7 +633,7 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         | (Type::Exception, Ty::Exc)
         | (Type::Bytes, Ty::Bytes)
         | (Type::Executor, Ty::None) => true,
-        (Type::Record(name), Ty::Record(_)) => {
+        (Type::Record(name), Ty::Record(_) | Ty::Obj(_)) => {
             seqs.record_name(ty).is_some_and(|n| n == name.as_str())
         }
         (Type::File(writes, data), Ty::File(kind)) => {
@@ -1129,10 +1142,12 @@ fn record(name: &str, seqs: &mut types::SeqTypes, span: Span) -> Result<Ty> {
     if let Some(ty) = seqs.named(name) {
         return Ok(ty);
     }
+    // A mutable class lowers for analysis only until 5-4 (D157, D160).
+    if seqs.is_class(name) && !seqs.objects {
+        return Err(unsupported(span, "classes"));
+    }
     let declared = seqs.declared(name).map(<[(String, Type)]>::to_vec);
-    // Only frozen records are declared to lowering ([`records`]): any
-    // other is a mutable class, which does not lower until 5-4 (D160).
-    let declared = declared.ok_or_else(|| unsupported(span, "classes"))?;
+    let declared = declared.ok_or_else(|| internal(span, &format!("no class `{name}`")))?;
     let ty = seqs.reserve(name);
     let mut fields = Vec::new();
     for (_, t) in &declared {

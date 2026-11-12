@@ -1,0 +1,63 @@
+# Objects under the ownership checks (#1264, D150): the accepted
+# neighbours of `class_alias_store`, `class_return_param`,
+# `class_shared_call`, `class_keep_self` and `tasks_object_field`.
+import concurrent.futures
+
+
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+    temper def keep(owned self) -> None:
+        kept.append(self)
+
+    temper def grow(mut self, k: int) -> None:
+        self.n += k
+
+    def __repr__(self) -> str:
+        return "Box(" + str(self.n) + ")"
+
+
+kept: list[Box] = []
+
+
+temper def bump(n: int) -> int:
+    a = Box(n)
+    b = Box(a.n)
+    b.n = 5
+    return a.n
+
+
+temper def fresh(b: Box) -> Box:
+    return Box(b.n)
+
+
+temper def take(mut a: Box, b: Box) -> None:
+    a.n = b.n + 1
+
+
+def put(b: Box, n: int) -> None:
+    b.n = n
+
+
+def get(b: Box) -> int:
+    return b.n
+
+
+def main() -> None:
+    first = Box(1)
+    second = Box(2)
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        x = ex.submit(put, first, 3)
+        y = ex.submit(get, second)
+        x.result()
+        print(y.result(), "é")
+    print(first, second)
+
+
+x = Box(1)
+take(x, Box(4))
+x.grow(2)
+x.keep()
+print(bump(1), fresh(x).n, x, len(kept), "é")
+main()

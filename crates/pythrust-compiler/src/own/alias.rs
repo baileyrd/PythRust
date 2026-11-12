@@ -383,6 +383,7 @@ impl<'a> Body<'a> {
                 if matches!(
                     value,
                     Rvalue::NewSeq(_)
+                        | Rvalue::NewObj
                         | Rvalue::CopyList(_)
                         | Rvalue::Slice { .. }
                         | Rvalue::View(_)
@@ -455,6 +456,7 @@ impl<'a> Body<'a> {
             }
             Rvalue::Index(a, _) | Rvalue::Entry(a, ..) => self.step(&of(state, *a), ty),
             Rvalue::NewSeq(_)
+            | Rvalue::NewObj
             | Rvalue::CopyList(_)
             | Rvalue::Slice { .. }
             | Rvalue::View(_)
@@ -510,13 +512,15 @@ impl<'a> Body<'a> {
                 | Compound::View(_, t),
             ) => self.within_in(*t, inner, open),
             Some(Compound::Tuple(fields)) => fields.iter().any(|t| self.within_in(*t, inner, open)),
-            Some(Compound::Record { fields, .. }) if !open.contains(&outer) => {
+            Some(Compound::Record { fields, .. } | Compound::Object { fields, .. })
+                if !open.contains(&outer) =>
+            {
                 open.push(outer);
                 let any = fields.iter().any(|t| self.within_in(*t, inner, open));
                 open.pop();
                 any
             }
-            Some(Compound::Record { .. }) | None => false,
+            Some(Compound::Record { .. } | Compound::Object { .. }) | None => false,
         }
     }
 
@@ -702,6 +706,7 @@ impl<'a> Body<'a> {
         match inst {
             Inst::Append { list, .. }
             | Inst::SetItem { list, .. }
+            | Inst::SetField { obj: list, .. }
             | Inst::Extend { list, .. }
             | Inst::Scale { list, .. }
             | Inst::Insert { list, .. }
@@ -711,8 +716,14 @@ impl<'a> Body<'a> {
                 value: Rvalue::Call(f, args),
                 ..
             } => {
-                let params = &self.summaries[f.0].params;
-                let changed = args.iter().zip(params).filter(|(_, p)| p.mode >= Mode::Mut);
+                // `__init__` builds the object `P(...)` just made, which
+                // nothing else names yet (D167).
+                let init = self.program.funcs[f.0].name.ends_with(".__init__");
+                let params = self.summaries[f.0].params.iter().enumerate();
+                let changed = args
+                    .iter()
+                    .zip(params)
+                    .filter(|(_, (k, p))| p.mode >= Mode::Mut && !(init && *k == 0));
                 changed.map(|(a, _)| (*a, Change::Within)).collect()
             }
             _ => Vec::new(),
@@ -808,6 +819,7 @@ impl<'a> Body<'a> {
             Some(Compound::List(_)) => "list",
             Some(Compound::Set(_)) => "set",
             Some(Compound::Dict(..)) => "dict",
+            Some(Compound::Object { .. }) => "object",
             Some(Compound::Opt(t)) => self.container(*t),
             _ => "mutable container",
         }
@@ -816,12 +828,12 @@ impl<'a> Body<'a> {
     fn subject(&self, writer: Writer) -> String {
         match writer {
             Writer::Local(w, _) => self.func.names.get(&w).map_or_else(
-                || format!("a {}", self.container(self.ty(w))),
+                || article(self.container(self.ty(w))),
                 |name| format!("`{name}`"),
             ),
             Writer::Callee(f, _, ty) => format!(
-                "a {} through `{}`",
-                self.container(ty),
+                "{} through `{}`",
+                article(self.container(ty)),
                 self.program.funcs[f.0].name
             ),
         }
@@ -921,7 +933,7 @@ impl<'a> Body<'a> {
     /// in its elements. Name the returned local, never a possible alias source.
     fn return_hint(&self, dest: LocalId, expression: &Rvalue) -> String {
         let Some(Compound::List(element)) = self.program.compound(self.func.locals[dest.0]) else {
-            return "return an independent value that shares no lists, dicts or sets with the parameter".into();
+            return "return an independent value that shares no lists, dicts, sets or objects with the parameter".into();
         };
         if !self.copy_separates(*element) {
             return "return an independent value; a shallow copy still shares nested lists, dicts or sets".into();
@@ -1320,6 +1332,7 @@ pub(super) fn inst_operands(inst: &Inst) -> Vec<Operand> {
         }
         Inst::Scale { list, count, .. } => vec![*list, *count],
         Inst::SetGlobal { value, .. } => vec![*value],
+        Inst::SetField { obj, value, .. } => vec![*obj, *value],
         Inst::SetItem {
             list, index, value, ..
         } => vec![*list, *index, *value],
@@ -1347,6 +1360,7 @@ pub(super) fn inst_span(inst: &Inst) -> Option<Span> {
     match inst {
         Inst::Append { span, .. }
         | Inst::SetItem { span, .. }
+        | Inst::SetField { span, .. }
         | Inst::Extend { span, .. }
         | Inst::Scale { span, .. }
         | Inst::Insert { span, .. }
@@ -1354,5 +1368,13 @@ pub(super) fn inst_span(inst: &Inst) -> Option<Span> {
         | Inst::Sort { span, .. }
         | Inst::Assign { span, .. } => Some(*span),
         _ => None,
+    }
+}
+
+/// `noun` with its indefinite article: "a list", "an object".
+pub(super) fn article(noun: &str) -> String {
+    match noun.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        true => format!("an {noun}"),
+        false => format!("a {noun}"),
     }
 }

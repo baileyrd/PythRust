@@ -1,0 +1,16 @@
+# deviation: a call may not pass one object to two parameters of a tempered function when one is `mut` or `owned` (A5, D150); CPython has no modes.
+# expect-error: tempered `take` changes `a` in place, and this call may also pass that object as `b`; pass another object
+# expect-exit: 1
+# The accepted neighbour is `class_ownership`.
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+
+temper def take(mut a: Box, b: Box) -> None:
+    a.n = b.n + 1
+
+
+x = Box(1)
+take(x, x)
+print(x.n, "é")

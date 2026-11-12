@@ -701,6 +701,7 @@ impl<'r> Codegen<'r> {
             | Ty::List(_)
             | Ty::Tuple(_)
             | Ty::Record(_)
+            | Ty::Obj(_)
             | Ty::Opt(_)
             | Ty::Range
             | Ty::Exc
@@ -940,6 +941,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 let v = self.rvalue(value, *dest, *span)?;
                 self.b.def_var(self.vars[dest.0], v);
             }
+            Inst::SetField { .. } => return Err(objects()),
             Inst::Print { args, sep, end } => {
                 for (i, op) in args.iter().enumerate() {
                     if i > 0 {
@@ -1106,6 +1108,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                     "printing a task's handle or a loop's hold".to_string(),
                 ))
             }
+            Ty::Obj(_) => return Err(objects()),
         };
         self.call_rt(rt, &[v]);
         Ok(())
@@ -1172,6 +1175,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     fn rvalue(&mut self, value: &Rvalue, dest: LocalId, span: Span) -> Result<Value> {
         match value {
             Rvalue::Use(op) => Ok(self.operand(*op)),
+            Rvalue::NewObj => Err(objects()),
             Rvalue::Int(op @ (IntOp::FloorDiv | IntOp::Mod), a, Operand::Int(2))
                 if self.func.ty(*a) == Ty::Int =>
             {
@@ -1370,6 +1374,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::View(_) => Rt::StrFromSeq,
             Ty::Bytes | Ty::File(_) => Rt::ObjStr,
             Ty::Exc => Rt::ExcStr,
+            Ty::Obj(_) => return Err(objects()),
             Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
                 return Err(backend(
                     "`str` of a task's handle or a loop's hold".to_string(),
@@ -1790,6 +1795,12 @@ fn may_cycle(types: &[Compound], ty: Ty) -> bool {
         Some(Compound::Dict(_, v)) => ir::holds(types, *v, ir::is_exc),
         _ => false,
     })
+}
+
+/// Objects reach only analysis until they lower to the runtime (#1266,
+/// D157): `lower::lower` refuses them first (D160).
+fn objects() -> Diagnostic {
+    backend("an object reached the native backend".to_string())
 }
 
 fn backend(message: String) -> Diagnostic {

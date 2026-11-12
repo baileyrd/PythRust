@@ -44,6 +44,8 @@ struct Need {
     root: String,
     /// For the contract itself, the other parameter's name.
     other: Option<String>,
+    /// What the strong parameter is: "list" (any container) or "object".
+    noun: &'static str,
 }
 
 type Needs = BTreeMap<Key, Need>;
@@ -144,6 +146,7 @@ fn entry(needs: &mut Needs, heap: &Heap, root: &str) -> bool {
                 slot.insert(Need {
                     root: root.to_string(),
                     other: None,
+                    noun: "list",
                 });
                 changed = true;
             }
@@ -176,7 +179,8 @@ fn contract(def: &FuncDef) -> Needs {
                 def.name.name, strong.name.name
             );
             let other = Some(other.name.name.clone());
-            needs.insert((i, Peer::Param(j)), Need { root, other });
+            let noun = noun(strong);
+            needs.insert((i, Peer::Param(j)), Need { root, other, noun });
         }
     }
     needs
@@ -200,7 +204,15 @@ fn passed_on(site: &CallSite, needs: &Needs) -> Vec<(Key, Need)> {
                 continue;
             };
             let root = need.root.clone();
-            out.push((key, Need { root, other: None }));
+            let noun = need.noun;
+            out.push((
+                key,
+                Need {
+                    root,
+                    other: None,
+                    noun,
+                },
+            ));
         }
     }
     out
@@ -229,18 +241,23 @@ fn diagnostic(site: &CallSite, def: &FuncDef, (k, peer): Key, need: &Need) -> Di
     let root = &need.root;
     let name = |i: usize| def.params.get(i).map_or("?", |p| p.name.name.as_str());
     let callee = &def.name.name;
-    let fix = "pass a copy (`list(...)`)";
+    let noun = need.noun;
+    let fix = match noun {
+        "object" => "pass another object",
+        _ => "pass a copy (`list(...)`)",
+    };
     let message = match (peer, &need.other) {
         (Peer::Param(_), Some(other)) => {
-            format!("{root}, and this call may also pass that list as `{other}`; {fix}")
+            format!("{root}, and this call may also pass that {noun} as `{other}`; {fix}")
         }
         (Peer::Param(l), None) => format!(
-            "this call may pass one list as `{}` and `{}` of `{callee}`, and from there {root}; {fix}",
+            "this call may pass one {noun} as `{}` and `{}` of `{callee}`, and from there {root}; {fix}",
             name(k),
             name(l)
         ),
         (Peer::World, _) => format!(
-            "this call may pass a list a module variable holds as `{}` of `{callee}`, and from there {root}; {fix}",
+            "this call may pass {} a module variable holds as `{}` of `{callee}`, and from there {root}; {fix}",
+            super::alias::article(noun),
             name(k)
         ),
     };
@@ -248,5 +265,18 @@ fn diagnostic(site: &CallSite, def: &FuncDef, (k, peer): Key, need: &Need) -> Di
         span: site.span,
         message,
         kind: DiagKind::Type,
+    }
+}
+
+/// What a message calls the value parameter `p` holds: "object" for a
+/// class (D150), else "list", which stands for any container.
+fn noun(p: &crate::ast::Param) -> &'static str {
+    let Some(t) = &p.annotation else {
+        return "list";
+    };
+    let containers = ["list", "dict", "set", "tuple", "str", "bytes"];
+    match t.args.is_empty() && !containers.contains(&t.name.name.as_str()) {
+        true => "object",
+        false => "list",
     }
 }

@@ -70,6 +70,11 @@ pub enum Ty {
     /// A frozen record (D129): immutable and reference-counted, laid out
     /// as a tuple of its fields; `types[id]` is a [`Compound::Record`].
     Record(TypeId),
+    /// An object of a plain class or non-frozen dataclass (D150): a
+    /// mutable, reference-counted container of its fields;
+    /// `types[id]` is a [`Compound::Object`]. Only analysis makes one
+    /// until objects lower to the runtime (#1266, D157).
+    Obj(TypeId),
     /// `T | None`; `types[id]` is a [`Compound::Opt`]. Null is `None`;
     /// otherwise a reference to the value, or for an `Int`, `Float` or
     /// `Bool` to a one-field tuple boxing it.
@@ -130,6 +135,7 @@ impl Ty {
                 | Ty::List(_)
                 | Ty::Tuple(_)
                 | Ty::Record(_)
+                | Ty::Obj(_)
                 | Ty::Opt(_)
                 | Ty::Range
                 | Ty::Exc
@@ -162,6 +168,15 @@ pub enum Compound {
         name: String,
         /// The name it prints with, as its source spells it.
         shown: String,
+        /// Its fields' names, in order.
+        names: Vec<String>,
+        fields: Vec<Ty>,
+    },
+    /// An object's field types in the order its class assigns them
+    /// first, and their names (D144, D150).
+    Object {
+        /// The class's qualified name, which makes it its own type.
+        name: String,
         /// Its fields' names, in order.
         names: Vec<String>,
         fields: Vec<Ty>,
@@ -286,6 +301,14 @@ pub enum Inst {
     /// Stores a new reference to `value` in the global, dropping the
     /// one it held (null: nothing).
     SetGlobal { global: GlobalId, value: Operand },
+    /// `obj.field = value` on an object: the object adds its own
+    /// reference to `value`, dropping the one the field held, if any.
+    SetField {
+        obj: Operand,
+        field: usize,
+        value: Operand,
+        span: Span,
+    },
     /// Drops the global's reference (null: nothing) and nulls it: the
     /// end of the module's code.
     DropGlobal(GlobalId),
@@ -422,7 +445,10 @@ pub enum Rvalue {
     /// A new list, tuple, set or dict, of the destination's type,
     /// holding `items`: for a dict, keys and values alternating.
     NewSeq(Vec<Operand>),
-    /// Field `k` of a tuple.
+    /// A new object of the destination's type, its fields unset until
+    /// its `__init__` (or a dataclass's generated one) stores them.
+    NewObj,
+    /// Field `k` of a tuple, record or object.
     Field(Operand, usize),
     /// The global's value; a new reference if reference-counted.
     Global(GlobalId),
@@ -576,7 +602,11 @@ pub fn parts(types: &[Compound], ty: Ty) -> Vec<Ty> {
             vec![*t]
         }
         Some(Compound::Dict(k, v)) => vec![*k, *v],
-        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => fields.clone(),
+        Some(
+            Compound::Tuple(fields)
+            | Compound::Record { fields, .. }
+            | Compound::Object { fields, .. },
+        ) => fields.clone(),
         None => Vec::new(),
     }
 }
@@ -588,6 +618,7 @@ pub fn compound(types: &[Compound], ty: Ty) -> Option<&Compound> {
         Ty::List(id)
         | Ty::Tuple(id)
         | Ty::Record(id)
+        | Ty::Obj(id)
         | Ty::Opt(id)
         | Ty::Dict(id)
         | Ty::Set(id)
@@ -624,16 +655,7 @@ impl Program {
     /// What list, tuple, optional, dict, set or view type `ty` holds;
     /// `None` for other types.
     pub fn compound(&self, ty: Ty) -> Option<&Compound> {
-        match ty {
-            Ty::List(id)
-            | Ty::Tuple(id)
-            | Ty::Record(id)
-            | Ty::Opt(id)
-            | Ty::Dict(id)
-            | Ty::Set(id)
-            | Ty::View(id) => self.types.get(id.0),
-            _ => None,
-        }
+        compound(&self.types, ty)
     }
 }
 
@@ -680,6 +702,7 @@ impl Rvalue {
             Rvalue::TaskResult(a) | Rvalue::NextResult(a) | Rvalue::Hold(a) => vec![*a],
             Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
             Rvalue::StrLit(_)
+            | Rvalue::NewObj
             | Rvalue::Global(_)
             | Rvalue::Raised
             | Rvalue::PendingIs(_)
@@ -701,6 +724,7 @@ impl Inst {
             Inst::Extend { list, other, .. } => local(list) || local(other),
             Inst::Scale { list, count, .. } => local(list) || local(count),
             Inst::SetGlobal { value, .. } => local(value),
+            Inst::SetField { obj, value, .. } => local(obj) || local(value),
             Inst::DropGlobal(_) => false,
             Inst::SetItem {
                 list, index, value, ..

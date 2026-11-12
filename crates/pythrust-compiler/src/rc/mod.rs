@@ -118,6 +118,7 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
         | Inst::Extend { .. }
         | Inst::Scale { .. }
         | Inst::SetGlobal { .. }
+        | Inst::SetField { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
         | Inst::Sort { .. }
@@ -143,6 +144,7 @@ fn takes(value: &Rvalue, p: LocalId) -> bool {
         | Rvalue::Cmp(..)
         | Rvalue::AddOverflows(..)
         | Rvalue::StrLit(_)
+        | Rvalue::NewObj
         | Rvalue::Std(..)
         | Rvalue::Rust(..)
         | Rvalue::Submit { .. }
@@ -605,6 +607,7 @@ fn ends(inst: &Inst, l: LocalId) -> bool {
         | Inst::Extend { .. }
         | Inst::Scale { .. }
         | Inst::SetGlobal { .. }
+        | Inst::SetField { .. }
         | Inst::DropGlobal(_)
         | Inst::SetItem { .. }
         | Inst::Sort { .. }

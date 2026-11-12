@@ -1,0 +1,19 @@
+# deviation: a tempered method must write the mode its body needs on `self` (D2, D149); CPython has no modes.
+# expect-error: tempered `Counter.add` changes `self` in place; write `mut self`
+# expect-exit: 1
+# A tempered method that changes `self` must say so (D149); the
+# accepted neighbour is `dataclass_temper_method`.
+from dataclasses import dataclass
+
+
+@dataclass
+class Counter:
+    total: int
+
+    temper def add(self, k: int) -> None:
+        self.total += k
+
+
+c = Counter(0)
+c.add(2)
+print(c, "é")

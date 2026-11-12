@@ -65,7 +65,9 @@ impl FnBuilder<'_, '_> {
     pub(super) fn slot_ty(&self, ty: Ty, k: usize, span: Span) -> Result<Ty> {
         let slot = match ty {
             Ty::List(_) => self.cx.seqs.elem(ty),
-            Ty::Tuple(_) | Ty::Record(_) => self.cx.seqs.fields(ty).and_then(|f| f.get(k).copied()),
+            Ty::Tuple(_) | Ty::Record(_) | Ty::Obj(_) => {
+                self.cx.seqs.fields(ty).and_then(|f| f.get(k).copied())
+            }
             _ => None,
         };
         slot.ok_or_else(|| internal(span, "a sequence slot of no type"))
@@ -256,7 +258,10 @@ impl FnBuilder<'_, '_> {
                 self.write(name, v, target.span)
             }
             TargetKind::Subscript { value, index } => self.set_item(value, index, v, target.span),
-            TargetKind::Attr { .. } => Err(super::unsupported(target.span, "classes")),
+            TargetKind::Attr { value, attr } => {
+                let obj = self.expr(value)?;
+                self.store_field(obj, &attr.name, v, target.span)
+            }
             TargetKind::Tuple(targets) => self.unpack(targets, v, target.span),
         }
     }

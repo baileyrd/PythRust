@@ -213,7 +213,13 @@ impl FnBuilder<'_, '_> {
                 let v = self.aug_item(op, l, r, span)?;
                 self.store_item(list, index, v, target.span)
             }
-            TargetKind::Attr { .. } => Err(unsupported(target.span, "classes")),
+            TargetKind::Attr { value: obj, attr } => {
+                let obj = self.expr(obj)?;
+                let l = self.attr(obj, &attr.name, target.span)?;
+                let r = self.expr(value)?;
+                let v = self.aug_item(op, l, r, span)?;
+                self.store_field(obj, &attr.name, v, target.span)
+            }
             TargetKind::Tuple(_) => Err(unsupported(target.span, "augmented unpacking")),
         }
     }

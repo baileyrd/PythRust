@@ -1,7 +1,7 @@
 //! List, tuple, optional, dict, set and view types, interned so that
 //! [`Ty`] stays `Copy`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::infer::Type;
 use crate::ir::{Compound, Ty, TypeId, View};
@@ -20,17 +20,36 @@ pub(super) struct SeqTypes {
     /// Each record type made so far, by its qualified name: records are
     /// nominal, and one may reach itself through its fields (D162).
     named: HashMap<String, TypeId>,
+    /// The records of [`Self::records`] that are mutable classes, whose
+    /// values are objects (D150).
+    mutable: HashSet<String>,
+    /// Whether objects lower, as for analysis; `build` refuses them
+    /// until they lower to the runtime (D157, D160).
+    pub(super) objects: bool,
 }
 
 impl SeqTypes {
-    /// No types yet; `futures` as [`SeqTypes::futures`], `records` the
-    /// program's record declarations.
-    pub(super) fn new(futures: bool, records: HashMap<String, Vec<(String, Type)>>) -> Self {
+    /// No types yet; `futures` as [`SeqTypes::futures`] and `objects`
+    /// as [`SeqTypes::objects`]; `records` the program's record and class
+    /// declarations, `mutable` its classes'.
+    pub(super) fn new(
+        futures: bool,
+        objects: bool,
+        records: HashMap<String, Vec<(String, Type)>>,
+        mutable: HashSet<String>,
+    ) -> Self {
         SeqTypes {
             futures,
+            objects,
             records,
+            mutable,
             ..SeqTypes::default()
         }
+    }
+
+    /// Whether `name` is a mutable class, whose values are objects.
+    pub(super) fn is_class(&self, name: &str) -> bool {
+        self.mutable.contains(name)
     }
 
     /// The declared fields of record `name`.
@@ -38,9 +57,18 @@ impl SeqTypes {
         self.records.get(name).map(Vec::as_slice)
     }
 
-    /// Record `name`'s type if it has been made.
+    /// Record or class `name`'s type if it has been made.
     pub(super) fn named(&self, name: &str) -> Option<Ty> {
-        self.named.get(name).copied().map(Ty::Record)
+        let id = self.named.get(name).copied()?;
+        Some(self.nominal(name, id))
+    }
+
+    /// The type `id` of record or class `name`.
+    fn nominal(&self, name: &str, id: TypeId) -> Ty {
+        match self.is_class(name) {
+            true => Ty::Obj(id),
+            false => Ty::Record(id),
+        }
     }
 
     /// Record `name`'s type, its fields to come from [`Self::fill`], so
@@ -52,36 +80,50 @@ impl SeqTypes {
             .unwrap_or_default();
         let shown = crate::ast::source_name(crate::ast::unqualified(name)).to_string();
         let id = TypeId(self.all.len());
-        self.all.push(Compound::Record {
-            name: name.to_string(),
-            shown,
-            names,
-            fields: Vec::new(),
+        let name = name.to_string();
+        self.all.push(match self.is_class(&name) {
+            true => Compound::Object {
+                name: name.clone(),
+                names,
+                fields: Vec::new(),
+            },
+            false => Compound::Record {
+                name: name.clone(),
+                shown,
+                names,
+                fields: Vec::new(),
+            },
         });
-        self.named.insert(name.to_string(), id);
-        Ty::Record(id)
+        self.named.insert(name.clone(), id);
+        self.nominal(&name, id)
     }
 
     /// The field types of `record`, a type [`Self::reserve`] made.
     pub(super) fn fill(&mut self, record: Ty, types: Vec<Ty>) {
-        let Ty::Record(id) = record else { return };
-        if let Some(Compound::Record { fields, .. }) = self.all.get_mut(id.0) {
+        let (Ty::Record(id) | Ty::Obj(id)) = record else {
+            return;
+        };
+        if let Some(Compound::Record { fields, .. } | Compound::Object { fields, .. }) =
+            self.all.get_mut(id.0)
+        {
             *fields = types;
         }
     }
 
-    /// The qualified name of record type `ty`.
+    /// The qualified name of record or class type `ty`.
     pub(super) fn record_name(&self, ty: Ty) -> Option<&str> {
         match self.compound(ty)? {
-            Compound::Record { name, .. } => Some(name),
+            Compound::Record { name, .. } | Compound::Object { name, .. } => Some(name),
             _ => None,
         }
     }
 
-    /// The index of record type `ty`'s field `field`.
+    /// The index of record or class type `ty`'s field `field`.
     pub(super) fn field_of(&self, ty: Ty, field: &str) -> Option<usize> {
         match self.compound(ty)? {
-            Compound::Record { names, .. } => names.iter().position(|n| n == field),
+            Compound::Record { names, .. } | Compound::Object { names, .. } => {
+                names.iter().position(|n| n == field)
+            }
             _ => None,
         }
     }
@@ -152,7 +194,9 @@ impl SeqTypes {
     /// A tuple's or record's field types.
     pub(super) fn fields(&self, ty: Ty) -> Option<&[Ty]> {
         match self.compound(ty)? {
-            Compound::Tuple(fields) | Compound::Record { fields, .. } => Some(fields),
+            Compound::Tuple(fields)
+            | Compound::Record { fields, .. }
+            | Compound::Object { fields, .. } => Some(fields),
             _ => None,
         }
     }
@@ -166,16 +210,7 @@ impl SeqTypes {
     }
 
     fn compound(&self, ty: Ty) -> Option<&Compound> {
-        match ty {
-            Ty::List(id)
-            | Ty::Tuple(id)
-            | Ty::Record(id)
-            | Ty::Opt(id)
-            | Ty::Dict(id)
-            | Ty::Set(id)
-            | Ty::View(id) => self.all.get(id.0),
-            _ => None,
-        }
+        crate::ir::compound(&self.all, ty)
     }
 
     /// Every type so far, by [`TypeId`].
