@@ -1,6 +1,5 @@
-# deviation: D44: records do not lower yet, so a tempered method cannot be ownership-checked; CPython runs it loosened.
-# expect-error: ownership checks cannot be skipped
-# expect-exit: 1
+# A tempered method is ownership-checked like any tempered function
+# (D44, step 4-2): it reads `self` and a list it is lent.
 from dataclasses import dataclass
 
 
@@ -12,5 +11,8 @@ class Point:
     temper def norm1(self) -> int:
         return abs(self.x) + abs(self.y)
 
+    temper def count(self, xs: list[int]) -> int:
+        return xs.count(self.x)
 
-print(Point(1, -2).norm1())
+
+print(Point(1, -2).norm1(), Point(3, 0).count([3, 1, 3]))

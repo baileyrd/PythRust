@@ -122,7 +122,8 @@ impl FnBuilder<'_, '_> {
             StmtKind::Continue => self.loop_jump(s.span, |l| l.next),
             StmtKind::Pass => Ok(()),
             StmtKind::FuncDef(f) => self.def_stmt(f),
-            StmtKind::Record(r) => Err(super::unsupported(r.name.span, "records")),
+            // A record is no value (D136); its methods are `def`s of their own.
+            StmtKind::Record(_) => Ok(()),
             StmtKind::If {
                 branch,
                 elifs,

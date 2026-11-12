@@ -603,6 +603,9 @@ const NATIVE: &[&str] = &[
     "range_index_error",
     "range_values",
     "raises",
+    "record_temper_method",
+    "records",
+    "records_tasks",
     "recursion_limit",
     "refcount_keeps",
     "refcount_moves",
@@ -667,10 +670,6 @@ const NATIVE: &[&str] = &[
 /// backend gap, with why. `corpus_matches_native` fails when one builds,
 /// so a closed gap moves to `NATIVE`.
 const NATIVE_GAPS: &[(&str, &str)] = &[
-    (
-        "records",
-        "frozen records are not lowered yet (step 4-2); `run` is the reference (D59)",
-    ),
     (
         "exception_list_cycle",
         "an exception may close a reference cycle; native code has no cycle collector",
@@ -1307,9 +1306,11 @@ fn memcheck_failure(case: &Case, got: Res<Run>, report: &str) -> Option<String> 
     ))
 }
 
-/// A corpus program links to about 0.5 MB. Without dead-code removal
-/// and debug-info stripping it is over 5 MB; this bound catches that.
-const MAX_NATIVE_BYTES: u64 = 1 << 20;
+/// A corpus program links to about 0.5 MB with a release runtime, and
+/// up to just over 1 MB with a debug one on macOS, whose 16 KB pages
+/// round it up (`genexp`, PR #156). Without dead-code removal and
+/// debug-info stripping it is over 5 MB; this bound catches that (D137).
+const MAX_NATIVE_BYTES: u64 = 5 << 18;
 
 /// The bound for a program using tasks, which links the runtime's
 /// threads: `tasks_map` and `tasks_map_taken` are 1.05 to 1.12 MB on

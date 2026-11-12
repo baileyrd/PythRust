@@ -46,7 +46,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 [start.as_deref(), stop.as_deref(), step.as_deref()],
                 e.span,
             ),
-            ExprKind::Attr { .. } => Err(unsupported(e.span, "attributes other than methods")),
+            ExprKind::Attr { value, attr } => self.record_field(value, &attr.name, e.span),
             ExprKind::Comp { gather, clauses } => self.comp(gather, clauses, e.span),
         }
     }
@@ -577,7 +577,10 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
-            Ty::Exc | Ty::File(_) | Ty::Exec | Ty::Future | Ty::Results => Operand::Bool(true),
+            // A record defines no `__len__` or `__bool__` (D132).
+            Ty::Exc | Ty::File(_) | Ty::Exec | Ty::Future | Ty::Results | Ty::Record(_) => {
+                Operand::Bool(true)
+            }
             Ty::Bytes
             | Ty::Str
             | Ty::List(_)
@@ -601,10 +604,16 @@ impl<'a> FnBuilder<'_, 'a> {
                 if let Some(op) = self.task_call(value, &attr.name, args, span)? {
                     return Ok(op);
                 }
+                if let Some(op) = self.record_method(value, &attr.name, args, span)? {
+                    return Ok(op);
+                }
                 return self.method(value, &attr.name, args, span);
             }
             _ => return Err(unsupported(span, "calling this kind of expression")),
         };
+        if self.cx.seqs.declared(name).is_some() {
+            return self.construct(name, args, span);
+        }
         let mut name = name.as_str();
         let mut def = self.cx.defs.get(name).copied();
         // Before a shadowing `def` runs, the name still finds the builtin
@@ -686,7 +695,7 @@ impl<'a> FnBuilder<'_, 'a> {
 
     /// A call of `def` with `slots`, its arguments in parameter order
     /// (`None` where the default applies), whose result has type `node`.
-    fn call_def(
+    pub(super) fn call_def(
         &mut self,
         def: &'a FuncDef,
         slots: Vec<Option<Operand>>,
@@ -1109,6 +1118,8 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Str => "str",
         Ty::List(_) | Ty::Held(_) => "list",
         Ty::Tuple(_) => "tuple",
+        // A record's own name only the IR's types know.
+        Ty::Record(_) => "record",
         Ty::Opt(_) => "optional",
         Ty::Range => "range",
         Ty::Dict(_) => "dict",
@@ -1133,11 +1144,24 @@ pub(super) fn bind_params(
     args: &[Arg],
     ops: Vec<Operand>,
 ) -> Result<Vec<Option<Operand>>> {
-    let mut slots: Vec<Option<Operand>> = vec![None; def.params.len()];
+    let params: Vec<&str> = def.params.iter().map(|p| p.name.name.as_str()).collect();
+    bind_slots(&params, 0, args, ops)
+}
+
+/// `ops`, the values of `args`, in the order of `params`: positional
+/// from slot `first`, then keywords by name; `None` where no argument
+/// binds. Inference rejected every other shape.
+pub(super) fn bind_slots(
+    params: &[&str],
+    first: usize,
+    args: &[Arg],
+    ops: Vec<Operand>,
+) -> Result<Vec<Option<Operand>>> {
+    let mut slots: Vec<Option<Operand>> = vec![None; params.len()];
     for (next, (a, op)) in args.iter().zip(ops).enumerate() {
         let k = match &a.name {
-            Some(kw) => def.params.iter().position(|p| p.name.name == kw.name),
-            None => Some(next),
+            Some(kw) => params.iter().position(|p| *p == kw.name),
+            None => Some(first + next),
         };
         let slot = k.and_then(|k| slots.get_mut(k));
         let Some(slot) = slot.filter(|s| s.is_none()) else {

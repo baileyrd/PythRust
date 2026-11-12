@@ -700,6 +700,7 @@ impl<'r> Codegen<'r> {
             Ty::Str
             | Ty::List(_)
             | Ty::Tuple(_)
+            | Ty::Record(_)
             | Ty::Opt(_)
             | Ty::Range
             | Ty::Exc
@@ -1093,6 +1094,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::Float => Rt::WriteFloat,
             Ty::List(_)
             | Ty::Tuple(_)
+            | Ty::Record(_)
             | Ty::Opt(_)
             | Ty::Range
             | Ty::Dict(_)
@@ -1360,6 +1362,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::Float => Rt::StrFromFloat,
             Ty::List(_)
             | Ty::Tuple(_)
+            | Ty::Record(_)
             | Ty::Opt(_)
             | Ty::Range
             | Ty::Dict(_)
@@ -1646,9 +1649,10 @@ fn raises_inline(value: &Rvalue) -> bool {
     )
 }
 
-/// Whether `ty` is a list, tuple or dict view: slots read by position.
+/// Whether `ty` is a list, tuple, record or dict view: slots read by
+/// position.
 fn is_seq(ty: Ty) -> bool {
-    matches!(ty, Ty::List(_) | Ty::Tuple(_) | Ty::View(_))
+    matches!(ty, Ty::List(_) | Ty::Tuple(_) | Ty::Record(_) | Ty::View(_))
 }
 
 /// Whether `ty` is a dict or set: read by key.
@@ -1756,8 +1760,13 @@ fn refuse_gaps(program: &Program) -> Result<()> {
 /// "An exception" is any `Ty::Exc`, whatever its kind, so a future
 /// `list[Exception]` counts; a future `dyn` must count as one too.
 fn may_cycle(types: &[Compound], ty: Ty) -> bool {
-    let (Ty::List(id) | Ty::Tuple(id) | Ty::Opt(id) | Ty::Dict(id) | Ty::Set(id) | Ty::View(id)) =
-        ty
+    let (Ty::List(id)
+    | Ty::Tuple(id)
+    | Ty::Record(id)
+    | Ty::Opt(id)
+    | Ty::Dict(id)
+    | Ty::Set(id)
+    | Ty::View(id)) = ty
     else {
         return false;
     };
@@ -1765,7 +1774,9 @@ fn may_cycle(types: &[Compound], ty: Ty) -> bool {
         Some(Compound::List(t) | Compound::Set(t)) => ir::holds(types, *t, ir::is_exc),
         Some(Compound::Dict(_, v)) => ir::holds(types, *v, ir::is_exc),
         Some(Compound::Opt(t) | Compound::View(_, t)) => may_cycle(types, *t),
-        Some(Compound::Tuple(fields)) => fields.iter().any(|t| may_cycle(types, *t)),
+        Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
+            fields.iter().any(|t| may_cycle(types, *t))
+        }
         None => false,
     }
 }

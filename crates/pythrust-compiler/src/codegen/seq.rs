@@ -249,6 +249,7 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
         Ty::List(id)
         | Ty::Held(id)
         | Ty::Tuple(id)
+        | Ty::Record(id)
         | Ty::Opt(id)
         | Ty::Dict(id)
         | Ty::Set(id)
@@ -263,6 +264,16 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
     Ok(())
 }
 
+/// `n` as one ASCII byte, so a descriptor stays a `String`; else the
+/// backend error `what`.
+fn byte(n: usize, what: &str) -> Result<char> {
+    let n = u8::try_from(n)
+        .ok()
+        .filter(u8::is_ascii)
+        .ok_or_else(|| backend(what.to_string()))?;
+    Ok(char::from(n))
+}
+
 fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Result<()> {
     match c {
         Compound::List(elem) => {
@@ -270,14 +281,30 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
             descriptor(types, *elem, out)
         }
         Compound::Tuple(fields) => {
-            // One byte, and ASCII so the descriptor stays a `String`.
-            let n = u8::try_from(fields.len())
-                .ok()
-                .filter(u8::is_ascii)
-                .ok_or_else(|| backend("a tuple of over 127 fields".to_string()))?;
             out.push('t');
-            out.push(char::from(n));
+            out.push(byte(fields.len(), "a tuple of over 127 fields")?);
             fields.iter().try_for_each(|f| descriptor(types, *f, out))
+        }
+        Compound::Record {
+            shown,
+            names,
+            fields,
+            ..
+        } => {
+            out.push('c');
+            out.push(byte(fields.len(), "a record of over 127 fields")?);
+            fields.iter().try_for_each(|f| descriptor(types, *f, out))?;
+            // Field names last first, the order the runtime prints them in.
+            std::iter::once(shown)
+                .chain(names.iter().rev())
+                .try_for_each(|name| {
+                    out.push(byte(
+                        name.len(),
+                        "a record or field name of over 127 bytes",
+                    )?);
+                    out.push_str(name);
+                    Ok(())
+                })
         }
         Compound::Opt(present) => {
             out.push('o');
@@ -336,6 +363,22 @@ mod tests {
         let mut out = String::new();
         descriptor(&types, Ty::List(TypeId(1)), &mut out).expect("descriptor");
         assert_eq!(out, "loi");
+    }
+
+    #[test]
+    fn record_descriptors_name_the_record_and_its_fields() {
+        let record = |shown: &str| Compound::Record {
+            name: "geo.P".to_string(),
+            shown: shown.to_string(),
+            names: vec!["x".to_string(), "tags".to_string()],
+            fields: vec![Ty::Int, Ty::List(TypeId(0))],
+        };
+        let types = vec![Compound::List(Ty::Str), record("Pé")];
+        let mut out = String::new();
+        descriptor(&types, Ty::Record(TypeId(1)), &mut out).expect("descriptor");
+        assert_eq!(out, "c\u{2}ils\u{3}Pé\u{4}tags\u{1}x");
+        let long = vec![Compound::List(Ty::Str), record(&"P".repeat(128))];
+        assert!(descriptor(&long, Ty::Record(TypeId(1)), &mut String::new()).is_err());
     }
 
     #[test]

@@ -65,7 +65,7 @@ impl FnBuilder<'_, '_> {
     pub(super) fn slot_ty(&self, ty: Ty, k: usize, span: Span) -> Result<Ty> {
         let slot = match ty {
             Ty::List(_) => self.cx.seqs.elem(ty),
-            Ty::Tuple(_) => self.cx.seqs.fields(ty).and_then(|f| f.get(k).copied()),
+            Ty::Tuple(_) | Ty::Record(_) => self.cx.seqs.fields(ty).and_then(|f| f.get(k).copied()),
             _ => None,
         };
         slot.ok_or_else(|| internal(span, "a sequence slot of no type"))

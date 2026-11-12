@@ -18,10 +18,7 @@ use super::{
 /// The programs `run` accepts that `build` refuses, each a named backend
 /// gap with why, as [`super::NATIVE_GAPS`]; a listed one that builds
 /// fails, so a closed gap leaves the list.
-const NATIVE_GAPS: &[(&str, &str)] = &[(
-    "records_imported",
-    "frozen records are not lowered yet (step 4-2); `run` is the reference (D59)",
-)];
+const NATIVE_GAPS: &[(&str, &str)] = &[];
 
 /// Every multi-file program, by its main file, sorted.
 fn cases() -> Res<Vec<Case>> {

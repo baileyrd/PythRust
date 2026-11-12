@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use crate::infer::Type;
 use crate::ir::{Compound, Ty, TypeId, View};
 
 /// Every list, tuple and optional type of the program, each once.
@@ -13,14 +14,55 @@ pub(super) struct SeqTypes {
     /// Whether a future is a [`Ty::Future`], as `build` runs tasks, or
     /// its task's result, as analysis does ([`super::tasks`]).
     pub(super) futures: bool,
+    /// Every record's fields with their declared types, by its qualified
+    /// name ([`crate::infer::Types::record`]).
+    records: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl SeqTypes {
-    /// No types yet; `futures` as [`SeqTypes::futures`].
-    pub(super) fn new(futures: bool) -> Self {
+    /// No types yet; `futures` as [`SeqTypes::futures`], `records` the
+    /// program's record declarations.
+    pub(super) fn new(futures: bool, records: HashMap<String, Vec<(String, Type)>>) -> Self {
         SeqTypes {
             futures,
+            records,
             ..SeqTypes::default()
+        }
+    }
+
+    /// The declared fields of record `name`.
+    pub(super) fn declared(&self, name: &str) -> Option<&[(String, Type)]> {
+        self.records.get(name).map(Vec::as_slice)
+    }
+
+    /// Record `name`, its fields of types `fields`.
+    pub(super) fn record(&mut self, name: &str, fields: Vec<Ty>) -> Ty {
+        let names = self
+            .declared(name)
+            .map(|d| d.iter().map(|(n, _)| n.clone()).collect())
+            .unwrap_or_default();
+        let shown = crate::ast::source_name(crate::ast::unqualified(name)).to_string();
+        Ty::Record(self.intern(Compound::Record {
+            name: name.to_string(),
+            shown,
+            names,
+            fields,
+        }))
+    }
+
+    /// The qualified name of record type `ty`.
+    pub(super) fn record_name(&self, ty: Ty) -> Option<&str> {
+        match self.compound(ty)? {
+            Compound::Record { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// The index of record type `ty`'s field `field`.
+    pub(super) fn field_of(&self, ty: Ty, field: &str) -> Option<usize> {
+        match self.compound(ty)? {
+            Compound::Record { names, .. } => names.iter().position(|n| n == field),
+            _ => None,
         }
     }
 
@@ -87,10 +129,10 @@ impl SeqTypes {
         }
     }
 
-    /// A tuple's field types.
+    /// A tuple's or record's field types.
     pub(super) fn fields(&self, ty: Ty) -> Option<&[Ty]> {
         match self.compound(ty)? {
-            Compound::Tuple(fields) => Some(fields),
+            Compound::Tuple(fields) | Compound::Record { fields, .. } => Some(fields),
             _ => None,
         }
     }
@@ -107,6 +149,7 @@ impl SeqTypes {
         match ty {
             Ty::List(id)
             | Ty::Tuple(id)
+            | Ty::Record(id)
             | Ty::Opt(id)
             | Ty::Dict(id)
             | Ty::Set(id)

@@ -478,7 +478,7 @@ impl<'a> Body<'a> {
     }
 
     fn is_tuple(&self, l: LocalId) -> bool {
-        matches!(self.func.locals[l.0], Ty::Tuple(_))
+        matches!(self.func.locals[l.0], Ty::Tuple(_) | Ty::Record(_))
     }
 
     /// `l`'s type, optional unwrapped: a list is the same list either way.
@@ -503,7 +503,9 @@ impl<'a> Body<'a> {
                 | Compound::Dict(_, t)
                 | Compound::View(_, t),
             ) => self.within(*t, inner),
-            Some(Compound::Tuple(fields)) => fields.iter().any(|t| self.within(*t, inner)),
+            Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
+                fields.iter().any(|t| self.within(*t, inner))
+            }
             None => false,
         }
     }
@@ -926,7 +928,9 @@ impl<'a> Body<'a> {
     /// separates it. An exception, for example, may carry a mutable value.
     fn copy_separates(&self, ty: Ty) -> bool {
         match self.program.compound(ty) {
-            Some(Compound::Tuple(fields)) => fields.iter().all(|t| self.copy_separates(*t)),
+            Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => {
+                fields.iter().all(|t| self.copy_separates(*t))
+            }
             Some(Compound::Opt(t)) => self.copy_separates(*t),
             _ => matches!(
                 ty,
@@ -963,7 +967,7 @@ impl<'a> Body<'a> {
                 vec![*t]
             }
             Some(Compound::Opt(t) | Compound::View(_, t)) => vec![*t],
-            Some(Compound::Tuple(fields)) => fields.clone(),
+            Some(Compound::Tuple(fields) | Compound::Record { fields, .. }) => fields.clone(),
             None => Vec::new(),
         };
         inner.into_iter().for_each(|t| self.list_types(t, out));

@@ -1655,23 +1655,77 @@ grow([1])\n";
 }
 
 #[test]
-fn a_tempered_method_never_falls_back_silently() {
-    // D44 for methods (#108 carried to step 4-1): a record's `temper def`
-    // is a top-level function `P.m`, so `needs_checks` finds it, and
-    // records do not lower yet.
+fn a_tempered_method_is_ownership_checked() {
+    // D44 for methods (#108, steps 4-1 and 4-2): a record's `temper def`
+    // is the top-level function `P.m`, which `needs_checks` finds and
+    // the checks now see, records lowering.
     let src = "from dataclasses import dataclass\n\
 @dataclass(frozen=True)\nclass P:\n    x: int\n\
 \x20   temper def m(self) -> int:\n        return self.x\n\
+\x20   temper def add(self, xs: list[int]) -> None:\n        xs.append(self.x)\n\
 print(P(1).m())\n";
-    let (msg, span) = mode_err(src);
-    assert!(
-        msg.contains("has a tempered function, so its ownership checks cannot be skipped"),
-        "{msg}"
+    assert_eq!(
+        mode_err(src),
+        (
+            "tempered `P.add` changes `xs` in place; write `mut xs`".into(),
+            "xs".into()
+        )
     );
-    assert!(msg.contains("does not support records yet"), "{msg}");
-    assert_eq!(span, "P");
-    // A loose method keeps the conservative fallback.
-    assert_eq!(checked(&src.replace("temper def", "def")), Ok(()));
+    assert_eq!(checked(&src.replace("xs: list", "mut xs: list")), Ok(()));
+}
+
+#[test]
+fn a_method_changing_self_through_a_call_is_the_named_error() {
+    // D131: the parser sees `self.xs.append(1)`; a change through a
+    // call that takes `self.xs` needs the summaries, loose or tempered.
+    let src = "from dataclasses import dataclass\n\
+temper def grow(mut xs: list[int]) -> None:\n    xs.append(1)\n\
+kept: list[list[int]] = []\n\
+@dataclass(frozen=True)\nclass P:\n    xs: list[int]\n\
+\x20   def m(self) -> None:\n        grow(self.xs)\n\
+P([1]).m()\n";
+    let named = (
+        "a method that changes or keeps `self` is not supported yet".to_string(),
+        "self".to_string(),
+    );
+    assert_eq!(mode_err(src), named);
+    assert_eq!(
+        mode_err(&src.replace("    def m", "    temper def m")),
+        named
+    );
+    let keeps = src.replace("grow(self.xs)", "kept.append(self.xs)");
+    assert_eq!(mode_err(&keeps), named);
+    // Reading `self.xs` through a call is a method's business.
+    assert_eq!(
+        checked(&src.replace("grow(self.xs)", "print(len(self.xs))")),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_record_parameter_follows_the_tuple_rules() {
+    // A8 for records (step 4-2): the strings and lists a record holds
+    // are its fields', so keeping or changing them needs a mode.
+    let head = "from dataclasses import dataclass\n\
+@dataclass(frozen=True)\nclass P:\n    s: str\n    xs: list[int]\n\
+kept: list[P] = []\nnames: list[str] = []\n";
+    let keep =
+        format!("{head}temper def keep(p: P) -> None:\n    kept.append(p)\nkeep(P('é', []))\n");
+    assert_eq!(
+        mode_err(&keep).0,
+        "tempered `keep` keeps `p` after it returns; write `owned p`"
+    );
+    assert_eq!(checked(&keep.replace("(p: P)", "(owned p: P)")), Ok(()));
+    let name =
+        format!("{head}temper def name(p: P) -> None:\n    names.append(p.s)\nname(P('é', []))\n");
+    assert!(mode_err(&name).0.contains("write `owned p`"), "{name}");
+    let grow =
+        format!("{head}temper def grow(p: P) -> None:\n    p.xs.append(1)\ngrow(P('é', []))\n");
+    assert_eq!(
+        mode_err(&grow).0,
+        "tempered `grow` changes `p` in place; write `mut p`"
+    );
+    assert_eq!(checked(&grow.replace("(p: P)", "(mut p: P)")), Ok(()));
 }
 
 /// Task functions for rule 4's programs.
