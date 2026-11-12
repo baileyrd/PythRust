@@ -1,0 +1,30 @@
+# deviation: a task storing to an object's field while another task of the block reads it is a compile error (rule 4, D150); CPython runs it.
+# expect-exit: 1
+# expect-error: two tasks of this block share `b`, and one changes it
+# The accepted neighbour is `class_ownership`.
+import concurrent.futures
+
+
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+
+def put(b: Box, n: int) -> None:
+    b.n = n
+
+
+def get(b: Box) -> int:
+    return b.n
+
+
+def main() -> None:
+    b = Box(1)
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        x = ex.submit(put, b, 2)
+        y = ex.submit(get, b)
+        x.result()
+        print(y.result() > 0, "é")
+
+
+main()

@@ -705,6 +705,10 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a mutable dataclass, until classes lower (step 5-4, D160)",
     ),
     (
+        "class_ownership",
+        "plain classes, until classes lower (step 5-4, D160)",
+    ),
+    (
         "classes",
         "plain classes, until classes lower (step 5-4, D160)",
     ),

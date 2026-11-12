@@ -387,6 +387,7 @@ impl<'a> Flow<'a> {
         let allocates = matches!(
             value,
             Rvalue::NewSeq(_)
+                | Rvalue::NewObj
                 | Rvalue::CopyList(_)
                 | Rvalue::Slice { .. }
                 | Rvalue::View(_)
@@ -431,6 +432,7 @@ impl<'a> Flow<'a> {
                 self.contents(&self.of(*a))
             }
             Rvalue::NewSeq(_)
+            | Rvalue::NewObj
             | Rvalue::CopyList(_)
             | Rvalue::Slice { .. }
             | Rvalue::View(_)

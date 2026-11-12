@@ -1,0 +1,14 @@
+# deviation: a tempered function may not return a parameter (D3), an object included (D150); CPython returns the same object.
+# expect-error: tempered `same` returns its parameter `b`; return an independent value that shares no lists, dicts, sets or objects with the parameter
+# expect-exit: 1
+# The accepted neighbour is `class_ownership`.
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+
+temper def same(b: Box) -> Box:
+    return b
+
+
+print(same(Box(1)).n, "é")

@@ -1,0 +1,15 @@
+# deviation: a tempered method that keeps `self` must write `owned self` (D2, D149); CPython has no modes.
+# expect-error: tempered `Box.keep` keeps `self` after it returns; write `owned self`
+# expect-exit: 1
+# The accepted neighbour is `class_ownership`.
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+    temper def keep(self) -> None:
+        kept.append(self)
+
+
+kept: list[Box] = []
+Box(1).keep()
+print(len(kept), "é")

@@ -8,16 +8,18 @@
 use crate::ast::{method_name, Arg, Expr};
 use crate::diag::Result;
 use crate::infer::Type;
-use crate::ir::{Inst, Operand, Rvalue};
+use crate::ir::{Inst, Operand, Rvalue, Ty};
 use crate::span::Span;
 
 /// What `__init__` returns, the node type its call takes.
 const NONE: Type = Type::None;
+/// What `__str__` and `__repr__` return.
+const STR: Type = Type::Str;
 
 use super::expr::bind_slots;
 use super::{internal, FnBuilder};
 
-impl FnBuilder<'_, '_> {
+impl<'a> FnBuilder<'_, 'a> {
     /// `P(args)`: the fields bound by position or keyword, as inference
     /// checked (D132), in a new record.
     pub(super) fn construct(&mut self, name: &str, args: &[Arg], span: Span) -> Result<Operand> {
@@ -60,7 +62,7 @@ impl FnBuilder<'_, '_> {
             let params: Vec<&str> = def.params.iter().map(|p| p.name.name.as_str()).collect();
             let mut slots = bind_slots(&params, 1, args, ops)?;
             if let Some(slf) = slots.first_mut() {
-                *slf = Some(obj);
+                *slf = Some(self.another(obj, span));
             }
             self.call_def(def, slots, &NONE, span)?;
             return Ok(obj);
@@ -149,5 +151,64 @@ impl FnBuilder<'_, '_> {
         }
         let node = self.node_type(span)?;
         self.call_def(def, slots, node, span).map(Some)
+    }
+
+    /// `v` as `str` and `print` render it (D167): a call of its own
+    /// `__str__` or `__repr__` (D147's lookup), a new `Str`. Otherwise
+    /// `v` itself, rendered as built in, after a call that passes it to
+    /// each `__repr__` of the classes its type reaches, so their
+    /// summaries apply to it; there are none in most programs.
+    pub(super) fn render(&mut self, v: Operand, span: Span) -> Result<Operand> {
+        let ty = self.ty(v);
+        if let Some(def) = self
+            .dunder(ty, "__str__")
+            .or_else(|| self.dunder(ty, "__repr__"))
+        {
+            return self.call_def(def, vec![Some(v)], &STR, span);
+        }
+        for t in crate::ir::reachable(self.cx.seqs.all(), ty) {
+            if let Some(def) = self.dunder(t, "__repr__") {
+                self.pass_to(def, t, v, span)?;
+            }
+        }
+        Ok(v)
+    }
+
+    /// The class method `name` of record or object type `ty`, if any.
+    fn dunder(&self, ty: Ty, name: &str) -> Option<&'a crate::ast::FuncDef> {
+        let class = self.cx.seqs.record_name(ty)?;
+        self.cx.defs.get(method_name(class, name).as_str()).copied()
+    }
+
+    /// A call of `def`'s instance for `self` of type `ty` that passes
+    /// `v`, a value holding such objects, as its `self`: what rendering
+    /// `v` does to it, for the analysis (D167). The result is unused.
+    fn pass_to(
+        &mut self,
+        def: &'a crate::ast::FuncDef,
+        ty: Ty,
+        v: Operand,
+        span: Span,
+    ) -> Result<()> {
+        let id = self.cx.instance(def, vec![ty], Ty::Str, span)?;
+        let arg = self.another(v, span);
+        self.temp(Ty::Str, Rvalue::Call(id, vec![arg]), span);
+        if let Operand::Local(l) = arg {
+            self.emit(Inst::Forget(l));
+        }
+        if self.may_raise(&def.name.name) {
+            self.check_raised(span)?;
+        }
+        Ok(())
+    }
+
+    /// A temporary with a reference of its own to object `v`, which
+    /// stays in use after the call this is passed to takes it.
+    fn another(&mut self, v: Operand, span: Span) -> Operand {
+        let copy = self.temp(self.ty(v), Rvalue::Use(v), span);
+        if let Operand::Local(l) = copy {
+            self.emit(Inst::Retain(l));
+        }
+        copy
     }
 }

@@ -2499,3 +2499,45 @@ fn tempered_methods_write_the_modes_on_self_their_bodies_need() {
         Ok(())
     );
 }
+
+/// A class whose `__repr__` changes `self` (D167).
+const NOISY: &str = "class Noisy:\n    def __init__(self):\n        self.shown = 0\n    def __repr__(self) -> str:\n        self.shown += 1\n        return \"Noisy\"\n";
+
+/// A class whose `__repr__` only reads `self`.
+const QUIET: &str = "class Quiet:\n    def __init__(self):\n        self.n = 0\n    def __repr__(self) -> str:\n        return \"Quiet\"\n";
+
+#[test]
+fn printing_an_object_calls_its_dunder() {
+    let calls = "def show(p: Noisy):\n    print(p)\ndef text(p: Noisy) -> str:\n    return str(p)\nshow(Noisy())\nprint(text(Noisy()))\n";
+    let src = format!("{NOISY}{calls}");
+    assert_eq!(modes(&src, "Noisy.__repr__"), (vec![MUT], vec![false]));
+    assert_eq!(modes(&src, "show"), (vec![MUT], vec![false]));
+    assert_eq!(modes(&src, "text"), (vec![MUT], vec![false]));
+    let quiet = format!("{QUIET}{}", calls.replace("Noisy", "Quiet"));
+    assert_eq!(modes(&quiet, "show"), (vec![READ], vec![false]));
+    assert_eq!(modes(&quiet, "text"), (vec![READ], vec![false]));
+}
+
+#[test]
+fn printing_a_container_of_objects_passes_it_to_their_reprs() {
+    let calls = "def show(ps: list[Noisy]):\n    print(ps)\nshow([Noisy()])\n";
+    assert_eq!(
+        modes(&format!("{NOISY}{calls}"), "show"),
+        (vec![MUT], vec![false])
+    );
+    let quiet = format!("{QUIET}{}", calls.replace("Noisy", "Quiet"));
+    assert_eq!(modes(&quiet, "show"), (vec![READ], vec![false]));
+}
+
+#[test]
+fn a_repr_that_keeps_self_keeps_what_is_printed() {
+    let class = "seen: list[Keeper] = []\nclass Keeper:\n    def __init__(self):\n        self.n = 0\n    def __repr__(self) -> str:\n        seen.append(self)\n        return \"K\"\n";
+    let src = format!("{class}def show(p: Keeper):\n    print(p)\nshow(Keeper())\n");
+    assert_eq!(modes(&src, "show"), (vec![OWNED], vec![false]));
+}
+
+#[test]
+fn comparing_objects_reads_them() {
+    let src = format!("{QUIET}def same(a: Quiet, b: Quiet) -> bool:\n    return a == b\nq = Quiet()\nprint(same(q, q), q != Quiet())\n");
+    assert_eq!(modes(&src, "same"), (vec![READ, READ], vec![false, false]));
+}

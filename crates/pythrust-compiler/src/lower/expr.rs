@@ -1037,6 +1037,7 @@ impl<'a> FnBuilder<'_, 'a> {
         }
         let mut rendered = Vec::new();
         for v in values {
+            let v = self.render(v, span)?;
             rendered.push(match self.holds(self.ty(v), crate::ir::is_exc) {
                 true => self.temp(Ty::Str, Rvalue::ToStr(v), span),
                 false => v,
@@ -1080,7 +1081,10 @@ impl<'a> FnBuilder<'_, 'a> {
             ("list", Ty::Dict(_) | Ty::Set(_) | Ty::View(_)) => {
                 (self.ty_at(span)?, Rvalue::CopyList(arg))
             }
-            ("str", _) => (Ty::Str, Rvalue::ToStr(arg)),
+            ("str", _) => match self.render(arg, span)? {
+                s if self.ty(s) == Ty::Str => return Ok(s),
+                arg => (Ty::Str, Rvalue::ToStr(arg)),
+            },
             ("int", Ty::Float) => (Ty::Int, Rvalue::FloatToInt(arg)),
             ("int" | "float", Ty::Str) => return self.parse(name, arg, span),
             (_, ty) => {

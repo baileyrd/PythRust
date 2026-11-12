@@ -1,0 +1,17 @@
+# deviation: a tempered body may not change an object through one name while another name for it is still used (D4, D150); CPython keeps aliasing.
+# expect-error: tempered `bump` changes `b` while `a` may be the same object and is used later; make independent values before sharing them; a shallow copy may still share nested lists, dicts or sets
+# expect-exit: 1
+# The accepted neighbour is `class_ownership`.
+class Box:
+    def __init__(self, n: int):
+        self.n = n
+
+
+temper def bump(n: int) -> int:
+    a = Box(n)
+    b = a
+    b.n = 5
+    return a.n
+
+
+print(bump(1), "é")
