@@ -19,7 +19,10 @@ def main() -> None:
 
 
 print(len(s.argv), len(argv), argv == s.argv)
-print(j("dir", "fïle"), path.join("a", "b"), osp.isdir("."), os.path.isdir("."), isdir("."))
+# Separators differ by OS, so compare forms instead of printing paths.
+f = j("dir", "fïle")
+print(f.endswith("fïle"), f == path.join("dir", "fïle"), f == os.path.join("dir", "fïle"))
+print(osp.isdir("."), os.path.isdir("."), isdir("."))
 data = open(argv[0], "rb").read()
 print(len(sha256(data).hexdigest()))
 main()
