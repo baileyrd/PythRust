@@ -719,8 +719,9 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a class that can refer to itself (`Tree`), until the cycle collector (D151, D152)",
     ),
     (
-        "record_recursive",
-        "a record that can hold its own type has no finite runtime descriptor yet (D166)",
+        "record_recursive_list",
+        "a record that holds its own type through a list can close a cycle, which native code \
+         has no collector for (D151, D166)",
     ),
     (
         "user_exception_many",

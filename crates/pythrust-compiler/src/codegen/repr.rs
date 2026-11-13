@@ -120,8 +120,15 @@ impl Codegen<'_> {
 }
 
 impl FnGen<'_, '_, '_> {
-    /// Registers every `__repr__` thunk with the runtime.
-    pub(super) fn register_reprs(&mut self) {
+    /// Registers the recursive records' descriptors and every `__repr__`
+    /// thunk with the runtime.
+    pub(super) fn register_reprs(&mut self) -> Result<()> {
+        for k in 0..self.cg.descs.len() {
+            let (id, text) = self.cg.descs[k].clone();
+            let (addr, len) = self.data(text)?;
+            let id = self.b.ins().iconst(types::I64, i64::from(id));
+            self.call_rt(Rt::RegisterDesc, &[id, addr, len]);
+        }
         for k in 0..self.cg.reprs.len() {
             let (class, thunk) = (self.cg.reprs[k].class, self.cg.reprs[k].thunk);
             let class = self.b.ins().iconst(types::I64, i64::from(class));
@@ -129,5 +136,6 @@ impl FnGen<'_, '_, '_> {
             let addr = self.b.ins().func_addr(self.cg.ptr, fref);
             self.call_rt(Rt::RegisterRepr, &[class, addr]);
         }
+        Ok(())
     }
 }

@@ -1,0 +1,4 @@
+4
+Tree(name='é', kids=[Tree(name='a', kids=[]), Tree(name='b', kids=[Tree(name='c', kids=[])])])
+Tree(name='é', kids=[Tree(name='a', kids=[]), Tree(name='b', kids=[Tree(name='c', kids=[])]), ...])
+True
