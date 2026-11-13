@@ -1,0 +1,38 @@
+# Cycles built inside tasks (step 5-5, D152): workers only buffer
+# candidates, and the collector runs on the submitting thread once the
+# executor is done. CI's race job runs it under ThreadSanitizer.
+import concurrent.futures
+
+
+class Cell:
+    def __init__(self, n: int):
+        self.n = n
+        self.other: Cell | None = None
+
+
+def spin(rounds: int) -> int:
+    total = 0
+    for i in range(rounds):
+        a = Cell(i)
+        b = Cell(i + 1)
+        a.other = b
+        b.other = a
+        total += a.n + b.n
+    return total
+
+
+def main() -> None:
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        first = ex.submit(spin, 400)
+        rest = ex.map(spin, [300, 200, 100])
+        print(first.result())
+        for t in rest:
+            print(t)
+    kept = Cell(1)
+    kept.other = kept
+    for i in range(2000):
+        spin(1)
+    print(kept.n)
+
+
+main()

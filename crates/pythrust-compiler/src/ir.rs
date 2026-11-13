@@ -622,6 +622,69 @@ pub fn parts(types: &[Compound], ty: Ty) -> Vec<Ty> {
     }
 }
 
+/// The name of class type `ty` if a value of it can close a reference
+/// cycle through itself: an object that can hold one of its own type
+/// (D151), or a record whose way back to its own type passes a list,
+/// dict, set or object (D166). A record that reaches itself only
+/// through records, tuples and optionals is immutable, so its values
+/// are acyclic; its descriptor is finite with a back-reference (D174).
+pub fn self_reaching(types: &[Compound], ty: Ty) -> Option<&str> {
+    let (Some(Compound::Record { shown, .. }) | Some(Compound::Object { shown, .. })) =
+        compound(types, ty)
+    else {
+        return None;
+    };
+    let object = matches!(ty, Ty::Obj(_));
+    let refused = match object {
+        true => reaches(types, ty, |_| true),
+        false => reaches(types, ty, |t| mutable(types, t)),
+    };
+    refused.then_some(shown.as_str())
+}
+
+/// Whether values of `ty` are mutable containers: lists, dicts, sets,
+/// their views and objects.
+fn mutable(types: &[Compound], ty: Ty) -> bool {
+    matches!(
+        compound(types, ty),
+        Some(
+            Compound::List(_)
+                | Compound::Dict(..)
+                | Compound::Set(_)
+                | Compound::View(..)
+                | Compound::Object { .. }
+        )
+    )
+}
+
+/// Whether some path from `start` back to itself passes a type for
+/// which `through` holds (the type `start` is leaving counts too).
+fn reaches(types: &[Compound], start: Ty, through: impl Fn(Ty) -> bool) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut todo = vec![(start, false)];
+    while let Some((t, via)) = todo.pop() {
+        let via = via || through(t);
+        for part in parts(types, t) {
+            if part == start && via {
+                return true;
+            }
+            if seen.insert((part, via)) {
+                todo.push((part, via));
+            }
+        }
+    }
+    false
+}
+
+/// Whether a value of `ty` may sit on a reference cycle: `ty` is, or
+/// holds, a class that can reach itself (D152). Sequences of such types
+/// are the collector's candidates, so their counts stay exact (D175).
+pub fn cyclic(types: &[Compound], ty: Ty) -> bool {
+    reachable(types, ty)
+        .into_iter()
+        .any(|t| self_reaching(types, t).is_some())
+}
+
 /// What compound type `ty` is, `types` being [`Program::types`]; `None`
 /// for a scalar.
 pub fn compound(types: &[Compound], ty: Ty) -> Option<&Compound> {

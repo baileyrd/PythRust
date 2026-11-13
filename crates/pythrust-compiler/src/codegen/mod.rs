@@ -1844,20 +1844,13 @@ fn refuse_gaps(program: &Program) -> Result<()> {
 }
 
 /// Refuses `inst` if it makes an exception that may close a reference
-/// cycle, or a record that can hold one of its own type (D166).
+/// cycle: the collector (D152) covers classes and records, not these.
 fn refuse_cycle(types: &[Compound], func: &Func, inst: &Inst) -> Result<()> {
-    let Inst::Assign { dest, value, span } = inst else {
+    let Inst::Assign { value, span, .. } = inst else {
         return Ok(());
     };
     let message = match value {
         Rvalue::NewExc(_, Some(arg)) if may_cycle(types, func.ty(*arg)) => CYCLE_GAP.to_string(),
-        Rvalue::NewSeq(_) | Rvalue::NewObj => match self_reaching(types, func.locals[dest.0]) {
-            Some(shown) => format!(
-                "the native backend does not support class `{shown}`, which can refer to \
-                 itself, yet"
-            ),
-            None => return Ok(()),
-        },
         _ => return Ok(()),
     };
     Err(Diagnostic {
@@ -1865,60 +1858,6 @@ fn refuse_cycle(types: &[Compound], func: &Func, inst: &Inst) -> Result<()> {
         message,
         kind: DiagKind::Backend,
     })
-}
-
-/// The name of class type `ty` if a value of it can close a reference
-/// cycle through itself: an object that can hold one of its own type
-/// (D151), or a record whose way back to its own type passes a list,
-/// dict, set or object (D166). A record that reaches itself only
-/// through records, tuples and optionals is immutable, so its values
-/// are acyclic; its descriptor is finite with a back-reference (D174).
-fn self_reaching(types: &[Compound], ty: Ty) -> Option<&str> {
-    let (Some(Compound::Record { shown, .. }) | Some(Compound::Object { shown, .. })) =
-        ir::compound(types, ty)
-    else {
-        return None;
-    };
-    let object = matches!(ty, Ty::Obj(_));
-    let refused = match object {
-        true => reaches(types, ty, |_| true),
-        false => reaches(types, ty, |t| mutable(types, t)),
-    };
-    refused.then_some(shown.as_str())
-}
-
-/// Whether values of `ty` are mutable containers: lists, dicts, sets,
-/// their views and objects.
-fn mutable(types: &[Compound], ty: Ty) -> bool {
-    matches!(
-        ir::compound(types, ty),
-        Some(
-            Compound::List(_)
-                | Compound::Dict(..)
-                | Compound::Set(_)
-                | Compound::View(..)
-                | Compound::Object { .. }
-        )
-    )
-}
-
-/// Whether some path from `start` back to itself passes a type for
-/// which `through` holds (the type `start` is leaving counts too).
-fn reaches(types: &[Compound], start: Ty, through: impl Fn(Ty) -> bool) -> bool {
-    let mut seen = std::collections::HashSet::new();
-    let mut todo = vec![(start, false)];
-    while let Some((t, via)) = todo.pop() {
-        let via = via || through(t);
-        for part in ir::parts(types, t) {
-            if part == start && via {
-                return true;
-            }
-            if seen.insert((part, via)) {
-                todo.push((part, via));
-            }
-        }
-    }
-    false
 }
 
 /// Whether an exception's argument of type `ty` may close a reference

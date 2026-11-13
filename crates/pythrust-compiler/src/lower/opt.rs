@@ -181,7 +181,7 @@ impl FnBuilder<'_, '_> {
     }
 
     /// `v`'s present value if optional, which the caller proved.
-    fn present(&mut self, v: Operand, span: Span) -> Operand {
+    pub(super) fn present(&mut self, v: Operand, span: Span) -> Operand {
         let ty = self.ty(v);
         match self.cx.seqs.present(ty) {
             Some(p) => self.temp(p, Rvalue::Unwrap(v), span),

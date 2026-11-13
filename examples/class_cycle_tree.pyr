@@ -1,0 +1,72 @@
+# A tree whose nodes point back at their parents, and a graph whose
+# nodes hold lists of their neighbours, so cycles pass through lists
+# (step 5-5, D151, D152). Thousands are built and dropped.
+from __future__ import annotations
+
+
+class Tree:
+    def __init__(self, name: str, parent: Tree | None):
+        self.name = name
+        self.parent = parent
+        self.kids: list[Tree] = []
+        if parent is not None:
+            parent.kids.append(self)
+
+
+def depth(t: Tree) -> int:
+    up = t.parent
+    if up is None:
+        return 0
+    return 1 + depth(up)
+
+
+def count(t: Tree) -> int:
+    n = 1
+    for k in t.kids:
+        n += count(k)
+    return n
+
+
+def build(levels: int, width: int) -> Tree:
+    root = Tree("é", None)
+    layer = [root]
+    for _ in range(levels):
+        nxt: list[Tree] = []
+        for t in layer:
+            for w in range(width):
+                nxt.append(Tree(t.name + str(w), t))
+        layer = nxt
+    return root
+
+
+class Vertex:
+    def __init__(self, label: int):
+        self.label = label
+        self.edges: list[Vertex] = []
+
+
+def graph(n: int) -> Vertex:
+    vs = [Vertex(i) for i in range(n)]
+    for v in vs:
+        for u in vs:
+            v.edges.append(u)
+    return vs[0]
+
+
+t = build(3, 2)
+print(count(t), depth(t.kids[1].kids[0].kids[1]), t.kids[1].kids[0].name)
+leaf = t.kids[0].kids[1].kids[0]
+print(leaf.name, leaf.parent is not None)
+
+total = 0
+for i in range(600):
+    total += count(build(2, 3))
+print(total)
+
+edges = 0
+for i in range(1500):
+    g = graph(3)
+    edges += len(g.edges)
+print(edges)
+g = graph(4)
+print(len(g.edges[3].edges[2].edges))

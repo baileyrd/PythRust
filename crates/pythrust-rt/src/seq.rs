@@ -19,6 +19,7 @@
 use crate::sync::{Count, Ref, Slot};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{PoisonError, RwLock};
 
 use crate::obj::{self, PtObj};
@@ -37,6 +38,14 @@ pub struct PtSeq {
     /// A dict's or set's hash index ([`crate::table`]); `None` for
     /// every other sequence.
     pub(crate) index: Slot<Option<Box<Index>>>,
+    /// Whether `desc` holds a [`CYCLIC`] back-reference: the sequence may
+    /// sit on a reference cycle, so a drop that leaves it alive makes it
+    /// a collector candidate (D152).
+    pub(crate) cyc: bool,
+    /// Whether the collector's candidate buffer holds this sequence. A
+    /// buffered sequence whose count reaches zero is emptied but not
+    /// freed: the collector frees it.
+    pub(crate) buffered: AtomicBool,
 }
 
 /// What a descriptor describes.
@@ -101,6 +110,11 @@ pub(crate) fn kind(desc: &[u8]) -> Kind {
 /// descriptor again.
 const BACKREF: u8 = b'^';
 
+/// A back-reference to a type that can close a reference cycle (D175):
+/// as [`BACKREF`], but its presence in a descriptor makes the sequence a
+/// candidate for the cycle collector ([`crate::gc`]).
+const CYCLIC: u8 = b'&';
+
 /// The registered full descriptors of the records back-references name,
 /// by number. Written once each, before any code runs.
 static DESCS: RwLock<BTreeMap<u16, &'static [u8]>> = RwLock::new(BTreeMap::new());
@@ -120,7 +134,7 @@ pub unsafe extern "C" fn pt_register_desc(id: u64, desc: *const u8, len: usize) 
 
 /// `desc`, or the full descriptor it back-references.
 pub(crate) fn resolve(desc: &[u8]) -> &[u8] {
-    let [BACKREF, lo, hi, ..] = *desc else {
+    let [BACKREF | CYCLIC, lo, hi, ..] = *desc else {
         return desc;
     };
     let id = u16::from(lo) | u16::from(hi) << 7;
@@ -130,7 +144,7 @@ pub(crate) fn resolve(desc: &[u8]) -> &[u8] {
 
 /// The length of the one type `desc` starts with.
 fn span(desc: &[u8]) -> usize {
-    if desc.first() == Some(&BACKREF) {
+    if matches!(desc.first(), Some(&(BACKREF | CYCLIC))) {
         return 3.min(desc.len());
     }
     match kind(desc) {
@@ -322,7 +336,7 @@ fn dec_into(desc: &[u8], v: u64, todo: &mut Vec<u64>) {
 /// zero and dropping what their slots own, in a loop: an exception
 /// chain (`e = ValueError(e)`) can be any length, so freeing must not
 /// recurse.
-fn free_all(mut todo: Vec<u64>) {
+pub(crate) fn free_all(mut todo: Vec<u64>) {
     while let Some(p) = todo.pop() {
         drop_one(p, &mut todo);
     }
@@ -336,14 +350,79 @@ fn drop_one(p: u64, todo: &mut Vec<u64>) {
     // SAFETY: `p` is a live sequence whose reference is given up.
     let s = unsafe { seq(p) };
     if !s.rc.dec() {
+        if s.cyc {
+            crate::gc::candidate(s, p);
+        }
+        return;
+    }
+    if s.buffered.load(Relaxed) {
+        // The collector's buffer still names it: empty it, and leave
+        // the freeing to the collector ([`crate::gc`]).
+        let items = std::mem::take(&mut *s.items.borrow_mut());
+        release(s.desc, items, todo);
         return;
     }
     // SAFETY: the last reference: `p` came from `Box::into_raw` and no
     // other reference remains.
     let owned = unsafe { Box::from_raw(p as *mut PtSeq) };
     crate::live_dec();
-    for (k, v) in owned.items.into_inner().into_iter().enumerate() {
-        dec_into(slot(owned.desc, k), v, todo);
+    release(owned.desc, owned.items.into_inner(), todo);
+}
+
+/// The sequence slot `v` of type `desc` holds a reference to, if any: the
+/// edge the cycle collector follows ([`crate::gc`]).
+pub(crate) fn child(desc: &[u8], v: u64) -> Option<u64> {
+    if v == 0 {
+        return None;
+    }
+    match kind(desc) {
+        Kind::Opt => child(opt_owner(desc), v),
+        Kind::List
+        | Kind::Tuple
+        | Kind::Record
+        | Kind::Data
+        | Kind::Plain
+        | Kind::Range
+        | Kind::Exc
+        | Kind::Dict
+        | Kind::Set
+        | Kind::View => Some(v),
+        _ => None,
+    }
+}
+
+/// Drops the reference slot `k` of a sequence described by `desc` holds
+/// in `v`, as [`dec_into`] does.
+pub(crate) fn dec_slot(desc: &'static [u8], k: usize, v: u64, todo: &mut Vec<u64>) {
+    dec_into(slot(desc, k), v, todo);
+}
+
+/// Drops the references `items` (slots of a sequence described by `desc`)
+/// own.
+pub(crate) fn release(desc: &'static [u8], items: Vec<u64>, todo: &mut Vec<u64>) {
+    for (k, v) in items.into_iter().enumerate() {
+        dec_into(slot(desc, k), v, todo);
+    }
+}
+
+/// Whether a sequence of type `desc` may sit on a reference cycle: a
+/// [`CYCLIC`] back-reference is among its types.
+fn cyclic(desc: &[u8]) -> bool {
+    let rest = |at: usize| desc.get(at..).unwrap_or_default();
+    match kind(desc) {
+        _ if desc.first() == Some(&CYCLIC) => true,
+        Kind::List | Kind::Opt | Kind::Set => cyclic(rest(1)),
+        Kind::View => cyclic(rest(2)),
+        Kind::Dict => cyclic(rest(1)) || cyclic(rest(1 + span(rest(1)))),
+        Kind::Tuple | Kind::Record | Kind::Data | Kind::Plain => {
+            let mut at = 2;
+            (0..desc.get(1).copied().unwrap_or(0)).any(|_| {
+                let field = rest(at);
+                at += span(field);
+                cyclic(field)
+            })
+        }
+        _ => false,
     }
 }
 
@@ -555,13 +634,14 @@ impl Drop for Held {
 enum Step {
     Show(&'static [u8], u64),
     Text(&'static str),
-    /// The end of a list, tuple or exception.
-    Leave,
+    /// The end of a list, tuple or exception; whether it is on the walk's
+    /// `active` path of container that can close a cycle.
+    Leave(bool),
 }
 
 /// Appends Python's `repr` of slot `v` of type `desc` to `out`. A loop
 /// with its own stack, since exceptions nest to any depth.
-fn repr(desc: &'static [u8], v: u64, out: &mut String) -> Result<(), TooDeep> {
+pub(crate) fn repr(desc: &'static [u8], v: u64, out: &mut String) -> Result<(), TooDeep> {
     repr_holding(desc, v, out, &mut Held::new())
 }
 
@@ -574,6 +654,9 @@ fn repr_holding(
 ) -> Result<(), TooDeep> {
     let mut todo = vec![Step::Show(desc, v)];
     let mut depth = 0;
+    // The containers being shown that can close a cycle, outermost first:
+    // meeting one again shows `...` as CPython does.
+    let mut active: Vec<u64> = Vec::new();
     while let Some(step) = todo.pop() {
         let (desc, v) = match step {
             Step::Show(desc, v) => (desc, v),
@@ -581,8 +664,11 @@ fn repr_holding(
                 out.push_str(t);
                 continue;
             }
-            Step::Leave => {
+            Step::Leave(tracked) => {
                 depth -= 1;
+                if tracked {
+                    active.pop();
+                }
                 continue;
             }
         };
@@ -598,16 +684,49 @@ fn repr_holding(
                 | Kind::Set
                 | Kind::View
         );
+        let tracked = nests && closes_cycles(desc, v);
+        if tracked {
+            if active.contains(&v) {
+                out.push_str(cycle_mark(desc));
+                continue;
+            }
+            active.push(v);
+        }
         if nests {
             if depth >= MAX_NESTING {
                 return Err(TooDeep);
             }
             depth += 1;
-            todo.push(Step::Leave);
+            todo.push(Step::Leave(tracked));
         }
         show(desc, v, out, &mut todo, held)?;
     }
     Ok(())
+}
+
+/// Whether slot `v` of type `desc` holds a list, tuple, record, dict or
+/// set that can sit on a reference cycle.
+fn closes_cycles(desc: &[u8], v: u64) -> bool {
+    let kinds = [
+        Kind::List,
+        Kind::Tuple,
+        Kind::Record,
+        Kind::Data,
+        Kind::Dict,
+        Kind::Set,
+    ];
+    // SAFETY: a sequence slot holds a live sequence.
+    kinds.contains(&kind(desc)) && v != 0 && unsafe { seq(v) }.cyc
+}
+
+/// What a container already being shown is shown as, as `run` does.
+fn cycle_mark(desc: &[u8]) -> &'static str {
+    match kind(desc) {
+        Kind::List => "[...]",
+        Kind::Tuple => "(...)",
+        Kind::Dict | Kind::Set => "{...}",
+        _ => "...",
+    }
 }
 
 /// Writes what of slot `v` of type `desc` comes first, and pushes the
@@ -976,6 +1095,9 @@ pub unsafe extern "C" fn pt_seq_new(desc: *const u8, len: usize, cap: i64) -> *m
 /// A new sequence of type `desc` holding `items`, whose references it
 /// takes; a dict or set gets an empty index, so `items` must be empty.
 pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
+    if crate::gc::due() {
+        crate::gc::collect();
+    }
     let index = matches!(kind(desc), Kind::Dict | Kind::Set).then(Box::default);
     crate::live_inc();
     Box::into_raw(Box::new(PtSeq {
@@ -983,6 +1105,8 @@ pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
         desc,
         items: Slot::new(items),
         index: Slot::new(index),
+        cyc: cyclic(desc),
+        buffered: AtomicBool::new(false),
     }))
 }
 

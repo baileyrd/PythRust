@@ -24,6 +24,7 @@
 pub mod abi;
 pub mod exc;
 pub mod fsum;
+mod gc;
 pub mod num;
 pub mod obj;
 pub mod os;
@@ -290,6 +291,7 @@ mod entry {
         // SAFETY: `pythrust_main` takes the context pointer and returns
         // nothing; the compiler emits it with exactly that signature.
         unsafe { pythrust_main(super::exc::pt_ctx()) };
+        super::gc::collect_all();
         super::flush();
         super::leak_status(cfg!(debug_assertions), super::LIVE.load(super::Relaxed))
     }

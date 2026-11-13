@@ -279,13 +279,19 @@ fn descriptor_in(
             let compound = types
                 .get(id.0)
                 .ok_or_else(|| backend("an unknown sequence type".to_string()))?;
-            if let (Ty::Record(rid), true) = (ty, path.contains(&id)) {
-                out.push('^');
-                out.push(byte(rid.0 & 127, "a record number")?);
-                out.push(byte(rid.0 >> 7, "over 16384 types")?);
+            if let (Ty::Record(n) | Ty::Obj(n), true) = (ty, path.contains(&id)) {
+                // `&` where the type can close a reference cycle, which
+                // makes its sequences collector candidates (D175).
+                out.push(if ir::self_reaching(types, ty).is_some() {
+                    '&'
+                } else {
+                    '^'
+                });
+                out.push(byte(n.0 & 127, "a record number")?);
+                out.push(byte(n.0 >> 7, "over 16384 types")?);
                 return Ok(());
             }
-            let on_path = matches!(ty, Ty::Record(_));
+            let on_path = matches!(ty, Ty::Record(_) | Ty::Obj(_));
             if on_path {
                 path.push(id);
             }
@@ -306,13 +312,16 @@ fn descriptor_in(
     Ok(())
 }
 
-/// The full descriptor of each record that can hold its own type, by its
+/// The full descriptor of each record or class that can hold its own type, by its
 /// number: what a back-reference to it resolves to (D174).
 pub(super) fn recursive_descriptors(types: &[Compound]) -> Result<Vec<(u16, String)>> {
     let mut out = Vec::new();
     for (i, c) in types.iter().enumerate() {
-        let ty = Ty::Record(TypeId(i));
-        let Compound::Record { .. } = c else { continue };
+        let ty = match c {
+            Compound::Record { .. } => Ty::Record(TypeId(i)),
+            Compound::Object { .. } => Ty::Obj(TypeId(i)),
+            _ => continue,
+        };
         let reaches = ir::parts(types, ty).into_iter();
         if !reaches
             .flat_map(|p| ir::reachable(types, p))

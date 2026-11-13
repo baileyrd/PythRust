@@ -711,19 +711,6 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
          function: its gathered list takes another element type than the items",
     ),
     (
-        "classes",
-        "a class that can refer to itself (`Node`), until the cycle collector (D151, D152)",
-    ),
-    (
-        "classes_future",
-        "a class that can refer to itself (`Tree`), until the cycle collector (D151, D152)",
-    ),
-    (
-        "record_recursive_list",
-        "a record that holds its own type through a list can close a cycle, which native code \
-         has no collector for (D151, D166)",
-    ),
-    (
         "user_exception_many",
         "more exception classes than the runtime's handler test holds, a bit per class \
          code (D143)",
