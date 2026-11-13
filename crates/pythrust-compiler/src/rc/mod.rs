@@ -25,6 +25,11 @@
 //!    every path to it (never assigned, moved out or released) does
 //!    nothing, so it goes.
 //!
+//! None of the three touches a local whose type may sit on a reference
+//! cycle (`ir::cyclic`): the cycle collector subtracts the references it
+//! finds inside a graph from each count, so no count may be missing
+//! (D175).
+//!
 //! Nothing here reads the ownership summaries of [`own`](crate::own)
 //! (Nano, 2026-10-29): those track list aliasing (a string parameter is
 //! always `read`), while what decides a refcount is whether the callee

@@ -515,6 +515,26 @@ mod tests {
     }
 
     #[test]
+    fn a_class_that_can_reach_itself_has_a_cyclic_back_reference() {
+        // type 0: Node(next: Node | None), an object; type 1: the optional.
+        let types = vec![
+            Compound::Object {
+                name: "m.Node".to_string(),
+                shown: "Node".to_string(),
+                names: vec!["next".to_string()],
+                fields: vec![Ty::Opt(TypeId(1))],
+                plain: false,
+            },
+            Compound::Opt(Ty::Obj(TypeId(0))),
+        ];
+        let mut out = String::new();
+        descriptor(&types, Ty::Obj(TypeId(0)), &mut out).expect("descriptor");
+        assert_eq!(out, "m\u{1}o&\0\0\u{4}Node\u{4}next");
+        let found = recursive_descriptors(&types).expect("recursive");
+        assert_eq!(found, vec![(0, out)]);
+    }
+
+    #[test]
     fn tuples_past_a_byte_of_fields_are_refused() {
         let types = vec![Compound::Tuple(vec![Ty::Int; 128])];
         let mut out = String::new();

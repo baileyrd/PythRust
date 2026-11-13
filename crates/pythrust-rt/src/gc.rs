@@ -72,7 +72,10 @@ fn due_at(buffered: usize, executors: usize) -> bool {
 /// Collects until the candidates are gone or stop yielding: the end of the
 /// program.
 pub(crate) fn collect_all() {
-    while BUFFERED.load(Relaxed) > 0 && collect() {}
+    let mut progress = true;
+    while progress && BUFFERED.load(Relaxed) > 0 {
+        progress = collect();
+    }
 }
 
 /// A candidate's place in the graph: its reference count less the
@@ -340,7 +343,7 @@ mod tests {
         drop_ref(a);
         drop_ref(a);
         assert_eq!(roots().iter().filter(|&&p| p == a as u64).count(), 1);
-        assert!(collect());
+        collect_all();
         assert!(!roots().contains(&(a as u64)));
         drop_ref(a);
         drop_ref_str(ta);

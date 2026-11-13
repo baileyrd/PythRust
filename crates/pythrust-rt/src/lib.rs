@@ -7,7 +7,7 @@
 //!
 //! The C ABI surface is the project's `unsafe`, with one exception
 //! inside the runtime, the borrow cell in `sync.rs`. Each exported
-//! item (or module, for [`str`], [`seq`], [`table`], [`range`], [`num`], [`exc`], [`obj`], [`sys`] and [`os`]) carries `allow(unsafe_code)` and a
+//! item (or module, for [`str`], [`seq`], [`table`], [`range`], [`num`], [`exc`], [`obj`], [`sys`], [`os`] and `gc`, the cycle collector) carries `allow(unsafe_code)` and a
 //! `# Safety` note on what the caller guarantees, so the audit is
 //! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
 //! tested.

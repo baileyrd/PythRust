@@ -127,7 +127,7 @@ fn after_copies(blocks: Vec<Block>) -> Func {
         regions: Vec::new(),
         tasks: Vec::new(),
     };
-    copies(&mut f, &[BTreeSet::new()]);
+    copies(&mut f, &[BTreeSet::new()], &[]);
     f
 }
 
@@ -499,4 +499,14 @@ fn the_for_items_fixture_reads_without_counts_where_it_says() {
     for (name, reads) in want {
         assert_eq!(item_reads(func(&p, name)), reads, "{name}");
     }
+}
+
+#[test]
+fn a_parameter_of_a_cycle_capable_class_keeps_its_count() {
+    let node = "from __future__ import annotations\nclass Node:\n    def __init__(self, v: int):\n        self.v = v\n        self.next: Node | None = None\n    def __repr__(self) -> str:\n        return 'N'\ndef f(n: Node) -> int:\n    return n.v\nprint(f(Node(1)))\n";
+    let cyclic = elided(node);
+    assert!(func(&cyclic, "f").borrowed.is_empty());
+    // The same without the link borrows, as any read-only parameter does.
+    let plain = elided(&node.replace("        self.next: Node | None = None\n", ""));
+    assert_eq!(func(&plain, "f").borrowed.len(), 1);
 }
