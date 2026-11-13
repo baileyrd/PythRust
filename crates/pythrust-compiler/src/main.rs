@@ -87,13 +87,22 @@ const NATIVE_LIBS: &[&str] = &[
 /// Symbols stay for backtraces. On macOS, ld64's `-S` is the analogue of
 /// `--strip-debug`: it leaves out the debug map. MSVC writes debug info
 /// only with `/DEBUG`, so there it only needs unreferenced code dropped
-/// (`/OPT:REF`) and identical code folded (`/OPT:ICF`).
+/// (`/OPT:REF`) and identical code folded (`/OPT:ICF`). The main thread
+/// gets the 8 MiB stack the other targets have, not Windows' 1 MiB, which
+/// the runtime's bounded recursion (`==` and hashing to `MAX_NESTING`
+/// levels, D177) overflows.
 #[cfg(target_os = "macos")]
 const LINK_FLAGS: &[&str] = &["-Wl,-dead_strip", "-Wl,-S"];
 #[cfg(all(unix, not(target_os = "macos")))]
 const LINK_FLAGS: &[&str] = &["-Wl,--gc-sections", "-Wl,--strip-debug"];
 #[cfg(windows)]
-const LINK_FLAGS: &[&str] = &["/NOLOGO", "/SUBSYSTEM:CONSOLE", "/OPT:REF", "/OPT:ICF"];
+const LINK_FLAGS: &[&str] = &[
+    "/NOLOGO",
+    "/SUBSYSTEM:CONSOLE",
+    "/OPT:REF",
+    "/OPT:ICF",
+    "/STACK:8388608",
+];
 
 /// A subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
