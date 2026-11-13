@@ -32,18 +32,20 @@ pub(crate) fn stride(desc: &[u8]) -> usize {
     }
 }
 
-/// Feeds key `v` of type `desc` to `h`, consistently with `seq::eq`.
-fn hash(desc: &'static [u8], v: u64, h: &mut DefaultHasher) {
+/// Feeds key `v` of type `desc`, inside `depth` tuples, to `h`,
+/// consistently with `seq::eq`.
+fn hash(desc: &'static [u8], v: u64, h: &mut DefaultHasher, depth: usize) {
     match kind(desc) {
         // SAFETY: a string key holds a live string.
         Kind::Str => unsafe { seq::text(v) }.hash(h),
         Kind::Opt if v == 0 => 0u8.hash(h),
-        Kind::Opt => hash(seq::opt(desc).0, seq::present(desc, v), h),
+        Kind::Opt => hash(seq::opt(desc).0, seq::present(desc, v), h, depth),
         Kind::Tuple => {
+            let depth = seq::deeper(depth);
             // SAFETY: a tuple key holds a live tuple.
             let t = unsafe { seq::seq(v) };
             for (k, field) in t.items.borrow().iter().enumerate() {
-                hash(slot(t.desc, k), *field, h);
+                hash(slot(t.desc, k), *field, h, depth);
             }
         }
         _ => v.hash(h),
@@ -57,7 +59,7 @@ fn key_desc(t: &PtSeq) -> &'static [u8] {
 
 fn hash_of(desc: &'static [u8], v: u64) -> usize {
     let mut h = DefaultHasher::new();
-    hash(desc, v, &mut h);
+    hash(desc, v, &mut h, 0);
     h.finish() as usize
 }
 
@@ -133,9 +135,9 @@ fn grow(t: &PtSeq, slots: &mut Vec<usize>, entries: usize) {
     }
 }
 
-/// Whether tables `a` and `b` of one type are equal: the same keys,
-/// and for a dict equal values, in any order.
-pub(crate) fn same(a: &PtSeq, b: &PtSeq) -> bool {
+/// Whether tables `a` and `b` of one type, at nesting `depth`, are
+/// equal: the same keys, and for a dict equal values, in any order.
+pub(crate) fn same(a: &PtSeq, b: &PtSeq, depth: usize) -> bool {
     let step = stride(a.desc);
     // Both borrows last through every comparison, so a value read from
     // `b` stays reachable from it until compared.
@@ -143,18 +145,22 @@ pub(crate) fn same(a: &PtSeq, b: &PtSeq) -> bool {
     if items.len() != others.len() {
         return false;
     }
-    items.chunks(step).all(|entry| {
+    // A plain loop, as `seq::seq_eq`, to keep each nesting level small.
+    for entry in items.chunks(step) {
         let Some(at) = entry.first().and_then(|k| find(b, *k)) else {
             return false;
         };
-        match entry.get(1) {
-            None => true,
-            Some(v) => {
-                let w = others.get(at * 2 + 1).copied();
-                w.is_some_and(|w| seq::eq(slot(a.desc, 1), *v, w))
-            }
+        let Some(v) = entry.get(1) else {
+            continue;
+        };
+        let Some(w) = others.get(at * 2 + 1).copied() else {
+            return false;
+        };
+        if !seq::eq_at(slot(a.desc, 1), *v, w, depth) {
+            return false;
         }
-    })
+    }
+    true
 }
 
 /// Borrows a table argument.
@@ -545,11 +551,11 @@ mod tests {
             (0..100).rev().for_each(|k| pt_set_add(b, k));
             pt_set_add(a, 5);
             assert_eq!(pt_seq_len(a), 100);
-            assert!(same(table(a), table(b)));
+            assert!(same(table(a), table(b), 0));
             assert_eq!(pt_table_contains(a, 99), 1);
             assert_eq!(pt_table_contains(a, 100), 0);
             pt_set_add(b, 100);
-            assert!(!same(table(a), table(b)));
+            assert!(!same(table(a), table(b), 0));
             pt_seq_dec(a);
             pt_seq_dec(b);
         }

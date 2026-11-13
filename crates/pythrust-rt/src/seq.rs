@@ -612,6 +612,11 @@ pub unsafe extern "C" fn pt_mark(desc: *const u8, len: usize, v: u64) {
 
 /// `a == b` for two slots of type `desc`.
 pub(crate) fn eq(desc: &[u8], a: u64, b: u64) -> bool {
+    eq_at(desc, a, b, 0)
+}
+
+/// `a == b` with `depth` containers already open around it (D177).
+pub(crate) fn eq_at(desc: &[u8], a: u64, b: u64, depth: usize) -> bool {
     match kind(desc) {
         Kind::Float => f64::from_bits(a) == f64::from_bits(b),
         // SAFETY: string slots hold live strings.
@@ -620,28 +625,47 @@ pub(crate) fn eq(desc: &[u8], a: u64, b: u64) -> bool {
         Kind::Obj => unsafe { obj::borrow(a as *const PtObj).same(obj::borrow(b as *const PtObj)) },
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple | Kind::Record | Kind::Data | Kind::View => {
-            a == b || unsafe { seq_eq(seq(a), seq(b)) }
+            a == b || unsafe { seq_eq(seq(a), seq(b), deeper(depth)) }
         }
         // SAFETY: table slots hold live tables.
-        Kind::Dict | Kind::Set => a == b || unsafe { table::same(seq(a), seq(b)) },
+        Kind::Dict | Kind::Set => a == b || unsafe { table::same(seq(a), seq(b), deeper(depth)) },
         // SAFETY: range slots hold live ranges.
         Kind::Range => unsafe {
             range_fields(a as *const PtSeq).same(&range_fields(b as *const PtSeq))
         },
         Kind::Opt if a == 0 || b == 0 => a == b,
-        Kind::Opt => eq(opt(desc).0, present(desc, a), present(desc, b)),
+        Kind::Opt => eq_at(opt(desc).0, present(desc, a), present(desc, b), depth),
         _ => a == b,
     }
 }
 
-/// Elementwise `==`. A sequence equals itself without looking inside.
-fn seq_eq(a: &PtSeq, b: &PtSeq) -> bool {
+/// The depth inside one more container, or the fatal recursion fault
+/// (D11) once that passes [`MAX_NESTING`], as `run` stops: a cyclic value
+/// compared with another would otherwise overflow the stack (D177).
+pub(crate) fn deeper(depth: usize) -> usize {
+    if depth >= MAX_NESTING {
+        crate::fault(TOO_DEEP_EQ);
+    }
+    depth + 1
+}
+
+/// The message of an `==` or hash nested deeper than `run` allows.
+const TOO_DEEP_EQ: &str = "RecursionError: maximum recursion depth exceeded in comparison";
+
+/// Elementwise `==` at `depth`. A sequence equals itself without looking inside.
+/// A plain loop, not iterator adapters: each nesting level then costs
+/// two stack frames, so [`MAX_NESTING`] levels fit even unoptimized.
+fn seq_eq(a: &PtSeq, b: &PtSeq, depth: usize) -> bool {
     let (x, y) = (a.items.borrow(), b.items.borrow());
-    x.len() == y.len()
-        && x.iter()
-            .zip(y.iter())
-            .enumerate()
-            .all(|(k, (p, q))| eq(slot(a.desc, k), *p, *q))
+    if x.len() != y.len() {
+        return false;
+    }
+    for (k, (p, q)) in x.iter().zip(y.iter()).enumerate() {
+        if !eq_at(slot(a.desc, k), *p, *q, depth) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Orders two slots of type `desc`; `None` when unordered (a NaN).
@@ -2831,6 +2855,30 @@ mod tests {
         assert!(!held.release_last());
         // SAFETY: the head's one reference, which frees the chain.
         unsafe { pt_seq_dec(links[0]) };
+    }
+
+    #[test]
+    fn equality_counts_each_container_toward_the_limit() {
+        assert_eq!(deeper(0), 1);
+        assert_eq!(deeper(MAX_NESTING - 1), MAX_NESTING);
+        let inner = |v: u64| make(b"li", &[v]);
+        let (a, b, c) = (inner(1), inner(1), inner(2));
+        let (xs, ys, zs) = (
+            make(b"lli", &[a as u64]),
+            make(b"lli", &[b as u64]),
+            make(b"lli", &[c as u64]),
+        );
+        // Two containers deep fits with two levels to spare; past the
+        // limit the program stops (D177), which the corpus checks.
+        assert!(eq_at(b"lli", xs as u64, ys as u64, MAX_NESTING - 2));
+        assert!(!eq_at(b"lli", xs as u64, zs as u64, MAX_NESTING - 2));
+        // The same sequence equals itself without opening it.
+        assert!(eq_at(b"lli", xs as u64, xs as u64, MAX_NESTING));
+        // SAFETY: each holds the last reference to what it built.
+        unsafe {
+            [a, b, c].iter().for_each(|p| pt_seq_dec(*p));
+            [xs, ys, zs].iter().for_each(|p| pt_seq_dec(*p));
+        }
     }
 
     #[test]

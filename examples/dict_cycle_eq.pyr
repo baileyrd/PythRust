@@ -1,0 +1,24 @@
+# native-stderr: the runtime reports the fault without a source location, so its stderr is "pythrust-rt: RecursionError: maximum recursion depth exceeded in comparison" where `run` shows the line and carets.
+# expect-exit: 1
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass
+class Hub:
+    links: dict[str, Hub]
+
+
+def main() -> None:
+    a = Hub({})
+    a.links["self"] = a
+    b = Hub({})
+    b.links["self"] = b
+    print(a == a)
+    print("comparing")
+    print(a == b)
+    print("not reached")
+
+
+main()
