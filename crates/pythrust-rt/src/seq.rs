@@ -19,7 +19,7 @@
 use crate::sync::{Count, Ref, Slot};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::{PoisonError, RwLock};
 
 use crate::obj::{self, PtObj};
@@ -46,6 +46,9 @@ pub struct PtSeq {
     /// buffered sequence whose count reaches zero is emptied but not
     /// freed: the collector frees it.
     pub(crate) buffered: AtomicBool,
+    /// The collector's place for this sequence in the graph it walks
+    /// (its index plus one), 0 outside a collection ([`crate::gc`]).
+    pub(crate) place: AtomicU32,
 }
 
 /// What a descriptor describes.
@@ -133,8 +136,12 @@ pub unsafe extern "C" fn pt_register_desc(id: u64, desc: *const u8, len: usize) 
 }
 
 /// `desc`, or the full descriptor it back-references.
+#[inline]
 pub(crate) fn resolve(desc: &[u8]) -> &[u8] {
-    let [BACKREF | CYCLIC, lo, hi, ..] = *desc else {
+    if !matches!(desc.first(), Some(&(BACKREF | CYCLIC))) {
+        return desc;
+    }
+    let [_, lo, hi, ..] = *desc else {
         return desc;
     };
     let id = u16::from(lo) | u16::from(hi) << 7;
@@ -369,6 +376,68 @@ fn drop_one(p: u64, todo: &mut Vec<u64>) {
     release(owned.desc, owned.items.into_inner(), todo);
 }
 
+/// The types of the slots of a sequence described by `desc`, in order,
+/// found by one walk of the descriptor: [`slot`] for each `k` walks it
+/// from the start every time.
+struct Slots {
+    desc: &'static [u8],
+    k: usize,
+    /// The next field's type, for a tuple, record or object.
+    rest: &'static [u8],
+}
+
+impl Slots {
+    fn new(desc: &'static [u8]) -> Slots {
+        Slots {
+            desc,
+            k: 0,
+            rest: desc.get(2..).unwrap_or_default(),
+        }
+    }
+}
+
+impl Iterator for Slots {
+    type Item = &'static [u8];
+
+    fn next(&mut self) -> Option<&'static [u8]> {
+        let (desc, k) = (self.desc, self.k);
+        self.k += 1;
+        let ty = match kind(desc) {
+            Kind::List | Kind::Set => desc.get(1..).unwrap_or_default(),
+            Kind::Dict => {
+                let key = desc.get(1..).unwrap_or_default();
+                if k % 2 == 0 {
+                    key
+                } else {
+                    key.get(span(key)..).unwrap_or_default()
+                }
+            }
+            Kind::Tuple | Kind::Record | Kind::Data | Kind::Plain => {
+                let ty = self.rest;
+                self.rest = ty.get(span(ty)..).unwrap_or_default();
+                ty
+            }
+            _ => slot_at(desc, k),
+        };
+        Some(resolve(ty))
+    }
+}
+
+/// Calls `f` with the index and target of each sequence reference
+/// `items` hold, as slots of `s`: the edges the cycle collector follows
+/// ([`crate::gc`]).
+pub(crate) fn for_children(s: &PtSeq, items: &[u64], mut f: impl FnMut(usize, u64)) {
+    for (k, (ty, &v)) in Slots::new(s.desc).zip(items).enumerate() {
+        // Scalars, strings and bytes are the common slots.
+        if matches!(ty.first(), Some(b'i' | b'f' | b'b' | b'n' | b's' | b'y')) {
+            continue;
+        }
+        if let Some(c) = child(ty, v) {
+            f(k, c);
+        }
+    }
+}
+
 /// The sequence slot `v` of type `desc` holds a reference to, if any: the
 /// edge the cycle collector follows ([`crate::gc`]).
 pub(crate) fn child(desc: &[u8], v: u64) -> Option<u64> {
@@ -391,18 +460,32 @@ pub(crate) fn child(desc: &[u8], v: u64) -> Option<u64> {
     }
 }
 
-/// Drops the reference slot `k` of a sequence described by `desc` holds
-/// in `v`, as [`dec_into`] does.
-pub(crate) fn dec_slot(desc: &'static [u8], k: usize, v: u64, todo: &mut Vec<u64>) {
-    dec_into(slot(desc, k), v, todo);
-}
-
 /// Drops the references `items` (slots of a sequence described by `desc`)
 /// own.
 pub(crate) fn release(desc: &'static [u8], items: Vec<u64>, todo: &mut Vec<u64>) {
-    for (k, v) in items.into_iter().enumerate() {
-        dec_into(slot(desc, k), v, todo);
+    for (ty, v) in Slots::new(desc).zip(items) {
+        dec_into(ty, v, todo);
     }
+}
+
+/// [`cyclic`], remembered for the last few descriptors allocated: a
+/// program allocates few types, many times.
+fn cyclic_cached(desc: &'static [u8]) -> bool {
+    thread_local! {
+        static SEEN: std::cell::Cell<[(usize, bool); 8]> = const { std::cell::Cell::new([(0, false); 8]) };
+    }
+    let key = desc.as_ptr() as usize;
+    let at = (key >> 3) % 8;
+    SEEN.with(|seen| {
+        let mut table = seen.get();
+        if table[at].0 == key {
+            return table[at].1;
+        }
+        let found = cyclic(desc);
+        table[at] = (key, found);
+        seen.set(table);
+        found
+    })
 }
 
 /// Whether a sequence of type `desc` may sit on a reference cycle: a
@@ -1105,8 +1188,9 @@ pub(crate) fn new_seq(desc: &'static [u8], items: Vec<u64>) -> *mut PtSeq {
         desc,
         items: Slot::new(items),
         index: Slot::new(index),
-        cyc: cyclic(desc),
+        cyc: cyclic_cached(desc),
         buffered: AtomicBool::new(false),
+        place: AtomicU32::new(0),
     }))
 }
 

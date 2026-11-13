@@ -22,7 +22,6 @@
 
 #![allow(unsafe_code)] // Frees sequences by pointer, as `seq::drop_one` does.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -78,15 +77,20 @@ pub(crate) fn collect_all() {
     }
 }
 
-/// A candidate's place in the graph: its reference count less the
-/// references inside the graph, and the sequences it holds references to.
-struct Node {
-    external: isize,
-    kids: Vec<u64>,
+/// The graph of the sequences the candidates reach through
+/// candidate-capable ones: each is [`PtSeq::place`]d at its index in
+/// `nodes`, `edges[ends[i - 1]..ends[i]]` are the indices it holds
+/// references to, and `external` is its count less the references
+/// inside the graph.
+struct Graph {
+    nodes: Vec<u64>,
+    external: Vec<isize>,
+    edges: Vec<u32>,
+    ends: Vec<usize>,
 }
 
 /// Collects the buffered candidates; whether it could (no write borrow in
-/// the way) and freed anything or emptied the buffer.
+/// the way).
 pub(crate) fn collect() -> bool {
     let taken = std::mem::take(&mut *roots());
     BUFFERED.store(0, Relaxed);
@@ -103,83 +107,114 @@ pub(crate) fn collect() -> bool {
         }
         return false;
     };
-    let garbage = garbage(&graph);
-    free(&garbage);
+    let alive = alive(&graph);
+    free(&graph, &alive);
     dead.iter().for_each(|&p| drop_box(p));
     true
 }
 
-/// The graph of sequences `from` reach, following candidate-capable ones;
-/// `None` when one cannot be read.
-fn graph(from: &[u64]) -> Option<HashMap<u64, Node>> {
-    let mut graph: HashMap<u64, Node> = HashMap::new();
-    let mut todo = from.to_vec();
-    while let Some(p) = todo.pop() {
-        if graph.contains_key(&p) {
-            continue;
-        }
+/// The graph `from` reach; `None` when a sequence in it cannot be read,
+/// after clearing the places set so far.
+fn graph(from: &[u64]) -> Option<Graph> {
+    let mut g = Graph {
+        nodes: Vec::new(),
+        external: Vec::new(),
+        edges: Vec::new(),
+        ends: Vec::new(),
+    };
+    let add = |g: &mut Graph, p: u64| {
         // SAFETY: reached from a live candidate by a counted reference.
         let s = unsafe { seq::seq(p) };
-        let items = s.items.try_borrow()?;
-        let kids: Vec<u64> = items
-            .iter()
-            .enumerate()
-            .filter_map(|(k, &v)| seq::child(seq::slot(s.desc, k), v))
-            // SAFETY: as above.
-            .filter(|&c| unsafe { seq::seq(c) }.cyc)
-            .collect();
+        g.nodes.push(p);
+        g.external
+            .push(isize::try_from(s.rc.get()).unwrap_or(isize::MAX));
+        s.place.store(g.nodes.len() as u32, Relaxed);
+    };
+    from.iter().for_each(|&p| add(&mut g, p));
+    let mut kids = Vec::new();
+    let mut i = 0;
+    while i < g.nodes.len() {
+        // SAFETY: as above.
+        let s = unsafe { seq::seq(g.nodes[i]) };
+        let Some(items) = s.items.try_borrow() else {
+            clear(&g.nodes);
+            return None;
+        };
+        kids.clear();
+        seq::for_children(s, &items, |_, c| kids.push(c));
         drop(items);
-        todo.extend(&kids);
-        let external = isize::try_from(s.rc.get()).unwrap_or(isize::MAX);
-        graph.insert(p, Node { external, kids });
-    }
-    let edges: Vec<u64> = graph.values().flat_map(|n| n.kids.clone()).collect();
-    for kid in edges {
-        if let Some(n) = graph.get_mut(&kid) {
-            n.external -= 1;
+        for &c in &kids {
+            // SAFETY: as above.
+            let kid = unsafe { seq::seq(c) };
+            if !kid.cyc {
+                continue;
+            }
+            if kid.place.load(Relaxed) == 0 {
+                add(&mut g, c);
+            }
+            let at = kid.place.load(Relaxed) - 1;
+            g.external[at as usize] -= 1;
+            g.edges.push(at);
         }
+        g.ends.push(g.edges.len());
+        i += 1;
     }
-    Some(graph)
+    Some(g)
 }
 
-/// The sequences of `graph` no reference from outside it reaches.
-fn garbage(graph: &HashMap<u64, Node>) -> Vec<u64> {
-    let mut todo: Vec<u64> = graph
+/// Resets the place of each of `nodes`.
+fn clear(nodes: &[u64]) {
+    // SAFETY: each is a live sequence.
+    nodes
         .iter()
-        .filter(|(_, n)| n.external > 0)
-        .map(|(&p, _)| p)
-        .collect();
-    let mut live = std::collections::HashSet::new();
-    while let Some(p) = todo.pop() {
-        if live.insert(p) {
-            todo.extend(&graph[&p].kids);
-        }
-    }
-    graph
-        .keys()
-        .copied()
-        .filter(|p| !live.contains(p))
-        .collect()
+        .for_each(|&p| unsafe { seq::seq(p) }.place.store(0, Relaxed));
 }
 
-/// Frees `garbage`: drops what each holds outside it, then the sequences.
-fn free(garbage: &[u64]) {
-    let set: std::collections::HashSet<u64> = garbage.iter().copied().collect();
-    let mut todo = Vec::new();
-    for &p in garbage {
-        // SAFETY: garbage, referenced only from garbage.
-        let s = unsafe { seq::seq(p) };
-        let items = std::mem::take(&mut *s.items.borrow_mut());
-        let outside = items.into_iter().enumerate().map(|(k, v)| {
-            let held = seq::child(seq::slot(s.desc, k), v).is_some_and(|c| set.contains(&c));
-            (k, if held { 0 } else { v })
-        });
-        for (k, v) in outside {
-            seq::dec_slot(s.desc, k, v, &mut todo);
+/// Which sequences of `g` something outside it, or a sequence outside it
+/// reaches, holds.
+fn alive(g: &Graph) -> Vec<bool> {
+    let mut alive = vec![false; g.nodes.len()];
+    let mut todo: Vec<usize> = (0..g.nodes.len()).filter(|&i| g.external[i] > 0).collect();
+    while let Some(i) = todo.pop() {
+        if std::mem::replace(&mut alive[i], true) {
+            continue;
         }
+        let start = if i == 0 { 0 } else { g.ends[i - 1] };
+        todo.extend(g.edges[start..g.ends[i]].iter().map(|&e| e as usize));
+    }
+    alive
+}
+
+/// Frees what is not `alive`: drops what each such sequence holds outside
+/// the garbage, as a drop does, then frees the sequences. Resets the
+/// places of the rest.
+fn free(g: &Graph, alive: &[bool]) {
+    let mut todo = Vec::new();
+    let mut garbage = Vec::new();
+    let mut held_garbage = Vec::new();
+    for (i, &p) in g.nodes.iter().enumerate() {
+        // SAFETY: a node of the graph.
+        let s = unsafe { seq::seq(p) };
+        if alive[i] {
+            s.place.store(0, Relaxed);
+            continue;
+        }
+        garbage.push(p);
+        let mut items = std::mem::take(&mut *s.items.borrow_mut());
+        // Slots holding garbage are not dropped one by one.
+        held_garbage.clear();
+        seq::for_children(s, &items, |k, c| {
+            // SAFETY: a node of the graph or a live sequence.
+            let at = unsafe { seq::seq(c) }.place.load(Relaxed);
+            if at != 0 && !alive[at as usize - 1] {
+                held_garbage.push(k);
+            }
+        });
+        held_garbage.iter().for_each(|&k| items[k] = 0);
+        seq::release(s.desc, items, &mut todo);
     }
     seq::free_all(todo);
-    garbage.iter().for_each(|&p| drop_box(p));
+    garbage.into_iter().for_each(drop_box);
 }
 
 /// Frees the allocation of sequence `p` once its slots hold nothing.
