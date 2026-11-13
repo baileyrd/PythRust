@@ -261,8 +261,14 @@ pub unsafe extern "C" fn pt_fail_mid(
 /// Ends the program on a runtime bug: something generated code
 /// guarantees did not hold.
 fn internal(what: &str) -> ! {
+    fault(&format!("internal error: {what}"))
+}
+
+/// Ends the program with the runtime's `message`, a fault of the
+/// program that no `try` catches.
+fn fault(message: &str) -> ! {
     flush();
-    let _ = writeln!(io::stderr(), "pythrust-rt: internal error: {what}");
+    let _ = writeln!(io::stderr(), "pythrust-rt: {message}");
     std::process::exit(1)
 }
 

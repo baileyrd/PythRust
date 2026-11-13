@@ -387,6 +387,9 @@ impl<T: Copy> Slot<Vec<T>> {
 }
 
 fn conflict() -> ! {
+    if crate::seq::in_repr() {
+        crate::fault("a `__repr__` changed the container being printed")
+    }
     crate::internal("two tasks used one value at once")
 }
 

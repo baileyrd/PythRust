@@ -25,6 +25,7 @@ mod zip;
 #[cfg(test)]
 mod tests;
 
+use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::iter;
@@ -118,6 +119,20 @@ fn run_here<'m>(
         )),
         None => Ok(()),
     }
+}
+
+/// What stops a program that changes a container while a `__repr__`
+/// call is printing it; `build`'s says the same (D172, D173).
+const REPR_CHANGED: &str = "a `__repr__` changed the container being printed";
+
+/// `cell` for writing. A printing container is read-borrowed while its
+/// items' `__repr__`s run, so a write from one is this fault, not a panic.
+fn writable<'a, T>(
+    cell: &'a RefCell<T>,
+    span: Span,
+) -> std::result::Result<RefMut<'a, T>, Diagnostic> {
+    cell.try_borrow_mut()
+        .map_err(|_| rt_err(span, REPR_CHANGED.to_string()))
 }
 
 /// Builds a runtime diagnostic.
@@ -1306,7 +1321,7 @@ fn set_field<'m>(object: &Value<'m>, attr: &Ident, v: Value<'m>) -> Exec<'m, ()>
         return Err(rt_err(attr.span, "internal: a field of a non-record".into()).into());
     };
     let at = r.def.fields.iter().position(|f| f.name.name == attr.name);
-    let mut fields = r.fields.borrow_mut();
+    let mut fields = writable(&r.fields, attr.span)?;
     let Some(slot) = at.and_then(|i| fields.get_mut(i)) else {
         let msg = format!("internal: no field `{}`", attr.name);
         return Err(rt_err(attr.span, msg).into());
@@ -1553,7 +1568,7 @@ fn in_place<'m>(op: BinOp, current: Value<'m>, rhs: &Value<'m>, span: Span) -> E
         BinOp::Add => {
             // Collect first: `xs += xs` reads the list it extends.
             let items: Vec<Value> = rhs.iter(span)?.collect();
-            list.borrow_mut().extend(items);
+            writable(list, span)?.extend(items);
         }
         BinOp::Mul => {
             if let Value::List(repeated) = ops::binary(op, &current, rhs, span)? {
@@ -1610,7 +1625,7 @@ fn set_item<'m>(
 ) -> Exec<'m, ()> {
     if let Value::Dict(dict) = container {
         let key = Key::of(index, span)?;
-        dict.borrow_mut().insert(key, index.clone(), v);
+        writable(dict, span)?.insert(key, index.clone(), v);
         return Ok(());
     }
     let Value::List(list) = container else {
@@ -1626,7 +1641,7 @@ fn set_item<'m>(
     let len = list.borrow().len();
     let i =
         resolve(index, len, "list", span)?.ok_or_else(|| out_of_range("list assignment", span))?;
-    list.borrow_mut()[i] = v;
+    writable(list, span)?[i] = v;
     Ok(())
 }
 
@@ -1635,7 +1650,8 @@ fn set_item<'m>(
 fn del_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Exec<'m, ()> {
     match container {
         Value::Dict(dict) => {
-            let removed = dict.borrow_mut().remove(&Key::of(index, span)?);
+            let key = Key::of(index, span)?;
+            let removed = writable(dict, span)?.remove(&key);
             // Dropped after the borrow ends.
             removed.map(drop).ok_or_else(|| missing_key(index, span))
         }
@@ -1643,7 +1659,7 @@ fn del_item<'m>(container: &Value<'m>, index: &Value<'m>, span: Span) -> Exec<'m
             let len = list.borrow().len();
             let i = resolve(index, len, "list", span)?
                 .ok_or_else(|| out_of_range("list assignment", span))?;
-            let removed = list.borrow_mut().remove(i);
+            let removed = writable(list, span)?.remove(i);
             drop(removed);
             Ok(())
         }
