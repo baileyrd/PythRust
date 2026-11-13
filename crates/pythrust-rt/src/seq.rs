@@ -628,6 +628,18 @@ pub unsafe extern "C" fn pt_register_repr(class: u64, f: ReprFn) {
     reprs.insert(class as u16, f);
 }
 
+thread_local! {
+    /// `__repr__` calls the walker has under way on this thread.
+    static REPR_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether a `__repr__` the walker called is running on this thread: a
+/// borrow conflict then is that `__repr__` changing what is printed
+/// (D172, D173).
+pub(crate) fn in_repr() -> bool {
+    REPR_CALLS.with(|n| n.get()) > 0
+}
+
 /// The class a plain object's descriptor names: its last two bytes.
 fn class_of(desc: &[u8]) -> u16 {
     let end = span(desc);
@@ -646,8 +658,10 @@ fn plain_repr(desc: &'static [u8], v: u64) -> Result<String, TooDeep> {
         return Ok("<object>".to_string());
     };
     drop(reprs);
+    REPR_CALLS.with(|n| n.set(n.get() + 1));
     // SAFETY: `f` was registered as a `__repr__`, `v` is a live object.
     let s = unsafe { f(crate::exc::pt_ctx(), v as *const PtSeq) };
+    REPR_CALLS.with(|n| n.set(n.get() - 1));
     if s.is_null() {
         return Err(TooDeep);
     }

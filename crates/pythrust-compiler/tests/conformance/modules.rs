@@ -154,7 +154,7 @@ fn corpus_matches_native_modules() -> Res<()> {
         let errored = failed.is_none() && got.status != 0;
         failures.extend(failed);
         if errored {
-            failures.extend(stderr_mismatch(&exe, native(&case, &exe, false))?);
+            failures.extend(stderr_mismatch(&exe, native(&case, &exe, false), false)?);
         }
         if memcheck_requested() {
             failures.extend(memcheck(&case, &exe)?);

@@ -11,7 +11,7 @@ use std::rc::Rc;
 use super::builtins::{merge_sort, Args};
 use super::table::{Key, TableRef};
 use super::value::{eq, File, ListRef, Value};
-use super::{raised, rt_err, stdlib, text, Exec};
+use super::{raised, rt_err, stdlib, text, writable, Exec};
 use crate::ast::Ident;
 use crate::diag::Result;
 use crate::exc::ExcKind;
@@ -326,7 +326,7 @@ fn list_call<'m>(
 ) -> Exec<'m, Value<'m>> {
     let arg = args.first().cloned().unwrap_or(Value::None);
     match name {
-        Name::Append => list.borrow_mut().push(arg),
+        Name::Append => writable(list, span)?.push(arg),
         Name::Pop => return pop(list, args.first(), span),
         Name::Extend => {
             // Read in full first, so `xs.extend(xs)` doubles `xs`.
@@ -334,20 +334,20 @@ fn list_call<'m>(
                 Value::List(other) => other.borrow().clone(),
                 other => other.iter(span)?.collect(),
             };
-            list.borrow_mut().extend(items);
+            writable(list, span)?.extend(items);
         }
         Name::Insert => {
             let len = list.borrow().len();
             let at = clamped(&arg, len, span)?;
             let v = args.get(1).cloned().unwrap_or(Value::None);
-            list.borrow_mut().insert(at, v);
+            writable(list, span)?.insert(at, v);
         }
         Name::Remove => {
             let Some(i) = find(list, &arg, span)? else {
                 let msg = "list.remove(x): x not in list".to_string();
                 return Err(raised(ExcKind::Value, msg, span));
             };
-            let removed = list.borrow_mut().remove(i);
+            let removed = writable(list, span)?.remove(i);
             drop(removed);
         }
         Name::Index => {
@@ -367,9 +367,9 @@ fn list_call<'m>(
         }
         Name::Sort => {
             // The list is empty while it sorts, as in CPython.
-            let items = std::mem::take(&mut *list.borrow_mut());
+            let items = std::mem::take(&mut *writable(list, span)?);
             let sorted = merge_sort(items, reverse, span)?;
-            *list.borrow_mut() = sorted;
+            *writable(list, span)? = sorted;
         }
         _ => return Err(rt_err(span, format!("`{}` is not a list method", name.as_str())).into()),
     }
@@ -398,7 +398,7 @@ fn pop<'m>(list: &ListRef<'m>, index: Option<&Value<'m>>, span: Span) -> Exec<'m
             span,
         ));
     };
-    Ok(list.borrow_mut().remove(at))
+    Ok(writable(list, span)?.remove(at))
 }
 
 /// `insert`'s index in `0..=len`: negative counts from the end, and one
@@ -445,7 +445,7 @@ fn table_call<'m>(
     match name {
         Name::Add => {
             let key = Key::of(&arg, span)?;
-            table.borrow_mut().insert(key, arg, Value::None);
+            writable(table, span)?.insert(key, arg, Value::None);
             Ok(Value::None)
         }
         Name::Get => {
@@ -458,7 +458,8 @@ fn table_call<'m>(
                 .unwrap_or(Value::None))
         }
         Name::Pop => {
-            let removed = table.borrow_mut().remove(&Key::of(&arg, span)?);
+            let key = Key::of(&arg, span)?;
+            let removed = writable(table, span)?.remove(&key);
             match (removed, default) {
                 (Some((_, v)), _) => Ok(v),
                 (None, Some(d)) => Ok(d),
@@ -471,7 +472,7 @@ fn table_call<'m>(
                 return Ok(v.clone());
             }
             let v = default.unwrap_or(Value::None);
-            table.borrow_mut().insert(key, arg, v.clone());
+            writable(table, span)?.insert(key, arg, v.clone());
             Ok(v)
         }
         Name::Update => {
@@ -481,7 +482,7 @@ fn table_call<'m>(
             let entries = other.borrow().entries().to_vec();
             for (k, v) in entries {
                 let key = Key::of(&k, span)?;
-                table.borrow_mut().insert(key, k, v);
+                writable(table, span)?.insert(key, k, v);
             }
             Ok(Value::None)
         }

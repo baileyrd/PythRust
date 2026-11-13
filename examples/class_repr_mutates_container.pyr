@@ -1,0 +1,17 @@
+# native-stderr: the runtime reports the fault without a source location, so its stderr is "pythrust-rt: a `__repr__` changed the container being printed" where `run` shows the line and carets.
+# deviation: a `__repr__` that changes the container being printed stops the program ("a `__repr__` changed the container being printed", D172, D173); CPython prints the container, with the items it holds at each step.
+# expect-exit: 1
+class Tag:
+    def __init__(self, name: str):
+        self.name = name
+
+    def __repr__(self) -> str:
+        if len(bag) < 3:
+            bag.append(Tag("né"))
+        return "Tag(" + self.name + ")"
+
+
+bag: list[Tag] = [Tag("a")]
+print("start")
+print(bag)
+print(len(bag))

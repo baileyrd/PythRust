@@ -28,6 +28,10 @@
 //! - `# native-unjoined: why` a fault in a task ends the native program
 //!   without joining the executor's workers, so ThreadSanitizer runs it
 //!   with `report_thread_leaks=0`; it needs a nonzero `expect-exit`.
+//! - `# native-stderr: why` the native program's stderr differs from
+//!   `run`'s (a runtime fault the native runtime reports without a source
+//!   location); it must differ, so a stale mark fails; it needs a nonzero
+//!   `expect-exit`.
 //! - `# expect-error: text` the program must fail `check` (lex, parse,
 //!   infer) with a diagnostic containing `text`; it implies exit 1. Every
 //!   other program must pass `check`. `corpus_checks` asserts both.
@@ -90,6 +94,8 @@ struct Expect {
     native_deviation: Option<String>,
     /// Why the native program ends without joining its workers, if so.
     unjoined: Option<String>,
+    /// Why the native program's stderr differs from `run`'s, if it does.
+    native_stderr: Option<String>,
 }
 
 /// One corpus program and its golden stdout.
@@ -112,6 +118,7 @@ const DEVIATION: &str = "# deviation:";
 const NATIVE_DEVIATION: &str = "# native-deviation:";
 const ERROR: &str = "# expect-error:";
 const UNJOINED: &str = "# native-unjoined:";
+const NATIVE_STDERR: &str = "# native-stderr:";
 
 /// Reads directives from the leading `#` comment block of `src`.
 fn parse_expect(src: &str) -> Res<Expect> {
@@ -120,6 +127,7 @@ fn parse_expect(src: &str) -> Res<Expect> {
     let mut check_error: Option<String> = None;
     let mut native_deviation: Option<String> = None;
     let mut unjoined: Option<String> = None;
+    let mut native_stderr: Option<String> = None;
     for line in src.lines().take_while(|l| l.starts_with('#')) {
         if let Some(v) = line.strip_prefix(EXIT) {
             let n = v
@@ -136,6 +144,8 @@ fn parse_expect(src: &str) -> Res<Expect> {
             set_once(&mut native_deviation, why, NATIVE_DEVIATION)?;
         } else if let Some(v) = line.strip_prefix(UNJOINED) {
             set_once(&mut unjoined, text(v, UNJOINED)?, UNJOINED)?;
+        } else if let Some(v) = line.strip_prefix(NATIVE_STDERR) {
+            set_once(&mut native_stderr, text(v, NATIVE_STDERR)?, NATIVE_STDERR)?;
         }
     }
     let status = status.unwrap_or(0);
@@ -145,12 +155,16 @@ fn parse_expect(src: &str) -> Res<Expect> {
     if unjoined.is_some() && status == 0 {
         return Err(format!("{UNJOINED} needs a nonzero {EXIT}"));
     }
+    if native_stderr.is_some() && status == 0 {
+        return Err(format!("{NATIVE_STDERR} needs a nonzero {EXIT}"));
+    }
     Ok(Expect {
         status,
         deviation,
         check_error,
         native_deviation,
         unjoined,
+        native_stderr,
     })
 }
 
@@ -1203,7 +1217,8 @@ fn loosen_strips_raises_clauses() {
 /// A native program that failed must print exactly what `pythrust run`
 /// prints for the same file: the error, its location and its carets. Only
 /// called once the program is known to terminate; `cmd` runs `exe`.
-fn stderr_mismatch(exe: &Path, mut cmd: Command) -> Res<Option<String>> {
+/// A case marked `native-stderr` must differ instead: `expect_diff`.
+fn stderr_mismatch(exe: &Path, mut cmd: Command, expect_diff: bool) -> Res<Option<String>> {
     let stderr = |cmd: &mut Command| -> Res<String> {
         let out = cmd
             .output()
@@ -1213,6 +1228,13 @@ fn stderr_mismatch(exe: &Path, mut cmd: Command) -> Res<Option<String>> {
     let source = exe.with_extension("pyr");
     let native = stderr(&mut cmd)?;
     let interp = stderr(Command::new(pythrust_bin()?).arg("run").arg(&source))?;
+    if expect_diff {
+        let stale = format!(
+            "{}: stderr now agrees; drop `native-stderr`",
+            source.display()
+        );
+        return Ok((native == interp).then_some(stale));
+    }
     Ok((native != interp).then(|| {
         format!(
             "{}\n  run stderr:\n{interp}\n  native stderr:\n{native}",
@@ -1442,7 +1464,8 @@ fn corpus_matches_native() -> Res<()> {
         let errored = failed.is_none() && got.status != 0;
         failures.extend(failed);
         if errored {
-            failures.extend(stderr_mismatch(&exe, native(&case, &exe, false))?);
+            let stale = case.expect.native_stderr.is_some();
+            failures.extend(stderr_mismatch(&exe, native(&case, &exe, false), stale)?);
         }
         if memchecked {
             failures.extend(memcheck(&case, &exe)?);
@@ -2460,7 +2483,7 @@ fn native_matches_run_at_the_repr_limit() -> Res<()> {
             if got != want {
                 failures.push(format!("{src}\n  run {want:?}\n  native {got:?}"));
             }
-            failures.extend(stderr_mismatch(&exe, Command::new(&exe))?);
+            failures.extend(stderr_mismatch(&exe, Command::new(&exe), false)?);
             let raises = u == 3;
             if (got.status == 0) != (fits && !raises) {
                 failures.push(format!("{src}\n  exit {} at depth {n}", got.status));
@@ -2693,6 +2716,7 @@ fn expect_defaults() {
         check_error: None,
         native_deviation: None,
         unjoined: None,
+        native_stderr: None,
     };
     assert_eq!(parse_expect("print(1)\n"), Ok(want()));
     assert_eq!(parse_expect(""), Ok(want()));
@@ -2707,6 +2731,7 @@ fn expect_reads_directives() {
         check_error: Some("overflow".to_string()),
         native_deviation: Some("lines".to_string()),
         unjoined: Some("a fault".to_string()),
+        native_stderr: None,
     };
     assert_eq!(parse_expect(src), Ok(want));
 }
@@ -2724,6 +2749,7 @@ fn expect_rejects_bad_directives() {
     assert!(parse_expect("# deviation:\n").is_err());
     assert!(parse_expect("# native-deviation:\n").is_err());
     assert!(parse_expect("# native-unjoined: a fault\n").is_err());
+    assert!(parse_expect("# native-stderr: a fault\n").is_err());
     assert!(parse_expect("# deviation: a\n# deviation: b\n").is_err());
     assert!(parse_expect("# expect-error:\n# expect-exit: 1\n").is_err());
     assert!(parse_expect("# expect-error: x\n").is_err());
@@ -2741,6 +2767,7 @@ fn mismatch_reports_status_and_stdout() {
             check_error: None,
             native_deviation: None,
             unjoined: None,
+            native_stderr: None,
         },
     };
     let ok = Run {
@@ -2771,6 +2798,7 @@ fn memcheck_fails_closed() {
             check_error: None,
             native_deviation: None,
             unjoined: None,
+            native_stderr: None,
         },
     };
     let ran = |stdout: &str, status: i32| -> Res<Run> {
