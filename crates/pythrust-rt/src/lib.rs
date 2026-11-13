@@ -284,34 +284,14 @@ mod entry {
         fn pythrust_main(ctx: *const super::exc::PtCtx);
     }
 
-    /// The module's top-level code on the calling thread.
-    #[allow(unsafe_code)]
-    fn module() {
-        // SAFETY: `pythrust_main` takes the context pointer and returns
-        // nothing; the compiler emits it with exactly that signature.
-        unsafe { pythrust_main(super::exc::pt_ctx()) }
-    }
-
-    /// The module's stack: far past the 8 MiB the platforms give a main
-    /// thread (1 MiB on Windows), so the runtime's bounded recursion
-    /// (`==` and hashing to `MAX_NESTING` levels, D177) fits an
-    /// unoptimized runtime on every target. Only pages used are committed.
-    const STACK: usize = 256 << 20;
-
-    /// Runs the module on a thread of its own with that stack, or on the
-    /// main thread when the system refuses one, then flushes stdout. A
-    /// debug runtime then fails if any string, sequence or object leaked.
+    /// Runs the module, then flushes stdout. A debug runtime then
+    /// fails if any string, sequence or object leaked.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn main() -> i32 {
-        match std::thread::Builder::new().stack_size(STACK).spawn(module) {
-            Ok(thread) => {
-                if thread.join().is_err() {
-                    super::internal("the program's thread panicked");
-                }
-            }
-            Err(_) => module(),
-        }
+        // SAFETY: `pythrust_main` takes the context pointer and returns
+        // nothing; the compiler emits it with exactly that signature.
+        unsafe { pythrust_main(super::exc::pt_ctx()) };
         super::gc::collect_all();
         super::flush();
         super::leak_status(cfg!(debug_assertions), super::LIVE.load(super::Relaxed))

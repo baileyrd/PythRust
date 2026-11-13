@@ -610,13 +610,44 @@ pub unsafe extern "C" fn pt_mark(desc: *const u8, len: usize, v: u64) {
     mark(desc, v);
 }
 
-/// `a == b` for two slots of type `desc`.
+/// `a == b` for two slots of type `desc`. A loop with its own stack, as
+/// [`repr`], so values nested to [`MAX_NESTING`] compare on any thread's
+/// stack; past it, or around a cycle, the program stops (D177).
 pub(crate) fn eq(desc: &[u8], a: u64, b: u64) -> bool {
-    eq_at(desc, a, b, 0)
+    // What is left to compare. A pair stays reachable from its parents,
+    // whose borrows `held` keeps until the walk ends.
+    let mut todo = vec![Cmp::Pair(desc, a, b, 0)];
+    let mut held = Held::new();
+    while let Some(step) = todo.pop() {
+        let Cmp::Pair(desc, a, b, depth) = step else {
+            return false;
+        };
+        if !eq_step(desc, a, b, depth, &mut todo, &mut held) {
+            return false;
+        }
+    }
+    true
 }
 
-/// `a == b` with `depth` containers already open around it (D177).
-pub(crate) fn eq_at(desc: &[u8], a: u64, b: u64, depth: usize) -> bool {
+/// What is left of an `==` in progress.
+enum Cmp<'d> {
+    /// Two slots of one type, with the containers open around them.
+    Pair(&'d [u8], u64, u64, usize),
+    /// Unequal once the steps queued before it compare equal: a dict key
+    /// missing after earlier entries' values, as `run` meets it (D179).
+    Differ,
+}
+
+/// Compares `a` and `b` of type `desc` as far as their own contents go,
+/// queuing the pairs inside them on `todo`; false when they differ.
+fn eq_step<'d>(
+    desc: &'d [u8],
+    a: u64,
+    b: u64,
+    depth: usize,
+    todo: &mut Vec<Cmp<'d>>,
+    held: &mut Held,
+) -> bool {
     match kind(desc) {
         Kind::Float => f64::from_bits(a) == f64::from_bits(b),
         // SAFETY: string slots hold live strings.
@@ -625,23 +656,85 @@ pub(crate) fn eq_at(desc: &[u8], a: u64, b: u64, depth: usize) -> bool {
         Kind::Obj => unsafe { obj::borrow(a as *const PtObj).same(obj::borrow(b as *const PtObj)) },
         // SAFETY: sequence slots hold live sequences.
         Kind::List | Kind::Tuple | Kind::Record | Kind::Data | Kind::View => {
-            a == b || unsafe { seq_eq(seq(a), seq(b), deeper(depth)) }
+            a == b || unsafe { queue_items(seq(a), seq(b), deeper(depth), todo, held) }
         }
         // SAFETY: table slots hold live tables.
-        Kind::Dict | Kind::Set => a == b || unsafe { table::same(seq(a), seq(b), deeper(depth)) },
+        Kind::Dict | Kind::Set => {
+            a == b || unsafe { queue_values(seq(a), seq(b), deeper(depth), todo, held) }
+        }
         // SAFETY: range slots hold live ranges.
         Kind::Range => unsafe {
             range_fields(a as *const PtSeq).same(&range_fields(b as *const PtSeq))
         },
         Kind::Opt if a == 0 || b == 0 => a == b,
-        Kind::Opt => eq_at(opt(desc).0, present(desc, a), present(desc, b), depth),
+        Kind::Opt => {
+            todo.push(Cmp::Pair(
+                opt(desc).0,
+                present(desc, a),
+                present(desc, b),
+                depth,
+            ));
+            true
+        }
         _ => a == b,
     }
 }
 
+/// Queues the item pairs of two sequences of one type, first item on
+/// top; false when their lengths differ.
+fn queue_items(
+    a: &'static PtSeq,
+    b: &'static PtSeq,
+    depth: usize,
+    todo: &mut Vec<Cmp>,
+    held: &mut Held,
+) -> bool {
+    let (x, y) = (a.items.borrow(), b.items.borrow());
+    if x.len() != y.len() {
+        return false;
+    }
+    let pairs = x.iter().zip(y.iter()).enumerate().rev();
+    todo.extend(pairs.map(|(k, (p, q))| Cmp::Pair(slot(a.desc, k), *p, *q, depth)));
+    held.push(x);
+    held.push(y);
+    true
+}
+
+/// Queues the value pairs of two tables of one type (none for a set),
+/// first entry on top, behind which a missing key makes them differ;
+/// false when that is already settled.
+fn queue_values(
+    a: &'static PtSeq,
+    b: &'static PtSeq,
+    depth: usize,
+    todo: &mut Vec<Cmp>,
+    held: &mut Held,
+) -> bool {
+    let (x, y) = (a.items.borrow(), b.items.borrow());
+    let Some((pairs, all_keys)) = table::matched(a, &x, b, &y) else {
+        return false;
+    };
+    if !all_keys && pairs.is_empty() {
+        return false;
+    }
+    if !all_keys {
+        todo.push(Cmp::Differ);
+    }
+    let desc = slot(a.desc, 1);
+    todo.extend(
+        pairs
+            .into_iter()
+            .rev()
+            .map(|(v, w)| Cmp::Pair(desc, v, w, depth)),
+    );
+    held.push(x);
+    held.push(y);
+    true
+}
+
 /// The depth inside one more container, or the fatal recursion fault
-/// (D11) once that passes [`MAX_NESTING`], as `run` stops: a cyclic value
-/// compared with another would otherwise overflow the stack (D177).
+/// (D11) once that passes [`MAX_NESTING`], as `run` stops: comparing a
+/// cyclic value with another would otherwise never end (D177).
 pub(crate) fn deeper(depth: usize) -> usize {
     if depth >= MAX_NESTING {
         crate::fault(TOO_DEEP_EQ);
@@ -651,22 +744,6 @@ pub(crate) fn deeper(depth: usize) -> usize {
 
 /// The message of an `==` or hash nested deeper than `run` allows.
 const TOO_DEEP_EQ: &str = "RecursionError: maximum recursion depth exceeded in comparison";
-
-/// Elementwise `==` at `depth`. A sequence equals itself without looking inside.
-/// A plain loop, not iterator adapters: each nesting level then costs
-/// two stack frames, so [`MAX_NESTING`] levels fit even unoptimized.
-fn seq_eq(a: &PtSeq, b: &PtSeq, depth: usize) -> bool {
-    let (x, y) = (a.items.borrow(), b.items.borrow());
-    if x.len() != y.len() {
-        return false;
-    }
-    for (k, (p, q)) in x.iter().zip(y.iter()).enumerate() {
-        if !eq_at(slot(a.desc, k), *p, *q, depth) {
-            return false;
-        }
-    }
-    true
-}
 
 /// Orders two slots of type `desc`; `None` when unordered (a NaN).
 pub(crate) fn cmp(desc: &[u8], a: u64, b: u64) -> Option<Ordering> {
@@ -708,7 +785,7 @@ fn seq_cmp(a: &PtSeq, b: &PtSeq) -> Option<Ordering> {
 
 /// How deep lists, tuples and exceptions may nest inside a `repr`
 /// before it is a `RecursionError`, as `run` counts them.
-const MAX_NESTING: usize = 10_000;
+pub(crate) const MAX_NESTING: usize = 10_000;
 
 /// A `repr` nested deeper than [`MAX_NESTING`].
 #[derive(Debug, PartialEq)]
@@ -2861,24 +2938,6 @@ mod tests {
     fn equality_counts_each_container_toward_the_limit() {
         assert_eq!(deeper(0), 1);
         assert_eq!(deeper(MAX_NESTING - 1), MAX_NESTING);
-        let inner = |v: u64| make(b"li", &[v]);
-        let (a, b, c) = (inner(1), inner(1), inner(2));
-        let (xs, ys, zs) = (
-            make(b"lli", &[a as u64]),
-            make(b"lli", &[b as u64]),
-            make(b"lli", &[c as u64]),
-        );
-        // Two containers deep fits with two levels to spare; past the
-        // limit the program stops (D177), which the corpus checks.
-        assert!(eq_at(b"lli", xs as u64, ys as u64, MAX_NESTING - 2));
-        assert!(!eq_at(b"lli", xs as u64, zs as u64, MAX_NESTING - 2));
-        // The same sequence equals itself without opening it.
-        assert!(eq_at(b"lli", xs as u64, xs as u64, MAX_NESTING));
-        // SAFETY: each holds the last reference to what it built.
-        unsafe {
-            [a, b, c].iter().for_each(|p| pt_seq_dec(*p));
-            [xs, ys, zs].iter().for_each(|p| pt_seq_dec(*p));
-        }
     }
 
     #[test]

@@ -13,8 +13,12 @@ class Hub:
 def main() -> None:
     a = Hub({})
     a.links["self"] = a
+    a.links["only_a"] = a
     b = Hub({})
     b.links["self"] = b
+    b.links["only_b"] = b
+    # The keys differ, but "self" comes first, so its values are compared
+    # (forever) before the missing key is looked up, as in CPython.
     print(a == a)
     print("comparing")
     print(a == b)

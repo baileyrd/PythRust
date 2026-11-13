@@ -292,6 +292,38 @@ mod tests {
         drop_ref_str(tb);
     }
 
+    #[test]
+    #[cfg_attr(miri, ignore = "30,000 nodes; too slow under Miri")]
+    fn equality_walks_a_chain_to_the_nesting_limit_without_recursing() {
+        let _g = setup();
+        // The chain buffers thousands of candidates; as with an executor
+        // alive, no other test thread's allocation may collect them while
+        // this one links nodes.
+        executor_started();
+        // `n` nodes, each linking the next: a recursive walk this deep
+        // would overflow the test thread's stack (D177).
+        let chain = |n: usize| {
+            let (head, tag) = node();
+            drop_ref_str(tag);
+            let mut tail = head;
+            for _ in 1..n {
+                let (next, tag) = node();
+                drop_ref_str(tag);
+                link(tail, next);
+                drop_ref(next);
+                tail = next;
+            }
+            head
+        };
+        let n = seq::MAX_NESTING;
+        let (a, b, c) = (chain(n), chain(n), chain(n - 1));
+        assert!(seq::eq(NODE, a as u64, b as u64));
+        assert!(!seq::eq(NODE, a as u64, c as u64));
+        [a, b, c].into_iter().for_each(drop_ref);
+        executor_ended();
+        collect();
+    }
+
     fn drop_ref_str(s: *mut PtStr) {
         // SAFETY: gives up the test's reference.
         unsafe { pstr::pt_str_dec(s) };
