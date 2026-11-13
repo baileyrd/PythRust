@@ -95,8 +95,44 @@ pub(crate) fn kind(desc: &[u8]) -> Kind {
     }
 }
 
+/// A descriptor's back-reference to an enclosing record type (D174): `^`
+/// and the record's number in two 7-bit bytes, low first. A recursive
+/// record's descriptor is finite this way; [`resolve`] finds the full
+/// descriptor again.
+const BACKREF: u8 = b'^';
+
+/// The registered full descriptors of the records back-references name,
+/// by number. Written once each, before any code runs.
+static DESCS: RwLock<BTreeMap<u16, &'static [u8]>> = RwLock::new(BTreeMap::new());
+
+/// Registers `desc[..len]` as the descriptor of record number `id`.
+///
+/// # Safety
+/// `desc` points to `len` bytes of read-only data that stay valid for the
+/// whole run.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_register_desc(id: u64, desc: *const u8, len: usize) {
+    // SAFETY: guaranteed by the caller.
+    let desc = unsafe { std::slice::from_raw_parts(desc, len) };
+    let mut descs = DESCS.write().unwrap_or_else(PoisonError::into_inner);
+    descs.insert(id as u16, desc);
+}
+
+/// `desc`, or the full descriptor it back-references.
+pub(crate) fn resolve(desc: &[u8]) -> &[u8] {
+    let [BACKREF, lo, hi, ..] = *desc else {
+        return desc;
+    };
+    let id = u16::from(lo) | u16::from(hi) << 7;
+    let descs = DESCS.read().unwrap_or_else(PoisonError::into_inner);
+    descs.get(&id).copied().unwrap_or(desc)
+}
+
 /// The length of the one type `desc` starts with.
 fn span(desc: &[u8]) -> usize {
+    if desc.first() == Some(&BACKREF) {
+        return 3.min(desc.len());
+    }
     match kind(desc) {
         Kind::List | Kind::Opt | Kind::Set => 1 + span(desc.get(1..).unwrap_or_default()),
         Kind::Dict => {
@@ -145,6 +181,11 @@ fn name_at(desc: &[u8], at: usize) -> (&str, usize) {
 /// before it ([`errno_form`]). A program's own class (D143) has its
 /// base's code and its two names ([`exc_names`]) before that type.
 pub(crate) fn slot(desc: &'static [u8], k: usize) -> &'static [u8] {
+    resolve(slot_at(desc, k))
+}
+
+/// [`slot`], before a back-reference is followed.
+fn slot_at(desc: &'static [u8], k: usize) -> &'static [u8] {
     match kind(desc) {
         Kind::List | Kind::Set => return desc.get(1..).unwrap_or_default(),
         Kind::Range => return b"i",
@@ -189,7 +230,7 @@ pub(crate) unsafe fn text<'a>(p: u64) -> &'a str {
 /// or `bool` is, in a one-field tuple. A string, list or tuple is held
 /// directly; `None` is null.
 pub(crate) fn opt(desc: &[u8]) -> (&[u8], bool) {
-    let inner = desc.get(1..).unwrap_or_default();
+    let inner = resolve(desc.get(1..).unwrap_or_default());
     let boxed = matches!(kind(inner), Kind::Int | Kind::Float | Kind::Bool);
     (inner, boxed)
 }
@@ -1758,6 +1799,25 @@ mod tests {
             pt_seq_dec(ok);
             pt_seq_dec(bad);
         }
+    }
+
+    /// A record that holds its own type through an optional: its
+    /// descriptor names itself with a back-reference, which walkers follow.
+    #[test]
+    fn back_references_resolve_to_the_registered_descriptor() {
+        const LINK: &[u8] = b"c\x02io^\x07\x00\x04Link\x03nxt\x05value";
+        // SAFETY: the descriptor is static.
+        unsafe { pt_register_desc(7, LINK.as_ptr(), LINK.len()) };
+        assert_eq!(span(LINK), LINK.len());
+        assert_eq!(span(b"^\x07\x00"), 3);
+        assert_eq!(opt(slot(LINK, 1)).0, LINK);
+        assert_eq!(resolve(b"^\x07\x00"), LINK);
+        assert_eq!(resolve(b"i"), b"i");
+        let tail = make(LINK, &[2, 0]);
+        let head = make(LINK, &[1, tail as u64]);
+        assert_eq!(shown(head), "Link(value=1, nxt=Link(value=2, nxt=None))");
+        // SAFETY: each is live and dropped once; `head` released its field.
+        unsafe { pt_seq_dec(head) };
     }
 
     #[test]

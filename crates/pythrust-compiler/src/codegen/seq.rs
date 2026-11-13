@@ -9,7 +9,7 @@ use cranelift_frontend::FunctionBuilder;
 use super::{backend, FnGen, Rt};
 use crate::diag::Result;
 use crate::exc::ExcKind;
-use crate::ir::{self, CmpOp, Compound, LocalId, Operand, Ty, View};
+use crate::ir::{self, CmpOp, Compound, LocalId, Operand, Ty, TypeId, View};
 use crate::span::Span;
 
 const LIST_INDEX: &str = "list index out of range";
@@ -239,6 +239,18 @@ pub(super) fn from_slot(b: &mut FunctionBuilder, v: Value, want: types::Type) ->
 
 /// Appends the runtime descriptor of `ty`: see `pythrust-rt/src/seq.rs`.
 pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result<()> {
+    descriptor_in(types, ty, &mut Vec::new(), out)
+}
+
+/// [`descriptor`] inside the records `path` is already describing: one
+/// of them met again is a back-reference to it (D174), so a recursive
+/// record's descriptor is finite.
+fn descriptor_in(
+    types: &[Compound],
+    ty: Ty,
+    path: &mut Vec<TypeId>,
+    out: &mut String,
+) -> Result<()> {
     let code = match ty {
         Ty::Int => 'i',
         Ty::Float => 'f',
@@ -267,7 +279,20 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
             let compound = types
                 .get(id.0)
                 .ok_or_else(|| backend("an unknown sequence type".to_string()))?;
-            compound_descriptor(types, compound, out)?;
+            if let (Ty::Record(rid), true) = (ty, path.contains(&id)) {
+                out.push('^');
+                out.push(byte(rid.0 & 127, "a record number")?);
+                out.push(byte(rid.0 >> 7, "over 16384 types")?);
+                return Ok(());
+            }
+            let on_path = matches!(ty, Ty::Record(_));
+            if on_path {
+                path.push(id);
+            }
+            compound_descriptor(types, compound, path, out)?;
+            if on_path {
+                path.pop();
+            }
             // A plain class's descriptor ends with its number, which finds
             // its registered `__repr__` (two 7-bit bytes).
             if let (Ty::Obj(id), Compound::Object { plain: true, .. }) = (ty, compound) {
@@ -279,6 +304,31 @@ pub(super) fn descriptor(types: &[Compound], ty: Ty, out: &mut String) -> Result
     };
     out.push(code);
     Ok(())
+}
+
+/// The full descriptor of each record that can hold its own type, by its
+/// number: what a back-reference to it resolves to (D174).
+pub(super) fn recursive_descriptors(types: &[Compound]) -> Result<Vec<(u16, String)>> {
+    let mut out = Vec::new();
+    for (i, c) in types.iter().enumerate() {
+        let ty = Ty::Record(TypeId(i));
+        let Compound::Record { .. } = c else { continue };
+        let reaches = ir::parts(types, ty).into_iter();
+        if !reaches
+            .flat_map(|p| ir::reachable(types, p))
+            .any(|t| t == ty)
+        {
+            continue;
+        }
+        let id = u16::try_from(i)
+            .ok()
+            .filter(|n| *n < 1 << 14)
+            .ok_or_else(|| backend("over 16384 types".to_string()))?;
+        let mut text = String::new();
+        descriptor(types, ty, &mut text)?;
+        out.push((id, text));
+    }
+    Ok(out)
 }
 
 /// `n` as one ASCII byte, so a descriptor stays a `String`; else the
@@ -299,16 +349,23 @@ pub(super) fn push_name(name: &str, what: &str, out: &mut String) -> Result<()> 
     Ok(())
 }
 
-fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Result<()> {
+fn compound_descriptor(
+    types: &[Compound],
+    c: &Compound,
+    path: &mut Vec<TypeId>,
+    out: &mut String,
+) -> Result<()> {
     match c {
         Compound::List(elem) => {
             out.push('l');
-            descriptor(types, *elem, out)
+            descriptor_in(types, *elem, path, out)
         }
         Compound::Tuple(fields) => {
             out.push('t');
             out.push(byte(fields.len(), "a tuple of over 127 fields")?);
-            fields.iter().try_for_each(|f| descriptor(types, *f, out))
+            fields
+                .iter()
+                .try_for_each(|f| descriptor_in(types, *f, path, out))
         }
         Compound::Record {
             shown,
@@ -328,7 +385,9 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
                 _ => 'c',
             });
             out.push(byte(fields.len(), "a record of over 127 fields")?);
-            fields.iter().try_for_each(|f| descriptor(types, *f, out))?;
+            fields
+                .iter()
+                .try_for_each(|f| descriptor_in(types, *f, path, out))?;
             // Field names last first, the order the runtime prints them in.
             let what = "a record or field name of over 127 bytes";
             std::iter::once(shown)
@@ -337,16 +396,16 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
         }
         Compound::Opt(present) => {
             out.push('o');
-            descriptor(types, *present, out)
+            descriptor_in(types, *present, path, out)
         }
         Compound::Dict(key, value) => {
             out.push('d');
-            descriptor(types, *key, out)?;
-            descriptor(types, *value, out)
+            descriptor_in(types, *key, path, out)?;
+            descriptor_in(types, *value, path, out)
         }
         Compound::Set(elem) => {
             out.push('e');
-            descriptor(types, *elem, out)
+            descriptor_in(types, *elem, path, out)
         }
         Compound::View(view, item) => {
             out.push('v');
@@ -355,7 +414,7 @@ fn compound_descriptor(types: &[Compound], c: &Compound, out: &mut String) -> Re
                 View::Values => 'v',
                 View::Items => 'i',
             });
-            descriptor(types, *item, out)
+            descriptor_in(types, *item, path, out)
         }
     }
 }
@@ -425,6 +484,25 @@ mod tests {
             let class = if plain { "\0\0" } else { "" };
             assert_eq!(out, format!("{code}\u{1}i\u{1}P\u{1}x{class}"));
         }
+    }
+
+    #[test]
+    fn a_record_that_holds_its_own_type_has_a_finite_descriptor() {
+        // type 0: Link(value: str, nxt: Link | None); type 1: the optional.
+        let types = vec![
+            Compound::Record {
+                name: "m.Link".to_string(),
+                shown: "Link".to_string(),
+                names: vec!["value".to_string(), "nxt".to_string()],
+                fields: vec![Ty::Str, Ty::Opt(TypeId(1))],
+            },
+            Compound::Opt(Ty::Record(TypeId(0))),
+        ];
+        let mut out = String::new();
+        descriptor(&types, Ty::Record(TypeId(0)), &mut out).expect("descriptor");
+        assert_eq!(out, "c\u{2}so^\0\0\u{4}Link\u{3}nxt\u{5}value");
+        let found = recursive_descriptors(&types).expect("recursive");
+        assert_eq!(found, vec![(0, out)]);
     }
 
     #[test]

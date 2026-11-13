@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+# Lazy annotations let a record hold its own type (D162): through a list,
+# which can close a cycle, so `build` refuses it until the collector
+# (D151, D152).
+@dataclass(frozen=True)
+class Tree:
+    name: str
+    kids: list[Tree]
+
+    def size(self) -> int:
+        n = 1
+        for k in self.kids:
+            n += k.size()
+        return n
+
+
+t = Tree("é", [Tree("a", []), Tree("b", [Tree("c", [])])])
+print(t.size())
+print(t)
+t.kids.append(t)
+print(t)
+print(t == t)

@@ -78,6 +78,7 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
     cg.declare_clones(program, constarg::plan(program, &plans))?;
     cg.declare_thunks(program)?;
     cg.declare_reprs(program)?;
+    cg.descs = seq::recursive_descriptors(&program.types)?;
     for (i, (func, id)) in program.funcs.iter().zip(&ids).enumerate() {
         let what = |scalar_return, bound| Ctx {
             func,
@@ -158,6 +159,7 @@ enum Rt {
     ObjNew,
     ObjSet,
     RegisterRepr,
+    RegisterDesc,
     SeqPush,
     SeqLen,
     SeqGet,
@@ -251,7 +253,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 124] = [
+    const ALL: [Rt; 125] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -286,6 +288,7 @@ impl Rt {
         Rt::ObjNew,
         Rt::ObjSet,
         Rt::RegisterRepr,
+        Rt::RegisterDesc,
         Rt::SeqPush,
         Rt::SeqLen,
         Rt::SeqGet,
@@ -414,6 +417,7 @@ impl Rt {
             Rt::ObjNew => "pt_obj_new",
             Rt::ObjSet => "pt_obj_set",
             Rt::RegisterRepr => "pt_register_repr",
+            Rt::RegisterDesc => "pt_register_desc",
             Rt::SeqPush => "pt_seq_push",
             Rt::SeqLen => "pt_seq_len",
             Rt::SeqGet => "pt_seq_get",
@@ -539,6 +543,7 @@ impl Rt {
             Rt::SeqNew | Rt::ObjNew => (vec![ptr, ptr, I64], Some(ptr)),
             Rt::ObjSet => (vec![ptr, I64, I64], None),
             Rt::RegisterRepr => (vec![I64, ptr], None),
+            Rt::RegisterDesc => (vec![I64, ptr, ptr], None),
             Rt::SeqPush => (vec![ptr, I64], None),
             Rt::SeqLen | Rt::SeqLenHeld => (vec![ptr], Some(I64)),
             Rt::SeqGet | Rt::IntListGet | Rt::SeqGetHeld | Rt::SeqItemHeld => {
@@ -632,6 +637,9 @@ struct Codegen<'r> {
     reads: task::Reads,
     /// The `__repr__` thunks registered with the runtime at start ([`repr`]).
     reprs: Vec<repr::Thunk>,
+    /// The descriptors of the recursive records, by record number, which
+    /// the runtime resolves back-references to (D174).
+    descs: Vec<(u16, String)>,
 }
 
 impl<'r> Codegen<'r> {
@@ -667,6 +675,7 @@ impl<'r> Codegen<'r> {
             thunks: HashMap::new(),
             reads: HashMap::new(),
             reprs: Vec::new(),
+            descs: Vec::new(),
         };
         for rt in Rt::ALL {
             let sig = runtime_sig(cg.module.make_signature(), rt, ptr);
@@ -901,7 +910,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             raise_to: None,
         };
         if registers {
-            g.register_reprs();
+            g.register_reprs()?;
         }
         for (i, block) in func.blocks.iter().enumerate() {
             if i > 0 {
@@ -1858,18 +1867,58 @@ fn refuse_cycle(types: &[Compound], func: &Func, inst: &Inst) -> Result<()> {
     })
 }
 
-/// The name of record type `ty` if a value of it can hold one of its own
-/// type (D162): such a type has no finite runtime descriptor, so it is
-/// a named gap however it reaches itself (D151, D166).
+/// The name of class type `ty` if a value of it can close a reference
+/// cycle through itself: an object that can hold one of its own type
+/// (D151), or a record whose way back to its own type passes a list,
+/// dict, set or object (D166). A record that reaches itself only
+/// through records, tuples and optionals is immutable, so its values
+/// are acyclic; its descriptor is finite with a back-reference (D174).
 fn self_reaching(types: &[Compound], ty: Ty) -> Option<&str> {
     let (Some(Compound::Record { shown, .. }) | Some(Compound::Object { shown, .. })) =
         ir::compound(types, ty)
     else {
         return None;
     };
-    let parts = ir::parts(types, ty).into_iter();
-    let mut reached = parts.flat_map(|p| ir::reachable(types, p));
-    reached.any(|t| t == ty).then_some(shown.as_str())
+    let object = matches!(ty, Ty::Obj(_));
+    let refused = match object {
+        true => reaches(types, ty, |_| true),
+        false => reaches(types, ty, |t| mutable(types, t)),
+    };
+    refused.then_some(shown.as_str())
+}
+
+/// Whether values of `ty` are mutable containers: lists, dicts, sets,
+/// their views and objects.
+fn mutable(types: &[Compound], ty: Ty) -> bool {
+    matches!(
+        ir::compound(types, ty),
+        Some(
+            Compound::List(_)
+                | Compound::Dict(..)
+                | Compound::Set(_)
+                | Compound::View(..)
+                | Compound::Object { .. }
+        )
+    )
+}
+
+/// Whether some path from `start` back to itself passes a type for
+/// which `through` holds (the type `start` is leaving counts too).
+fn reaches(types: &[Compound], start: Ty, through: impl Fn(Ty) -> bool) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut todo = vec![(start, false)];
+    while let Some((t, via)) = todo.pop() {
+        let via = via || through(t);
+        for part in ir::parts(types, t) {
+            if part == start && via {
+                return true;
+            }
+            if seen.insert((part, via)) {
+                todo.push((part, via));
+            }
+        }
+    }
+    false
 }
 
 /// Whether an exception's argument of type `ty` may close a reference
@@ -2014,6 +2063,20 @@ mod tests {
         );
         let plain = node.replace("        self.next: Node | None = None\n", "");
         assert_eq!(refusal(&plain), None);
+    }
+
+    #[test]
+    fn a_record_that_reaches_itself_is_refused_only_through_a_mutable_container() {
+        let head = "from __future__ import annotations\nfrom dataclasses import dataclass\n@dataclass(frozen=True)\nclass R:\n    n: int\n";
+        let opt = format!("{head}    next: R | None\nprint(R(1, R(2, None)))\n");
+        assert_eq!(refusal(&opt), None);
+        let tuple = format!("{head}    next: tuple[R, int] | None\nprint(R(1, None))\n");
+        assert_eq!(refusal(&tuple), None);
+        let list = format!("{head}    kids: list[R]\nprint(R(1, []))\n");
+        assert_eq!(
+            refusal(&list).as_deref(),
+            Some("the native backend does not support class `R`, which can refer to itself, yet")
+        );
     }
 
     #[test]
@@ -2333,13 +2396,20 @@ mod tests {
         };
         let gap = "the native backend does not support class `P`, which can refer to itself, yet";
         let cases = [
-            ("    nxt: P | None\n", "P(None)"),
             ("    kids: list[P]\n", "P([])"),
-            ("    pair: tuple[int, P | None]\n", "P((1, None))"),
             ("    by: dict[str, P]\n", "P({})"),
+            ("    pair: tuple[int, list[P]]\n", "P((1, []))"),
         ];
         for (fields, make) in cases {
             assert_eq!(refusal(fields, make).as_deref(), Some(gap), "{fields}");
+        }
+        // Through records, tuples and optionals alone it is acyclic: it
+        // builds with a back-reference in its descriptor (D174).
+        for (fields, make) in [
+            ("    nxt: P | None\n", "P(None)"),
+            ("    pair: tuple[int, P | None]\n", "P((1, None))"),
+        ] {
+            assert_eq!(refusal(fields, make), None, "{fields}");
         }
         let method = "    x: int\n    def same(self, o: P) -> P:\n        return o\n";
         assert_eq!(refusal(method, "P(1).same(P(2))"), None);

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 
 # Lazy annotations let a record hold its own type (D162): through an
-# optional, and through a list, which can close a cycle.
+# optional, which cannot close a cycle, so `build` accepts it (D166, #1457).
 @dataclass(frozen=True)
 class Link:
     value: str
@@ -17,25 +17,25 @@ class Link:
         return 1 + nxt.length()
 
 
-@dataclass(frozen=True)
-class Tree:
-    name: str
-    kids: list[Tree]
-
-    def size(self) -> int:
-        n = 1
-        for k in self.kids:
-            n += k.size()
-        return n
-
-
 chain = Link("ä", Link("ö", Link("ü", None)))
 print(chain.length())
 print(chain)
 print(chain == Link("ä", Link("ö", Link("ü", None))))
-t = Tree("é", [Tree("a", []), Tree("b", [Tree("c", [])])])
-print(t.size())
-print(t)
-t.kids.append(t)
-print(t)
-print(t == t)
+
+
+# Two records that hold each other, through tuples and optionals.
+@dataclass(frozen=True)
+class Even:
+    n: int
+    rest: tuple[Odd, int] | None
+
+
+@dataclass(frozen=True)
+class Odd:
+    n: int
+    rest: Even | None
+
+
+odd = Odd(1, Even(2, (Odd(3, None), 7)))
+print(odd)
+print(odd == Odd(1, Even(2, (Odd(3, None), 7))), odd == Odd(1, None))
