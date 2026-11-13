@@ -97,7 +97,8 @@ jobs:
           PYTHRUST_VALGRIND: "1"
 
   miri:
-    # The runtime's own unsafe (the borrow cell, `sync.rs`) and its
+    # The runtime's own unsafe (the borrow cell, `sync.rs`, and the cycle
+    # collector, `gc.rs`, D176) and its
     # threads (the task pool, `task.rs`), and the list holds built on the
     # cell (`seq.rs`), under Miri, which checks their
     # tests for undefined behaviour, data races and leaks, each under
@@ -108,7 +109,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup toolchain install nightly --profile minimal --component miri && cargo +nightly miri setup
       # Quoted: `sync:: task::` would otherwise read as a YAML mapping.
-      - run: "cargo +nightly miri test --locked -p pythrust-rt -- sync:: task:: seq::tests::a_hold seq::tests::a_held_item seq::tests::marked_holds seq::tests::integer_access"
+      - run: "cargo +nightly miri test --locked -p pythrust-rt -- sync:: task:: gc:: seq::tests::a_hold seq::tests::a_held_item seq::tests::marked_holds seq::tests::integer_access"
         env:
           MIRIFLAGS: "-Zmiri-permissive-provenance -Zmiri-many-seeds=0..8"
 

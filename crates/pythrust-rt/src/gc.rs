@@ -20,7 +20,9 @@
 //! thread), and gives up, keeping its candidates, when a sequence it
 //! must read is write-borrowed.
 
-#![allow(unsafe_code)] // Frees sequences by pointer, as `seq::drop_one` does.
+// An audited runtime exception (D176): frees sequences by pointer, as
+// `seq::drop_one` does; its tests run under Miri in CI.
+#![allow(unsafe_code)]
 
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Mutex, MutexGuard, PoisonError};
