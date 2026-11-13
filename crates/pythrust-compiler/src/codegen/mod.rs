@@ -37,6 +37,7 @@ mod exc;
 mod num;
 mod opt;
 mod pair;
+mod repr;
 mod seq;
 mod stdlib;
 mod task;
@@ -65,10 +66,18 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
     cg.declare_globals(&program.globals)?;
     let ids = cg.declare(program)?;
     cg.rets = program.funcs.iter().map(|f| f.ret).collect();
+    cg.firsts = (program.funcs.iter())
+        .map(|f| {
+            f.params
+                .first()
+                .map(|p| (f.locals[p.0], f.borrowed.contains(p)))
+        })
+        .collect();
     let plans = pair::plans(program);
     cg.declare_pairs(program, &plans)?;
     cg.declare_clones(program, constarg::plan(program, &plans))?;
     cg.declare_thunks(program)?;
+    cg.declare_reprs(program)?;
     for (i, (func, id)) in program.funcs.iter().zip(&ids).enumerate() {
         let what = |scalar_return, bound| Ctx {
             func,
@@ -77,6 +86,7 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
             plan: &plans[i],
             scalar_return,
             bound,
+            registers: i == program.main.0 && !scalar_return,
         };
         cg.define(*id, what(false, None))?;
         if let Some(clone) = cg.pairs.get(&ir::FuncId(i)).copied() {
@@ -99,10 +109,12 @@ pub fn emit(program: &Program, render: &dyn Fn(&Diagnostic) -> String) -> Result
             plan,
             scalar_return: c.scalar,
             bound,
+            registers: false,
         };
         cg.define(id, what)?;
     }
     cg.define_thunks(program, &ids)?;
+    cg.define_reprs(program, &ids)?;
     cg.module
         .finish()
         .emit()
@@ -145,6 +157,7 @@ enum Rt {
     SeqNew,
     ObjNew,
     ObjSet,
+    RegisterRepr,
     SeqPush,
     SeqLen,
     SeqGet,
@@ -238,7 +251,7 @@ enum Rt {
 }
 
 impl Rt {
-    const ALL: [Rt; 123] = [
+    const ALL: [Rt; 124] = [
         Rt::WriteInt,
         Rt::WriteBool,
         Rt::WriteNone,
@@ -272,6 +285,7 @@ impl Rt {
         Rt::SeqNew,
         Rt::ObjNew,
         Rt::ObjSet,
+        Rt::RegisterRepr,
         Rt::SeqPush,
         Rt::SeqLen,
         Rt::SeqGet,
@@ -399,6 +413,7 @@ impl Rt {
             Rt::SeqNew => "pt_seq_new",
             Rt::ObjNew => "pt_obj_new",
             Rt::ObjSet => "pt_obj_set",
+            Rt::RegisterRepr => "pt_register_repr",
             Rt::SeqPush => "pt_seq_push",
             Rt::SeqLen => "pt_seq_len",
             Rt::SeqGet => "pt_seq_get",
@@ -523,6 +538,7 @@ impl Rt {
             Rt::IntParse => (vec![ptr, ptr], Some(I64)),
             Rt::SeqNew | Rt::ObjNew => (vec![ptr, ptr, I64], Some(ptr)),
             Rt::ObjSet => (vec![ptr, I64, I64], None),
+            Rt::RegisterRepr => (vec![I64, ptr], None),
             Rt::SeqPush => (vec![ptr, I64], None),
             Rt::SeqLen | Rt::SeqLenHeld => (vec![ptr], Some(I64)),
             Rt::SeqGet | Rt::IntListGet | Rt::SeqGetHeld | Rt::SeqItemHeld => {
@@ -603,6 +619,9 @@ struct Codegen<'r> {
     globals: Vec<(DataId, Ty)>,
     /// Each function's result type, by `ir::FuncId`.
     rets: Vec<Ty>,
+    /// Each function's first parameter: its type, and whether the caller
+    /// keeps its reference.
+    firsts: Vec<Option<(Ty, bool)>>,
     /// Private scalar-return variants; ordinary ids and all ABIs stay boxed.
     pairs: HashMap<ir::FuncId, ClifFunc>,
     /// Private constant-divisor clones (D69); calls only, never ABIs.
@@ -611,6 +630,8 @@ struct Codegen<'r> {
     thunks: HashMap<ir::FuncId, ClifFunc>,
     /// The module values each such function's tasks may reach.
     reads: task::Reads,
+    /// The `__repr__` thunks registered with the runtime at start ([`repr`]).
+    reprs: Vec<repr::Thunk>,
 }
 
 impl<'r> Codegen<'r> {
@@ -640,10 +661,12 @@ impl<'r> Codegen<'r> {
             ptr,
             globals: Vec::new(),
             rets: Vec::new(),
+            firsts: Vec::new(),
             pairs: HashMap::new(),
             clones: BTreeMap::new(),
             thunks: HashMap::new(),
             reads: HashMap::new(),
+            reprs: Vec::new(),
         };
         for rt in Rt::ALL {
             let sig = runtime_sig(cg.module.make_signature(), rt, ptr);
@@ -793,6 +816,8 @@ struct Ctx<'c> {
     /// In a constant-divisor clone (D69): the parameter bound at entry
     /// and its value; the caller's argument is ignored.
     bound: Option<(LocalId, i64)>,
+    /// In the program's main: registers the `__repr__` thunks first.
+    registers: bool,
 }
 
 /// Translates one function.
@@ -824,6 +849,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             plan,
             scalar_return,
             bound,
+            registers,
         }: Ctx<'c>,
         ctx: &'b mut Context,
         fctx: &'b mut FunctionBuilderContext,
@@ -874,6 +900,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             ctx: ctx_param,
             raise_to: None,
         };
+        if registers {
+            g.register_reprs();
+        }
         for (i, block) in func.blocks.iter().enumerate() {
             if i > 0 {
                 g.b.switch_to_block(g.blocks[i]);
@@ -1083,7 +1112,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     /// hold an exception with `str` first, which can fail.
     fn write(&mut self, op: Operand) -> Result<()> {
         let ty = self.func.ty(op);
-        refuse_plain(self.types, ty)?;
+        refuse_plain(self.types, &self.cg.reprs, ty)?;
         if ir::holds(self.types, ty, ir::is_exc) {
             return Err(backend(
                 "printing an exception not rendered first".to_string(),
@@ -1373,7 +1402,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
     /// reference. Rendering an exception fails at `span` when it nests
     /// deeper than `run` allows.
     fn str_of_value(&mut self, ty: Ty, v: Value, span: Span) -> Result<Value> {
-        refuse_plain(self.types, ty)?;
+        refuse_plain(self.types, &self.cg.reprs, ty)?;
         let rt = match ty {
             Ty::Int => Rt::StrFromInt,
             Ty::Bool => Rt::StrFromBool,
@@ -1401,7 +1430,15 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             }
         };
         let s = self.call_rt_value(rt, &[v])?;
-        if ir::holds(self.types, ty, ir::is_exc) {
+        if holds_plain(self.types, ty) {
+            // Null with an exception pending is a `__repr__` that raised:
+            // lowering tests the flag next. Without one, it nests too deep.
+            let null = self.b.ins().icmp_imm_s(IntCC::Equal, s, 0);
+            let pending = self.pending_flag();
+            let clear = self.b.ins().icmp_imm_s(IntCC::Equal, pending, 0);
+            let deep = self.b.ins().band(null, clear);
+            self.fail_if(deep, span, TOO_DEEP)?;
+        } else if ir::holds(self.types, ty, ir::is_exc) {
             let null = self.b.ins().icmp_imm_s(IntCC::Equal, s, 0);
             self.fail_if(null, span, TOO_DEEP)?;
         }
@@ -1445,6 +1482,9 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
         dest: LocalId,
         span: Span,
     ) -> Result<Value> {
+        if self.renders_only(callee, args) {
+            return self.skip_render(callee, args, dest);
+        }
         let scalar = self.pair_vars.contains_key(&dest);
         let id = match self.clone_target(callee, args, scalar) {
             Some(clone) => Some(clone),
@@ -1483,6 +1523,39 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 .ins()
                 .iconst(self.cg.clif_ty(self.func.locals[dest.0]), 0)),
         }
+    }
+
+    /// Whether this call of a plain class's `__repr__` is the analysis-only
+    /// pass of a container holding its objects (D167): the runtime walker
+    /// calls the real one while rendering.
+    fn renders_only(&self, callee: ir::FuncId, args: &[Operand]) -> bool {
+        let first = self.cg.firsts.get(callee.0).copied().flatten();
+        let (Some((want, _)), [arg]) = (first, args) else {
+            return false;
+        };
+        let plain = matches!(
+            ir::compound(self.types, want),
+            Some(Compound::Object { plain: true, .. })
+        );
+        plain && self.func.ty(*arg) != want
+    }
+
+    /// Does nothing for such a call but give up the reference the callee
+    /// would have dropped; its result is null.
+    fn skip_render(
+        &mut self,
+        callee: ir::FuncId,
+        args: &[Operand],
+        dest: LocalId,
+    ) -> Result<Value> {
+        let borrowed = self.cg.firsts[callee.0].is_some_and(|(_, b)| b);
+        if let (false, [arg]) = (borrowed, args) {
+            let dec = rc_dec(self.types, self.func.ty(*arg));
+            let v = self.operand(*arg);
+            self.call_rt(dec, &[v]);
+        }
+        let ty = self.cg.clif_ty(self.func.locals[dest.0]);
+        Ok(self.b.ins().iconst(ty, 0))
     }
 
     /// Checked `a op b` with Python's floor semantics for `//` and `%`.
@@ -1818,25 +1891,38 @@ fn may_cycle(types: &[Compound], ty: Ty) -> bool {
 }
 
 /// Refuses to render a value of type `ty` that holds a plain class's
-/// object: the runtime cannot call its `__repr__` from inside a
-/// container yet (D147, D167). A direct `print(p)` is lowered to a call
-/// of the dunder first, so it never gets here.
-fn refuse_plain(types: &[Compound], ty: Ty) -> Result<()> {
-    let plain = ir::reachable(types, ty).into_iter().any(|t| {
-        matches!(
+/// object whose `__repr__` is not registered with the runtime (D147,
+/// D170). A direct `print(p)` is lowered to a call of the dunder first,
+/// so it never gets here.
+fn refuse_plain(types: &[Compound], registered: &[repr::Thunk], ty: Ty) -> Result<()> {
+    let unregistered = ir::reachable(types, ty).into_iter().any(|t| {
+        let Ty::Obj(id) = t else { return false };
+        let plain = matches!(
             ir::compound(types, t),
             Some(Compound::Object { plain: true, .. })
-        )
+        );
+        plain && !registered.iter().any(|r| usize::from(r.class) == id.0)
     });
-    if !plain {
+    if !unregistered {
         return Ok(());
     }
     Err(Diagnostic {
         span: Span { start: 0, end: 0 },
         message: "the native backend does not support printing a container that holds an \
-                  object yet"
+                  object without a `__repr__`"
             .to_string(),
         kind: DiagKind::Backend,
+    })
+}
+
+/// Whether a value of type `ty` holds a plain class's object, whose
+/// `__repr__` rendering calls (and which can raise).
+fn holds_plain(types: &[Compound], ty: Ty) -> bool {
+    ir::reachable(types, ty).into_iter().any(|t| {
+        matches!(
+            ir::compound(types, t),
+            Some(Compound::Object { plain: true, .. })
+        )
     })
 }
 
@@ -1931,19 +2017,15 @@ mod tests {
     }
 
     #[test]
-    fn printing_a_container_that_holds_a_plain_object_is_refused() {
+    fn a_container_that_holds_a_plain_object_builds_by_registering_its_repr() {
         let class = "class B:\n    def __init__(self, v: int):\n        self.v = v\n    def __repr__(self) -> str:\n        return \"B\"\n";
-        let want =
-            "the native backend does not support printing a container that holds an object yet";
-        assert_eq!(
-            refusal(&format!("{class}print([B(1)])\n")).as_deref(),
-            Some(want)
-        );
-        assert_eq!(
-            refusal(&format!("{class}print(str((B(1), 2)))\n")).as_deref(),
-            Some(want)
-        );
-        assert_eq!(refusal(&format!("{class}print(B(1), str(B(2)))\n")), None);
+        for use_ in [
+            "print([B(1)])",
+            "print(str((B(1), 2)))",
+            "print(B(1), str(B(2)))",
+        ] {
+            assert_eq!(refusal(&format!("{class}{use_}\n")), None, "{use_}");
+        }
         let data = "from dataclasses import dataclass\n@dataclass\nclass D:\n    v: int\nprint([D(1)], D(2) == D(2))\n";
         assert_eq!(refusal(data), None);
     }
@@ -1972,6 +2054,7 @@ mod tests {
                 plan: &pair::Plan::default(),
                 scalar_return: false,
                 bound: None,
+                registers: false,
             },
             &mut ctx,
             &mut FunctionBuilderContext::new(),
@@ -2002,6 +2085,7 @@ mod tests {
                 plan: &pair::Plan::default(),
                 scalar_return: false,
                 bound: None,
+                registers: false,
             },
             &mut ctx,
             &mut FunctionBuilderContext::new(),
@@ -2095,6 +2179,7 @@ mod tests {
                 plan: &pair::Plan::default(),
                 scalar_return: false,
                 bound: divisor.map(|c| (func.params[1], c)),
+                registers: false,
             },
             &mut ctx,
             &mut FunctionBuilderContext::new(),

@@ -234,6 +234,11 @@ pub struct Program {
     /// The globals that hold module variables, by the variable's name;
     /// for diagnostics.
     pub global_names: BTreeMap<GlobalId, String>,
+    /// The `__repr__` of each plain class a container's rendering may
+    /// call (D170): instances taking the object as their only argument,
+    /// registered with the runtime at start. Each is found by its
+    /// object type.
+    pub reprs: Vec<FuncId>,
 }
 
 /// One monomorphic function. `blocks[0]` is the entry; `params` are the

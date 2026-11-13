@@ -121,6 +121,11 @@ pub extern "C" fn pt_ctx() -> *const PtCtx {
     CTX.with(std::ptr::from_ref)
 }
 
+/// Whether an exception is pending on this thread.
+pub(crate) fn is_pending() -> bool {
+    CTX.with(|c| c.pending.load(Ordering::Relaxed)) != 0
+}
+
 fn set_flag(on: bool) {
     CTX.with(|c| c.pending.store(u8::from(on), Ordering::Relaxed));
 }

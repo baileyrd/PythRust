@@ -8,7 +8,7 @@
 use crate::ast::{method_name, Arg, Expr};
 use crate::diag::Result;
 use crate::infer::Type;
-use crate::ir::{Inst, Operand, Rvalue, Ty};
+use crate::ir::{Compound, Inst, Operand, Rvalue, Ty};
 use crate::span::Span;
 
 /// What `__init__` returns, the node type its call takes.
@@ -166,12 +166,29 @@ impl<'a> FnBuilder<'_, 'a> {
         {
             return self.call_def(def, vec![Some(v)], &STR, span);
         }
+        let mut plain = false;
         for t in crate::ir::reachable(self.cx.seqs.all(), ty) {
             if let Some(def) = self.dunder(t, "__repr__") {
                 self.pass_to(def, t, v, span)?;
+                plain |= self.is_plain(t);
             }
         }
-        Ok(v)
+        if !plain {
+            return Ok(v);
+        }
+        // The runtime walks `v` and calls those `__repr__`s, which can raise.
+        let text = self.temp(Ty::Str, Rvalue::ToStr(v), span);
+        self.check_raised(span)?;
+        Ok(text)
+    }
+
+    /// Whether `ty` is a plain class's object type (no dataclass).
+    fn is_plain(&self, ty: Ty) -> bool {
+        let Ty::Obj(id) = ty else { return false };
+        matches!(
+            self.cx.seqs.all().get(id.0),
+            Some(Compound::Object { plain: true, .. })
+        )
     }
 
     /// The class method `name` of record or object type `ty`, if any.
@@ -191,6 +208,9 @@ impl<'a> FnBuilder<'_, 'a> {
         span: Span,
     ) -> Result<()> {
         let id = self.cx.instance(def, vec![ty], Ty::Str, span)?;
+        if self.is_plain(ty) && !self.cx.reprs.contains(&id) {
+            self.cx.reprs.push(id);
+        }
         let arg = self.another(v, span);
         self.temp(Ty::Str, Rvalue::Call(id, vec![arg]), span);
         if let Operand::Local(l) = arg {

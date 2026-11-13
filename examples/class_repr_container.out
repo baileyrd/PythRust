@@ -1,0 +1,8 @@
+[Item<é:1>, Item<ß:2>]
+(Item<é:1>, 1) [[Item<é:1>], [Item<ß:2>, Item<é:1>]]
+{1: Item<é:1>, 2: Item<ß:2>} {'k': [Item<é:1>]}
+[Item<é:1>, Item<ß:2>] 12
+[None] [Item<é:1>]
+Box(label='ünï', item=Item<é:1>, extra=[Item<ß:2>])
+[Box(label='ünï', item=Item<é:1>, extra=[Item<ß:2>]), Box(label='ünï', item=Item<é:1>, extra=[Item<ß:2>])]
+[Wrap([1])] Wrap([1])

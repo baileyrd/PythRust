@@ -1,0 +1,26 @@
+# A __repr__ that raises, inside a container: the exception surfaces from
+# the print and can be caught (#1458).
+class Bad:
+    def __init__(self, n: int):
+        self.n = n
+
+    def __repr__(self) -> str:
+        if self.n == 0:
+            raise ValueError("no repr for ünï")
+        return "Bad" + str(10 // self.n)
+
+
+try:
+    print([Bad(1), Bad(0), Bad(2)])
+except ValueError as e:
+    print("caught", e)
+print([Bad(5)])
+try:
+    print((Bad(0),))
+except ValueError:
+    print("again")
+print(str([Bad(2)]))
+try:
+    print([Bad(3)], str([Bad(0)]))
+except ValueError as e:
+    print("last", e)
