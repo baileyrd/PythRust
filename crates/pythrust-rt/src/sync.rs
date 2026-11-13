@@ -45,7 +45,6 @@ impl Count {
     }
 
     /// Whether the object may be reached by another thread.
-    #[cfg(test)]
     pub(crate) fn is_marked(&self) -> bool {
         self.0.load(Ordering::Relaxed) & MARK != 0
     }

@@ -356,8 +356,17 @@ pub(crate) fn free_all(mut todo: Vec<u64>) {
 fn drop_one(p: u64, todo: &mut Vec<u64>) {
     // SAFETY: `p` is a live sequence whose reference is given up.
     let s = unsafe { seq(p) };
+    // Read before the drop: once it leaves the count above zero, another
+    // thread may drop the last reference and free `s`. A marked candidate
+    // is therefore buffered first; the collector frees one that then dies
+    // (D175).
+    let cyc = s.cyc;
+    let marked = s.rc.is_marked();
+    if cyc && marked {
+        crate::gc::candidate(s, p);
+    }
     if !s.rc.dec() {
-        if s.cyc {
+        if cyc && !marked {
             crate::gc::candidate(s, p);
         }
         return;
