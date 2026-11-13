@@ -369,7 +369,7 @@ Results are reported as tables there.
 
 ## Cycle collector (5-5)
 
-`bench/cycles.pyr` builds and drops 60,000 rings of 8 doubly linked nodes and 60,000 trees with parent pointers (about a million objects in cycles); `main` refuses it. The other rows run `main` (before the collector) and this branch back to back on the same machine, release builds, CPython 3.13, 7 runs, median seconds (`bench/run.py`); the machine was noisier during the branch run, as CPython's own column shows (`numeric`: 8.3 s then 9.1 s). Programs with no cycle-capable class pay one cached descriptor test per allocation and one flag test per drop of a count that stays above zero; none is outside that noise.
+`bench/cycles.pyr` builds and drops 60,000 rings of 8 doubly linked nodes and 60,000 trees with parent pointers (about a million objects in cycles); `main` refuses it. The other rows run `main` (before the collector) and this branch back to back on the same machine, release builds, CPython 3.13, 7 runs, median seconds (`bench/run.py`); the machine was noisier during the branch run, as CPython's own column shows (`numeric`: 8.3 s then 9.1 s). Programs with no cycle-capable class pay a cached descriptor test per allocation and a flag test per drop that leaves a count above zero. Wall times of the short rows move by more than that between runs (`tuples_baseline` read 0.042 s, 0.060 s and 0.044 s on three runs), so the instruction counts below (callgrind, `main` against this branch, same sources) are the comparison.
 
 | benchmark | main native s | branch native s | branch CPython s |
 |---|---|---|---|
@@ -392,3 +392,11 @@ Results are reported as tables there.
 | tuples_baseline | 0.042 | 0.060 | 0.821 |
 
 Where the cycle time goes (callgrind, 4,000 iterations, instruction counts): descriptor walks (`span`, `resolve`, the slot types of an object) are about a quarter, `malloc` and `free` a fifth, and the collection itself (`gc::collect` and its graph walks) about a fifth. A per-type table of pointer slots would remove most of the descriptor walks; not done.
+
+| program | main instructions | branch instructions |
+|---|---|---|
+| tuples | 397,033,245 | 397,033,435 |
+| tuples_baseline | 603,699,901 | 603,700,105 |
+| tasks_alloc_serial | 1,923,499,831 | 1,923,500,146 |
+| sorting | 698,377,224 | 701,977,581 |
+
