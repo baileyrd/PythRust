@@ -25,6 +25,11 @@
 //!    every path to it (never assigned, moved out or released) does
 //!    nothing, so it goes.
 //!
+//! None of the three touches a local whose type may sit on a reference
+//! cycle (`ir::cyclic`): the cycle collector subtracts the references it
+//! finds inside a graph from each count, so no count may be missing
+//! (D175).
+//!
 //! Nothing here reads the ownership summaries of [`own`](crate::own)
 //! (Nano, 2026-10-29): those track list aliasing (a string parameter is
 //! always `read`), while what decides a refcount is whether the callee
@@ -39,14 +44,17 @@ mod tests;
 
 use std::collections::{BTreeSet, HashSet};
 
-use crate::ir::{Block, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty};
+use crate::ir::{
+    self, Block, Compound, Func, FuncId, Inst, LocalId, Operand, Program, Rvalue, Term, Ty,
+};
 
 /// `program` with the refcount operations it does not need removed.
 pub fn elide(mut program: Program) -> Program {
     let borrowed = borrow(&mut program);
+    let types = &program.types;
     for f in &mut program.funcs {
-        copies(f, &borrowed);
-        items(f, &borrowed);
+        copies(f, &borrowed, types);
+        items(f, &borrowed, types);
         skip_null(f);
     }
     program
@@ -55,10 +63,10 @@ pub fn elide(mut program: Program) -> Program {
 /// Makes every parameter that can be borrowed so, rewriting its calls;
 /// gives each function's borrowed parameter positions.
 fn borrow(program: &mut Program) -> Vec<BTreeSet<usize>> {
-    let funcs = &program.funcs;
+    let (funcs, types) = (&program.funcs, &program.types);
     let retained: Vec<BTreeSet<usize>> = funcs.iter().map(retains).collect();
     let borrowed: Vec<BTreeSet<usize>> = (0..funcs.len())
-        .map(|id| borrowable(funcs, FuncId(id), &retained[id]))
+        .map(|id| borrowable(funcs, types, FuncId(id), &retained[id]))
         .collect();
     for (f, params) in program.funcs.iter_mut().zip(&borrowed) {
         let locals: BTreeSet<LocalId> = params.iter().map(|&i| f.params[i]).collect();
@@ -94,10 +102,16 @@ fn retains(f: &Func) -> BTreeSet<usize> {
 /// The positions of `f`'s parameters it can borrow: reference-counted,
 /// not [`retains`]-ed, and moved in by every call as lowering emits it,
 /// so [`release_after_calls`] can rewrite each.
-fn borrowable(funcs: &[Func], id: FuncId, retained: &BTreeSet<usize>) -> BTreeSet<usize> {
+fn borrowable(
+    funcs: &[Func],
+    types: &[Compound],
+    id: FuncId,
+    retained: &BTreeSet<usize>,
+) -> BTreeSet<usize> {
     let f = &funcs[id.0];
     let kept = |i: &usize| {
-        f.locals[f.params[*i].0].is_rc() && !retained.contains(i) && moved_in(funcs, id, *i)
+        let ty = f.locals[f.params[*i].0];
+        ty.is_rc() && !ir::cyclic(types, ty) && !retained.contains(i) && moved_in(funcs, id, *i)
     };
     (0..f.params.len()).filter(kept).collect()
 }
@@ -229,7 +243,7 @@ fn release_after_calls(block: &mut Block, borrowed: &[BTreeSet<usize>]) {
 /// still read only as `x` lives borrows `x`'s reference ([`borrows`]),
 /// and one whose source is not read again takes `x`'s reference
 /// ([`last_use`]).
-fn copies(f: &mut Func, borrowed: &[BTreeSet<usize>]) {
+fn copies(f: &mut Func, borrowed: &[BTreeSet<usize>], types: &[Compound]) {
     let sites: Vec<(usize, usize)> = f
         .blocks
         .iter()
@@ -242,7 +256,7 @@ fn copies(f: &mut Func, borrowed: &[BTreeSet<usize>]) {
     // Back to front, so removing a `Retain` moves no site still to come.
     let mut lent = Lent::default();
     for (b, k) in sites.into_iter().rev() {
-        copy_at(f, b, k, borrowed, &mut lent);
+        copy_at(f, b, k, borrowed, types, &mut lent);
     }
 }
 
@@ -256,11 +270,22 @@ struct Lent {
 
 /// Elides the `Retain(a)` at block `b`, index `k`, if [`borrows`] or
 /// [`last_use`] allows.
-fn copy_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>], lent: &mut Lent) {
+fn copy_at(
+    f: &mut Func,
+    b: usize,
+    k: usize,
+    borrowed: &[BTreeSet<usize>],
+    types: &[Compound],
+    lent: &mut Lent,
+) {
     let insts = &f.blocks[b].insts;
     let Inst::Retain(a) = insts[k] else {
         return;
     };
+    // The collector needs every reference to a candidate counted (D175).
+    if ir::cyclic(types, f.locals[a.0]) {
+        return;
+    }
     let Some((def, x)) = copied_from(&insts[..k], a) else {
         return;
     };
@@ -288,7 +313,7 @@ fn copy_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>], lent:
 /// while read only before the hold ends ([`released_while`], as a copy
 /// borrows in [`copies`]), the read borrows (`Rvalue::Item`) and `x`'s
 /// releases only null it.
-fn items(f: &mut Func, borrowed: &[BTreeSet<usize>]) {
+fn items(f: &mut Func, borrowed: &[BTreeSet<usize>], types: &[Compound]) {
     let reads: Vec<(usize, usize)> = f
         .blocks
         .iter()
@@ -296,13 +321,13 @@ fn items(f: &mut Func, borrowed: &[BTreeSet<usize>]) {
         .flat_map(|(b, block)| (0..block.insts.len()).map(move |k| (b, k)))
         .collect();
     for (b, k) in reads {
-        item_at(f, b, k, borrowed);
+        item_at(f, b, k, borrowed, types);
     }
 }
 
 /// Makes the element read at block `b`, index `k`, borrow, if [`items`]
 /// allows.
-fn item_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>]) {
+fn item_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>], types: &[Compound]) {
     let Some(read) = moved_item(f, &f.blocks[b].insts, k) else {
         return;
     };
@@ -313,7 +338,8 @@ fn item_at(f: &mut Func, b: usize, k: usize, borrowed: &[BTreeSet<usize>]) {
         after,
     } = read;
     let param = f.params.contains(&var);
-    if param || defined(f, var) != 1 || retained(f, var) != 0 {
+    if param || ir::cyclic(types, f.locals[var.0]) || defined(f, var) != 1 || retained(f, var) != 0
+    {
         return;
     }
     let Some(sites) = released_while(f, var, list, (b, after), borrowed) else {

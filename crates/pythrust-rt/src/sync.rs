@@ -45,7 +45,6 @@ impl Count {
     }
 
     /// Whether the object may be reached by another thread.
-    #[cfg(test)]
     pub(crate) fn is_marked(&self) -> bool {
         self.0.load(Ordering::Relaxed) & MARK != 0
     }
@@ -56,7 +55,6 @@ impl Count {
     }
 
     /// The number of references.
-    #[cfg(test)]
     pub(crate) fn get(&self) -> usize {
         self.0.load(Ordering::Relaxed) & !MARK
     }
@@ -240,6 +238,14 @@ impl<T> Slot<T> {
             }
         }
         Ref { slot: self }
+    }
+
+    /// Reads the value, or `None` if a writer holds it.
+    pub(crate) fn try_borrow(&self) -> Option<Ref<'_, T>> {
+        if self.state.load(Ordering::Relaxed) & WRITER != 0 {
+            return None;
+        }
+        Some(self.borrow())
     }
 
     /// Changes the value; ends the program if anyone else holds it.

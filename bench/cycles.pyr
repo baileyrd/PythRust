@@ -1,0 +1,47 @@
+# Builds and drops reference cycles (step 5-5): rings of doubly linked
+# nodes and trees with parent pointers. Native code frees them with its
+# cycle collector, CPython with its own.
+from __future__ import annotations
+
+
+class Node:
+    def __init__(self, n: int):
+        self.n = n
+        self.next: Node | None = None
+        self.prev: Node | None = None
+
+
+class Tree:
+    def __init__(self, parent: Tree | None):
+        self.parent = parent
+        self.kids: list[Tree] = []
+        if parent is not None:
+            parent.kids.append(self)
+
+
+def ring(size: int) -> int:
+    first = Node(0)
+    last = first
+    for i in range(1, size):
+        node = Node(i)
+        last.next = node
+        node.prev = last
+        last = node
+    last.next = first
+    first.prev = last
+    return last.n
+
+
+def tree(width: int) -> int:
+    root = Tree(None)
+    for _ in range(width):
+        child = Tree(root)
+        Tree(child)
+    return len(root.kids)
+
+
+total = 0
+for i in range(60000):
+    total += ring(8)
+    total += tree(4)
+print(total)

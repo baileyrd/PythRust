@@ -32,19 +32,28 @@ pub(crate) fn stride(desc: &[u8]) -> usize {
     }
 }
 
-/// Feeds key `v` of type `desc` to `h`, consistently with `seq::eq`.
-fn hash(desc: &'static [u8], v: u64, h: &mut DefaultHasher) {
+/// Feeds key `v` of type `desc`, inside `depth` tuples, to `h`,
+/// consistently with `seq::eq`, queuing a tuple's fields on `todo`.
+fn hash_step(
+    desc: &'static [u8],
+    v: u64,
+    depth: usize,
+    h: &mut DefaultHasher,
+    todo: &mut Vec<(&'static [u8], u64, usize)>,
+) {
     match kind(desc) {
         // SAFETY: a string key holds a live string.
         Kind::Str => unsafe { seq::text(v) }.hash(h),
         Kind::Opt if v == 0 => 0u8.hash(h),
-        Kind::Opt => hash(seq::opt(desc).0, seq::present(desc, v), h),
+        Kind::Opt => todo.push((seq::opt(desc).0, seq::present(desc, v), depth)),
         Kind::Tuple => {
-            // SAFETY: a tuple key holds a live tuple.
+            let depth = seq::deeper(depth);
+            // SAFETY: a tuple key holds a live tuple, whose fields never
+            // change, so they outlive the borrow.
             let t = unsafe { seq::seq(v) };
-            for (k, field) in t.items.borrow().iter().enumerate() {
-                hash(slot(t.desc, k), *field, h);
-            }
+            let fields = t.items.borrow();
+            let queued = fields.iter().enumerate().rev();
+            todo.extend(queued.map(|(k, f)| (slot(t.desc, k), *f, depth)));
         }
         _ => v.hash(h),
     }
@@ -56,8 +65,13 @@ fn key_desc(t: &PtSeq) -> &'static [u8] {
 }
 
 fn hash_of(desc: &'static [u8], v: u64) -> usize {
+    // A loop with its own stack, as `seq::eq`, so key nesting never
+    // depends on the thread's stack (D177).
     let mut h = DefaultHasher::new();
-    hash(desc, v, &mut h);
+    let mut todo = vec![(desc, v, 0)];
+    while let Some((desc, v, depth)) = todo.pop() {
+        hash_step(desc, v, depth, &mut h, &mut todo);
+    }
     h.finish() as usize
 }
 
@@ -133,28 +147,30 @@ fn grow(t: &PtSeq, slots: &mut Vec<usize>, entries: usize) {
     }
 }
 
-/// Whether tables `a` and `b` of one type are equal: the same keys,
-/// and for a dict equal values, in any order.
-pub(crate) fn same(a: &PtSeq, b: &PtSeq) -> bool {
-    let step = stride(a.desc);
-    // Both borrows last through every comparison, so a value read from
-    // `b` stays reachable from it until compared.
-    let (items, others) = (a.items.borrow(), b.items.borrow());
-    if items.len() != others.len() {
-        return false;
+/// Tables `a` and `b` of one type, read through their items `x` and `y`:
+/// the value pairs of `a`'s entries, in order, up to the first key `b`
+/// lacks (no pairs for a set), and whether `b` holds every key; `None`
+/// when their sizes differ. `seq::eq` compares the pairs before the
+/// missing key settles it, as `run` does (D179).
+pub(crate) fn matched(
+    a: &PtSeq,
+    x: &[u64],
+    b: &PtSeq,
+    y: &[u64],
+) -> Option<(Vec<(u64, u64)>, bool)> {
+    if x.len() != y.len() {
+        return None;
     }
-    items.chunks(step).all(|entry| {
+    let mut pairs = Vec::new();
+    for entry in x.chunks(stride(a.desc)) {
         let Some(at) = entry.first().and_then(|k| find(b, *k)) else {
-            return false;
+            return Some((pairs, false));
         };
-        match entry.get(1) {
-            None => true,
-            Some(v) => {
-                let w = others.get(at * 2 + 1).copied();
-                w.is_some_and(|w| seq::eq(slot(a.desc, 1), *v, w))
-            }
+        if let (Some(v), Some(w)) = (entry.get(1), y.get(at * 2 + 1)) {
+            pairs.push((*v, *w));
         }
-    })
+    }
+    Some((pairs, true))
 }
 
 /// Borrows a table argument.
@@ -545,11 +561,11 @@ mod tests {
             (0..100).rev().for_each(|k| pt_set_add(b, k));
             pt_set_add(a, 5);
             assert_eq!(pt_seq_len(a), 100);
-            assert!(same(table(a), table(b)));
+            assert!(seq::eq(b"ei", a as u64, b as u64));
             assert_eq!(pt_table_contains(a, 99), 1);
             assert_eq!(pt_table_contains(a, 100), 0);
             pt_set_add(b, 100);
-            assert!(!same(table(a), table(b)));
+            assert!(!seq::eq(b"ei", a as u64, b as u64));
             pt_seq_dec(a);
             pt_seq_dec(b);
         }

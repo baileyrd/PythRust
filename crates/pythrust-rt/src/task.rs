@@ -252,6 +252,7 @@ pub struct PtExec {
 
 impl PtExec {
     fn new(limit: usize) -> PtExec {
+        crate::gc::executor_started();
         PtExec {
             queue: Arc::default(),
             workers: Vec::new(),
@@ -293,6 +294,7 @@ impl PtExec {
                 crate::internal("a task's worker panicked");
             }
         }
+        crate::gc::executor_ended();
     }
 }
 

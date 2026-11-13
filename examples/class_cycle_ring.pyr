@@ -1,0 +1,65 @@
+# Linked structures that close reference cycles (step 5-5, D151, D152):
+# a ring, a doubly linked list and a node that points at itself. Native
+# code frees them with its cycle collector; `run` has CPython's. Thousands
+# of dropped rings pass the collector's candidate threshold.
+class Node:
+    def __init__(self, label: str):
+        self.label = label
+        self.next: Node | None = None
+        self.prev: Node | None = None
+
+
+def ring(labels: list[str]) -> Node:
+    first = Node(labels[0])
+    last = first
+    for text in labels[1:]:
+        node = Node(text)
+        last.next = node
+        node.prev = last
+        last = node
+    last.next = first
+    first.prev = last
+    return first
+
+
+def walk(start: Node, steps: int) -> str:
+    out = ""
+    node = start
+    for _ in range(steps):
+        out += node.label
+        nxt = node.next
+        if nxt is None:
+            break
+        node = nxt
+    return out
+
+
+def backwards(start: Node, steps: int) -> str:
+    out = ""
+    node = start
+    for _ in range(steps):
+        out += node.label
+        before = node.prev
+        if before is None:
+            break
+        node = before
+    return out
+
+
+r = ring(["é", "ß", "ñ", "λ"])
+print(walk(r, 9), backwards(r, 9))
+
+loner = Node("ø")
+loner.next = loner
+print(walk(loner, 3))
+
+total = 0
+for i in range(5000):
+    x = ring(["a", "b", str(i)])
+    total += len(walk(x, 5))
+print(total)
+
+keep = ring(["x", "y"])
+for i in range(3000):
+    ring(["tmp", "ring"])
+print(walk(keep, 5))

@@ -8,7 +8,7 @@
 use crate::ast::{method_name, Arg, Expr};
 use crate::diag::Result;
 use crate::infer::Type;
-use crate::ir::{Compound, Inst, Operand, Rvalue, Ty};
+use crate::ir::{Compound, Inst, Operand, Rvalue, Term, Ty};
 use crate::span::Span;
 
 /// What `__init__` returns, the node type its call takes.
@@ -160,6 +160,9 @@ impl<'a> FnBuilder<'_, 'a> {
     /// summaries apply to it; there are none in most programs.
     pub(super) fn render(&mut self, v: Operand, span: Span) -> Result<Operand> {
         let ty = self.ty(v);
+        if self.opt_with_str(ty) {
+            return self.render_opt(v, span);
+        }
         if let Some(def) = self
             .dunder(ty, "__str__")
             .or_else(|| self.dunder(ty, "__repr__"))
@@ -180,6 +183,37 @@ impl<'a> FnBuilder<'_, 'a> {
         let text = self.temp(Ty::Str, Rvalue::ToStr(v), span);
         self.check_raised(span)?;
         Ok(text)
+    }
+
+    /// Whether `ty` is an optional whose present type defines `__str__`:
+    /// printed directly, a present value uses it, not its `__repr__`.
+    fn opt_with_str(&self, ty: Ty) -> bool {
+        let present = self.cx.seqs.present(ty);
+        present.is_some_and(|p| self.dunder(p, "__str__").is_some())
+    }
+
+    /// `v`, an optional, as `str` renders it: `None`, or the present
+    /// value rendered by [`Self::render`].
+    fn render_opt(&mut self, v: Operand, span: Span) -> Result<Operand> {
+        let dest = self.pooled(Ty::Str);
+        let n = self.is_none(v, span);
+        let (none, present, end) = (self.new_block(), self.new_block(), self.new_block());
+        self.terminate(Term::Branch {
+            cond: n,
+            then: none,
+            orelse: present,
+        });
+        self.switch_to(none);
+        let text = self.temp(Ty::Str, Rvalue::StrLit("None".to_string()), span);
+        self.move_into(dest, text, span);
+        self.terminate(Term::Goto(end));
+        self.switch_to(present);
+        let inner = self.present(v, span);
+        let text = self.render(inner, span)?;
+        self.move_into(dest, text, span);
+        self.terminate(Term::Goto(end));
+        self.switch_to(end);
+        Ok(Operand::Local(dest))
     }
 
     /// Whether `ty` is a plain class's object type (no dataclass).

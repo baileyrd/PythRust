@@ -30,6 +30,7 @@ pub const EMBEDDED: &[(&str, &str)] = &[
         "src/fsum.rs",
         include_str!("../../../pythrust-rt/src/fsum.rs"),
     ),
+    ("src/gc.rs", include_str!("../../../pythrust-rt/src/gc.rs")),
     (
         "src/lib.rs",
         include_str!("../../../pythrust-rt/src/lib.rs"),

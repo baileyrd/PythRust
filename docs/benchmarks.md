@@ -366,3 +366,37 @@ code and size](benchmarks/card816.md) for a private clone that binds a literal
 divisor argument (D69). Only the tuple workload has an eligible call; the other
 workloads' generated code is instruction-identical and serves as noise controls.
 Results are reported as tables there.
+
+## Cycle collector (5-5)
+
+`bench/cycles.pyr` builds and drops 60,000 rings of 8 doubly linked nodes and 60,000 trees with parent pointers (about a million objects in cycles); `main` refuses it. The other rows run `main` (before the collector) and this branch back to back on the same machine, release builds, CPython 3.13, 7 runs, median seconds (`bench/run.py`); the machine was noisier during the branch run, as CPython's own column shows (`numeric`: 8.3 s then 9.1 s). Programs with no cycle-capable class pay a cached descriptor test per allocation and a flag test per drop that leaves a count above zero. Wall times of the short rows move by more than that between runs (`tuples_baseline` read 0.042 s, 0.060 s and 0.044 s on three runs), so the instruction counts below (callgrind, `main` against this branch, same sources) are the comparison.
+
+| benchmark | main native s | branch native s | branch CPython s |
+|---|---|---|---|
+| cycles | does not build | 0.428 | 0.270 |
+| int_format | 0.163 | 0.167 | 0.232 |
+| numeric | 0.413 | 0.417 | 9.125 |
+| shared | 0.071 | 0.081 | 0.261 |
+| shared_2 | 0.059 | 0.065 | 0.312 |
+| shared_4 | 0.054 | 0.060 | 0.291 |
+| shared_baseline | 0.063 | 0.069 | 0.239 |
+| sorting | 0.067 | 0.070 | 0.612 |
+| string_chain | 0.069 | 0.075 | 0.396 |
+| strings | 0.246 | 0.271 | 0.341 |
+| tasks_alloc | 0.035 | 0.049 | 0.383 |
+| tasks_alloc_serial | 0.119 | 0.160 | 0.301 |
+| tasks_cpu | 0.089 | 0.086 | 7.478 |
+| tasks_cpu_serial | 0.324 | 0.317 | 6.970 |
+| tuple_unpack | 0.013 | 0.016 | 0.670 |
+| tuples | 0.024 | 0.029 | 0.665 |
+| tuples_baseline | 0.042 | 0.060 | 0.821 |
+
+Where the cycle time goes (callgrind, 4,000 iterations, instruction counts): descriptor walks (`span`, `resolve`, the slot types of an object) are about a quarter, `malloc` and `free` a fifth, and the collection itself (`gc::collect` and its graph walks) about a fifth. A per-type table of pointer slots would remove most of the descriptor walks; not done.
+
+| program | main instructions | branch instructions |
+|---|---|---|
+| tuples | 397,033,245 | 397,033,435 |
+| tuples_baseline | 603,699,901 | 603,700,105 |
+| tasks_alloc_serial | 1,923,499,831 | 1,923,500,146 |
+| sorting | 698,377,224 | 701,977,581 |
+

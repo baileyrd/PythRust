@@ -1844,20 +1844,13 @@ fn refuse_gaps(program: &Program) -> Result<()> {
 }
 
 /// Refuses `inst` if it makes an exception that may close a reference
-/// cycle, or a record that can hold one of its own type (D166).
+/// cycle: the collector (D152) covers classes and records, not these.
 fn refuse_cycle(types: &[Compound], func: &Func, inst: &Inst) -> Result<()> {
-    let Inst::Assign { dest, value, span } = inst else {
+    let Inst::Assign { value, span, .. } = inst else {
         return Ok(());
     };
     let message = match value {
         Rvalue::NewExc(_, Some(arg)) if may_cycle(types, func.ty(*arg)) => CYCLE_GAP.to_string(),
-        Rvalue::NewSeq(_) | Rvalue::NewObj => match self_reaching(types, func.locals[dest.0]) {
-            Some(shown) => format!(
-                "the native backend does not support class `{shown}`, which can refer to \
-                 itself, yet"
-            ),
-            None => return Ok(()),
-        },
         _ => return Ok(()),
     };
     Err(Diagnostic {
@@ -1865,60 +1858,6 @@ fn refuse_cycle(types: &[Compound], func: &Func, inst: &Inst) -> Result<()> {
         message,
         kind: DiagKind::Backend,
     })
-}
-
-/// The name of class type `ty` if a value of it can close a reference
-/// cycle through itself: an object that can hold one of its own type
-/// (D151), or a record whose way back to its own type passes a list,
-/// dict, set or object (D166). A record that reaches itself only
-/// through records, tuples and optionals is immutable, so its values
-/// are acyclic; its descriptor is finite with a back-reference (D174).
-fn self_reaching(types: &[Compound], ty: Ty) -> Option<&str> {
-    let (Some(Compound::Record { shown, .. }) | Some(Compound::Object { shown, .. })) =
-        ir::compound(types, ty)
-    else {
-        return None;
-    };
-    let object = matches!(ty, Ty::Obj(_));
-    let refused = match object {
-        true => reaches(types, ty, |_| true),
-        false => reaches(types, ty, |t| mutable(types, t)),
-    };
-    refused.then_some(shown.as_str())
-}
-
-/// Whether values of `ty` are mutable containers: lists, dicts, sets,
-/// their views and objects.
-fn mutable(types: &[Compound], ty: Ty) -> bool {
-    matches!(
-        ir::compound(types, ty),
-        Some(
-            Compound::List(_)
-                | Compound::Dict(..)
-                | Compound::Set(_)
-                | Compound::View(..)
-                | Compound::Object { .. }
-        )
-    )
-}
-
-/// Whether some path from `start` back to itself passes a type for
-/// which `through` holds (the type `start` is leaving counts too).
-fn reaches(types: &[Compound], start: Ty, through: impl Fn(Ty) -> bool) -> bool {
-    let mut seen = std::collections::HashSet::new();
-    let mut todo = vec![(start, false)];
-    while let Some((t, via)) = todo.pop() {
-        let via = via || through(t);
-        for part in ir::parts(types, t) {
-            if part == start && via {
-                return true;
-            }
-            if seen.insert((part, via)) {
-                todo.push((part, via));
-            }
-        }
-    }
-    false
 }
 
 /// Whether an exception's argument of type `ty` may close a reference
@@ -2053,30 +1992,23 @@ mod tests {
     }
 
     #[test]
-    fn a_class_that_can_refer_to_itself_is_refused_and_an_acyclic_one_builds() {
+    fn a_class_that_can_refer_to_itself_builds() {
         let node = "class Node:\n    def __init__(self, v: int):\n        self.v = v\n        self.next: Node | None = None\n    def __repr__(self) -> str:\n        return \"N\"\nprint(Node(1))\n";
-        let want =
-            "the native backend does not support class `Node`, which can refer to itself, yet";
         assert_eq!(
-            refusal(&format!("from __future__ import annotations\n{node}")).as_deref(),
-            Some(want)
+            refusal(&format!("from __future__ import annotations\n{node}")),
+            None
         );
-        let plain = node.replace("        self.next: Node | None = None\n", "");
-        assert_eq!(refusal(&plain), None);
     }
 
     #[test]
-    fn a_record_that_reaches_itself_is_refused_only_through_a_mutable_container() {
+    fn a_record_that_reaches_itself_builds_through_any_container() {
         let head = "from __future__ import annotations\nfrom dataclasses import dataclass\n@dataclass(frozen=True)\nclass R:\n    n: int\n";
         let opt = format!("{head}    next: R | None\nprint(R(1, R(2, None)))\n");
         assert_eq!(refusal(&opt), None);
         let tuple = format!("{head}    next: tuple[R, int] | None\nprint(R(1, None))\n");
         assert_eq!(refusal(&tuple), None);
         let list = format!("{head}    kids: list[R]\nprint(R(1, []))\n");
-        assert_eq!(
-            refusal(&list).as_deref(),
-            Some("the native backend does not support class `R`, which can refer to itself, yet")
-        );
+        assert_eq!(refusal(&list), None);
     }
 
     #[test]
@@ -2382,7 +2314,7 @@ mod tests {
     /// A record that can hold its own type is a named gap however it
     /// reaches itself; one whose methods only name it builds (D166).
     #[test]
-    fn a_record_holding_its_own_type_is_a_named_gap() {
+    fn a_record_holding_its_own_type_builds() {
         let head = "from __future__ import annotations\nfrom dataclasses import dataclass\n\
                     @dataclass(frozen=True)\nclass P:\n";
         let refusal = |fields: &str, make: &str| {
@@ -2394,14 +2326,13 @@ mod tests {
                 .err()
                 .map(|d| d.message)
         };
-        let gap = "the native backend does not support class `P`, which can refer to itself, yet";
         let cases = [
             ("    kids: list[P]\n", "P([])"),
             ("    by: dict[str, P]\n", "P({})"),
             ("    pair: tuple[int, list[P]]\n", "P((1, []))"),
         ];
         for (fields, make) in cases {
-            assert_eq!(refusal(fields, make).as_deref(), Some(gap), "{fields}");
+            assert_eq!(refusal(fields, make), None, "{fields}");
         }
         // Through records, tuples and optionals alone it is acyclic: it
         // builds with a back-reference in its descriptor (D174).

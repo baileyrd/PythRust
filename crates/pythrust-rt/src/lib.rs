@@ -5,8 +5,9 @@
 //! ([`obj`]), the `sys` and `os` modules ([`sys`], [`os`]), tasks
 //! ([`task`]), and what Rust binding shims call ([`abi`]).
 //!
-//! The C ABI surface is the project's `unsafe`, with one exception
-//! inside the runtime, the borrow cell in `sync.rs`. Each exported
+//! The C ABI surface is the project's `unsafe`, with two exceptions
+//! inside the runtime: the borrow cell in `sync.rs` and the cycle
+//! collector in `gc.rs` (D176). Each exported
 //! item (or module, for [`str`], [`seq`], [`table`], [`range`], [`num`], [`exc`], [`obj`], [`sys`] and [`os`]) carries `allow(unsafe_code)` and a
 //! `# Safety` note on what the caller guarantees, so the audit is
 //! `grep allow(unsafe_code)`. The logic behind the ABI is safe Rust,
@@ -24,6 +25,7 @@
 pub mod abi;
 pub mod exc;
 pub mod fsum;
+mod gc;
 pub mod num;
 pub mod obj;
 pub mod os;
@@ -290,6 +292,7 @@ mod entry {
         // SAFETY: `pythrust_main` takes the context pointer and returns
         // nothing; the compiler emits it with exactly that signature.
         unsafe { pythrust_main(super::exc::pt_ctx()) };
+        super::gc::collect_all();
         super::flush();
         super::leak_status(cfg!(debug_assertions), super::LIVE.load(super::Relaxed))
     }
