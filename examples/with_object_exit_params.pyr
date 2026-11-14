@@ -1,0 +1,12 @@
+# expect-exit: 1
+# expect-error: `M.__exit__` takes `self, exc_type, exc, tb`
+class M:
+    def __enter__(self) -> int:
+        return 1
+
+    def __exit__(self, exc):
+        return False
+
+
+with M() as x:
+    pass

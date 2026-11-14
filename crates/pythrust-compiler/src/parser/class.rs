@@ -5,13 +5,16 @@
 
 use super::record::{check_method, method, Body};
 use super::{error, init, Parser};
-use crate::ast::{Field, FuncDef, Ident, RecordDef, RecordKind, Stmt, StmtKind, TypeExpr};
+use crate::ast::{
+    Block, Expr, ExprKind, Field, FuncDef, Ident, Mode, RecordDef, RecordKind, Stmt, StmtKind,
+    TypeExpr,
+};
 use crate::diag::Result;
+use crate::span::Span;
 use crate::token::TokenKind;
 
-/// The dunders a plain class may define (D147); 5-6 adds `__enter__`
-/// and `__exit__` (D153).
-const DUNDERS: [&str; 3] = ["__init__", "__repr__", "__str__"];
+/// The dunders a plain class may define (D147, D153).
+const DUNDERS: [&str; 5] = ["__init__", "__repr__", "__str__", "__enter__", "__exit__"];
 
 impl Parser<'_> {
     /// `'class' NAME ['(' ')'] ':' body`: the class, then its methods as
@@ -86,7 +89,8 @@ impl Parser<'_> {
                 let stored = std::mem::replace(&mut self.init, saved);
                 let def = def?;
                 annotations.extend(stored.unwrap_or_default());
-                check_dunder(class, &def)?;
+                let mut def = def;
+                check_dunder(class, &mut def)?;
                 Ok(Some(def))
             }
             TokenKind::At => Err(error(
@@ -109,16 +113,22 @@ impl Parser<'_> {
 
 /// A dunder method is one D147 admits; `__init__` returns nothing and
 /// the printable ones return `str`, as CPython requires.
-fn check_dunder(class: &Ident, def: &FuncDef) -> Result<()> {
+fn check_dunder(class: &Ident, def: &mut FuncDef) -> Result<()> {
     let n = def.name.name.as_str();
     if !(n.starts_with("__") && n.ends_with("__")) {
         return Ok(());
     }
     if !DUNDERS.contains(&n) {
         let msg = format!(
-            "`{n}` is not supported yet; a class defines `__init__`, `__repr__` and `__str__` only"
+            "`{n}` is not supported yet; a class defines `__init__`, `__repr__`, `__str__`, \
+             `__enter__` and `__exit__` only"
         );
         return Err(error(def.name.span, msg));
+    }
+    match n {
+        "__enter__" => return Ok(()),
+        "__exit__" => return check_exit(class, def),
+        _ => {}
     }
     let returns = def.returns.as_ref().map(|t| t.name.name.as_str());
     let want = if n == "__init__" { "None" } else { "str" };
@@ -128,6 +138,83 @@ fn check_dunder(class: &Ident, def: &FuncDef) -> Result<()> {
             Err(error(def.name.span, msg))
         }
         _ => Ok(()),
+    }
+}
+
+/// `__exit__(self, exc_type, exc, tb)` is CPython's four-parameter form,
+/// loose (a tempered one waits for spellable exception types, D153), and
+/// returns `bool` or nothing. Every path that returns nothing returns
+/// `False` (CPython: `None`, falsy), so `with` reads one type.
+fn check_exit(class: &Ident, def: &mut FuncDef) -> Result<()> {
+    let shown = &class.name;
+    if def.mode == Mode::Tempered {
+        let msg = format!("a tempered `{shown}.__exit__` is not supported yet");
+        return Err(error(def.name.span, msg));
+    }
+    if def.params.len() != 4 {
+        let msg = format!("`{shown}.__exit__` takes `self, exc_type, exc, tb`");
+        return Err(error(def.name.span, msg));
+    }
+    match def.returns.as_ref().map(|t| t.name.name.as_str()) {
+        Some("bool") => return Ok(()),
+        Some("None") | None => {}
+        Some(_) => {
+            let msg = format!("`{shown}.__exit__` returns `bool` or nothing");
+            return Err(error(def.name.span, msg));
+        }
+    }
+    def.returns = None;
+    false_returns(&mut def.body, def.span);
+    if !matches!(def.body.last().map(|s| &s.kind), Some(StmtKind::Return(_))) {
+        def.body.push(return_false(def.span));
+    }
+    Ok(())
+}
+
+/// Every bare `return` in the body as `return False`.
+fn false_returns(block: &mut [Stmt], at: Span) {
+    for s in block {
+        match &mut s.kind {
+            StmtKind::Return(v) if v.is_none() => *v = Some(false_expr(at)),
+            kind => children_mut(kind)
+                .into_iter()
+                .for_each(|b| false_returns(b, at)),
+        }
+    }
+}
+
+fn return_false(span: Span) -> Stmt {
+    let kind = StmtKind::Return(Some(false_expr(span)));
+    Stmt { kind, span }
+}
+
+fn false_expr(span: Span) -> Expr {
+    let kind = ExprKind::Bool(false);
+    Expr { kind, span }
+}
+
+fn children_mut(kind: &mut StmtKind) -> Vec<&mut Block> {
+    match kind {
+        StmtKind::If {
+            branch,
+            elifs,
+            orelse,
+        } => std::iter::once(&mut branch.body)
+            .chain(elifs.iter_mut().map(|b| &mut b.body))
+            .chain([orelse])
+            .collect(),
+        StmtKind::While { branch, orelse } => vec![&mut branch.body, orelse],
+        StmtKind::For { body, orelse, .. } => vec![body, orelse],
+        StmtKind::With { body, .. } => vec![body],
+        StmtKind::Try {
+            body,
+            handlers,
+            finally,
+        } => std::iter::once(body)
+            .chain(handlers.iter_mut().map(|h| &mut h.body))
+            .chain(finally)
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -202,7 +289,7 @@ mod tests {
             "        if k:\n            raise ValueError('ü')\n        self.x = 1\n",
             "        try:\n            self.x = 1 // k\n        except ZeroDivisionError:\n            self.x = 0\n",
             "        self.x = 1\n        if k:\n            return\n        self.x = 2\n",
-            "        with k as e:\n            self.x = 1\n",
+            "        with ThreadPoolExecutor() as e:\n            self.x = 1\n",
         ];
         for init in ok {
             assert_eq!(fields(init), ["x"], "{init}");
@@ -210,6 +297,8 @@ mod tests {
         let missing = "field `x` of `P` is not assigned on every path through `__init__`";
         let bad = [
             "        if k:\n            self.x = 1\n",
+            // An `__exit__` may suppress the body's exception (D153).
+            "        with k as e:\n            self.x = 1\n",
             "        if k:\n            return\n        self.x = 1\n",
             "        while k:\n            self.x = 1\n",
             "        for i in range(k):\n            self.x = i\n",

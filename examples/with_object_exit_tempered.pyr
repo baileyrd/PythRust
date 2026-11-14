@@ -1,0 +1,13 @@
+# expect-exit: 1
+# deviation: D153: a tempered `__exit__` is not supported yet (the exception types are not spellable); CPython runs it.
+# expect-error: a tempered `M.__exit__` is not supported yet
+class M:
+    def __enter__(self) -> int:
+        return 1
+
+    temper def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+with M() as x:
+    print(x)

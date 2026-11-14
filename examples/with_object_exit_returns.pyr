@@ -1,0 +1,13 @@
+# expect-exit: 1
+# deviation: D153: `__exit__` returns `bool` or nothing; CPython accepts any value and tests its truth.
+# expect-error: `M.__exit__` returns `bool` or nothing
+class M:
+    def __enter__(self) -> int:
+        return 1
+
+    def __exit__(self, exc_type, exc, tb) -> int:
+        return 1
+
+
+with M() as x:
+    print(x)

@@ -1,0 +1,5 @@
+# expect-exit: 1
+# expect-error: `with` takes an executor, `open(...)`, or an object whose class defines `__enter__` and `__exit__`
+n = 5
+with n as x:
+    print(x)

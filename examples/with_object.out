@@ -1,0 +1,29 @@
+enter é
+body é
+exit clean é True True
+1
+enter naïve
+enter 日本
+nested
+exit with boom 日本
+exit clean naïve True True
+after
+enter é
+body é
+exit with integer division or modulo by zero é
+propagated integer division or modulo by zero
+enter bare
+no name
+exit clean bare True True
+enter loop0
+exit clean loop0 True True
+enter loop1
+exit clean loop1 True True
+after loop
+7 True
+2
+enter outer
+enter inner
+exit with 'swallowed' inner
+exit with escapes outer
+caught escapes

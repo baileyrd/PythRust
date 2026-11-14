@@ -1,0 +1,13 @@
+# expect-exit: 1
+# deviation: D153: `exc_type` can only be compared with `None` yet; CPython compares it with an exception class.
+# expect-error: exception classes can't be held in variables; name them where they are used, as in `except (ValueError, IndexError):`
+class M:
+    def __enter__(self) -> int:
+        return 1
+
+    def __exit__(self, exc_type, exc, tb):
+        print(exc_type == ValueError)
+
+
+with M() as x:
+    print(x)

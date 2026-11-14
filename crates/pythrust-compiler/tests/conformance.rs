@@ -471,6 +471,7 @@ const NATIVE: &[&str] = &[
     "genexp_sum_overflow",
     "open_text_mode",
     "with_open_read",
+    "with_object",
     "unicode_error",
     "raises_finally",
     "slice_list",

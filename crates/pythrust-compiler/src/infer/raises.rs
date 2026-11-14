@@ -592,8 +592,14 @@ impl<'a> Cx<'_, 'a> {
                 finally,
             } => {
                 let known = self.a.types.classes();
+                // An object `with`'s handler re-raises what the body did
+                // (D153): nothing is caught, so the body's escapes stay.
+                let synthetic = handlers
+                    .iter()
+                    .any(|h| h.binding.as_ref().is_some_and(is_with_err));
                 let classes: Vec<Class> = handlers
                     .iter()
+                    .filter(|_| !synthetic)
                     .flat_map(|h| &h.classes)
                     .filter_map(|c| known.get(&c.name))
                     .collect();
@@ -814,6 +820,7 @@ impl<'a> Cx<'_, 'a> {
     fn kinds(&self, value: &'a Expr, seen: &mut BTreeSet<&'a str>) -> BTreeSet<Class> {
         let unknown = BTreeSet::from([Class::Builtin(ExcKind::Exception)]);
         match &value.kind {
+            ExprKind::Name(name) if is_with_err_name(name) => BTreeSet::new(),
             ExprKind::Name(name) => self.name_kinds(name, seen),
             ExprKind::Call { func, .. } => match &func.kind {
                 ExprKind::Name(name) if !self.a.defs.contains_key(name.as_str()) => {
@@ -889,6 +896,15 @@ impl<'a> Cx<'_, 'a> {
             Source::Opaque => any(),
         }
     }
+}
+
+/// The unspellable name an object `with` binds its handler's exception to.
+fn is_with_err_name(name: &str) -> bool {
+    name.starts_with("with#") && name.ends_with(".err")
+}
+
+fn is_with_err(binding: &Ident) -> bool {
+    is_with_err_name(&binding.name)
 }
 
 /// Whether an `int()`/`float()` argument of type `t` may be a string,
@@ -1010,6 +1026,24 @@ def f(s: str, n: int, x: float):
             raises(src, "f"),
             "IndexError, ValueError, ZeroDivisionError"
         );
+    }
+
+    #[test]
+    fn an_object_with_raises_its_bodys_and_its_methods() {
+        let class = "\
+class M:
+    def __enter__(self) -> int:
+        return 1
+    def __exit__(self, t, e, tb):
+        if e is None:
+            raise KeyError(\"k\")
+";
+        let with = |body: &str| format!("{class}def f():\n    with M() as x:\n        {body}\n");
+        assert_eq!(
+            raises(&with("raise ValueError(\"v\")"), "f"),
+            "KeyError, ValueError"
+        );
+        assert_eq!(raises(&with("print(x)"), "f"), "KeyError");
     }
 
     #[test]

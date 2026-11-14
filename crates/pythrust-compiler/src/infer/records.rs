@@ -284,6 +284,13 @@ impl Checker {
 }
 
 fn no_member(record: &str, attr: &Ident) -> crate::diag::Diagnostic {
+    if matches!(attr.name.as_str(), "__enter__" | "__exit__") {
+        let msg = format!(
+            "`with` needs `{}` to define `__enter__` and `__exit__`",
+            source_name(unqualified(record))
+        );
+        return error(attr.span, msg);
+    }
     let msg = format!(
         "record `{}` has no field or method `{}`",
         source_name(unqualified(record)),

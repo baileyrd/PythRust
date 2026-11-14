@@ -239,6 +239,12 @@ impl Checker {
                 return Err(error(attr.span, msg));
             }
         }
+        if matches!(name, "__enter__" | "__exit__") && lookup(&METHODS, name, None).is_none() {
+            return Err(error(
+                attr.span,
+                with_message(&self.subst.resolve(&receiver)),
+            ));
+        }
         let Some(first) = lookup(&METHODS, name, None) else {
             let msg = format!(
                 "unknown method `.{name}`; the methods are `str.split`, `.join`, \
@@ -552,6 +558,21 @@ fn unsupported<'a>(name: &str, args: &'a [Arg]) -> Option<(&'a Arg, &'static str
 }
 
 /// Checks a method call's argument count; methods take no keywords.
+/// Why `with` cannot take a value of type `t`: not an object.
+fn with_message(t: &Type) -> String {
+    match t {
+        Type::Executor => "an executor is used only as \
+                           `with concurrent.futures.ThreadPoolExecutor() as ex:`"
+            .to_string(),
+        Type::File(..) => "`with` takes `open(...)` directly; \
+                           a file already open is not supported yet"
+            .to_string(),
+        _ => "`with` takes an executor, `open(...)`, or an object whose class \
+              defines `__enter__` and `__exit__`"
+            .to_string(),
+    }
+}
+
 fn method_arity(name: &str, args: &[Arg], min: usize, max: usize, span: Span) -> Result<()> {
     if let Some(arg) = args.iter().find(|a| a.name.is_some()) {
         let msg = format!("`{name}` takes no keyword arguments");
