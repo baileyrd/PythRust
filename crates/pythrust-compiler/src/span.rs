@@ -10,6 +10,11 @@ pub struct Span {
 }
 
 impl Span {
+    /// The empty span at byte `at`.
+    pub fn at(at: usize) -> Span {
+        Span { start: at, end: at }
+    }
+
     /// The smallest span covering both `self` and `other`.
     pub fn merge(self, other: Span) -> Span {
         Span {

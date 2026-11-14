@@ -1,5 +1,5 @@
-# deviation: D147: dunders other than `__init__`, `__repr__` and `__str__` are not supported yet; CPython runs them.
-# expect-error: `__eq__` is not supported yet; a class defines `__init__`, `__repr__` and `__str__` only
+# deviation: D147, D153: dunders other than `__init__`, `__repr__`, `__str__`, `__enter__` and `__exit__` are not supported yet; CPython runs them.
+# expect-error: `__eq__` is not supported yet; a class defines `__init__`, `__repr__`, `__str__`, `__enter__` and `__exit__` only
 # expect-exit: 1
 class Box:
     def __init__(self, n: int):

@@ -1,0 +1,9 @@
+# expect-exit: 1
+# expect-error: `with` needs `M` to define `__enter__` and `__exit__`
+class M:
+    def __enter__(self) -> int:
+        return 1
+
+
+with M() as x:
+    print(x)

@@ -2062,9 +2062,9 @@ fn with_open_is_try_finally_on_a_hidden_file() {
     );
     assert_eq!(
         ok(&format!(
-            "with open ( a ) as f , ex ( ) as e , open ( b ) {body}"
+            "with open ( a ) as f , ThreadPoolExecutor ( ) as e , open ( b ) {body}"
         )),
-        "(= with#0 (call open a)) (= f with#0) (try ((with (call ex) e \
+        "(= with#0 (call open a)) (= f with#0) (try ((with (call ThreadPoolExecutor) e \
          ((= with#1 (call open b)) (try (y) (finally ((call (. with#1 close)))))))) \
          (finally ((call (. with#0 close)))))"
     );
@@ -2073,11 +2073,11 @@ fn with_open_is_try_finally_on_a_hidden_file() {
         "(= with#0 (call open p)) (= f with#0) (try (y) (finally ((call (. with#0 close)))))"
     );
     assert_eq!(
-        ok(&format!("with ex ( ) as e {body}")),
-        "(with (call ex) e (y))"
+        ok(&format!("with ThreadPoolExecutor ( ) as e {body}")),
+        "(with (call ThreadPoolExecutor) e (y))"
     );
     assert_eq!(
-        err(&format!("with ex ( ) {body}")),
+        err(&format!("with ThreadPoolExecutor ( ) {body}")),
         "`with` needs a name: write `with value as name:`"
     );
     assert_eq!(
@@ -2093,20 +2093,42 @@ fn with_open_is_try_finally_on_a_hidden_file() {
 }
 
 /// A program's own `def open`, before or after the `with`, makes an
-/// `open(...)` item an ordinary executor item, as CPython calls it (D115).
+/// `open(...)` item an ordinary object item, as CPython calls it (D115,
+/// D153).
 #[test]
-fn with_over_a_user_open_is_an_executor_item() {
+fn with_over_a_user_open_is_an_object_item() {
     let body = ": NL INDENT y NL DEDENT";
     let def = "def open ( n ) : NL INDENT return n NL DEDENT";
-    let item = "(with (call open p) e (y))";
+    let enter = "(= e (call (. with#0 __enter__)))";
     let before = ok(&format!("{def} with open ( p ) as e {body}"));
-    assert!(before.ends_with(item), "{before}");
+    assert!(before.contains(enter), "{before}");
     let after = ok(&format!("with open ( p ) as e {body} {def}"));
-    assert!(after.starts_with(item), "{after}");
+    assert!(after.contains(enter), "{after}");
     let tempered = ok(&format!("temper {def} with open ( p ) as e {body}"));
-    assert!(tempered.ends_with(item), "{tempered}");
-    assert_eq!(
-        err(&format!("{def} with open ( p ) {body}")),
-        "`with` needs a name: write `with value as name:`"
+    assert!(tempered.contains(enter), "{tempered}");
+    let bare = ok(&format!("{def} with open ( p ) {body}"));
+    assert!(bare.contains("(call (. with#0 __enter__))"), "{bare}");
+}
+
+/// An object item is PEP 343 over try/finally: `__enter__`, the body,
+/// and one `__exit__` on every way out (D153).
+#[test]
+fn with_an_object_enters_and_exits_once() {
+    let got = ok("with m ( ) as e : NL INDENT y NL DEDENT");
+    let exit = "(call (. with#0 __exit__) with#0.exc with#0.exc with#0.exc)";
+    assert!(
+        got.starts_with("(= with#0 (call m)) (= e (call (. with#0 __enter__)))"),
+        "{got}"
     );
+    assert!(
+        got.contains(&format!("(if (not {exit}) ((raise with#0.err)))")),
+        "{got}"
+    );
+    assert!(
+        got.contains(&format!("(if (not with#0.done) ({exit}))")),
+        "{got}"
+    );
+    assert!(ok("with m as e : NL INDENT y NL DEDENT").contains("__enter__"));
+    let items = ok("with m ( ) as a , n ( ) : NL INDENT y NL DEDENT");
+    assert!(items.contains("with#1"), "{items}");
 }

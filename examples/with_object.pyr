@@ -1,0 +1,87 @@
+# A user class with `__enter__`/`__exit__` works as a `with` target
+# (D153): `__exit__` runs on every way out, sees the exception, and a
+# true result suppresses it. Non-ASCII text (D47).
+from __future__ import annotations
+
+PATH = "../../examples/data/with_open.txt"
+
+
+class Res:
+    def __init__(self, name: str, quiet: bool) -> None:
+        self.name = name
+        self.quiet = quiet
+
+    def __enter__(self) -> Res:
+        print("enter", self.name)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc is None:
+            print("exit clean", self.name, exc_type is None, tb is None)
+            return
+        print("exit with", exc, self.name)
+        return self.quiet
+
+
+class Files:
+    def __init__(self) -> None:
+        self.seen = 0
+
+    def __enter__(self) -> int:
+        return 7
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.seen += 1
+        return False
+
+
+def returns(quiet: bool) -> int:
+    with Res("é", quiet) as r:
+        print("body", r.name)
+        if quiet:
+            return 1
+        1 // 0
+    return 2
+
+
+def loops() -> None:
+    for i in range(3):
+        with Res("loop" + str(i), False):
+            if i == 0:
+                continue
+            if i == 1:
+                break
+            print("never")
+    print("after loop")
+
+
+def file_inside() -> str:
+    f = Files()
+    with f as n, open(PATH) as handle:
+        line = handle.readline()
+        print(n, len(line) > 0)
+    with f:
+        pass
+    return str(f.seen)
+
+
+print(returns(True))
+with Res("naïve", False) as a, Res("日本", True):
+    print("nested")
+    raise ValueError("boom")
+print("after")
+try:
+    returns(False)
+except ZeroDivisionError as z:
+    print("propagated", z)
+with Res("bare", False):
+    print("no name")
+loops()
+print(file_inside())
+try:
+    with Res("outer", False):
+        with Res("inner", True):
+            raise KeyError("swallowed")
+        raise IndexError("escapes")
+except IndexError as e:
+    print("caught", e)

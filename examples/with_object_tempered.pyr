@@ -1,0 +1,17 @@
+# expect-exit: 1
+# deviation: D153: a `with` on an object in tempered code is not supported yet (`__exit__` cannot be tempered); CPython runs it.
+# expect-error: tempered `f` calls loose `M.__exit__`; temper `M.__exit__` first
+class M:
+    temper def __enter__(self) -> int:
+        return 1
+
+    def __exit__(self, exc_type, exc, tb):
+        pass
+
+
+temper def f(m: M) -> None:
+    with m as x:
+        print(x)
+
+
+f(M())
