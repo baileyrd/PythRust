@@ -146,6 +146,9 @@ struct Parser<'a> {
     /// The program defines its own `open`, so `with open(...)` is an
     /// executor item (D115).
     user_open: bool,
+    /// The program defines its own `sorted`, `min` or `max`, so `key=`
+    /// is theirs (step 6-1).
+    user_ordering: bool,
     /// `from dataclasses import dataclass` came first (D132).
     dataclass: bool,
     /// While a plain class's `__init__` is parsed, the field annotations
@@ -184,6 +187,7 @@ impl<'a> Parser<'a> {
             pauses: Vec::new(),
             withs: 0,
             user_open: with::defines_open(tokens),
+            user_ordering: key::defines_ordering(tokens),
             dataclass: false,
             init: None,
         })
@@ -486,7 +490,10 @@ impl<'a> Parser<'a> {
             return self.ann_assign(lhs);
         }
         let Some(op) = aug_op(self.peek()) else {
-            return Ok(StmtKind::Expr(lhs));
+            return match self.user_ordering {
+                true => Ok(StmtKind::Expr(lhs)),
+                false => key::sort_stmt(lhs),
+            };
         };
         self.bump();
         self.aug_assign(lhs, op)
@@ -1080,13 +1087,19 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::RParen)?;
         check_args(&args)?;
-        bounded(Expr {
+        let call = Expr {
             span: self.span_from(func.span),
             kind: ExprKind::Call {
                 func: Box::new(func),
                 args,
             },
-        })
+        };
+        let call = if self.user_ordering {
+            call
+        } else {
+            key::rewrite(call)?
+        };
+        bounded(call)
     }
 
     /// `arg (',' arg)* [',']`, or a generator expression alone (D119):
@@ -1722,6 +1735,7 @@ mod class;
 mod exc_class;
 mod imports;
 mod init;
+mod key;
 mod record;
 mod stubs;
 mod with;

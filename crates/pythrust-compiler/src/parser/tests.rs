@@ -1295,6 +1295,47 @@ fn error_span_points_at_offending_token() {
     assert_eq!(text(src, d.span), ")");
 }
 
+// `key=` of `sorted`, `min`, `max` and `list.sort` (step 6-1, D181).
+
+#[test]
+fn key_of_a_name_becomes_comprehensions_over_index_pairs() {
+    for call in [
+        "sorted ( xs , key = f )",
+        "sorted ( xs , key = f , reverse = r )",
+        "min ( xs , key = f )",
+        "max ( 1 , 2 , key = f )",
+    ] {
+        let got = ok(&format!("z = {call} NL"));
+        assert!(
+            got.contains("enumerate") && got.contains("(call f "),
+            "{got}"
+        );
+        assert!(!got.contains("key"), "{got}");
+    }
+    let sort = ok("xs . sort ( key = f ) NL");
+    assert!(
+        sort.starts_with("(for ") && sort.contains("enumerate"),
+        "{sort}"
+    );
+}
+
+#[test]
+fn key_none_is_no_key_and_other_keys_are_named_errors() {
+    assert_eq!(ok("sorted ( xs , key = None ) NL"), "(call sorted xs)");
+    assert_eq!(
+        err("z = sorted ( xs , key = a . b ) NL"),
+        "`key=` of `sorted` takes only the name of a function yet"
+    );
+    assert!(err("z = max ( xs , key = 1 ) NL").contains("`key=` of `max`"));
+}
+
+#[test]
+fn a_program_defining_sorted_keeps_its_own_key() {
+    let src =
+        "def sorted ( n , key ) : NL INDENT return n NL DEDENT z = sorted ( xs , key = f ) NL";
+    assert!(!ok(src).contains("enumerate"));
+}
+
 // Nesting limit.
 
 #[test]

@@ -1,7 +1,6 @@
-# deviation: `key=` of `list.sort` and `sorted` is not supported yet (D70); CPython accepts it.
+# deviation: `key=` takes only the name of a function yet (D181); CPython accepts a method, lambda or any callable.
 # expect-exit: 1
-# expect-error: `key=` of `list.sort` is not supported yet
+# expect-error: `key=` of `sorted` takes only the name of a function yet
 
-xs = ["bb", "a"]
-xs.sort(key=len)
-print(xs)
+xs = ["bb", "A", "a"]
+print(sorted(xs, key=str.lower))

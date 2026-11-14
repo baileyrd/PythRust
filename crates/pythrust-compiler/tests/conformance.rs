@@ -472,6 +472,7 @@ const NATIVE: &[&str] = &[
     "open_text_mode",
     "with_open_read",
     "with_object",
+    "sort_key",
     "unicode_error",
     "raises_finally",
     "slice_list",

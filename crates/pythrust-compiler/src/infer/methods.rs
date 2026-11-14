@@ -346,7 +346,7 @@ impl Checker {
                     }
                 }
                 "key" => {
-                    let msg = format!("`key=` of `{what}` is not supported yet");
+                    let msg = format!("`key=` of `{what}` takes only the name of a function yet");
                     return Err(error(arg.span, msg));
                 }
                 other => {

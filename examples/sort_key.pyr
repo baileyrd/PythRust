@@ -1,0 +1,64 @@
+# `key=` naming a function (D181-D185) for `sorted`, `min`, `max` and
+# `list.sort`: the key runs once per element in order, ties keep their
+# order (also with `reverse=True`), `min`/`max` take the first of equal
+# keys, and a raising key propagates. Non-ASCII text (D47).
+calls = []
+
+
+def length(s: str) -> int:
+    return len(s)
+
+
+def neg(n: int) -> int:
+    return -n
+
+
+def tracked(s: str) -> int:
+    calls.append(s)
+    return len(s)
+
+
+def boom(s: str) -> int:
+    if s == "x":
+        raise ValueError("ü")
+    return len(s)
+
+
+def pair(s: str) -> tuple[int, str]:
+    return (len(s), s)
+
+
+def show() -> None:
+    words = ["pear", "é", "fig", "apple", "kiwi", "ñu", "ab"]
+    print(sorted(words, key=length))
+    print(sorted(words, key=length, reverse=True))
+    print(sorted(words, key=pair), sorted(words, key=len))
+    print(min(words, key=length), max(words, key=length))
+    print(min("zebra", "ox", "ant", key=length))
+    nums = [3, 1, 2, 5, 4, 1]
+    print(sorted(nums, key=neg), max(nums, key=neg), min(nums, key=neg))
+    print(sorted(words, key=None), sorted({"bb": 1, "a": 2}, key=length))
+    reverse = len(words) > 3
+    print(sorted(words, key=length, reverse=reverse))
+    print(sorted(["a"], key=tracked), calls)
+    print(sorted(["ccc", "b", "aa"], key=tracked), calls)
+    words.sort(key=length)
+    print(words)
+    words.sort(key=length, reverse=True)
+    print(words)
+    again = ["bb", "x", "a"]
+    try:
+        again.sort(key=boom)
+    except ValueError as e:
+        print("caught", e, again)
+    try:
+        print(min([], key=neg))
+    except ValueError as e:
+        print("empty", e)
+    try:
+        print(sorted(["bb", "x"], key=boom))
+    except ValueError as e:
+        print("caught", e)
+
+
+show()
