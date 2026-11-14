@@ -28,20 +28,35 @@ def pair(s: str) -> tuple[int, str]:
     return (len(s), s)
 
 
-def show() -> None:
+def basics() -> None:
     words = ["pear", "é", "fig", "apple", "kiwi", "ñu", "ab"]
     print(sorted(words, key=length))
     print(sorted(words, key=length, reverse=True))
     print(sorted(words, key=pair), sorted(words, key=len))
+
+
+def extremes() -> None:
+    words = ["pear", "é", "fig", "apple", "kiwi", "ñu", "ab"]
     print(min(words, key=length), max(words, key=length))
     print(min("zebra", "ox", "ant", key=length))
     nums = [3, 1, 2, 5, 4, 1]
     print(sorted(nums, key=neg), max(nums, key=neg), min(nums, key=neg))
+
+
+def others() -> None:
+    words = ["pear", "é", "fig", "apple", "kiwi", "ñu", "ab"]
     print(sorted(words, key=None), sorted({"bb": 1, "a": 2}, key=length))
     reverse = len(words) > 3
     print(sorted(words, key=length, reverse=reverse))
+
+
+def order() -> None:
     print(sorted(["a"], key=tracked), calls)
     print(sorted(["ccc", "b", "aa"], key=tracked), calls)
+
+
+def in_place() -> None:
+    words = ["pear", "é", "fig", "apple", "kiwi", "ñu", "ab"]
     words.sort(key=length)
     print(words)
     words.sort(key=length, reverse=True)
@@ -51,6 +66,9 @@ def show() -> None:
         again.sort(key=boom)
     except ValueError as e:
         print("caught", e, again)
+
+
+def raising() -> None:
     try:
         print(min([], key=neg))
     except ValueError as e:
@@ -61,4 +79,9 @@ def show() -> None:
         print("caught", e)
 
 
-show()
+basics()
+extremes()
+others()
+order()
+in_place()
+raising()
