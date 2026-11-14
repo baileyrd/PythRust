@@ -473,6 +473,7 @@ const NATIVE: &[&str] = &[
     "with_open_read",
     "with_object",
     "sort_key",
+    "sort_key_method_named_max",
     "unicode_error",
     "raises_finally",
     "slice_list",

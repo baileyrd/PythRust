@@ -28,13 +28,26 @@ use crate::diag::Result;
 use crate::span::Span;
 use crate::token::{Token, TokenKind};
 
-/// Whether the program defines its own `sorted`, `min` or `max`, which
-/// then is no builtin to rewrite, wherever its `def` stands (D115).
+/// Whether the program defines its own `sorted`, `min` or `max` at the
+/// top level, which then is no builtin to rewrite, wherever its `def`
+/// stands (D115). A method of that name, inside a block, is no such `def`.
 pub(super) fn defines_ordering(tokens: &[Token]) -> bool {
-    tokens.windows(2).any(|w| {
-        w[0].kind == TokenKind::Def
-            && matches!(&w[1].kind, TokenKind::Name(n) if matches!(n.as_str(), "sorted" | "min" | "max"))
-    })
+    let mut depth = 0usize;
+    for (i, t) in tokens.iter().enumerate() {
+        match &t.kind {
+            TokenKind::Indent => depth += 1,
+            TokenKind::Dedent => depth = depth.saturating_sub(1),
+            TokenKind::Def if depth == 0 => {
+                let named = tokens.get(i + 1).map(|n| &n.kind);
+                if matches!(named, Some(TokenKind::Name(n)) if matches!(n.as_str(), "sorted" | "min" | "max"))
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `call`, or what it means if it is `sorted`/`min`/`max` with `key=`.
