@@ -1,4 +1,3 @@
-# deviation: D187: a key that changes the list `list.sort` is sorting finishes here, where CPython raises `ValueError: list modified during sort`.
 words = ["bb", "a", "ccc"]
 
 
@@ -11,4 +10,4 @@ try:
     words.sort(key=grow)
     print(words)
 except ValueError as e:
-    print("caught", e)
+    print("caught", e, words)

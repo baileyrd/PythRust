@@ -21,8 +21,8 @@ use std::collections::HashSet;
 
 use super::error;
 use crate::ast::{
-    comp_name, Arg, BinOp, CmpOp, CompFor, Expr, ExprKind, Gather, Ident, Stmt, StmtKind, Target,
-    TargetKind, UnaryOp,
+    comp_name, Arg, BinOp, Branch, CmpOp, CompFor, Expr, ExprKind, Gather, Ident, Stmt, StmtKind,
+    Target, TargetKind, UnaryOp,
 };
 use crate::diag::Result;
 use crate::span::Span;
@@ -94,8 +94,7 @@ pub(super) fn rewrite(call: Expr) -> Result<Expr> {
 }
 
 /// `xs.sort(key=F, reverse=R)` as a statement: the sorted copy first, so a
-/// raising key leaves `xs` as it was, then each element stored back:
-/// `for i, v in enumerate(sorted(xs, key=F, reverse=R)): xs[i] = v`.
+/// raising key leaves `xs` as it was, then stored back (see `guarded_store`).
 pub(super) fn sort_stmt(lhs: Expr) -> Result<StmtKind> {
     let ExprKind::Call { func, args } = &lhs.kind else {
         return Ok(StmtKind::Expr(lhs));
@@ -129,35 +128,103 @@ pub(super) fn sort_stmt(lhs: Expr) -> Result<StmtKind> {
         return Ok(StmtKind::Expr(lhs));
     }
     let mut b = Build::new(&sorted, lhs.span);
-    let (ti, tv) = (b.target("ki"), b.target("kv"));
-    let target = Target {
+    Ok(guarded_store(&mut b, xs, sorted))
+}
+
+/// The statement behind `xs.sort(key=F)`: `sorted` is evaluated after the
+/// length is read, then `xs` is emptied and refilled from it, so a key
+/// that changed the length leaves the sorted original items and raises
+/// CPython's `ValueError` (D188):
+/// `for kn in [len(xs)]: ks = SORTED; kc = len(xs) != kn;`
+/// `while len(xs) > 0: xs.pop()`, `for kv in ks: xs.append(kv)`,
+/// `if kc: raise ValueError(...)`.
+fn guarded_store(b: &mut Build, xs: &str, sorted: Expr) -> StmtKind {
+    let (kn, ks, kc, kv) = (
+        b.target("kn"),
+        b.target("ks"),
+        b.target("kc"),
+        b.target("kv"),
+    );
+    let stmt = |b: &mut Build, kind| Stmt {
+        kind,
         span: b.span(),
-        kind: TargetKind::Tuple(vec![ti, tv]),
     };
-    let iter = b.call("enumerate", vec![sorted]);
-    let slot = Target {
-        span: b.span(),
-        kind: TargetKind::Subscript {
-            value: Box::new(Expr {
-                kind: ExprKind::Name(xs.clone()),
-                span: b.span(),
-            }),
-            index: Box::new(b.name("ki")),
+    let len_xs = |b: &mut Build| {
+        let list = b.e(ExprKind::Name(xs.to_string()));
+        b.call("len", vec![list])
+    };
+    let method = |b: &mut Build, name: &str, args: Vec<Expr>| {
+        let value = Box::new(b.e(ExprKind::Name(xs.to_string())));
+        let attr = Ident {
+            name: name.to_string(),
+            span: b.span(),
+        };
+        let func = Box::new(b.e(ExprKind::Attr { value, attr }));
+        let args = args.into_iter().map(Build::arg).collect();
+        b.e(ExprKind::Call { func, args })
+    };
+    let assign =
+        |b: &mut Build, target: Target, value: Expr| stmt(b, StmtKind::Assign { target, value });
+    let (kn_read, kc_read, kv_read) = (b.name("kn"), b.name("kc"), b.name("kv"));
+    let ks_read = b.name("ks");
+    let (len_before, len_test, len_loop) = (len_xs(b), len_xs(b), len_xs(b));
+    let changed = b.e(ExprKind::Compare {
+        left: Box::new(len_test),
+        rest: vec![(CmpOp::NotEq, kn_read)],
+    });
+    let zero = b.int(0);
+    let nonempty = b.e(ExprKind::Compare {
+        left: Box::new(len_loop),
+        rest: vec![(CmpOp::Gt, zero)],
+    });
+    let pop = method(b, "pop", Vec::new());
+    let push = method(b, "append", vec![kv_read]);
+    let message = b.e(ExprKind::Str("list modified during sort".to_string()));
+    let error = b.call("ValueError", vec![message]);
+    let items = b.list(vec![len_before]);
+    let (pop_stmt, push_stmt, raise_stmt) = (
+        stmt(b, StmtKind::Expr(pop)),
+        stmt(b, StmtKind::Expr(push)),
+        stmt(b, StmtKind::Raise(error)),
+    );
+    let (while_span, if_span) = (b.span(), b.span());
+    let (store_ks, store_kc) = (assign(b, ks, sorted), assign(b, kc, changed));
+    let drain = StmtKind::While {
+        branch: Branch {
+            test: nonempty,
+            body: vec![pop_stmt],
+            span: while_span,
         },
-    };
-    let store = Stmt {
-        kind: StmtKind::Assign {
-            target: slot,
-            value: b.name("kv"),
-        },
-        span: lhs.span,
-    };
-    Ok(StmtKind::For {
-        target,
-        iter,
-        body: vec![store],
         orelse: Vec::new(),
-    })
+    };
+    let refill = StmtKind::For {
+        target: kv,
+        iter: ks_read,
+        body: vec![push_stmt],
+        orelse: Vec::new(),
+    };
+    let check = StmtKind::If {
+        branch: Branch {
+            test: kc_read,
+            body: vec![raise_stmt],
+            span: if_span,
+        },
+        elifs: Vec::new(),
+        orelse: Vec::new(),
+    };
+    let store = vec![
+        store_ks,
+        store_kc,
+        stmt(b, drain),
+        stmt(b, refill),
+        stmt(b, check),
+    ];
+    StmtKind::For {
+        target: kn,
+        iter: items,
+        body: store,
+        orelse: Vec::new(),
+    }
 }
 
 fn is_kw(arg: &Arg, name: &str) -> bool {

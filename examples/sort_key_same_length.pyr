@@ -1,0 +1,15 @@
+# deviation: D188: a key that changes the list `list.sort` is sorting but leaves its length as it was (an append followed by a pop) finishes here, where CPython raises `ValueError: list modified during sort`.
+words = ["bb", "a", "ccc"]
+
+
+def churn(s: str) -> int:
+    words.append("z")
+    words.pop()
+    return len(s)
+
+
+try:
+    words.sort(key=churn)
+    print(words)
+except ValueError as e:
+    print("caught", e, words)

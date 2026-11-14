@@ -271,8 +271,8 @@ Nano's post-M6 order (2026-11-03), step 5: plain classes with `__init__`, fields
 
 ## Post-M6 step 6: functions as values
 
-Nano's post-M6 order (2026-11-03), step 6: `key=`, lambda, closures. Decisions D181-D187.
+Nano's post-M6 order (2026-11-03), step 6: `key=`, lambda, closures. Decisions D181-D188.
 
-- [x] *`key=` taking a function name (#1272):* `sorted`, `min`, `max` and `list.sort` with `key=NAME` (D181-D187), in `check`, `run` and `build`. Done: the parser rewrites the call into comprehensions over `(key, index)` pairs (`parser/key.rs`), so no new IR or runtime; corpus `sort_key` (in `NATIVE`, matches CPython) and `sort_key_unsupported`.
+- [x] *`key=` taking a function name (#1272):* `sorted`, `min`, `max` and `list.sort` with `key=NAME` (D181-D188), in `check`, `run` and `build`. Done: the parser rewrites the call into comprehensions over `(key, index)` pairs (`parser/key.rs`), so no new IR or runtime; corpus `sort_key` (in `NATIVE`, matches CPython) and `sort_key_unsupported`.
 - [ ] *Functions as values and lambda without captures (#1274).*
 - [ ] *Nested `def` and closures with ownership capture rules (#1276).*

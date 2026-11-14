@@ -1,1 +1,1 @@
-['a', 'bb', 'ccc', 'z', 'z', 'z']
+caught list modified during sort ['a', 'bb', 'ccc']
