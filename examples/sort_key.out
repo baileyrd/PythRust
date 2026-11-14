@@ -1,0 +1,15 @@
+['é', 'ñu', 'ab', 'fig', 'pear', 'kiwi', 'apple']
+['apple', 'pear', 'kiwi', 'fig', 'ñu', 'ab', 'é']
+['é', 'ab', 'ñu', 'fig', 'kiwi', 'pear', 'apple'] ['é', 'ñu', 'ab', 'fig', 'pear', 'kiwi', 'apple']
+é apple
+ox
+[5, 4, 3, 2, 1, 1] 1 5
+['ab', 'apple', 'fig', 'kiwi', 'pear', 'é', 'ñu'] ['a', 'bb']
+['apple', 'pear', 'kiwi', 'fig', 'ñu', 'ab', 'é']
+['a'] ['a']
+['b', 'aa', 'ccc'] ['a', 'ccc', 'b', 'aa']
+['é', 'ñu', 'ab', 'fig', 'pear', 'kiwi', 'apple']
+['apple', 'pear', 'kiwi', 'fig', 'ñu', 'ab', 'é']
+caught ü ['bb', 'x', 'a']
+empty min() iterable argument is empty
+caught ü

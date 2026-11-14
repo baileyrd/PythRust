@@ -1,0 +1,14 @@
+# A method named `max` is no shadowing `def`: `key=` still works (D187, D115).
+class Box:
+    def __init__(self) -> None:
+        self.n = 1
+
+    def max(self) -> int:
+        return self.n
+
+
+def length(s: str) -> int:
+    return len(s)
+
+
+print(sorted(["bb", "a"], key=length), Box().max())

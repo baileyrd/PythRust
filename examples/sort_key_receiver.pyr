@@ -1,0 +1,10 @@
+# deviation: `list.sort(key=...)` needs a plain name for its list yet (D186); CPython sorts any expression's list.
+# expect-exit: 1
+# expect-error: `key=` of `list.sort` takes only the name of a function yet
+def length(s: str) -> int:
+    return len(s)
+
+
+groups = [["bb", "a"], ["c"]]
+groups[0].sort(key=length)
+print(groups)

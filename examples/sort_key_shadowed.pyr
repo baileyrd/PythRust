@@ -1,0 +1,6 @@
+# A program's own `sorted` keeps `key=` as its own argument (D186, D115).
+def sorted(xs: list[int], key: int) -> int:
+    return len(xs) + key
+
+
+print(sorted([3, 1, 2], key=10))

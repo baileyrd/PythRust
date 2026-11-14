@@ -1,0 +1,13 @@
+words = ["bb", "a", "ccc"]
+
+
+def grow(s: str) -> int:
+    words.append("z")
+    return len(s)
+
+
+try:
+    words.sort(key=grow)
+    print(words)
+except ValueError as e:
+    print("caught", e, words)

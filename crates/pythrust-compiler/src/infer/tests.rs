@@ -2126,8 +2126,8 @@ fn dict_and_set_misuse_is_an_error() {
             "cannot order set[int] against set[int]",
         ),
         (
-            "print(sorted([1], key=len))\n",
-            "`key=` of `sorted` is not supported yet",
+            "print(sorted([\"a\"], key=str.lower))\n",
+            "`key=` of `sorted` takes only the name of a function yet",
         ),
         (
             "d = {1: \"a\"}\nprint(d.get(\"x\"))\n",
@@ -2551,7 +2551,10 @@ fn reducing_builtins_refuse_what_cannot_be_typed() {
         ("print(sum([1.5], 0))\n", "`start` of `sum` must be a float, such as `0.0`"),
         ("print(sum([1], 0, 1))\n", "`sum` takes 1 to 2 arguments"),
         ("print(sum(start=[1, 2]))\n", "`sum` needs its iterable before `start=`"),
-        ("print(min([1], key=abs))\n", "`key=` of `min` is not supported yet"),
+        (
+            "print(min([1], key=str.lower))\n",
+            "`key=` of `min` takes only the name of a function yet",
+        ),
         ("print(max([1], default=0))\n", "`default=` of `max` is not supported yet"),
         ("print(min(1, 2.5))\n", "`min` of int and float: convert with `float(...)`"),
         ("print(max(True, 2))\n", "`max` of bool and int: convert with `float(...)`"),
@@ -2765,8 +2768,8 @@ fn list_and_dict_method_misuse_is_an_error() {
             "cannot order set[int] against set[int]",
         ),
         (
-            "xs = [1]\nxs.sort(key=len)\n",
-            "`key=` of `list.sort` is not supported yet",
+            "xs = [\"a\"]\nxs.sort(key=str.lower)\n",
+            "`key=` of `sorted` takes only the name of a function yet",
         ),
         (
             "xs = [1]\nxs.sort(True)\n",
