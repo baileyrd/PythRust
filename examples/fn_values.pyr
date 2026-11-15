@@ -1,0 +1,46 @@
+from collections.abc import Callable
+
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+
+def sub(a: int, b: int) -> int:
+    return a - b
+
+
+def shout(s: str) -> str:
+    return s.upper() + "!"
+
+
+def length(s: str) -> int:
+    return len(s)
+
+
+def apply(f: Callable[[int, int], int], a: int, b: int) -> int:
+    return f(a, b)
+
+
+def pick(name: str) -> Callable[[int, int], int]:
+    if name == "add":
+        return add
+    return sub
+
+
+def by_length(words: list[str], key: Callable[[str], int]) -> list[str]:
+    return sorted(words, key=key)
+
+
+def twice(f: Callable[[str], str], s: str) -> str:
+    return f(f(s))
+
+
+ops: dict[str, Callable[[int, int], int]] = {"add": add, "sub": sub}
+for name in ["add", "sub"]:
+    print(name, ops[name](7, 3), apply(ops[name], 1, 2))
+table = [add, sub]
+print(table[1](5, 2), pick("add")(2, 2), pick("x")(2, 2))
+print(by_length(["bb", "été", "a"], length))
+print(twice(shout, "ü"))
+f = add
+print(f(1, 2))

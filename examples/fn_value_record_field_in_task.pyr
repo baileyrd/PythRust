@@ -1,0 +1,30 @@
+# deviation: a function value called inside a task is a named error (D196); CPython runs it.
+# expect-exit: 1
+# expect-error: a function value is called inside a task; rule 4 cannot see its callee yet
+
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+
+
+def d(x: int) -> int:
+    return x * 2
+
+
+@dataclass(frozen=True)
+class Op:
+    name: str
+    f: Callable[[int], int]
+
+
+def run(o: Op, x: int) -> int:
+    return o.f(x)
+
+
+def main() -> None:
+    with ThreadPoolExecutor() as ex:
+        fut = ex.submit(run, Op("dbl", d), 3)
+        print(fut.result())
+
+
+main()

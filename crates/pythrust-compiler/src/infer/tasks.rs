@@ -165,6 +165,7 @@ pub(super) fn check(module: &Module, defs: &[&FuncDef], types: &Types) -> Result
         }
     }
     let names: BTreeSet<&str> = defs.iter().map(|f| f.name.name.as_str()).collect();
+    values_in_tasks(defs, &names, types)?;
     for f in defs {
         signature(f, types)?;
         Body::new(f, types, &names).check()?;
@@ -179,6 +180,52 @@ pub(super) fn check(module: &Module, defs: &[&FuncDef], types: &Types) -> Result
         }
     }
     Ok(())
+}
+
+/// Rule 4 cannot see what a function value calls (D196): no function a
+/// task runs, or reaches by name, calls one.
+fn values_in_tasks(defs: &[&FuncDef], names: &BTreeSet<&str>, types: &Types) -> Result<()> {
+    let by_name: std::collections::HashMap<&str, &FuncDef> =
+        defs.iter().map(|f| (f.name.name.as_str(), *f)).collect();
+    let mut todo: Vec<&str> = defs
+        .iter()
+        .flat_map(|f| scope::exprs(&f.body))
+        .filter_map(task_function)
+        .filter(|n| names.contains(n))
+        .collect();
+    let mut seen = BTreeSet::new();
+    while let Some(name) = todo.pop() {
+        let Some(f) = by_name.get(name).filter(|_| seen.insert(name)) else {
+            continue;
+        };
+        let called = scope::exprs(&f.body).into_iter().find(|e| match &e.kind {
+            ExprKind::Call { func, .. } => matches!(types.at(func.span), Some(Type::Func(..))),
+            _ => false,
+        });
+        if let Some(e) = called {
+            let msg = "a function value is called inside a task; rule 4 cannot see its callee yet";
+            return Err(error(e.span, msg.to_string()));
+        }
+        todo.extend(scope::name_uses(f).into_iter().map(|(n, _)| n));
+    }
+    Ok(())
+}
+
+/// The def name `ex.submit(f, ...)` or `ex.map(f, xs)` runs.
+fn task_function(e: &Expr) -> Option<&str> {
+    let ExprKind::Call { func, args } = &e.kind else {
+        return None;
+    };
+    let ExprKind::Attr { attr, .. } = &func.kind else {
+        return None;
+    };
+    if !matches!(attr.name.as_str(), "submit" | "map") {
+        return None;
+    }
+    match &args.first()?.value.kind {
+        ExprKind::Name(n) => Some(n.as_str()),
+        _ => None,
+    }
 }
 
 /// No parameter or result holds one.

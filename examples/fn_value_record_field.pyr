@@ -1,0 +1,18 @@
+from collections.abc import Callable
+from dataclasses import dataclass
+
+
+def d(x: int) -> int:
+    return x * 2
+
+
+@dataclass(frozen=True)
+class Op:
+    name: str
+    f: Callable[[int], int]
+
+
+o = Op("dbl", d)
+print(o.name, o.f(5))
+g = o.f
+print(g(5))

@@ -696,6 +696,14 @@ const NATIVE: &[&str] = &[
 /// so a closed gap moves to `NATIVE`.
 const NATIVE_GAPS: &[(&str, &str)] = &[
     (
+        "fn_values",
+        "function values (step 6-2, D197): the native backend does not support them yet",
+    ),
+    (
+        "fn_value_record_field",
+        "function values (step 6-2, D197): the native backend does not support them yet",
+    ),
+    (
         "exception_list_cycle",
         "an exception may close a reference cycle; native code has no cycle collector",
     ),

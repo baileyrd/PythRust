@@ -425,6 +425,10 @@ fn printable(
         Ok(Step::Done(needs.collect()))
     };
     match t {
+        Type::Func(..) => Err(error(
+            c,
+            "printing a function needs a name: its address is not stable".to_string(),
+        )),
         Type::List(e) | Type::Set(e) | Type::View(_, e) => inner(vec![*e]),
         Type::Dict(k, v) => inner(vec![*k, *v]),
         Type::Tuple(items) => inner(items),
@@ -772,6 +776,9 @@ fn comparable(s: &Subst, c: &Constraint, t: &Type) -> Result<Step> {
         Type::File(..) => {
             let msg = "files compare by identity, which is not supported".to_string();
             return Err(error(c, msg));
+        }
+        Type::Func(..) => {
+            return Err(error(c, "function values can't be compared".to_string()));
         }
         Type::Executor | Type::Future(_) | Type::Results(_) => {
             let msg = format!(

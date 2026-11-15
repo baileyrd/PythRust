@@ -34,7 +34,7 @@ mod tests;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::mem;
 
-use crate::ast::{Block, FuncDef, Module, StmtKind, StubDef, TypeExpr};
+use crate::ast::{Block, FuncDef, Module, ParamMode, StmtKind, StubDef, TypeExpr};
 use crate::diag::{DiagKind, Diagnostic, Result, Warning};
 use crate::exc::Classes;
 use crate::span::Span;
@@ -100,6 +100,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     c.declare_globals(module, &defs)?;
     c.declare_classes(module, &defs)?;
     c.declare_stubs(&module.stubs, &defs)?;
+    c.declare_by_ref(&defs);
     for group in scope::groups(&defs, &module.methods()) {
         c.infer_group(&group)?;
     }
@@ -200,6 +201,9 @@ struct Checker {
     /// Rust binding functions that raise a class the program redefines,
     /// with that class's name.
     stub_redefined: HashMap<String, String>,
+    /// Top-level defs with a `mut` or `owned` parameter, by name and that
+    /// parameter: none can be a function value (D191).
+    by_ref: HashMap<String, String>,
     /// Every Rust binding function, by its dotted name. A local module's
     /// functions are dotted too (`a.f`, D76), so the dot alone does not
     /// tell a binding.
@@ -233,6 +237,16 @@ impl Checker {
                 format!("`{}` is both a function and a variable", f.name.name),
             )),
             None => Ok(()),
+        }
+    }
+
+    /// Notes the defs a written `mut` or `owned` keeps off function values.
+    fn declare_by_ref(&mut self, defs: &[&FuncDef]) {
+        for f in defs {
+            let by_ref = f.params.iter().find(|p| p.mode != ParamMode::Read);
+            if let Some(p) = by_ref {
+                self.by_ref.insert(f.name.name.clone(), p.name.name.clone());
+            }
         }
     }
 

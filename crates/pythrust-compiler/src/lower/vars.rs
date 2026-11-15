@@ -99,6 +99,9 @@ impl FnBuilder<'_, '_> {
         if let Some(var) = self.names.get(name) {
             return Ok(*var);
         }
+        if !self.scope.contains(name) && self.cx.defs.contains_key(name) {
+            return Err(unsupported(span, "function values"));
+        }
         if !self.scope.contains(name) {
             let what = format!("reading `{name}`, a global, from a function");
             return Err(unsupported(span, &what));

@@ -1,0 +1,10 @@
+# deviation: function values can't be compared (D193); CPython compares them by identity.
+# expect-exit: 1
+# expect-error: function values can't be compared
+
+def f(x: int) -> int:
+    return x
+
+
+g = f
+print(f == g)

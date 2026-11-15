@@ -1,0 +1,10 @@
+# deviation: a def with a default is not a function value yet (D189); CPython allows it.
+# expect-exit: 1
+# expect-error: `inc` has a default for `x`, so it is not a function value yet
+
+def inc(x: int = 1) -> int:
+    return x + 1
+
+
+f = inc
+print(f(1))

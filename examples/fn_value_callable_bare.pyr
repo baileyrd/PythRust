@@ -1,0 +1,7 @@
+# deviation: `Callable` needs its parameter types (D189); CPython accepts bare `Callable`.
+# expect-exit: 1
+# expect-error: `Callable` needs its parameter types
+
+from collections.abc import Callable
+
+f: Callable = print

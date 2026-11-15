@@ -1,0 +1,10 @@
+# deviation: a function value is not a dict key (D193); CPython hashes it by identity.
+# expect-exit: 1
+# expect-error: dict keys and set elements are not supported yet
+
+def f(x: int) -> int:
+    return x
+
+
+d = {f: 1}
+print(len(d))

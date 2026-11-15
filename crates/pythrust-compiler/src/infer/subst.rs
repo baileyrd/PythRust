@@ -49,6 +49,10 @@ impl Subst {
             Type::File(w, d) => Type::File(w, Box::new(self.zonk(&d))),
             Type::Results(r) => Type::Results(Box::new(self.zonk(&r))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.zonk(t)).collect()),
+            Type::Func(ps, r) => Type::Func(
+                ps.iter().map(|t| self.zonk(t)).collect(),
+                Box::new(self.zonk(&r)),
+            ),
             other => other,
         }
     }
@@ -75,6 +79,10 @@ impl Subst {
             }
             (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => {
                 xs.iter().zip(ys).try_for_each(|(x, y)| self.unify(x, y))
+            }
+            (Type::Func(xs, r1), Type::Func(ys, r2)) if xs.len() == ys.len() => {
+                xs.iter().zip(ys).try_for_each(|(x, y)| self.unify(x, y))?;
+                self.unify(r1, r2)
             }
             _ if a == b => Ok(()),
             _ => Err(Clash::Mismatch),
@@ -129,6 +137,10 @@ impl Subst {
                 self.free_vars(&v, out);
             }
             Type::Tuple(elems) => elems.iter().for_each(|t| self.free_vars(t, out)),
+            Type::Func(ps, r) => {
+                ps.iter().for_each(|t| self.free_vars(t, out));
+                self.free_vars(&r, out);
+            }
             _ => {}
         }
     }
@@ -149,6 +161,10 @@ impl Subst {
             Type::File(w, d) => Type::File(w, Box::new(self.rename(&d, map))),
             Type::Results(r) => Type::Results(Box::new(self.rename(&r, map))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|t| self.rename(t, map)).collect()),
+            Type::Func(ps, r) => Type::Func(
+                ps.iter().map(|t| self.rename(t, map)).collect(),
+                Box::new(self.rename(&r, map)),
+            ),
             other => other,
         }
     }

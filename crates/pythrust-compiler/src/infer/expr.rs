@@ -273,8 +273,12 @@ impl Checker {
         if self.is_exception_name(name) {
             return Err(error(span, CLASS_NOT_A_VALUE.to_string()));
         }
-        if self.funcs.contains_key(name) || builtins::is_builtin(name) {
-            let msg = format!("`{name}` is a function; functions are not values yet");
+        if let Some(t) = self.function_value(name, span)? {
+            self.nodes.insert(span, t.clone());
+            return Ok(t);
+        }
+        if builtins::is_builtin(name) {
+            let msg = format!("`{name}` is a builtin; it is not a function value yet");
             return Err(error(span, msg));
         }
         if self.is_record(name) {
@@ -283,6 +287,33 @@ impl Checker {
             return Err(error(span, msg));
         }
         Err(error(span, format!("name `{name}` is not defined")))
+    }
+
+    /// A top-level def read as a value (D190): its `Callable` type, or
+    /// the named error for a def that cannot be one (D189, D191).
+    fn function_value(&mut self, name: &str, span: Span) -> Result<Option<Type>> {
+        let sig = match self.funcs.get(name).cloned() {
+            None => return Ok(None),
+            Some(Func::Mono(sig)) => sig,
+            Some(Func::Poly(scheme)) => self.instantiate(name, &scheme, span),
+        };
+        if let Some(param) = self.by_ref.get(name) {
+            let msg = format!(
+                "`{}` changes its parameter `{param}`, so it cannot be a function value yet",
+                source_name(name)
+            );
+            return Err(error(span, msg));
+        }
+        if let Some(p) = sig.params.iter().find(|p| p.has_default) {
+            let msg = format!(
+                "`{}` has a default for `{}`, so it is not a function value yet",
+                source_name(name),
+                p.name
+            );
+            return Err(error(span, msg));
+        }
+        let params = sig.params.into_iter().map(|p| p.ty).collect();
+        Ok(Some(Type::Func(params, Box::new(sig.ret))))
     }
 
     fn list(&mut self, items: &[Expr]) -> Result<Type> {
@@ -443,10 +474,23 @@ impl Checker {
         match &func.kind {
             ExprKind::Name(name) => self.call_name(name, func.span, args, span),
             ExprKind::Attr { value, attr } => self.method(value, attr, args, span),
-            _ => Err(error(
-                func.span,
-                "only named functions can be called".to_string(),
-            )),
+            _ => {
+                let t = self.expr(func)?;
+                let t = match self.subst.zonk(&t) {
+                    Type::Var(_) => {
+                        let params = args.iter().map(|_| self.subst.fresh()).collect();
+                        let want = Type::Func(params, Box::new(self.subst.fresh()));
+                        self.expect(func.span, &want, &t, "only function values can be called")?;
+                        self.subst.zonk(&t)
+                    }
+                    known => known,
+                };
+                let Type::Func(params, ret) = t else {
+                    let msg = "only named functions and function values can be called";
+                    return Err(error(func.span, msg.to_string()));
+                };
+                self.call_value("a function value", &params, *ret, args, span)
+            }
         }
     }
 
@@ -457,9 +501,14 @@ impl Checker {
             .get(name)
             .or_else(|| self.globals.get(name));
         if let Some(t) = local {
-            let name = source_name(name);
-            let msg = format!("`{name}` is {}, not a function", self.subst.zonk(t));
-            return Err(error(at, msg));
+            let t = self.subst.zonk(t);
+            let Type::Func(params, ret) = t else {
+                let msg = format!("`{}` is {t}, not a function", source_name(name));
+                return Err(error(at, msg));
+            };
+            self.nodes
+                .insert(at, Type::Func(params.clone(), ret.clone()));
+            return self.call_value(name, &params, *ret, args, span);
         }
         if let Some(class) = self.stub_redefined.get(name) {
             let msg = format!(
@@ -483,6 +532,36 @@ impl Checker {
         };
         self.bind_args(name, &sig, args, span)?;
         Ok(sig.ret)
+    }
+
+    /// A call through a function value (D191): positional arguments of
+    /// exactly the type's parameters.
+    pub(super) fn call_value(
+        &mut self,
+        name: &str,
+        params: &[Type],
+        ret: Type,
+        args: &[Arg],
+        span: Span,
+    ) -> Result<Type> {
+        let name = source_name(name);
+        if args.len() != params.len() || args.iter().any(|a| a.name.is_some()) {
+            let msg = format!(
+                "`{name}` takes {} positional argument(s), as its `Callable` type says",
+                params.len()
+            );
+            return Err(error(span, msg));
+        }
+        for (a, want) in args.iter().zip(params) {
+            let got = self.expr(&a.value)?;
+            self.expect(
+                a.value.span,
+                want,
+                &got,
+                "argument does not match the `Callable` type",
+            )?;
+        }
+        Ok(ret)
     }
 
     /// Python binding: positional arguments first, then keywords by name.
@@ -620,6 +699,9 @@ impl Checker {
     }
 
     fn annotation_atom(&mut self, t: &TypeExpr) -> Result<Type> {
+        if t.name.name == "Callable" {
+            return self.callable_annotation(t);
+        }
         let args = t
             .args
             .iter()
@@ -648,6 +730,23 @@ impl Checker {
             return Err(error(t.span, format!("`{name}` takes no type arguments")));
         }
         Ok(scalar)
+    }
+
+    /// `Callable[[A, B], R]` (D189), as the parser shapes it.
+    fn callable_annotation(&mut self, t: &TypeExpr) -> Result<Type> {
+        let [params, ret] = t.args.as_slice() else {
+            return Err(error(
+                t.span,
+                "`Callable` needs its parameter types".to_string(),
+            ));
+        };
+        let params = params
+            .args
+            .iter()
+            .map(|a| self.annotation(a))
+            .collect::<Result<Vec<_>>>()?;
+        let ret = self.annotation(ret)?;
+        Ok(Type::Func(params, Box::new(ret)))
     }
 
     /// `dict[K, V]` or `set[T]`, or bare `dict` / `set` with fresh

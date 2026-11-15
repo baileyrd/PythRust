@@ -151,6 +151,8 @@ struct Parser<'a> {
     user_ordering: bool,
     /// `from dataclasses import dataclass` came first (D132).
     dataclass: bool,
+    /// The name `Callable` was imported under (D189), if it was.
+    callable: Option<String>,
     /// While a plain class's `__init__` is parsed, the field annotations
     /// it wrote (`self.x: T = v`, D144).
     init: Option<Vec<(Ident, TypeExpr)>>,
@@ -189,6 +191,7 @@ impl<'a> Parser<'a> {
             user_open: with::defines_open(tokens),
             user_ordering: key::defines_ordering(tokens),
             dataclass: false,
+            callable: None,
             init: None,
         })
     }
@@ -868,6 +871,9 @@ impl<'a> Parser<'a> {
             _ => return Err(self.unexpected("a type")),
         };
         self.bump();
+        if self.callable.as_deref() == Some(name.as_str()) {
+            return self.callable_type(tok.span);
+        }
         let name = self.imported_type(name, tok.span)?;
         let mut args = Vec::new();
         if self.eat(&TokenKind::LBracket) {
@@ -885,6 +891,44 @@ impl<'a> Parser<'a> {
             args,
             optional: false,
             span: self.span_from(tok.span),
+        })
+    }
+
+    /// `Callable[[A, B], R]` after its name (D189): the parameters are one
+    /// argument named `[]` holding them, then the result.
+    fn callable_type(&mut self, first: Span) -> Result<TypeExpr> {
+        let needs = "`Callable` needs its parameter types: `Callable[[int], str]`";
+        let ident = |name: &str, span| Ident {
+            name: name.to_string(),
+            span,
+        };
+        if !self.eat(&TokenKind::LBracket) || !self.at(&TokenKind::LBracket) {
+            return Err(error(self.span_from(first), needs));
+        }
+        let open = self.tok(0).span;
+        self.bump();
+        let mut params = Vec::new();
+        while !self.at(&TokenKind::RBracket) {
+            params.push(self.nested(Self::type_expr)?);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBracket)?;
+        self.expect(&TokenKind::Comma)?;
+        let ret = self.nested(Self::type_expr)?;
+        self.expect(&TokenKind::RBracket)?;
+        let params = TypeExpr {
+            name: ident("[]", open),
+            args: params,
+            optional: false,
+            span: self.span_from(open),
+        };
+        Ok(TypeExpr {
+            name: ident("Callable", first),
+            args: vec![params, ret],
+            optional: false,
+            span: self.span_from(first),
         })
     }
 

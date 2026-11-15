@@ -217,6 +217,15 @@ impl Checker {
             let msg = "calling `__init__` directly is not supported yet";
             return Err(error(attr.span, msg.to_string()));
         }
+        if let Type::Record(name) = self.subst.resolve(receiver) {
+            let held = self.records.get(&name).and_then(|r| r.field(&attr.name));
+            if let Some(Type::Func(params, ret)) = held.cloned() {
+                let callee = value.span.merge(attr.span);
+                self.nodes
+                    .insert(callee, Type::Func(params.clone(), ret.clone()));
+                return self.call_value(&attr.name, &params, *ret, args, span);
+            }
+        }
         let record = self.owner(receiver, attr, |r| r.methods.contains(&attr.name))?;
         if !self.has_method(&record, &attr.name) {
             return Err(no_member(&record, attr));

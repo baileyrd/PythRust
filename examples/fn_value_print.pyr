@@ -1,0 +1,10 @@
+# deviation: a function value can't be printed (D193); CPython prints its address.
+# expect-exit: 1
+# expect-error: printing a function needs a name: its address is not stable
+
+def f(x: int) -> int:
+    return x
+
+
+g = f
+print(g)
