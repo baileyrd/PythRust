@@ -153,6 +153,8 @@ struct Parser<'a> {
     dataclass: bool,
     /// The name `Callable` was imported under (D189), if it was.
     callable: Option<String>,
+    /// The lambdas lifted to hidden defs so far, in source order (D195).
+    lifted: Vec<Stmt>,
     /// While a plain class's `__init__` is parsed, the field annotations
     /// it wrote (`self.x: T = v`, D144).
     init: Option<Vec<(Ident, TypeExpr)>>,
@@ -192,6 +194,7 @@ impl<'a> Parser<'a> {
             user_ordering: key::defines_ordering(tokens),
             dataclass: false,
             callable: None,
+            lifted: Vec::new(),
             init: None,
         })
     }
@@ -333,9 +336,12 @@ impl<'a> Parser<'a> {
         while self.at(&TokenKind::Import) || self.at(&TokenKind::From) {
             body.extend(self.import_stmt()?);
         }
+        let head = body.len();
         while !self.at(&TokenKind::EndMarker) {
             body.extend(self.stmts()?);
         }
+        let lifted = std::mem::take(&mut self.lifted);
+        body.splice(head..head, lifted);
         record::check_module(&body, lazy)?;
         Ok(Module {
             body,
@@ -592,15 +598,18 @@ impl<'a> Parser<'a> {
         let raises = self.raises()?;
         self.expect(&TokenKind::Colon)?;
         self.in_func = true;
+        let lambdas = self.lifted.len();
         let body = self.block();
         self.in_func = false;
+        let body = body?;
+        lambda::check_captures(&self.lifted[lambdas..], &params, &body)?;
         Ok(FuncDef {
             mode,
             name,
             params,
             returns,
             raises,
-            body: body?,
+            body,
             span: self.span_from(start),
         })
     }
@@ -953,6 +962,9 @@ impl<'a> Parser<'a> {
     }
 
     fn expr(&mut self) -> Result<Expr> {
+        if self.at(&TokenKind::Lambda) {
+            return self.nested(Self::lambda);
+        }
         self.nested(Self::paused)
     }
 
@@ -1647,6 +1659,7 @@ fn starts_expr(kind: &TokenKind) -> bool {
             | TokenKind::Plus
             | TokenKind::Not
             | TokenKind::Pause
+            | TokenKind::Lambda
     )
 }
 
@@ -1736,6 +1749,7 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::As => "as",
         TokenKind::With => "with",
         TokenKind::Pause => "pause",
+        TokenKind::Lambda => "lambda",
         TokenKind::Class => "class",
         TokenKind::Pipe => "|",
         TokenKind::At => "@",
@@ -1780,6 +1794,7 @@ mod exc_class;
 mod imports;
 mod init;
 mod key;
+mod lambda;
 mod record;
 mod stubs;
 mod with;

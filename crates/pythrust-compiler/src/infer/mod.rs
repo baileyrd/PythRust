@@ -119,6 +119,7 @@ pub fn infer(module: &Module) -> Result<Types> {
     c.resolve_schemes()?;
     solve::default_slice_bounds(&mut c.subst, &c.records, waiting)?;
     c.resolve_schemes()?;
+    c.lambdas_decided()?;
     let mut types = c.finish();
     tasks::check(module, &defs, &types)?;
     temper::check(&defs, &types)?;
@@ -204,6 +205,9 @@ struct Checker {
     /// Top-level defs with a `mut` or `owned` parameter, by name and that
     /// parameter: none can be a function value (D191).
     by_ref: HashMap<String, String>,
+    /// Each lambda read as a value, with its type, which the program must
+    /// fully decide (D194).
+    lambda_values: Vec<(Type, Span)>,
     /// Every Rust binding function, by its dotted name. A local module's
     /// functions are dotted too (`a.f`, D76), so the dot alone does not
     /// tell a binding.
@@ -238,6 +242,21 @@ impl Checker {
             )),
             None => Ok(()),
         }
+    }
+
+    /// A lambda read as a value takes its types from where it is used
+    /// (D194): none may be left open.
+    fn lambdas_decided(&self) -> Result<()> {
+        for (t, span) in &self.lambda_values {
+            let mut free = std::collections::BTreeSet::new();
+            self.subst.free_vars(t, &mut free);
+            if !free.is_empty() {
+                let msg = "a lambda needs a type from its context: \
+                           write `f: Callable[[int], int] = lambda x: x + 1`";
+                return Err(error(*span, msg.to_string()));
+            }
+        }
+        Ok(())
     }
 
     /// Notes the defs a written `mut` or `owned` keeps off function values.

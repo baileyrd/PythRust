@@ -440,7 +440,7 @@ pub(crate) fn references(f: &FuncDef) -> BTreeSet<String> {
 
 /// Each read counted by [`references`], with its span, in source order
 /// (body first, then defaults).
-pub(super) fn name_uses(f: &FuncDef) -> Vec<(&str, Span)> {
+pub(crate) fn name_uses(f: &FuncDef) -> Vec<(&str, Span)> {
     let mut locals = assigned(&f.body);
     locals.extend(f.params.iter().map(|p| p.name.name.clone()));
     let mut uses = Vec::new();

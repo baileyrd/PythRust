@@ -1,0 +1,16 @@
+from collections.abc import Callable
+
+inc: Callable[[int], int] = lambda x: x + 1
+print(inc(2))
+ops: dict[str, Callable[[int, int], int]] = {"add": lambda a, b: a + b, "mul": lambda a, b: a * b}
+for name in ["add", "mul"]:
+    print(name, ops[name](3, 4))
+fs: list[Callable[[str], str]] = [lambda s: s.upper(), lambda s: s + "!"]
+print(fs[0]("été"), fs[1]("a"))
+
+
+def twice(f: Callable[[int], int], n: int) -> int:
+    return f(f(n))
+
+
+print(twice(lambda n: n * n, 3))

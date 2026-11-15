@@ -1,0 +1,13 @@
+SHIFT = 10
+
+words = ["bb", "ccc", "a", "été", "zz"]
+print(sorted(words, key=lambda s: len(s)))
+print(sorted(words, key=lambda s: -len(s), reverse=True))
+print(max(words, key=lambda s: len(s)), min(words, key=lambda s: len(s)))
+nums = [3, -1, 2, -7]
+print(sorted(nums, key=lambda n: abs(n)))
+print(sorted(nums, key=lambda n: abs(n - SHIFT)))
+nums.sort(key=lambda n: -n)
+print(nums)
+pairs = [(2, "b"), (1, "z"), (2, "a")]
+print(sorted(pairs, key=lambda p: p[0]))

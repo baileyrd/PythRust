@@ -1,0 +1,9 @@
+# deviation: a lambda reading a name of its enclosing function needs closures (D195); CPython captures it.
+# expect-exit: 1
+# expect-error: lambda uses `k`, which belongs to the enclosing function
+
+def shifted(xs: list[int], k: int) -> list[int]:
+    return sorted(xs, key=lambda v: v + k)
+
+
+print(shifted([3, 1], 1))

@@ -313,7 +313,11 @@ impl Checker {
             return Err(error(span, msg));
         }
         let params = sig.params.into_iter().map(|p| p.ty).collect();
-        Ok(Some(Type::Func(params, Box::new(sig.ret))))
+        let ty = Type::Func(params, Box::new(sig.ret));
+        if source_name(name) != name && name.starts_with("lambda") {
+            self.lambda_values.push((ty.clone(), span));
+        }
+        Ok(Some(ty))
     }
 
     fn list(&mut self, items: &[Expr]) -> Result<Type> {
