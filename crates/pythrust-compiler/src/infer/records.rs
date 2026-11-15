@@ -220,6 +220,9 @@ impl Checker {
         if let Type::Record(name) = self.subst.resolve(receiver) {
             let held = self.records.get(&name).and_then(|r| r.field(&attr.name));
             if let Some(Type::Func(params, ret)) = held.cloned() {
+                let callee = value.span.merge(attr.span);
+                self.nodes
+                    .insert(callee, Type::Func(params.clone(), ret.clone()));
                 return self.call_value(&attr.name, &params, *ret, args, span);
             }
         }
