@@ -613,8 +613,11 @@ impl<'a> FnBuilder<'_, 'a> {
                 }
                 return self.method(value, &attr.name, args, span);
             }
-            _ => return Err(unsupported(span, "calling this kind of expression")),
+            _ => return Err(unsupported(span, "function values")),
         };
+        if self.names.contains_key(name.as_str()) || self.scope.contains(name.as_str()) {
+            return Err(unsupported(span, "function values"));
+        }
         if self.cx.seqs.declared(name).is_some() {
             return self.construct(name, args, span);
         }

@@ -1,0 +1,9 @@
+# deviation: a def that changes its parameter is not a function value yet (D191); CPython allows it.
+# expect-exit: 1
+# expect-error: `push` changes its parameter `xs`, so it cannot be a function value yet
+
+def push(mut xs: list[int]) -> None:
+    xs.append(1)
+
+
+f = push

@@ -526,6 +526,7 @@ fn is_closed(t: &Type, subst: &Subst) -> bool {
         | Type::Results(t) => is_closed(t, subst),
         Type::Dict(k, v) => is_closed(k, subst) && is_closed(v, subst),
         Type::Tuple(ts) => ts.iter().all(|t| is_closed(t, subst)),
+        Type::Func(ps, r) => ps.iter().all(|t| is_closed(t, subst)) && is_closed(r, subst),
         Type::Int | Type::Float | Type::Str | Type::Bool | Type::None | Type::Range => true,
         Type::File(_, data) => is_closed(data, subst),
         Type::Exception | Type::Bytes | Type::Executor | Type::Record(_) => true,
@@ -557,6 +558,8 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::None => Ty::None,
         Type::Str => Ty::Str,
         Type::Range => Ty::Range,
+        // A function value is an opaque word to the analyses (D197).
+        Type::Func(..) => Ty::Int,
         Type::Exception => Ty::Exc,
         Type::Bytes => Ty::Bytes,
         Type::File(writes, data) => Ty::File(file_kind(*writes, settle(data, subst, bound, seqs))),
@@ -1092,6 +1095,8 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::None => Ok(Ty::None),
         Type::Str => Ok(Ty::Str),
         Type::Range => Ok(Ty::Range),
+        Type::Func(..) if seqs.futures => Err(unsupported(span, "function values")),
+        Type::Func(..) => Ok(Ty::Int),
         Type::Exception => Ok(Ty::Exc),
         Type::Bytes => Ok(Ty::Bytes),
         Type::File(writes, data) => {

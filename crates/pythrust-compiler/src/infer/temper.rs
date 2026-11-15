@@ -85,6 +85,7 @@ fn spellable(t: &Type) -> bool {
         Type::List(inner) | Type::Set(inner) | Type::Optional(inner) => spellable(inner),
         Type::Dict(key, value) => spellable(key) && spellable(value),
         Type::Tuple(items) => !items.is_empty() && items.iter().all(spellable),
+        Type::Func(params, ret) => params.iter().all(spellable) && spellable(ret),
         Type::Int
         | Type::Float
         | Type::Str

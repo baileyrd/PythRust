@@ -52,6 +52,9 @@ pub enum Type {
     /// A frozen record (step 4, D129), by its qualified name: nominal,
     /// so two records with the same fields are different types.
     Record(String),
+    /// `Callable[[A, B], R]` (step 6-2, D189): a top-level def used as a
+    /// value. It reads its arguments and keeps none (D191).
+    Func(Vec<Type>, Box<Type>),
     Var(TypeVar),
 }
 
@@ -216,6 +219,7 @@ impl fmt::Display for Type {
             Type::Tuple(elems) => write!(f, "tuple[{}]", join(elems)),
             Type::Optional(inner) => write!(f, "{inner} | None"),
             Type::Record(name) => f.write_str(name),
+            Type::Func(params, ret) => write!(f, "Callable[[{}], {ret}]", join(params)),
             Type::Var(TypeVar(n)) => write!(f, "T{n}"),
         }
     }

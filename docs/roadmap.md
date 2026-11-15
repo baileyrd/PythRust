@@ -274,5 +274,5 @@ Nano's post-M6 order (2026-11-03), step 5: plain classes with `__init__`, fields
 Nano's post-M6 order (2026-11-03), step 6: `key=`, lambda, closures. Decisions D181-D188.
 
 - [x] *`key=` taking a function name (#1272):* `sorted`, `min`, `max` and `list.sort` with `key=NAME` (D181-D188), in `check`, `run` and `build`. Done: the parser rewrites the call into comprehensions over `(key, index)` pairs (`parser/key.rs`), so no new IR or runtime; corpus `sort_key` (in `NATIVE`, matches CPython) and `sort_key_unsupported`.
-- [ ] *Functions as values and lambda without captures (#1274).*
+- [ ] *Functions as values and lambda without captures (#1274), three PRs (D198):* [x] 6-2a: `Callable[[A], R]`, top-level defs as values, calls through a value, `key=` of a variable, the D189-D193 errors, in `check` and `run`; `build` and tempered code refuse with the named gap "function values" (corpus `fn_values` in `NATIVE_GAPS`). [ ] 6-2b: `lambda` without captures (D194, D195). [ ] 6-2c: native code pointers and the IR for function values (D197), which also lets a tempered function take a `Callable`.
 - [ ] *Nested `def` and closures with ownership capture rules (#1276).*

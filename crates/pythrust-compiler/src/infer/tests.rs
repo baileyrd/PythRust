@@ -876,8 +876,9 @@ fn name_errors() {
         err(vec![b.ex(b.call("nope", vec![]))]),
         "name `nope` is not defined"
     );
-    let msg = err(vec![b.def("f", &[], vec![]), b.assign("g", b.n("f"))]);
-    assert_eq!(msg, "`f` is a function; functions are not values yet");
+    ok(vec![b.def("f", &[], vec![]), b.assign("g", b.n("f"))]);
+    let msg = err(vec![b.assign("g", b.n("len"))]);
+    assert_eq!(msg, "`len` is a builtin; it is not a function value yet");
     let msg = err(vec![
         b.assign("len", b.i(3)),
         b.ex(b.call("len", vec![b.s("a")])),

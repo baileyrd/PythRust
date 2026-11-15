@@ -1,0 +1,6 @@
+# deviation: a builtin is not a function value yet (D190); CPython allows `f = len`.
+# expect-exit: 1
+# expect-error: `len` is a builtin; it is not a function value yet
+
+f = len
+print(f("a"))

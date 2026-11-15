@@ -16,6 +16,9 @@ use crate::token::TokenKind;
 /// The standard module whose `dataclass` makes records (D132).
 const DATACLASSES: &str = "dataclasses";
 
+/// The modules `Callable` comes from (D189).
+const CALLABLE_MODULES: &[&str] = &["collections.abc", "typing"];
+
 /// The module whose `annotations` feature makes annotations lazy (D154).
 const FUTURE: &str = "__future__";
 
@@ -202,6 +205,9 @@ impl<'a> Parser<'a> {
         if path.text() == DATACLASSES {
             return self.import_dataclass();
         }
+        if CALLABLE_MODULES.contains(&path.text().as_str()) {
+            return self.import_callable(path.text().as_str());
+        }
         if self.at(&TokenKind::Star) {
             let msg = "`import *` is not supported; import the names you use";
             return Err(error(self.tok(0).span, msg));
@@ -243,6 +249,29 @@ impl<'a> Parser<'a> {
             return Err(error(self.tok(0).span, msg));
         }
         self.dataclass = true;
+        Ok(Vec::new())
+    }
+
+    /// `from collections.abc import Callable [as NAME]`, or the same from
+    /// `typing` (D189): it binds a type, no value.
+    fn import_callable(&mut self, module: &str) -> Result<Vec<Stmt>> {
+        let name = self.expect_name("`Callable`")?;
+        if name.name != "Callable" {
+            let msg = format!(
+                "`{module}.{}` is not supported yet; only `Callable` is",
+                name.name
+            );
+            return Err(error(name.span, msg));
+        }
+        let bound = match self.eat(&TokenKind::As) {
+            true => self.binding_name("a name for it")?.name,
+            false => name.name,
+        };
+        if self.at(&TokenKind::Comma) {
+            let msg = "only `from collections.abc import Callable` is supported yet";
+            return Err(error(self.tok(0).span, msg));
+        }
+        self.callable = Some(bound);
         Ok(Vec::new())
     }
 
