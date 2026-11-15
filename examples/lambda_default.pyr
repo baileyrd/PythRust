@@ -1,0 +1,5 @@
+# deviation: lambda parameters are plain names (D194); CPython allows defaults.
+# expect-exit: 1
+# expect-error: lambda parameters are plain names
+
+f = lambda x=1: x

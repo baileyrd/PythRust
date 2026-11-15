@@ -62,6 +62,8 @@ pub enum TokenKind {
     With,
     /// `pause`, marking an expression that waits on a task (M6c).
     Pause,
+    /// `lambda`, lifted by the parser to a hidden def (step 6-2b, D195).
+    Lambda,
     /// `class`, only under `@dataclass(frozen=True)` (step 4, D132).
     Class,
 

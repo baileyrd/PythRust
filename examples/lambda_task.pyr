@@ -1,0 +1,12 @@
+from concurrent.futures import ThreadPoolExecutor
+
+
+def main() -> None:
+    with ThreadPoolExecutor() as ex:
+        fut = ex.submit(lambda x: x * 2, 21)
+        print(fut.result())
+        print(list(ex.map(lambda x: x + 1, [1, 2, 3])))
+        print(list(ex.map(lambda s: s + "é", ["a", "b"])))
+
+
+main()

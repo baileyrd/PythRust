@@ -1,0 +1,5 @@
+# deviation: a lambda needs its types from its context (D194); CPython needs none.
+# expect-exit: 1
+# expect-error: a lambda needs a type from its context
+
+f = lambda x: x

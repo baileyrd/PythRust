@@ -474,6 +474,8 @@ const NATIVE: &[&str] = &[
     "with_object",
     "sort_key",
     "sort_key_method_named_max",
+    "lambda_key",
+    "lambda_task",
     "sort_key_mutates_list",
     "unicode_error",
     "raises_finally",
@@ -697,6 +699,10 @@ const NATIVE: &[&str] = &[
 const NATIVE_GAPS: &[(&str, &str)] = &[
     (
         "fn_values",
+        "function values (step 6-2, D197): the native backend does not support them yet",
+    ),
+    (
+        "lambda_value",
         "function values (step 6-2, D197): the native backend does not support them yet",
     ),
     (

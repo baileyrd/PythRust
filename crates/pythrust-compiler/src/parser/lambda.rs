@@ -1,0 +1,94 @@
+//! `lambda` (step 6-2b, D194, D195): each lambda is lifted to a hidden
+//! top-level def, so inference, ownership, `raises`, `run` and lowering
+//! see an ordinary def. A lambda is its own name where it was written.
+//!
+//! A lambda reads only its parameters, names bound in its body and
+//! module-level names; a name of the enclosing function is the named
+//! error until closures exist (step 6-3).
+
+use std::collections::BTreeSet;
+
+use super::{error, Parser};
+use crate::ast::{
+    comp_name, Block, Expr, ExprKind, FuncDef, Ident, Mode, Param, ParamMode, Stmt, StmtKind,
+};
+use crate::diag::Result;
+use crate::infer::scope;
+use crate::token::TokenKind;
+
+const PLAIN: &str = "lambda parameters are plain names";
+
+impl Parser<'_> {
+    /// `'lambda' [NAME (',' NAME)*] ':' expr`
+    pub(super) fn lambda(&mut self) -> Result<Expr> {
+        let keyword = self.bump().span;
+        let mut params = Vec::new();
+        while !self.at(&TokenKind::Colon) {
+            let name = self.binding_name("a lambda parameter")?;
+            if self.at(&TokenKind::Assign) {
+                return Err(error(self.tok(0).span, PLAIN));
+            }
+            params.push(Param {
+                mode: ParamMode::Read,
+                span: name.span,
+                name,
+                annotation: None,
+                default: None,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        if self.at(&TokenKind::Star) || self.at(&TokenKind::DoubleStar) {
+            return Err(error(self.tok(0).span, PLAIN));
+        }
+        let colon = self.expect(&TokenKind::Colon)?.span;
+        let value = self.expr()?;
+        let span = self.span_from(keyword);
+        let name = Ident {
+            name: comp_name("lambda", keyword.start),
+            span: keyword,
+        };
+        self.lifted.push(Stmt {
+            kind: StmtKind::FuncDef(FuncDef {
+                mode: Mode::Loose,
+                name: name.clone(),
+                params,
+                returns: None,
+                raises: Vec::new(),
+                body: vec![Stmt {
+                    kind: StmtKind::Return(Some(value)),
+                    span: colon,
+                }],
+                span: keyword.merge(colon),
+            }),
+            span: keyword.merge(colon),
+        });
+        Ok(Expr {
+            kind: ExprKind::Name(name.name),
+            span,
+        })
+    }
+}
+
+/// The lambdas lifted inside one function read none of its names (D195).
+pub(super) fn check_captures(lifted: &[Stmt], params: &[Param], body: &Block) -> Result<()> {
+    let mut bound: BTreeSet<String> = scope::assigned(body);
+    bound.extend(params.iter().map(|p| p.name.name.clone()));
+    for stmt in lifted {
+        let StmtKind::FuncDef(def) = &stmt.kind else {
+            continue;
+        };
+        let captured = scope::name_uses(def)
+            .into_iter()
+            .find(|(n, _)| bound.contains(*n));
+        if let Some((name, span)) = captured {
+            let msg = format!(
+                "lambda uses `{name}`, which belongs to the enclosing function; \
+                 captures need closures (not supported yet)"
+            );
+            return Err(error(span, msg));
+        }
+    }
+    Ok(())
+}
