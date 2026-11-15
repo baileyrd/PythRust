@@ -124,6 +124,10 @@ pub enum Ty {
     /// then the reference. Only `build` makes one, for a loop whose
     /// statements cannot change any list of that type (atomics cost A).
     Held(TypeId),
+    /// A function value (step 6-2c, D197): the address of a def's
+    /// instance, one pointer-sized word that is not reference-counted;
+    /// `types[id]` is a [`Compound::Fn`].
+    Fn(TypeId),
 }
 
 impl Ty {
@@ -195,6 +199,8 @@ pub enum Compound {
     /// Which view, and its item type (a key, a value, or a `(key,
     /// value)` tuple).
     View(View, Ty),
+    /// A function value's parameter and result types.
+    Fn(Vec<Ty>, Ty),
 }
 
 /// What a dict view holds.
@@ -408,6 +414,10 @@ pub enum Rvalue {
     /// Whether int `a + b` overflows. Never fails; ends `range` loops.
     AddOverflows(Operand, Operand),
     Call(FuncId, Vec<Operand>),
+    /// The function value of a def's instance (D197).
+    FuncRef(FuncId),
+    /// A call through a function value, its arguments borrowed (D191).
+    CallValue(Operand, Vec<Operand>),
     /// A new `Str` holding the literal.
     StrLit(String),
     /// A module function's result (M6a), a new value of the
@@ -618,7 +628,7 @@ pub fn parts(types: &[Compound], ty: Ty) -> Vec<Ty> {
             | Compound::Record { fields, .. }
             | Compound::Object { fields, .. },
         ) => fields.clone(),
-        None => Vec::new(),
+        Some(Compound::Fn(..)) | None => Vec::new(),
     }
 }
 
@@ -766,6 +776,7 @@ impl Rvalue {
                 std::iter::once(*source).chain(*bounds).collect()
             }
             Rvalue::Contains { hay, needle } => vec![*hay, *needle],
+            Rvalue::CallValue(f, args) => std::iter::once(*f).chain(args.iter().copied()).collect(),
             Rvalue::Call(_, args)
             | Rvalue::NewSeq(args)
             | Rvalue::Std(_, args)
@@ -776,6 +787,7 @@ impl Rvalue {
             Rvalue::TaskResult(a) | Rvalue::NextResult(a) | Rvalue::Hold(a) => vec![*a],
             Rvalue::NewExc(_, arg) => arg.iter().copied().collect(),
             Rvalue::StrLit(_)
+            | Rvalue::FuncRef(_)
             | Rvalue::NewObj
             | Rvalue::Global(_)
             | Rvalue::Raised

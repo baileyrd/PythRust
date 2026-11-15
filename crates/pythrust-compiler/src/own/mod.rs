@@ -27,6 +27,7 @@ mod calls;
 mod modes;
 mod strs;
 mod tasks;
+mod values;
 
 #[cfg(test)]
 mod tests;
@@ -177,7 +178,8 @@ pub struct Analysis {
 /// [`Precision::Conservative`].
 pub fn analyze(module: &Module, types: &Types) -> Analysis {
     match lower::lower_every(module, types) {
-        Ok(program) => {
+        Ok(mut program) => {
+            values::dispatch(&mut program);
             let summaries = infer(&program);
             let stores = body::stores(&program, &summaries);
             let calls = program.funcs.iter().enumerate();
@@ -419,6 +421,7 @@ fn source_in(program: &Program, ty: Ty, open: &mut Vec<Ty>) -> Type {
         Ty::Future => Type::Future(Box::new(Type::None)),
         Ty::Results => Type::Results(Box::new(Type::None)),
         Ty::Held(id) => compound_source(program, Ty::List(id), open),
+        Ty::Fn(_) => compound_source(program, ty, open),
         Ty::Record(_) if open.contains(&ty) => Type::None,
         Ty::Record(_) => {
             open.push(ty);
@@ -450,6 +453,10 @@ fn compound_source(program: &Program, ty: Ty, open: &mut Vec<Ty>) -> Type {
             Type::Dict(k, part(v))
         }
         Some(Compound::Set(t)) => Type::Set(part(t)),
+        Some(Compound::Fn(params, ret)) => {
+            let params = params.iter().map(|p| *part(p)).collect();
+            Type::Func(params, part(ret))
+        }
         Some(Compound::View(view, item)) => Type::View(view_source(*view), part(item)),
         // An object is its class's type, whose fields are not walked.
         Some(Compound::Object { name, .. }) => Type::Record(name.clone()),

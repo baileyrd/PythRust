@@ -520,7 +520,9 @@ impl<'a> Body<'a> {
                 open.pop();
                 any
             }
-            Some(Compound::Record { .. } | Compound::Object { .. }) | None => false,
+            Some(Compound::Record { .. } | Compound::Object { .. } | Compound::Fn(..)) | None => {
+                false
+            }
         }
     }
 

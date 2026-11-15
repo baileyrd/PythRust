@@ -103,12 +103,14 @@ impl FnBuilder<'_, '_> {
 fn runs_unseen(value: &Rvalue) -> bool {
     match value {
         Rvalue::Call(..)
+        | Rvalue::CallValue(..)
         | Rvalue::Rust(..)
         | Rvalue::Submit { .. }
         | Rvalue::TaskResult(_)
         | Rvalue::NextResult(_) => true,
         Rvalue::Std(f, _) => std_changes_lists(*f),
         Rvalue::Use(_)
+        | Rvalue::FuncRef(_)
         | Rvalue::Int(..)
         | Rvalue::Neg(_)
         | Rvalue::Cmp(..)

@@ -262,6 +262,7 @@ fn descriptor_in(
         Ty::Bytes | Ty::File(_) => 'y',
         Ty::Future => 'u',
         Ty::Exec => return Err(backend("an executor in a value".to_string())),
+        Ty::Fn(_) => return Err(super::unsupported("a function value in a container yet")),
         // A list of futures ([`Ty::Results`]).
         Ty::Results => {
             out.push_str("lu");
@@ -365,6 +366,7 @@ fn compound_descriptor(
     out: &mut String,
 ) -> Result<()> {
     match c {
+        Compound::Fn(..) => Err(super::unsupported("a function value in a container yet")),
         Compound::List(elem) => {
             out.push('l');
             descriptor_in(types, *elem, path, out)

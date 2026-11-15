@@ -2541,3 +2541,29 @@ fn comparing_objects_reads_them() {
     let src = format!("{QUIET}def same(a: Quiet, b: Quiet) -> bool:\n    return a == b\nq = Quiet()\nprint(same(q, q), q != Quiet())\n");
     assert_eq!(modes(&src, "same"), (vec![READ, READ], vec![false, false]));
 }
+
+#[test]
+fn a_call_through_a_function_value_joins_the_candidates_summaries() {
+    let src = "\
+from collections.abc import Callable
+
+
+def same(xs: list[int]) -> list[int]:
+    return xs
+
+
+def fresh(xs: list[int]) -> list[int]:
+    return [1]
+
+
+def run(f: Callable[[list[int]], list[int]], xs: list[int]) -> list[int]:
+    return f(xs)
+
+
+g: Callable[[list[int]], list[int]] = same
+h: Callable[[list[int]], list[int]] = fresh
+print(run(g, [2]), run(h, [3]))
+";
+    let (_, aliases) = modes(src, "run");
+    assert!(aliases[1], "one candidate returns its argument");
+}

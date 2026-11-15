@@ -558,8 +558,11 @@ fn settle(t: &Type, subst: &Subst, bound: &Subst, seqs: &mut types::SeqTypes) ->
         Type::None => Ty::None,
         Type::Str => Ty::Str,
         Type::Range => Ty::Range,
-        // A function value is an opaque word to the analyses (D197).
-        Type::Func(..) => Ty::Int,
+        Type::Func(ps, r) => {
+            let params = ps.iter().map(|t| settle(t, subst, bound, seqs)).collect();
+            let ret = settle(r, subst, bound, seqs);
+            seqs.func(params, ret)
+        }
         Type::Exception => Ty::Exc,
         Type::Bytes => Ty::Bytes,
         Type::File(writes, data) => Ty::File(file_kind(*writes, settle(data, subst, bound, seqs))),
@@ -631,6 +634,11 @@ fn bind(t: &Type, ty: Ty, seqs: &types::SeqTypes, subst: &mut Subst) -> bool {
         (Type::Set(t), Ty::Set(_)) | (Type::View(_, t), Ty::View(_)) => {
             seqs.elem(ty).is_some_and(|e| bind(t, e, seqs, subst))
         }
+        (Type::Func(ps, r), Ty::Fn(_)) => seqs.signature(ty).is_some_and(|(params, ret)| {
+            ps.len() == params.len()
+                && ps.iter().zip(params).all(|(t, p)| bind(t, *p, seqs, subst))
+                && bind(r, ret, seqs, subst)
+        }),
         (Type::Dict(k, v), Ty::Dict(_)) => seqs
             .key_value(ty)
             .is_some_and(|(kt, vt)| bind(k, kt, seqs, subst) && bind(v, vt, seqs, subst)),
@@ -1095,8 +1103,14 @@ fn concrete(t: &Type, subst: &Subst, seqs: &mut types::SeqTypes, span: Span) -> 
         Type::None => Ok(Ty::None),
         Type::Str => Ok(Ty::Str),
         Type::Range => Ok(Ty::Range),
-        Type::Func(..) if seqs.futures => Err(unsupported(span, "function values")),
-        Type::Func(..) => Ok(Ty::Int),
+        Type::Func(ps, r) => {
+            let params = ps
+                .iter()
+                .map(|t| concrete(t, subst, seqs, span))
+                .collect::<Result<Vec<Ty>>>()?;
+            let ret = concrete(r, subst, seqs, span)?;
+            Ok(seqs.func(params, ret))
+        }
         Type::Exception => Ok(Ty::Exc),
         Type::Bytes => Ok(Ty::Bytes),
         Type::File(writes, data) => {
