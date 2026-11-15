@@ -1,0 +1,14 @@
+# deviation: a def whose body changes its parameter is not a function value yet (D191); CPython allows it.
+# expect-exit: 1
+# expect-error: `push` changes its parameter `xs`, so it cannot be a function value yet
+
+from collections.abc import Callable
+
+
+def push(xs: list[int]) -> int:
+    xs.append(1)
+    return len(xs)
+
+
+f: Callable[[list[int]], int] = push
+print(f([1]))

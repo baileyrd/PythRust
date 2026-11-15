@@ -3,8 +3,8 @@
 //! see an ordinary def. A lambda is its own name where it was written.
 //!
 //! A lambda reads only its parameters, names bound in its body and
-//! module-level names; a name of the enclosing function is the named
-//! error until closures exist (step 6-3).
+//! module-level names; a name of the enclosing function, comprehension
+//! or lambda is the named error until closures exist (step 6-3).
 
 use std::collections::BTreeSet;
 
@@ -43,7 +43,10 @@ impl Parser<'_> {
             return Err(error(self.tok(0).span, PLAIN));
         }
         let colon = self.expect(&TokenKind::Colon)?.span;
+        let inner = self.lifted.len();
         let value = self.expr()?;
+        let own: BTreeSet<String> = params.iter().map(|p| p.name.name.clone()).collect();
+        no_capture(&self.lifted[inner..], &own, "the enclosing lambda")?;
         let span = self.span_from(keyword);
         let name = Ident {
             name: comp_name("lambda", keyword.start),
@@ -75,6 +78,16 @@ impl Parser<'_> {
 pub(super) fn check_captures(lifted: &[Stmt], params: &[Param], body: &Block) -> Result<()> {
     let mut bound: BTreeSet<String> = scope::assigned(body);
     bound.extend(params.iter().map(|p| p.name.name.clone()));
+    no_capture(lifted, &bound, "the enclosing function")
+}
+
+/// No lambda of `lifted` reads a name of `bound`, which `owner` binds
+/// (D195): a function, a comprehension or an enclosing lambda.
+pub(super) fn no_capture<'a>(
+    lifted: impl IntoIterator<Item = &'a Stmt>,
+    bound: &BTreeSet<String>,
+    owner: &str,
+) -> Result<()> {
     for stmt in lifted {
         let StmtKind::FuncDef(def) = &stmt.kind else {
             continue;
@@ -84,7 +97,7 @@ pub(super) fn check_captures(lifted: &[Stmt], params: &[Param], body: &Block) ->
             .find(|(n, _)| bound.contains(*n));
         if let Some((name, span)) = captured {
             let msg = format!(
-                "lambda uses `{name}`, which belongs to the enclosing function; \
+                "lambda uses `{name}`, which belongs to {owner}; \
                  captures need closures (not supported yet)"
             );
             return Err(error(span, msg));

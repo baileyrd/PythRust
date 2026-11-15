@@ -10,7 +10,12 @@ use crate::diag::Result;
 /// Renames the names `clauses` bind, wherever the comprehension starting
 /// at `offset` sees them: what it gathers, its filters, every target,
 /// and every iterable but the first, which runs in the enclosing scope.
-pub(super) fn own_names(gather: &mut Gather, clauses: &mut [CompFor], offset: usize) -> Result<()> {
+/// Returns those names as the source spells them.
+pub(super) fn own_names(
+    gather: &mut Gather,
+    clauses: &mut [CompFor],
+    offset: usize,
+) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     clauses
         .iter()
@@ -24,7 +29,7 @@ pub(super) fn own_names(gather: &mut Gather, clauses: &mut [CompFor], offset: us
         }
         c.ifs.iter_mut().for_each(rename);
     }
-    Ok(())
+    Ok(names)
 }
 
 /// Adds the names `target` binds to `out`: a name or a tuple of them.

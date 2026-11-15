@@ -1,0 +1,8 @@
+# deviation: a lambda's result must equal its `Callable` result type, with no widening (D3, D194); CPython has no types.
+# expect-exit: 1
+# expect-error: in a lambda: `+` gives int here, but float is expected
+
+from collections.abc import Callable
+
+f: Callable[[int], float] = lambda x: x + 1
+print(f(1))

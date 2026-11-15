@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ast::{source_name, unqualified, BinOp, RecordKind};
+use crate::ast::{is_lambda, source_name, unqualified, BinOp, RecordKind};
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::span::Span;
 
@@ -1287,14 +1287,27 @@ fn expect(s: &mut Subst, c: &Constraint, expected: &Type, found: &Type) -> Resul
 /// The message for a failed unification.
 pub(super) fn mismatch(s: &Subst, clash: Clash, expected: &Type, found: &Type) -> String {
     let (e, f) = (s.zonk(expected), s.zonk(found));
-    match clash {
-        Clash::Mismatch => format!("expected {e}, found {f}"),
-        Clash::Infinite => format!("{f} would have to contain itself ({e})"),
+    match (clash, &e, &f) {
+        (Clash::Mismatch, Type::Func(want, _), Type::Func(got, _)) if want.len() != got.len() => {
+            let (n, m) = (parameters(want.len()), parameters(got.len()));
+            format!("expected {e}, a function of {n}, found a function of {m}")
+        }
+        (Clash::Mismatch, ..) => format!("expected {e}, found {f}"),
+        (Clash::Infinite, ..) => format!("{f} would have to contain itself ({e})"),
+    }
+}
+
+/// `1 parameter`, `2 parameters`.
+fn parameters(n: usize) -> String {
+    match n {
+        1 => "1 parameter".to_string(),
+        n => format!("{n} parameters"),
     }
 }
 
 fn error(c: &Constraint, message: String) -> Diagnostic {
     let message = match &c.via {
+        Some(func) if is_lambda(func) => format!("in a lambda: {message}"),
         Some(func) => format!("in call to `{func}`: {message}"),
         None => message,
     };

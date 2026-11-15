@@ -10,6 +10,8 @@
 //! default after one with a default, and a positional argument after a
 //! keyword argument.
 
+use std::collections::BTreeSet;
+
 use crate::ast::{
     Arg, BinOp, Binding, Block, Branch, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Handler,
     Ident, LocalModule, LogicalOp, Mode, Module, Param, ParamMode, Pause, Stmt, StmtKind, StubDef,
@@ -1382,11 +1384,29 @@ impl<'a> Parser<'a> {
         if let Some(close) = close {
             self.expect(close)?;
         }
-        comp::own_names(&mut gather, &mut clauses, start.start)?;
+        let names = comp::own_names(&mut gather, &mut clauses, start.start)?;
+        self.no_comp_capture(&clauses, &names, start)?;
         bounded(Expr {
             kind: ExprKind::Comp { gather, clauses },
             span: self.span_from(start),
         })
+    }
+
+    /// No lambda inside the comprehension starting at `start` reads a name
+    /// it binds (D195). Lambdas in its first iterable run outside it.
+    fn no_comp_capture(
+        &self,
+        clauses: &[CompFor],
+        names: &BTreeSet<String>,
+        start: Span,
+    ) -> Result<()> {
+        let first = clauses.first().map(|c| c.iter.span);
+        let outside = |s: &Span| first.is_some_and(|f| f.start <= s.start && s.start < f.end);
+        let inside = self
+            .lifted
+            .iter()
+            .filter(|l| l.span.start >= start.start && !outside(&l.span));
+        lambda::no_capture(inside, names, "the enclosing comprehension")
     }
 
     /// `'for' target_list 'in' or_expr ('if' or_expr)*`

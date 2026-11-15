@@ -294,19 +294,6 @@ pub(super) fn check_method(
     }
 }
 
-/// The builtin methods that change their receiver in place.
-const MUTATORS: [&str; 9] = [
-    "append",
-    "pop",
-    "extend",
-    "insert",
-    "remove",
-    "sort",
-    "add",
-    "setdefault",
-    "update",
-];
-
 /// Where `body` visibly changes a value reached through `self` (D131):
 /// a changing method call, an item store or a `del` on it. A change
 /// through a call that takes it is found by `own` once records lower
@@ -320,7 +307,7 @@ fn changes_self(body: &[Stmt]) -> Option<Span> {
             return None;
         };
         let reached = !matches!(&value.kind, ExprKind::Name(n) if n == "self");
-        let changes = MUTATORS.contains(&attr.name.as_str());
+        let changes = scope::MUTATORS.contains(&attr.name.as_str());
         (reached && changes && from_self(value)).then_some(e.span)
     });
     call.or_else(|| stores(body))
