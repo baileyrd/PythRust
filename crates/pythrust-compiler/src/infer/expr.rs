@@ -506,6 +506,8 @@ impl Checker {
                 let msg = format!("`{}` is {t}, not a function", source_name(name));
                 return Err(error(at, msg));
             };
+            self.nodes
+                .insert(at, Type::Func(params.clone(), ret.clone()));
             return self.call_value(name, &params, *ret, args, span);
         }
         if let Some(class) = self.stub_redefined.get(name) {
@@ -534,7 +536,7 @@ impl Checker {
 
     /// A call through a function value (D191): positional arguments of
     /// exactly the type's parameters.
-    fn call_value(
+    pub(super) fn call_value(
         &mut self,
         name: &str,
         params: &[Type],
