@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{
-    source_name, Arg, CmpOp, CompFor, Expr, ExprKind, Gather, Ident, LogicalOp, TypeExpr, UnaryOp,
+    is_lambda, source_name, Arg, CmpOp, CompFor, Expr, ExprKind, Gather, Ident, LogicalOp,
+    TypeExpr, UnaryOp,
 };
 use crate::diag::Result;
 use crate::span::Span;
@@ -299,8 +300,8 @@ impl Checker {
         };
         if let Some(param) = self.by_ref.get(name) {
             let msg = format!(
-                "`{}` changes its parameter `{param}`, so it cannot be a function value yet",
-                source_name(name)
+                "{} changes its parameter `{param}`, so it cannot be a function value yet",
+                display(name)
             );
             return Err(error(span, msg));
         }
@@ -314,7 +315,7 @@ impl Checker {
         }
         let params = sig.params.into_iter().map(|p| p.ty).collect();
         let ty = Type::Func(params, Box::new(sig.ret));
-        if source_name(name) != name && name.starts_with("lambda") {
+        if is_lambda(name) {
             self.lambda_values.push((ty.clone(), span));
         }
         Ok(Some(ty))
@@ -854,4 +855,12 @@ pub(super) fn slice_literal(e: &Expr) -> Option<i64> {
         };
     }
     int_literal(e)
+}
+
+/// A def as a message names it: a lambda has no name a source can spell.
+fn display(name: &str) -> String {
+    if is_lambda(name) {
+        return "a lambda".to_string();
+    }
+    format!("`{}`", source_name(name))
 }

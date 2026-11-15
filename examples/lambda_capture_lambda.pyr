@@ -1,0 +1,8 @@
+# deviation: a lambda reading an enclosing lambda's parameter needs closures (D195); CPython captures it.
+# expect-exit: 1
+# expect-error: lambda uses `x`, which belongs to the enclosing lambda
+
+from collections.abc import Callable
+
+add: Callable[[int], Callable[[int], int]] = lambda x: lambda y: x + y
+print(add(1)(2))

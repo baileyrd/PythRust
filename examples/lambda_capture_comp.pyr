@@ -1,0 +1,12 @@
+# deviation: a lambda reading a comprehension's own name needs closures (D195); CPython captures it.
+# expect-exit: 1
+# expect-error: lambda uses `i`, which belongs to the enclosing comprehension
+
+i = 100
+
+
+def scaled(xs: list[int]) -> list[list[int]]:
+    return [sorted(xs, key=lambda x: x * i) for i in [1, -1]]
+
+
+print(scaled([3, 1, 2]))

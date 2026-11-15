@@ -39,6 +39,78 @@ pub(crate) fn assigned(block: &[Stmt]) -> BTreeSet<String> {
     out
 }
 
+/// The builtin methods that change their receiver in place.
+pub(crate) const MUTATORS: [&str; 9] = [
+    "append",
+    "pop",
+    "extend",
+    "insert",
+    "remove",
+    "sort",
+    "add",
+    "setdefault",
+    "update",
+];
+
+/// A parameter `f`'s body visibly changes (D191): a changing method call
+/// on it or on a value reached from it, or an item store, field store or
+/// `del` through it. A change through a call that takes it is left to
+/// `own`, which does not see function values yet (step 6-2c).
+pub(crate) fn changed_param(f: &FuncDef) -> Option<&str> {
+    let params: BTreeSet<&str> = f.params.iter().map(|p| p.name.name.as_str()).collect();
+    let call = exprs(&f.body).into_iter().find_map(|e| {
+        let ExprKind::Call { func, .. } = &e.kind else {
+            return None;
+        };
+        let ExprKind::Attr { value, attr } = &func.kind else {
+            return None;
+        };
+        MUTATORS
+            .contains(&attr.name.as_str())
+            .then(|| param_root(value, &params))?
+    });
+    call.or_else(|| stored(&f.body, &params))
+}
+
+/// The first of `params` under an item, field or `del` store in `body`.
+fn stored<'a>(body: &'a [Stmt], params: &BTreeSet<&str>) -> Option<&'a str> {
+    let mut found = None;
+    walk(body, &mut |s| {
+        if found.is_some() {
+            return;
+        }
+        found = match &s.kind {
+            StmtKind::Assign { target, .. } | StmtKind::AugAssign { target, .. } => {
+                target_root(target, params)
+            }
+            StmtKind::Del { value, .. } => param_root(value, params),
+            _ => None,
+        };
+    });
+    found
+}
+
+fn target_root<'a>(t: &'a Target, params: &BTreeSet<&str>) -> Option<&'a str> {
+    match &t.kind {
+        TargetKind::Name(_) => None,
+        TargetKind::Subscript { value, .. } | TargetKind::Attr { value, .. } => {
+            param_root(value, params)
+        }
+        TargetKind::Tuple(ts) => ts.iter().find_map(|t| target_root(t, params)),
+    }
+}
+
+/// The parameter `e` is reached from by fields and items, if any.
+fn param_root<'a>(e: &'a Expr, params: &BTreeSet<&str>) -> Option<&'a str> {
+    match &e.kind {
+        ExprKind::Name(n) => params.contains(n.as_str()).then_some(n.as_str()),
+        ExprKind::Attr { value, .. } | ExprKind::Subscript { value, .. } => {
+            param_root(value, params)
+        }
+        _ => None,
+    }
+}
+
 /// Names an `except ... as name` anywhere in `block` binds, and so
 /// unbinds when its handler ends.
 pub(crate) fn caught(block: &[Stmt]) -> BTreeSet<String> {
