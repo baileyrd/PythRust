@@ -1,0 +1,8 @@
+# deviation: a lambda that changes its parameter is not a function value yet (D191, D194); CPython allows it.
+# expect-exit: 1
+# expect-error: a lambda changes its parameter `xs`, so it cannot be a function value yet
+
+from collections.abc import Callable
+
+pop: Callable[[list[int]], int] = lambda xs: xs.pop()
+print(pop([1, 2]))

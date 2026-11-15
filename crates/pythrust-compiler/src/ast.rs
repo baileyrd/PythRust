@@ -473,6 +473,11 @@ pub fn source_name(name: &str) -> &str {
     name.split_once(COMP_MARK).map_or(name, |(n, _)| n)
 }
 
+/// Whether `name` is the hidden def a lambda is lifted to (D195).
+pub fn is_lambda(name: &str) -> bool {
+    source_name(name) != name && name.starts_with("lambda")
+}
+
 /// `[NAME '='] expr`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arg {

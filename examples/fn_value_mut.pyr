@@ -2,8 +2,12 @@
 # expect-exit: 1
 # expect-error: `push` changes its parameter `xs`, so it cannot be a function value yet
 
-def push(mut xs: list[int]) -> None:
+def grow(mut xs: list[int]) -> None:
     xs.append(1)
+
+
+def push(mut xs: list[int]) -> None:
+    grow(xs)
 
 
 f = push

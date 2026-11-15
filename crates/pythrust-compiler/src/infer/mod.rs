@@ -202,8 +202,9 @@ struct Checker {
     /// Rust binding functions that raise a class the program redefines,
     /// with that class's name.
     stub_redefined: HashMap<String, String>,
-    /// Top-level defs with a `mut` or `owned` parameter, by name and that
-    /// parameter: none can be a function value (D191).
+    /// Top-level defs with a `mut` or `owned` parameter, or one their body
+    /// visibly changes, by name and that parameter: none can be a function
+    /// value (D191).
     by_ref: HashMap<String, String>,
     /// Each lambda read as a value, with its type, which the program must
     /// fully decide (D194).
@@ -259,12 +260,14 @@ impl Checker {
         Ok(())
     }
 
-    /// Notes the defs a written `mut` or `owned` keeps off function values.
+    /// Notes the defs a written `mut` or `owned`, or a visible change to a
+    /// parameter, keeps off function values (D191).
     fn declare_by_ref(&mut self, defs: &[&FuncDef]) {
         for f in defs {
-            let by_ref = f.params.iter().find(|p| p.mode != ParamMode::Read);
-            if let Some(p) = by_ref {
-                self.by_ref.insert(f.name.name.clone(), p.name.name.clone());
+            let written = f.params.iter().find(|p| p.mode != ParamMode::Read);
+            let by_ref = written.map(|p| p.name.name.as_str());
+            if let Some(p) = by_ref.or_else(|| scope::changed_param(f)) {
+                self.by_ref.insert(f.name.name.clone(), p.to_string());
             }
         }
     }

@@ -1,0 +1,7 @@
+# expect-exit: 1
+# expect-error: expected Callable[[int], int], a function of 1 parameter, found a function of 2 parameters
+
+from collections.abc import Callable
+
+f: Callable[[int], int] = lambda a, b: a + b
+print(f(1))
