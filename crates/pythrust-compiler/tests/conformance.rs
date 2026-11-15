@@ -70,7 +70,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use pythrust_compiler::ir::{Func, Inst, LocalId, Program};
+use pythrust_compiler::ir::{Func, Inst, LocalId, Program, Rvalue};
 use pythrust_compiler::own::{self, Precision};
 use pythrust_compiler::{infer, lexer, lower, parser, rc, TokenKind};
 
@@ -475,6 +475,7 @@ const NATIVE: &[&str] = &[
     "sort_key",
     "sort_key_method_named_max",
     "lambda_key",
+    "fn_value_native",
     "lambda_task",
     "sort_key_mutates_list",
     "unicode_error",
@@ -699,15 +700,15 @@ const NATIVE: &[&str] = &[
 const NATIVE_GAPS: &[(&str, &str)] = &[
     (
         "fn_values",
-        "function values (step 6-2, D197): the native backend does not support them yet",
+        "a function value in a list, dict, tuple or record field (D197): the native backend does not support it yet",
     ),
     (
         "lambda_value",
-        "function values (step 6-2, D197): the native backend does not support them yet",
+        "a function value in a list, dict, tuple or record field (D197): the native backend does not support it yet",
     ),
     (
         "fn_value_record_field",
-        "function values (step 6-2, D197): the native backend does not support them yet",
+        "a function value in a list, dict, tuple or record field (D197): the native backend does not support it yet",
     ),
     (
         "exception_list_cycle",
@@ -1027,8 +1028,23 @@ fn corpus_unkept_parameters_are_borrowed() -> Res<()> {
 fn unkept_unborrowed(program: &Program) -> Vec<String> {
     let summaries = own::infer(program);
     let elided = rc::elide(program.clone());
+    // A function used as a value is called without knowing its callee, so
+    // it takes every parameter (D197).
+    let taken: Vec<usize> = program
+        .funcs
+        .iter()
+        .flat_map(|f| f.blocks.iter().flat_map(|b| &b.insts))
+        .filter_map(|i| match i {
+            Inst::Assign {
+                value: Rvalue::FuncRef(f),
+                ..
+            } => Some(f.0),
+            _ => None,
+        })
+        .collect();
     let funcs = program.funcs.iter().zip(summaries).zip(elided.funcs);
-    let params = funcs.flat_map(|((func, summary), after)| {
+    let funcs = funcs.enumerate().filter(|(i, _)| !taken.contains(i));
+    let params = funcs.flat_map(|(_, ((func, summary), after))| {
         let checked: Vec<LocalId> = func
             .params
             .iter()

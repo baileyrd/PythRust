@@ -26,6 +26,11 @@ impl FnBuilder<'_, '_> {
         if self.defined.is_none() && !self.scope.contains(name) && self.cx.is_shared(name) {
             return self.read_global(name, span);
         }
+        if !self.names.contains_key(name) && !self.scope.contains(name) {
+            if let Some(def) = self.cx.defs.get(name).copied() {
+                return self.func_ref(def, span);
+            }
+        }
         if let Some(Hint::Unbound) = self.hints.get(name) {
             // Never assigned by code that completes: the read fails.
             let message = self.unbound_message(name);
@@ -98,9 +103,6 @@ impl FnBuilder<'_, '_> {
     fn var_of(&mut self, name: &str, span: Span, value: Option<Ty>) -> Result<Var> {
         if let Some(var) = self.names.get(name) {
             return Ok(*var);
-        }
-        if !self.scope.contains(name) && self.cx.defs.contains_key(name) {
-            return Err(unsupported(span, "function values"));
         }
         if !self.scope.contains(name) {
             let what = format!("reading `{name}`, a global, from a function");

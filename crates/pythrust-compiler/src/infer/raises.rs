@@ -672,10 +672,21 @@ impl<'a> Cx<'_, 'a> {
                 if matches!(&func.kind, ExprKind::Name(n) if builtins::reads_results(n)) {
                     args.iter().for_each(|a| self.read(&a.value, out));
                 }
+                // A call through a function value may raise anything (D191).
+                let through_value = match &func.kind {
+                    ExprKind::Name(n) => !self.a.defs.contains_key(n.as_str()),
+                    _ => true,
+                } && matches!(self.a.types.at(func.span), Some(Type::Func(..)));
+                if through_value {
+                    out.add(ExcKind::Exception, e.span);
+                }
                 match &func.kind {
                     ExprKind::Name(name) => self.call(name, args, e.span, out),
                     ExprKind::Attr { value, attr } => {
                         self.expr(value, out);
+                        if through_value {
+                            return;
+                        }
                         if let Some(Type::Record(r)) = self.a.types.at(value.span) {
                             // A method is never a builtin, so only its set counts.
                             let name = crate::ast::method_name(r, &attr.name);
@@ -1166,6 +1177,23 @@ def g(xs: list[int]) -> int raises Exception:
         assert!(err(src).contains("must declare it; write `-> int raises IndexError`"));
         let ok = "temper def f(mut xs: list[int]) -> int raises IndexError:\n    return xs.pop()\n";
         assert_eq!(raises(ok, "f"), "IndexError");
+    }
+
+    #[test]
+    fn a_call_through_a_function_value_may_raise_anything() {
+        let src = "\
+from collections.abc import Callable
+
+
+def run(f: Callable[[int], int], n: int) -> int:
+    return f(n)
+
+
+def direct(n: int) -> int:
+    return n
+";
+        assert_eq!(raises(src, "run"), "Exception");
+        assert_eq!(raises(src, "direct"), "");
     }
 
     #[test]

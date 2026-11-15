@@ -128,6 +128,21 @@ impl SeqTypes {
         Ty::List(self.intern(Compound::List(elem)))
     }
 
+    pub(super) fn func(&mut self, params: Vec<Ty>, ret: Ty) -> Ty {
+        Ty::Fn(self.intern(Compound::Fn(params, ret)))
+    }
+
+    /// The parameters and result of function type `ty`.
+    pub(super) fn signature(&self, ty: Ty) -> Option<(&[Ty], Ty)> {
+        let Ty::Fn(id) = ty else {
+            return None;
+        };
+        match self.all().get(id.0) {
+            Some(Compound::Fn(params, ret)) => Some((params, *ret)),
+            _ => None,
+        }
+    }
+
     pub(super) fn tuple(&mut self, fields: Vec<Ty>) -> Ty {
         Ty::Tuple(self.intern(Compound::Tuple(fields)))
     }

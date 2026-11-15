@@ -65,8 +65,14 @@ pub fn elide(mut program: Program) -> Program {
 fn borrow(program: &mut Program) -> Vec<BTreeSet<usize>> {
     let (funcs, types) = (&program.funcs, &program.types);
     let retained: Vec<BTreeSet<usize>> = funcs.iter().map(retains).collect();
+    let taken = address_taken(funcs);
     let borrowed: Vec<BTreeSet<usize>> = (0..funcs.len())
-        .map(|id| borrowable(funcs, types, FuncId(id), &retained[id]))
+        .map(|id| match taken.contains(&id) {
+            // A call through a value cannot tell which parameters borrow,
+            // so every one is moved in (D197).
+            true => BTreeSet::new(),
+            false => borrowable(funcs, types, FuncId(id), &retained[id]),
+        })
         .collect();
     for (f, params) in program.funcs.iter_mut().zip(&borrowed) {
         let locals: BTreeSet<LocalId> = params.iter().map(|&i| f.params[i]).collect();
@@ -80,6 +86,20 @@ fn borrow(program: &mut Program) -> Vec<BTreeSet<usize>> {
         f.borrowed = locals;
     }
     borrowed
+}
+
+/// The functions used as values, which calls through a value may reach.
+fn address_taken(funcs: &[Func]) -> BTreeSet<usize> {
+    let insts = funcs.iter().flat_map(|f| &f.blocks).flat_map(|b| &b.insts);
+    insts
+        .filter_map(|i| match i {
+            Inst::Assign {
+                value: Rvalue::FuncRef(f),
+                ..
+            } => Some(f.0),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The positions of `f`'s reference-counted parameters whose reference
@@ -150,9 +170,10 @@ fn keeps(inst: &Inst, p: LocalId, at_exit: bool) -> bool {
 /// borrows its operands and gives a new reference.
 fn takes(value: &Rvalue, p: LocalId) -> bool {
     match value {
-        Rvalue::Call(_, args) => args.contains(&Operand::Local(p)),
+        Rvalue::Call(_, args) | Rvalue::CallValue(_, args) => args.contains(&Operand::Local(p)),
         Rvalue::Hold(a) => *a == Operand::Local(p),
         Rvalue::Use(_)
+        | Rvalue::FuncRef(_)
         | Rvalue::Int(..)
         | Rvalue::Neg(_)
         | Rvalue::Cmp(..)

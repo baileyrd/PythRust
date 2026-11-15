@@ -752,7 +752,8 @@ impl<'r> Codegen<'r> {
             | Ty::Exec
             | Ty::Future
             | Ty::Results
-            | Ty::Held(_) => self.ptr,
+            | Ty::Held(_)
+            | Ty::Fn(_) => self.ptr,
         }
     }
 
@@ -1156,6 +1157,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             | Ty::View(_) => Rt::WriteSeq,
             Ty::Obj(_) => Rt::WriteSeq,
             Ty::Bytes | Ty::File(_) => Rt::WriteObj,
+            Ty::Fn(_) => return Err(backend("printing a function value".to_string())),
             Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
                 return Err(backend(
                     "printing a task's handle or a loop's hold".to_string(),
@@ -1286,6 +1288,8 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
                 Ok(self.b.ins().sadd_overflow(a, b).1)
             }
             Rvalue::Call(callee, args) => self.call(*callee, args, dest, span),
+            Rvalue::FuncRef(f) => self.func_ref(*f),
+            Rvalue::CallValue(f, args) => self.call_value(*f, args, dest, span),
             Rvalue::StrLit(text) => self.str_lit(text),
             Rvalue::Std(f, args) => self.std(*f, args, self.func.locals[dest.0], span),
             Rvalue::Rust(name, args) => self.rust(name, args, dest, span),
@@ -1428,6 +1432,7 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             Ty::Bytes | Ty::File(_) => Rt::ObjStr,
             Ty::Exc => Rt::ExcStr,
             Ty::Obj(_) => Rt::StrFromSeq,
+            Ty::Fn(_) => return Err(backend("`str` of a function value".to_string())),
             Ty::Exec | Ty::Future | Ty::Results | Ty::Held(_) => {
                 return Err(backend(
                     "`str` of a task's handle or a loop's hold".to_string(),
@@ -1525,6 +1530,65 @@ impl<'b, 'c, 'r> FnGen<'b, 'c, 'r> {
             self.set_pair(dest, vals)?;
             return Ok(self.b.ins().iconst(self.cg.ptr, 0));
         }
+        match self.b.inst_results(call).first() {
+            Some(v) => Ok(*v),
+            None => Ok(self
+                .b
+                .ins()
+                .iconst(self.cg.clif_ty(self.func.locals[dest.0]), 0)),
+        }
+    }
+
+    /// The address of `f`, a function used as a value (D197).
+    fn func_ref(&mut self, f: ir::FuncId) -> Result<Value> {
+        let id = *self
+            .ids
+            .get(f.0)
+            .ok_or_else(|| backend("a function value of an unknown function".to_string()))?;
+        let fref = self.cg.module.declare_func_in_func(id, self.b.func);
+        Ok(self.b.ins().func_addr(self.cg.ptr, fref))
+    }
+
+    /// Calls the function value `f` with `args` through its address, under
+    /// the same depth bound as [`Self::call`]. The signature is the plain
+    /// one of every function: the context, then the parameters.
+    fn call_value(
+        &mut self,
+        f: Operand,
+        args: &[Operand],
+        dest: LocalId,
+        span: Span,
+    ) -> Result<Value> {
+        let Ty::Fn(id) = self.func.ty(f) else {
+            return Err(backend("a call of a non-function value".to_string()));
+        };
+        let Some(Compound::Fn(params, ret)) = self.types.get(id.0) else {
+            return Err(backend("a function value without a signature".to_string()));
+        };
+        let mut sig = self.cg.module.make_signature();
+        sig.params.push(AbiParam::new(self.cg.ptr));
+        for p in params {
+            sig.params.push(AbiParam::new(self.cg.clif_ty(*p)));
+        }
+        if *ret != Ty::None {
+            sig.returns.push(AbiParam::new(self.cg.clif_ty(*ret)));
+        }
+        let sig = self.b.import_signature(sig);
+        let callee = self.operand(f);
+        let args: Vec<Value> = std::iter::once(self.ctx)
+            .chain(args.iter().map(|op| self.operand(*op)))
+            .collect();
+        let (addr, flags) = (self.ctx, MemFlagsData::trusted());
+        let depth = self.b.ins().load(types::I64, flags, addr, CTX_DEPTH);
+        let full = self
+            .b
+            .ins()
+            .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, depth, MAX_DEPTH);
+        self.fail_if(full, span, RECURSION)?;
+        let deeper = self.b.ins().iadd_imm_s(depth, 1);
+        self.b.ins().store(flags, deeper, addr, CTX_DEPTH);
+        let call = self.b.ins().call_indirect(sig, callee, &args);
+        self.b.ins().store(flags, depth, addr, CTX_DEPTH);
         match self.b.inst_results(call).first() {
             Some(v) => Ok(*v),
             None => Ok(self
@@ -1912,6 +1976,15 @@ fn holds_plain(types: &[Compound], ty: Ty) -> bool {
             Some(Compound::Object { plain: true, .. })
         )
     })
+}
+
+/// A program outside the native backend's subset, named by `what`.
+fn unsupported(what: &str) -> Diagnostic {
+    Diagnostic {
+        span: Span { start: 0, end: 0 },
+        message: format!("the native backend does not support {what}"),
+        kind: DiagKind::Backend,
+    }
 }
 
 fn backend(message: String) -> Diagnostic {

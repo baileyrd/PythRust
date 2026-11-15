@@ -576,6 +576,7 @@ impl<'a> FnBuilder<'_, 'a> {
                 self.temp(Ty::Bool, Rvalue::Cmp(CmpOp::Ne, v, zero), span)
             }
             Ty::None => Operand::Bool(false),
+            Ty::Fn(_) => Operand::Bool(true),
             // A record or object defines no `__len__` or `__bool__`
             // (D132, D147).
             Ty::Exc
@@ -605,6 +606,9 @@ impl<'a> FnBuilder<'_, 'a> {
         let name = match &func.kind {
             ExprKind::Name(name) => name,
             ExprKind::Attr { value, attr } => {
+                if matches!(self.cx.types.at(func.span), Some(Type::Func(..))) {
+                    return self.call_value(func, args, span);
+                }
                 if let Some(op) = self.task_call(value, &attr.name, args, span)? {
                     return Ok(op);
                 }
@@ -613,10 +617,10 @@ impl<'a> FnBuilder<'_, 'a> {
                 }
                 return self.method(value, &attr.name, args, span);
             }
-            _ => return Err(unsupported(span, "function values")),
+            _ => return self.call_value(func, args, span),
         };
         if self.names.contains_key(name.as_str()) || self.scope.contains(name.as_str()) {
-            return Err(unsupported(span, "function values"));
+            return self.call_value(func, args, span);
         }
         if self.cx.seqs.declared(name).is_some() {
             return self.construct(name, args, span);
@@ -665,6 +669,45 @@ impl<'a> FnBuilder<'_, 'a> {
         let slots = bind_params(def, args, ops)?;
         let node = self.node_type(span)?;
         self.call_def(def, slots, node, span)
+    }
+
+    /// Top-level `def` used as a value (D197): the address of its
+    /// instance for the parameter and result types the node carries.
+    pub(super) fn func_ref(&mut self, def: &'a FuncDef, span: Span) -> Result<Operand> {
+        let name = def.name.name.as_str();
+        if !self.callable(name, span)? {
+            let ty = self.ty_at(span)?;
+            return Ok(Operand::Local(self.new_local(ty)));
+        }
+        let ty = self.ty_at(span)?;
+        let Some((params, ret)) = self.cx.seqs.signature(ty) else {
+            return Err(unsupported(span, "a function value of unknown type"));
+        };
+        let (params, ret) = (params.to_vec(), ret);
+        let id = self.cx.instance(def, params, ret, span)?;
+        Ok(self.temp(ty, Rvalue::FuncRef(id), span))
+    }
+
+    /// A call of the function value `func` (D197): its arguments are
+    /// taken by the callee, and it may raise anything (D191).
+    fn call_value(&mut self, func: &Expr, args: &[Arg], span: Span) -> Result<Operand> {
+        let callee = self.expr(func)?;
+        let Some((_, ret)) = self.cx.seqs.signature(self.ty(callee)) else {
+            return Err(unsupported(span, "calling a value that is not a function"));
+        };
+        let mut ops = Vec::new();
+        for a in args {
+            ops.push(self.expr(&a.value)?);
+        }
+        let owned: Vec<Operand> = ops.into_iter().map(|op| self.own(op, span)).collect();
+        let result = self.temp(ret, Rvalue::CallValue(callee, owned.clone()), span);
+        for op in owned {
+            if let (Operand::Local(l), true) = (op, self.ty(op).is_rc()) {
+                self.emit(Inst::Forget(l));
+            }
+        }
+        self.check_raised(span)?;
+        Ok(result)
     }
 
     /// `list`, `sorted` or `set`: in `build`, `map`'s results are taken
@@ -1142,6 +1185,7 @@ fn type_name(ty: Ty) -> &'static str {
         Ty::Dict(_) => "dict",
         Ty::Set(_) => "set",
         Ty::View(_) => "dict view",
+        Ty::Fn(_) => "function",
         Ty::Bytes => "bytes",
         Ty::File(kind) => kind.qualified(),
         Ty::Exec => "ThreadPoolExecutor",

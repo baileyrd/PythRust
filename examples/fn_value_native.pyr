@@ -1,0 +1,61 @@
+from collections.abc import Callable
+
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+
+def shout(s: str) -> str:
+    return s.upper() + "!"
+
+
+def total(xs: list[int]) -> int:
+    n = 0
+    for x in xs:
+        n += x
+    return n
+
+
+def boom(n: int) -> int:
+    if n > 1:
+        raise ValueError("too big")
+    return n
+
+
+def apply(f: Callable[[int, int], int], a: int, b: int) -> int:
+    return f(a, b)
+
+
+def apply_str(f: Callable[[str], str], s: str) -> str:
+    return f(f(s))
+
+
+def pick(name: str) -> Callable[[int, int], int]:
+    if name == "add":
+        return add
+    return lambda a, b: a - b
+
+
+def run(f: Callable[[int], int], n: int) -> int:
+    return f(n)
+
+
+def say(s: str) -> None:
+    print("say", s)
+
+
+def call_none(f: Callable[[str], None]) -> None:
+    f("hi")
+
+
+g: Callable[[int, int], int] = add
+print(g(1, 2), apply(add, 3, 4), apply(pick("add"), 5, 6), apply(pick("sub"), 5, 6))
+print(apply_str(shout, "été"))
+h: Callable[[list[int]], int] = total
+print(h([1, 2, 3]), apply(lambda a, b: a * b, 6, 7))
+call_none(say)
+try:
+    print(run(boom, 1))
+    print(run(boom, 2))
+except ValueError as e:
+    print("caught", e)
