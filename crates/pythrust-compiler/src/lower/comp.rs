@@ -19,6 +19,10 @@ use super::FnBuilder;
 pub(super) enum Sink {
     /// Into a fresh list, set or dict.
     Into(LocalId),
+    /// Into a fresh one whose type generic code left open, decided by the
+    /// first item ([`FnBuilder::decide_comp`]): the comprehension's span,
+    /// and the statement pool that releases it.
+    Open(LocalId, Span, Option<usize>),
     /// Added to an int total, as `sum` adds; `span` is the call's.
     Sum(LocalId, Span),
     /// `any` (`any` true) or `all`: `out` starts `!any` and becomes
@@ -35,10 +39,21 @@ impl FnBuilder<'_, '_> {
         clauses: &[CompFor],
         span: Span,
     ) -> Result<Operand> {
-        let ty = self.ty_at(span)?;
-        let out = self.pooled(ty);
+        let (out, sink) = match self.settled_ty_at(span)? {
+            Some(ty) => {
+                let out = self.pooled(ty);
+                (out, Sink::Into(out))
+            }
+            // `[f(x) for x in xs]` in `def g(xs)`: what `f` returns is
+            // known once its call is lowered, as for a display.
+            None => {
+                let pool = self.pools.len().checked_sub(1);
+                let out = self.new_local(Ty::None);
+                (out, Sink::Open(out, span, pool))
+            }
+        };
         self.assign(out, Rvalue::NewSeq(Vec::new()), span);
-        self.comp_clauses(gather, clauses, Sink::Into(out), |_| Ok(()))?;
+        self.comp_clauses(gather, clauses, sink, |_| Ok(()))?;
         Ok(Operand::Local(out))
     }
 
@@ -133,8 +148,9 @@ impl FnBuilder<'_, '_> {
     /// (evaluated first) and the value, as `d[k] = v` does, or hands the
     /// item to its reducer.
     fn gather(&mut self, gather: &Gather, sink: Sink) -> Result<()> {
-        let out = match sink {
-            Sink::Into(out) => out,
+        let (out, open) = match sink {
+            Sink::Into(out) => (out, None),
+            Sink::Open(out, span, pool) => (out, Some((span, pool))),
             Sink::Sum(total, span) => {
                 let e = gen_item(gather, span)?;
                 return self.sum_item(e, total, span);
@@ -145,10 +161,10 @@ impl FnBuilder<'_, '_> {
             }
         };
         let table = Operand::Local(out);
-        let ty = self.ty(table);
         match gather {
             Gather::List(e) | Gather::Gen(e) => {
                 let v = self.expr(e)?;
+                let ty = self.decide_comp(out, open, &[v])?;
                 let want = self.slot_ty(ty, 0, e.span)?;
                 let value = self.expect(v, want, e.span)?;
                 self.emit(Inst::Append {
@@ -159,6 +175,7 @@ impl FnBuilder<'_, '_> {
             }
             Gather::Set(e) => {
                 let v = self.expr(e)?;
+                let ty = self.decide_comp(out, open, &[v])?;
                 let elem = self.elem_of(ty, e.span)?;
                 let value = self.stored(v, elem, e.span)?;
                 self.emit(Inst::Append {
@@ -170,10 +187,34 @@ impl FnBuilder<'_, '_> {
             Gather::Dict(k, v) => {
                 let key = self.expr(k)?;
                 let value = self.expr(v)?;
+                self.decide_comp(out, open, &[key, value])?;
                 self.dict_store(table, key, value, k.span.merge(v.span))?;
             }
         }
         Ok(())
+    }
+
+    /// The type of comprehension `out`; for an open one (`open`: its
+    /// span and statement pool), decided now by the first item's values
+    /// `items`, as [`FnBuilder::bind_display`] does for a display.
+    fn decide_comp(
+        &mut self,
+        out: LocalId,
+        open: Option<(Span, Option<usize>)>,
+        items: &[Operand],
+    ) -> Result<Ty> {
+        let have = self.ty(Operand::Local(out));
+        let Some((span, pool)) = open.filter(|_| have == Ty::None) else {
+            return Ok(have);
+        };
+        self.bind_display(items, span)?;
+        let ty = self.ty_at(span)?;
+        self.locals[out.0] = ty;
+        let pool = pool.filter(|_| ty.is_rc());
+        if let Some(pool) = pool.and_then(|p| self.pools.get_mut(p)) {
+            pool.push(out);
+        }
+        Ok(ty)
     }
 
     /// `total += item`, checked as `sum`'s ints are: an overflow is the

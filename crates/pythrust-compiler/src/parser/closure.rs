@@ -5,7 +5,8 @@
 //! inference, ownership, `raises`, `run` and lowering see ordinary defs.
 //!
 //! By reference as CPython, staged: a captured name is bound once in its
-//! function, so a closure can take its value as an argument (D200). A
+//! function, before the closure, so a closure can take its value as an
+//! argument and never sees it change or unbound (D200, D204). A
 //! closure is only called by name; its value escaping, which needs cells,
 //! is the named error of step 6-3b.
 
@@ -64,7 +65,7 @@ impl Parser<'_> {
                 return Err(error(at, TEMPERED));
             }
         }
-        check_bound_once(&captures, body, params, lifted)?;
+        check_captures(&captures, body, params, lifted)?;
         add_captures(body, lifted, &captures)
     }
 }
@@ -247,34 +248,77 @@ fn captures(lifted: &[Stmt], bound: &BTreeSet<String>) -> Captures {
         .collect()
 }
 
-/// A captured name is bound once in its function (D200): a second
-/// binding would be seen by a closure only through a cell.
-fn check_bound_once(
+/// A captured name is bound once in its function, before the closure
+/// (D200, D204): a parameter never bound again, or one top-level
+/// assignment before it. Otherwise a closure would see it change, or
+/// unbound, only through a cell.
+fn check_captures(
     captures: &Captures,
     body: &Block,
     params: &[Param],
     lifted: &[Stmt],
 ) -> Result<()> {
+    let count = binding_counts(body, params);
+    for (closure, names) in captures {
+        let at = lifted_span(lifted, closure);
+        let shown = source_name(closure);
+        let again = names.iter().find(|n| count.get(*n).is_some_and(|c| *c > 1));
+        if let Some(name) = again {
+            let msg = format!(
+                "`{name}` is captured by `{shown}` and rebound; \
+                 captures of a changing variable need cells (not supported yet)"
+            );
+            return Err(error(at, msg));
+        }
+        let is_param = |n: &str| params.iter().any(|p| p.name.name == n);
+        let late = names
+            .iter()
+            .find(|n| !is_param(n) && !assigned_before(body, n, at.start));
+        if let Some(name) = late {
+            let msg = format!(
+                "`{name}` is captured by `{shown}` but not bound before it; captures of a \
+                 variable bound later or conditionally need cells (not supported yet)"
+            );
+            return Err(error(at, msg));
+        }
+    }
+    Ok(())
+}
+
+/// How many times each name of the function is bound, counting twice a
+/// binding that may run again or always rebinds (D204): one in a loop's
+/// body, a `for` target, a `with ... as` and an `except ... as`.
+fn binding_counts(body: &Block, params: &[Param]) -> BTreeMap<String, usize> {
     let mut count: BTreeMap<String, usize> = BTreeMap::new();
     for p in params {
         *count.entry(p.name.name.clone()).or_default() += 1;
     }
-    scope::walk(body, &mut |s| {
+    scope::walk_looped(body, false, &mut |s, looped| {
+        let always = matches!(
+            s.kind,
+            StmtKind::For { .. } | StmtKind::With { .. } | StmtKind::Try { .. }
+        );
+        let weight = if looped || always { 2 } else { 1 };
         for name in bindings(s) {
-            *count.entry(name).or_default() += 1;
+            *count.entry(name).or_default() += weight;
         }
     });
-    for (closure, names) in captures {
-        let again = names.iter().find(|n| count.get(*n).is_some_and(|c| *c > 1));
-        if let Some(name) = again {
-            let shown = source_name(closure);
-            let msg = format!(
-                "`{name}` is captured by `{shown}` and rebound; needs cells (not supported yet)"
-            );
-            return Err(error(lifted_span(lifted, closure), msg));
+    count
+}
+
+/// Whether a top-level assignment of `body` before `start` binds `name`.
+fn assigned_before(body: &Block, name: &str, start: usize) -> bool {
+    body.iter().filter(|s| s.span.start < start).any(|s| {
+        let mut out = BTreeSet::new();
+        match &s.kind {
+            StmtKind::Assign { target, .. } => scope::target_names(target, &mut out),
+            StmtKind::AnnAssign { target, .. } => {
+                out.insert(target.name.clone());
+            }
+            _ => {}
         }
-    }
-    Ok(())
+        out.contains(name)
+    })
 }
 
 /// The names a statement binds, each time it does.

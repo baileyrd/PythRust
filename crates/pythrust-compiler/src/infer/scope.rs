@@ -146,6 +146,17 @@ pub(crate) fn walk<'a>(block: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
     }
 }
 
+/// Visits every statement as [`walk`] does, with whether it is inside a
+/// loop's body, where it may run more than once.
+pub(crate) fn walk_looped<'a>(block: &'a [Stmt], looped: bool, f: &mut impl FnMut(&'a Stmt, bool)) {
+    for s in block {
+        f(s, looped);
+        for (b, body) in bodies(s) {
+            walk_looped(b, looped || body, f);
+        }
+    }
+}
+
 /// The blocks directly nested in `s`, each marked when it is a loop's
 /// body, which may run again after it ends.
 fn bodies(s: &Stmt) -> Vec<(&[Stmt], bool)> {

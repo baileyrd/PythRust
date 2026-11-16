@@ -82,8 +82,10 @@ impl FnBuilder<'_, '_> {
     /// evaluated in order, `enumerate`'s start (by position or keyword)
     /// as an int.
     pub(super) fn zip(&mut self, name: &str, args: &[Arg], span: Span) -> Result<Zip> {
-        let list = self.ty_at(span)?;
-        let item = self.cx.seqs.elem(list).unwrap_or(Ty::None);
+        // In generic code the item type may be open until the arguments'
+        // live types decide it ([`FnBuilder::open_zip_item`]).
+        let settled = self.settled_ty_at(span)?;
+        let item = settled.map(|list| self.cx.seqs.elem(list).unwrap_or(Ty::None));
         let mut pending = Vec::new();
         let mut start = None;
         for a in args {
@@ -96,10 +98,8 @@ impl FnBuilder<'_, '_> {
             pending.push(self.pending(&a.value)?);
         }
         // As CPython's, every argument is evaluated before any is iterated.
-        let fields: Vec<Ty> = self
-            .cx
-            .seqs
-            .fields(item)
+        let fields: Vec<Ty> = item
+            .and_then(|item| self.cx.seqs.fields(item))
             .map(<[Ty]>::to_vec)
             .unwrap_or_default();
         let skip = usize::from(name == "enumerate");
@@ -111,6 +111,10 @@ impl FnBuilder<'_, '_> {
         if name == "enumerate" {
             start = start.or(Some(Operand::Int(0)));
         }
+        let item = match item {
+            Some(item) => item,
+            None => self.open_zip_item(start.is_some(), &sources, span)?,
+        };
         Ok(Zip {
             sources,
             start,
@@ -140,6 +144,39 @@ impl FnBuilder<'_, '_> {
         let v = self.expr(e)?;
         self.reads_results(e)?;
         Ok(Pending::Value(v, None, e.span))
+    }
+
+    /// The item type of an `enumerate(...)` or `zip(...)` whose node type
+    /// generic code left open, decided by its evaluated `sources` (and
+    /// `enumerate`'s count), as `enumerate(xs)` in `def f(xs)` needs;
+    /// binds the node's variables.
+    fn open_zip_item(&mut self, counted: bool, sources: &[Source], span: Span) -> Result<Ty> {
+        let mut fields = Vec::new();
+        if counted {
+            fields.push(Ty::Int);
+        }
+        for s in sources {
+            fields.push(self.source_item(s, span)?);
+        }
+        let item = self.cx.seqs.tuple(fields);
+        let list = self.cx.seqs.list(item);
+        let node = self.node_type(span)?;
+        super::bind(node, list, &self.cx.seqs, &mut self.subst);
+        Ok(item)
+    }
+
+    /// The type of each item `s` gives.
+    fn source_item(&self, s: &Source, span: Span) -> Result<Ty> {
+        match s {
+            Source::Seq { item, .. } | Source::Results { item, .. } => Ok(*item),
+            Source::Zip(z) => Ok(z.item),
+            Source::Table { t, part, .. } => match (part, self.ty(*t)) {
+                (Part::Item(ty), _) => Ok(*ty),
+                (Part::Key, ty @ Ty::Set(_)) => self.elem_of(ty, span),
+                (Part::Key, ty) => self.key_value(ty, span).map(|(k, _)| k),
+                (Part::Value, ty) => self.key_value(ty, span).map(|(_, v)| v),
+            },
+        }
     }
 
     /// The argument `p` as it is stepped, with the loop holding its own
