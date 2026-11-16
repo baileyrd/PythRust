@@ -1,0 +1,38 @@
+from collections.abc import Callable
+
+
+def outer() -> int:
+    x = 1
+
+    def middle() -> Callable[[], int]:
+        def inner() -> int:
+            nonlocal x
+            x += 10
+            return x
+
+        return inner
+
+    f = middle()
+    f()
+    return f() + x
+
+
+def both() -> int:
+    n = 0
+
+    def middle() -> int:
+        nonlocal n
+        n += 1
+
+        def inner() -> int:
+            nonlocal n
+            n += 100
+            return n
+
+        return inner()
+
+    return middle() + n
+
+
+print(outer())
+print(both())

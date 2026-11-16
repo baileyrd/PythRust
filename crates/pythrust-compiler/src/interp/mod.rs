@@ -395,11 +395,6 @@ impl<'m> Interp<'m, '_> {
         self.store(&binding.name, Value::Exc(exc));
         let flow = self.exec_block(&h.body);
         match self.frames.last_mut() {
-            Some(frame)
-                if matches!(frame.vars.get(binding.name.as_str()), Some(Value::Cell(_))) =>
-            {
-                None
-            }
             Some(frame) => frame.vars.remove(binding.name.as_str()),
             None => self.globals.remove(binding.name.as_str()),
         };

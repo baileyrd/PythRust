@@ -2197,7 +2197,6 @@ const UNBOUND: &str =
 fn a_capture_rebound_after_the_closure_is_a_cell() {
     let cases = [
         "def f(n):\n    x = 0\n    def g():\n        return x\n    while n > 0:\n        x = n\n        n -= 1\n    return g()\n",
-        "def f():\n    x = 1\n    def g():\n        return x\n    try:\n        pass\n    except ValueError as x:\n        pass\n    return g()\n",
         "def f(m):\n    x = m\n    def g():\n        return x\n    with m as x:\n        pass\n    return g()\n",
         "def f(x):\n    def g():\n        return x\n    x += 1\n    return g()\n",
         "def f():\n    c = 0\n    def g():\n        nonlocal c\n        c += 1\n    g()\n    return c\n",
@@ -2217,6 +2216,32 @@ fn a_loop_target_after_the_def_is_not_bound_before_it() {
 fn a_loop_target_is_bound_where_a_lambda_in_its_body_captures_it() {
     let src = "def f(xs):\n    out = []\n    for x in xs:\n        out.append(lambda: x)\n    return out\n";
     assert!(src_parse(src).is_ok(), "{:?}", src_parse(src).err());
+}
+
+#[test]
+fn nonlocal_may_name_any_enclosing_function_variable() {
+    let src = "def f():\n    x = 1\n    def m():\n        def i():\n            nonlocal x\n            x += 1\n        i()\n    m()\n    return x\n";
+    assert!(src_parse(src).is_ok(), "{:?}", src_parse(src).err());
+}
+
+#[test]
+fn nonlocal_of_a_parameter_is_an_error() {
+    let src = "def f():\n    x = 1\n    def g(x):\n        nonlocal x\n        x += 1\n    g(1)\n";
+    assert!(
+        src_err(src).contains("is parameter and nonlocal"),
+        "{}",
+        src_err(src)
+    );
+}
+
+#[test]
+fn a_captured_except_target_is_the_named_error() {
+    let src = "def f():\n    e = 1\n    def g():\n        return e\n    try:\n        pass\n    except ValueError as e:\n        pass\n    return g()\n";
+    assert!(
+        src_err(src).contains("bound by `except ... as`"),
+        "{}",
+        src_err(src)
+    );
 }
 
 #[test]
