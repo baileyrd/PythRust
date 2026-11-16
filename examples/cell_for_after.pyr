@@ -1,0 +1,11 @@
+def squares(xs: list[int]) -> list[int]:
+    def sq() -> int:
+        return x * x
+
+    out: list[int] = []
+    for x in xs:
+        out.append(sq())
+    return out
+
+
+print(squares([1, 2, 3]))

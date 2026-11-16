@@ -2190,9 +2190,6 @@ fn with_an_object_enters_and_exits_once() {
 // Closures (step 6-3a, D200, D204): a captured name is bound once,
 // before the closure, else the named errors until cells.
 
-const UNBOUND: &str =
-    "captures of a variable bound later or conditionally need cells (not supported yet)";
-
 #[test]
 fn a_capture_rebound_after_the_closure_is_a_cell() {
     let cases = [
@@ -2204,12 +2201,6 @@ fn a_capture_rebound_after_the_closure_is_a_cell() {
     for src in cases {
         assert!(src_parse(src).is_ok(), "{src}: {:?}", src_parse(src).err());
     }
-}
-
-#[test]
-fn a_loop_target_after_the_def_is_not_bound_before_it() {
-    let src = "def f(xs):\n    def g():\n        return x\n    for x in xs:\n        g()\n";
-    assert!(src_err(src).ends_with(UNBOUND), "{}", src_err(src));
 }
 
 #[test]
@@ -2344,16 +2335,6 @@ fn nonlocal_of_a_parameter_is_an_error() {
 }
 
 #[test]
-fn a_captured_except_target_is_the_named_error() {
-    let src = "def f():\n    e = 1\n    def g():\n        return e\n    try:\n        pass\n    except ValueError as e:\n        pass\n    return g()\n";
-    assert!(
-        src_err(src).contains("bound by `except ... as`"),
-        "{}",
-        src_err(src)
-    );
-}
-
-#[test]
 fn nonlocal_needs_an_enclosing_binding() {
     for src in [
         "def f():\n    nonlocal x\n    x = 1\n",
@@ -2366,25 +2347,14 @@ fn nonlocal_needs_an_enclosing_binding() {
 }
 
 #[test]
-fn a_capture_bound_after_or_in_a_branch_is_the_named_error() {
+fn a_capture_bound_after_or_in_a_branch_is_a_cell() {
     let after = "def f():\n    def g():\n        return x\n    x = 1\n    return g()\n";
     let branch =
         "def f(c):\n    if c:\n        x = 1\n    def g():\n        return x\n    return g()\n";
     let lambda = "def f(xs):\n    ys = sorted(xs, key=lambda v: v + k)\n    k = 1\n    return ys\n";
     let own = "def f():\n    x = sorted([1], key=lambda v: len(x))\n    return x\n";
-    let own_ann = "def f():\n    x: list[int] = sorted([1], key=lambda v: len(x))\n    return x\n";
-    for (src, name, closure) in [
-        (after, "x", "g"),
-        (branch, "x", "g"),
-        (lambda, "k", "lambda"),
-        // The assignment holding the lambda binds only after it is made.
-        (own, "x", "lambda"),
-        (own_ann, "x", "lambda"),
-    ] {
-        let msg = src_err(src);
-        let want = format!("`{name}` is captured by `{closure}` but not bound before it");
-        assert!(msg.starts_with(&want), "{src}: {msg}");
-        assert!(msg.ends_with(UNBOUND), "{msg}");
+    for src in [after, branch, lambda, own] {
+        assert!(src_parse(src).is_ok(), "{src}: {:?}", src_parse(src).err());
     }
 }
 

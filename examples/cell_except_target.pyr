@@ -1,0 +1,14 @@
+# expect-exit: 1
+
+def inside() -> str:
+    def get() -> str:
+        return str(e)
+
+    try:
+        raise ValueError("boom")
+    except ValueError as e:
+        print(get())
+    return get()
+
+
+print(inside())

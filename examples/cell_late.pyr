@@ -1,0 +1,12 @@
+def pick() -> int:
+    def get(read: bool) -> int:
+        if read:
+            return x
+        return 0
+
+    first = get(False)
+    x = 5
+    return first + get(True)
+
+
+print(pick())

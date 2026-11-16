@@ -457,11 +457,10 @@ fn captures(
         .collect()
 }
 
-/// Which captured names live in cells (D209), and the check that every
-/// one is bound before the closure (D204): a captured name that is
-/// rebound after the closure, or that some closure declares `nonlocal`,
-/// is shared through a cell; any other is captured by value. A name bound
-/// later or only conditionally is still refused (step 6-3b-2b).
+/// Which captured names live in cells (D209, D215): one rebound after the
+/// closure, declared `nonlocal` by some closure, or bound later or only
+/// conditionally (it may be unbound when read). Any other is captured by
+/// value.
 fn check_captures(
     captures: &Captures,
     declared: &BTreeMap<String, Vec<String>>,
@@ -472,50 +471,27 @@ fn check_captures(
 ) -> Result<BTreeSet<String>> {
     let mut count = binding_counts(body, params);
     count.retain(|n, _| !own.contains(n));
-    let unbinds = except_targets(body);
     let mut celled: BTreeSet<String> = declared.values().flatten().cloned().collect();
     for (closure, names) in captures {
         let at = lifted_span(lifted, closure);
-        let shown = source_name(closure);
         celled.extend(
             names
                 .iter()
                 .filter(|n| count.get(*n).is_some_and(|c| *c > 1))
                 .cloned(),
         );
-        if let Some(name) = names.iter().find(|n| unbinds.contains(*n)) {
-            let msg = format!(
-                "`{name}` is captured by `{shown}` and bound by `except ... as`, which unbinds \
-                 it after the handler; that needs cells that may be unbound (not supported yet)"
-            );
-            return Err(error(at, msg));
-        }
+        // A name bound later or only conditionally may be unbound when the
+        // closure reads it (D215): it is a cell too.
         let is_param = |n: &str| params.iter().any(|p| p.name.name == n);
-        let late = names.iter().find(|n| {
-            count.contains_key(*n) && !is_param(n) && !assigned_before(body, n, at.start)
-        });
-        if let Some(name) = late {
-            let msg = format!(
-                "`{name}` is captured by `{shown}` but not bound before it; captures of a \
-                 variable bound later or conditionally need cells (not supported yet)"
-            );
-            return Err(error(at, msg));
-        }
+        celled.extend(
+            names
+                .iter()
+                .filter(|n| count.contains_key(*n) && !is_param(n))
+                .filter(|n| !assigned_before(body, n, at.start))
+                .cloned(),
+        );
     }
     Ok(celled)
-}
-
-/// The names an `except ... as` of `body` binds: Python unbinds each one
-/// when its handler ends.
-fn except_targets(body: &Block) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    scope::walk(body, &mut |s| {
-        if let StmtKind::Try { handlers, .. } = &s.kind {
-            let names = handlers.iter().filter_map(|h| h.binding.as_ref());
-            out.extend(names.map(|b| b.name.clone()));
-        }
-    });
-    out
 }
 
 /// How many times each name of the function is bound, counting twice a
