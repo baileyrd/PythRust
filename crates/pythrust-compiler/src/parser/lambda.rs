@@ -2,15 +2,16 @@
 //! top-level def, so inference, ownership, `raises`, `run` and lowering
 //! see an ordinary def. A lambda is its own name where it was written.
 //!
-//! A lambda reads only its parameters, names bound in its body and
-//! module-level names; a name of the enclosing function, comprehension
-//! or lambda is the named error until closures exist (step 6-3).
+//! A lambda reads its parameters, names bound in its body and
+//! module-level names, and names of its enclosing function, which
+//! `closure` turns into leading parameters (step 6-3a); a name of an
+//! enclosing comprehension or lambda is the named error until cells exist.
 
 use std::collections::BTreeSet;
 
 use super::{error, Parser};
 use crate::ast::{
-    comp_name, Block, Expr, ExprKind, FuncDef, Ident, Mode, Param, ParamMode, Stmt, StmtKind,
+    comp_name, Expr, ExprKind, FuncDef, Ident, Mode, Param, ParamMode, Stmt, StmtKind,
 };
 use crate::diag::Result;
 use crate::infer::scope;
@@ -72,13 +73,6 @@ impl Parser<'_> {
             span,
         })
     }
-}
-
-/// The lambdas lifted inside one function read none of its names (D195).
-pub(super) fn check_captures(lifted: &[Stmt], params: &[Param], body: &Block) -> Result<()> {
-    let mut bound: BTreeSet<String> = scope::assigned(body);
-    bound.extend(params.iter().map(|p| p.name.name.clone()));
-    no_capture(lifted, &bound, "the enclosing function")
 }
 
 /// No lambda of `lifted` reads a name of `bound`, which `owner` binds

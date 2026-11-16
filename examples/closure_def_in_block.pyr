@@ -1,0 +1,14 @@
+# deviation: a nested def is only supported at the top of its function body (D202); CPython allows one in a block.
+# expect-exit: 1
+# expect-error: a nested `def` must be at the top of its function body
+
+def run(flag: bool) -> int:
+    if flag:
+        def one() -> int:
+            return 1
+
+        return one()
+    return 0
+
+
+print(run(True))

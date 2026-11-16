@@ -429,7 +429,7 @@ pub(crate) fn task_call(e: &Expr) -> Option<(&str, &Ident, &[Arg])> {
     Some((name.as_str(), attr, &args[1..]))
 }
 
-pub(super) fn target_names(target: &Target, out: &mut BTreeSet<String>) {
+pub(crate) fn target_names(target: &Target, out: &mut BTreeSet<String>) {
     match &target.kind {
         TargetKind::Name(name) => {
             out.insert(name.clone());

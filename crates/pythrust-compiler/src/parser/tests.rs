@@ -950,12 +950,22 @@ fn function_definition_errors() {
 fn def_only_at_top_level() {
     let msg = "`def` is only allowed at module top level";
     assert_eq!(
-        err("def f ( ) : NL INDENT def g ( ) : NL INDENT pass NL DEDENT DEDENT"),
+        err("if x : NL INDENT def g ( ) : NL INDENT pass NL DEDENT DEDENT"),
         msg
     );
     assert_eq!(
         err("if x : NL INDENT temper def g ( ) : NL INDENT pass NL DEDENT DEDENT"),
         msg
+    );
+    // Inside a function a `def` is a closure (step 6-3a), only a
+    // loose one and only at the top of the body.
+    assert_eq!(
+        err("def f ( ) : NL INDENT temper def g ( ) : NL INDENT pass NL DEDENT DEDENT"),
+        msg
+    );
+    assert_eq!(
+        err("def f ( ) : NL INDENT if x : NL INDENT def g ( ) : NL INDENT pass NL DEDENT DEDENT DEDENT"),
+        "a nested `def` must be at the top of its function body (not supported yet)"
     );
 }
 

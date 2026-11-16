@@ -1,0 +1,60 @@
+def counter(start: int, xs: list[int]) -> int:
+    def bump(n: int) -> int:
+        xs.append(n + start)
+        return len(xs)
+
+    def twice(n: int) -> int:
+        return bump(n) + bump(n + 1)
+
+    first = twice(1)
+    second = twice(5)
+    return first * 100 + second
+
+
+def greet(names: list[str], prefix: str) -> list[str]:
+    def one(n: str) -> str:
+        return prefix + n + "!"
+
+    return [one(n) for n in names]
+
+
+def fact(n: int) -> int:
+    def go(k: int) -> int:
+        if k <= 1:
+            return 1
+        return k * go(k - 1)
+
+    return go(n)
+
+
+def tagged(words: list[str], tag: str) -> list[str]:
+    def key(w: str) -> int:
+        return len(w + tag)
+
+    return sorted(words, key=key)
+
+
+def pure(n: int) -> int:
+    def double(x: int) -> int:
+        return x * 2
+
+    return double(double(n))
+
+
+def boom(limit: int) -> int:
+    def check(n: int) -> int:
+        if n > limit:
+            raise ValueError("over")
+        return n
+
+    return check(limit + 1)
+
+
+store = [1]
+print(counter(10, store), store)
+print(greet(["Zoë", "été"], "¡"))
+print(fact(5), tagged(["bb", "a", "ccc"], "é"), pure(3))
+try:
+    print(boom(2))
+except ValueError as e:
+    print("caught", e)

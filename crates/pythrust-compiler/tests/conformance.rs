@@ -476,6 +476,8 @@ const NATIVE: &[&str] = &[
     "sort_key_method_named_max",
     "lambda_key",
     "fn_value_native",
+    "closure_lambda_key",
+    "closure_nested",
     "lambda_task",
     "sort_key_mutates_list",
     "unicode_error",

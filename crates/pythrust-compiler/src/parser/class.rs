@@ -193,7 +193,7 @@ fn false_expr(span: Span) -> Expr {
     Expr { kind, span }
 }
 
-fn children_mut(kind: &mut StmtKind) -> Vec<&mut Block> {
+pub(super) fn children_mut(kind: &mut StmtKind) -> Vec<&mut Block> {
     match kind {
         StmtKind::If {
             branch,
