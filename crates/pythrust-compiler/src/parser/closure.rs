@@ -351,6 +351,43 @@ fn bindings(s: &Stmt) -> Vec<String> {
 /// Gives each closure its captures as leading parameters, and passes them
 /// at every call of it in `body` and the closures. A closure that takes
 /// some and is used other than called is the error of step 6-3b.
+/// An existing `<closure>(def, inner..)` whose def gained outer captures: splice
+/// them in front of the inner ones (the hidden def's parameter order) rather
+/// than wrapping the def operand again.
+fn widen_closure(args: &mut Vec<Arg>, captures: &Captures, callees: &mut HashSet<Span>) {
+    let Some(first) = args.first() else {
+        return;
+    };
+    let ExprKind::Name(h) = &first.value.kind else {
+        return;
+    };
+    let Some(names) = captures.get(h.as_str()).filter(|c| !c.is_empty()) else {
+        return;
+    };
+    callees.insert(first.value.span);
+    let at = first.value.span.start + 1 + args.len();
+    let extra: Vec<Arg> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let span = Span {
+                start: at + i,
+                end: at + i,
+            };
+            let value = Expr {
+                kind: ExprKind::Name(n.clone()),
+                span,
+            };
+            Arg {
+                name: None,
+                value,
+                span,
+            }
+        })
+        .collect();
+    args.splice(1..1, extra);
+}
+
 fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> Result<()> {
     let mut failed = None;
     let mut callees: HashSet<Span> = HashSet::new();
@@ -374,6 +411,10 @@ fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> R
             let ExprKind::Name(h) = &func.kind else {
                 return;
             };
+            if h == CLOSURE {
+                widen_closure(args, captures, &mut callees);
+                return;
+            }
             let Some(names) = captures.get(h.as_str()) else {
                 return;
             };

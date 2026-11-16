@@ -310,9 +310,18 @@ impl Checker {
             Some(Func::Mono(sig)) => sig,
             Some(Func::Poly(scheme)) => self.instantiate(name, &scheme, span),
         };
-        let changed = self.by_ref.get(name);
-        let visible = |p: &String| !sig.params.iter().take(captured).any(|q| q.name == *p);
-        if let Some(param) = changed.filter(|p| visible(p)) {
+        // A closure's captures may change; its other parameters may not.
+        let captures: Vec<&str> = sig
+            .params
+            .iter()
+            .take(captured)
+            .map(|p| p.name.as_str())
+            .collect();
+        let changed = self.by_ref.get(name).into_iter().flatten();
+        if let Some(param) = changed
+            .into_iter()
+            .find(|p| !captures.contains(&p.as_str()))
+        {
             let msg = format!(
                 "{} changes its parameter `{param}`, so it cannot be a function value yet",
                 display(name)

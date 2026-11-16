@@ -703,6 +703,10 @@ const NATIVE: &[&str] = &[
 /// so a closed gap moves to `NATIVE`.
 const NATIVE_GAPS: &[(&str, &str)] = &[
     (
+        "closure_levels",
+        "a closure value (step 6-3b-1, D205) needs an environment object (step 6-3c)",
+    ),
+    (
         "closure_values",
         "a closure value (step 6-3b-1, D205) needs an environment object (step 6-3c)",
     ),
