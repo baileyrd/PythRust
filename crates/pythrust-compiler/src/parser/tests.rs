@@ -2216,10 +2216,15 @@ fn a_capture_bound_after_or_in_a_branch_is_the_named_error() {
     let branch =
         "def f(c):\n    if c:\n        x = 1\n    def g():\n        return x\n    return g()\n";
     let lambda = "def f(xs):\n    ys = sorted(xs, key=lambda v: v + k)\n    k = 1\n    return ys\n";
+    let own = "def f():\n    x = sorted([1], key=lambda v: len(x))\n    return x\n";
+    let own_ann = "def f():\n    x: list[int] = sorted([1], key=lambda v: len(x))\n    return x\n";
     for (src, name, closure) in [
         (after, "x", "g"),
         (branch, "x", "g"),
         (lambda, "k", "lambda"),
+        // The assignment holding the lambda binds only after it is made.
+        (own, "x", "lambda"),
+        (own_ann, "x", "lambda"),
     ] {
         let msg = src_err(src);
         let want = format!("`{name}` is captured by `{closure}` but not bound before it");

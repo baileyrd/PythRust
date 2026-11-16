@@ -20,9 +20,8 @@ pub(super) enum Sink {
     /// Into a fresh list, set or dict.
     Into(LocalId),
     /// Into a fresh one whose type generic code left open, decided by the
-    /// first item ([`FnBuilder::decide_comp`]): the comprehension's span,
-    /// and the statement pool that releases it.
-    Open(LocalId, Span, Option<usize>),
+    /// first item ([`FnBuilder::decide_comp`]); the comprehension's span.
+    Open(LocalId, Span),
     /// Added to an int total, as `sum` adds; `span` is the call's.
     Sum(LocalId, Span),
     /// `any` (`any` true) or `all`: `out` starts `!any` and becomes
@@ -46,14 +45,23 @@ impl FnBuilder<'_, '_> {
             }
             // `[f(x) for x in xs]` in `def g(xs)`: what `f` returns is
             // known once its call is lowered, as for a display.
+            // A list, set or dict is counted, so the statement releases it
+            // from the start: an exception edge lowered before its type is
+            // decided releases it too.
             None => {
-                let pool = self.pools.len().checked_sub(1);
                 let out = self.new_local(Ty::None);
-                (out, Sink::Open(out, span, pool))
+                if let Some(pool) = self.pools.last_mut() {
+                    pool.push(out);
+                }
+                (out, Sink::Open(out, span))
             }
         };
         self.assign(out, Rvalue::NewSeq(Vec::new()), span);
         self.comp_clauses(gather, clauses, sink, |_| Ok(()))?;
+        if self.ty(Operand::Local(out)) == Ty::None {
+            let what = "a value whose type depends on generic code";
+            return Err(super::unsupported(span, what));
+        }
         Ok(Operand::Local(out))
     }
 
@@ -150,7 +158,7 @@ impl FnBuilder<'_, '_> {
     fn gather(&mut self, gather: &Gather, sink: Sink) -> Result<()> {
         let (out, open) = match sink {
             Sink::Into(out) => (out, None),
-            Sink::Open(out, span, pool) => (out, Some((span, pool))),
+            Sink::Open(out, span) => (out, Some(span)),
             Sink::Sum(total, span) => {
                 let e = gen_item(gather, span)?;
                 return self.sum_item(e, total, span);
@@ -195,25 +203,16 @@ impl FnBuilder<'_, '_> {
     }
 
     /// The type of comprehension `out`; for an open one (`open`: its
-    /// span and statement pool), decided now by the first item's values
-    /// `items`, as [`FnBuilder::bind_display`] does for a display.
-    fn decide_comp(
-        &mut self,
-        out: LocalId,
-        open: Option<(Span, Option<usize>)>,
-        items: &[Operand],
-    ) -> Result<Ty> {
+    /// span), decided now by the first item's values `items`, as
+    /// [`FnBuilder::bind_display`] does for a display.
+    fn decide_comp(&mut self, out: LocalId, open: Option<Span>, items: &[Operand]) -> Result<Ty> {
         let have = self.ty(Operand::Local(out));
-        let Some((span, pool)) = open.filter(|_| have == Ty::None) else {
+        let Some(span) = open.filter(|_| have == Ty::None) else {
             return Ok(have);
         };
         self.bind_display(items, span)?;
         let ty = self.ty_at(span)?;
         self.locals[out.0] = ty;
-        let pool = pool.filter(|_| ty.is_rc());
-        if let Some(pool) = pool.and_then(|p| self.pools.get_mut(p)) {
-            pool.push(out);
-        }
         Ok(ty)
     }
 

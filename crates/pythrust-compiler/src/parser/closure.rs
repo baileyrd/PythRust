@@ -306,9 +306,10 @@ fn binding_counts(body: &Block, params: &[Param]) -> BTreeMap<String, usize> {
     count
 }
 
-/// Whether a top-level assignment of `body` before `start` binds `name`.
+/// Whether a top-level assignment of `body` that ends before `start`
+/// binds `name`: one holding the closure binds only after it is made.
 fn assigned_before(body: &Block, name: &str, start: usize) -> bool {
-    body.iter().filter(|s| s.span.start < start).any(|s| {
+    body.iter().filter(|s| s.span.end <= start).any(|s| {
         let mut out = BTreeSet::new();
         match &s.kind {
             StmtKind::Assign { target, .. } => scope::target_names(target, &mut out),
