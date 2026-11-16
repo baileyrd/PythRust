@@ -1,0 +1,26 @@
+# deviation: a closure value called inside a task is a named error (D196, D206); CPython runs it.
+# expect-exit: 1
+# expect-error: a function value is called inside a task; rule 4 cannot see its callee yet
+
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+
+
+def adder(k: int) -> Callable[[int], int]:
+    def add(n: int) -> int:
+        return n + k
+
+    return add
+
+
+def run(g: Callable[[int], int], x: int) -> int:
+    return g(x)
+
+
+def main() -> None:
+    with ThreadPoolExecutor() as ex:
+        fut = ex.submit(run, adder(2), 3)
+        print(fut.result())
+
+
+main()

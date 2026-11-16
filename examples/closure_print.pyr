@@ -1,0 +1,12 @@
+# deviation: a closure value can't be printed (D193, D206); CPython prints its address.
+# expect-exit: 1
+# expect-error: printing a function needs a name: its address is not stable
+
+def make(k: int):
+    def add(n: int) -> int:
+        return n + k
+
+    return add
+
+
+print(make(1))

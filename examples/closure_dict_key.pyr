@@ -1,0 +1,13 @@
+# deviation: a closure value is not a dict key (D193, D206); CPython hashes it by identity.
+# expect-exit: 1
+# expect-error: dict keys and set elements are not supported yet
+
+def make(k: int):
+    def add(n: int) -> int:
+        return n + k
+
+    return add
+
+
+d = {make(1): 1}
+print(len(d))

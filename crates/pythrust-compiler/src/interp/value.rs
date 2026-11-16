@@ -64,6 +64,8 @@ pub(super) enum Value<'m> {
     Record(Rc<Record<'m>>),
     /// A record's method bound to its receiver: `p.m`.
     Bound(Rc<Bound<'m>>),
+    /// A closure value (D205): a def with its captured values.
+    Closure(Rc<Closure<'m>>),
 }
 
 /// A record: its definition and its fields' values, in declaration
@@ -80,6 +82,14 @@ impl<'m> Record<'m> {
         let at = self.def.fields.iter().position(|f| f.name.name == name)?;
         self.fields.borrow().get(at).cloned()
     }
+}
+
+/// A closure value (D205): the hidden def and the values it captured,
+/// passed first at every call.
+#[derive(Debug)]
+pub(super) struct Closure<'m> {
+    pub func: Rc<Func<'m>>,
+    pub captured: Vec<Value<'m>>,
 }
 
 /// A method and the record it is called on, passed as `self`.
@@ -241,6 +251,7 @@ impl<'m> Value<'m> {
             Value::Range(r) => r.len() != 0,
             Value::Bytes(b) => !b.is_empty(),
             Value::Func(_)
+            | Value::Closure(_)
             | Value::Builtin(_)
             | Value::Method(_)
             | Value::Exc(_)
@@ -269,7 +280,7 @@ impl<'m> Value<'m> {
             Value::Tuple(_) => "tuple",
             Value::View(view, _) => view.name(),
             Value::Range(_) => "range",
-            Value::Func(_) => "function",
+            Value::Func(_) | Value::Closure(_) => "function",
             Value::Builtin(b) if b.exception().is_some() => "type",
             Value::Builtin(_) | Value::Method(_) => "builtin_function_or_method",
             // A user class's base: inference refuses every operation whose
@@ -808,6 +819,7 @@ fn write_repr<'m>(
         Value::Range(r) if r.step == 1 => format!("range({}, {})", r.start, r.stop),
         Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
         Value::Func(f) => format!("<function {}>", f.def.name.name),
+        Value::Closure(c) => format!("<function {}>", c.func.def.name.name),
         Value::Class(def) => format!("<class '{}'>", unqualified(&def.name.name)),
         Value::ExcClass(class) => format!("<class '{}'>", class.name()),
         Value::Bound(b) => format!("<bound method {}>", b.func.def.name.name),

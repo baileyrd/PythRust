@@ -1,0 +1,16 @@
+# deviation: a nested def naming itself as a value needs cells (D205, step 6-3b-2); CPython allows it.
+# expect-exit: 1
+# expect-error: `g` refers to itself as a value; that needs cells (not supported yet)
+
+from collections.abc import Callable
+
+
+def outer(k: int) -> Callable[[int], int]:
+    def g(n: int) -> int:
+        h = g
+        return n + k
+
+    return g
+
+
+print(outer(1)(2))

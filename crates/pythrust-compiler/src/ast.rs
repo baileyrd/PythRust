@@ -473,6 +473,11 @@ pub fn source_name(name: &str) -> &str {
     name.split_once(COMP_MARK).map_or(name, |(n, _)| n)
 }
 
+/// The name of the call that makes a closure value (D205): the first
+/// argument is the closure's hidden def, the rest its captured values.
+/// Not a name a program can write.
+pub const CLOSURE: &str = "<closure>";
+
 /// Whether `name` is the hidden def a lambda is lifted to (D195).
 pub fn is_lambda(name: &str) -> bool {
     source_name(name) != name && name.starts_with("lambda")

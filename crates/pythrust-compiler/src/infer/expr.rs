@@ -293,12 +293,26 @@ impl Checker {
     /// A top-level def read as a value (D190): its `Callable` type, or
     /// the named error for a def that cannot be one (D189, D191).
     fn function_value(&mut self, name: &str, span: Span) -> Result<Option<Type>> {
+        let Some(ty) = self.signature_value(name, span, 0)? else {
+            return Ok(None);
+        };
+        if is_lambda(name) {
+            self.lambda_values.push((ty.clone(), span));
+        }
+        Ok(Some(ty))
+    }
+
+    /// `name`'s `Callable` type, its first `captured` parameters being a
+    /// closure's captures, which are no part of its use as a value.
+    fn signature_value(&mut self, name: &str, span: Span, captured: usize) -> Result<Option<Type>> {
         let sig = match self.funcs.get(name).cloned() {
             None => return Ok(None),
             Some(Func::Mono(sig)) => sig,
             Some(Func::Poly(scheme)) => self.instantiate(name, &scheme, span),
         };
-        if let Some(param) = self.by_ref.get(name) {
+        let changed = self.by_ref.get(name);
+        let visible = |p: &String| !sig.params.iter().take(captured).any(|q| q.name == *p);
+        if let Some(param) = changed.filter(|p| visible(p)) {
             let msg = format!(
                 "{} changes its parameter `{param}`, so it cannot be a function value yet",
                 display(name)
@@ -314,11 +328,39 @@ impl Checker {
             return Err(error(span, msg));
         }
         let params = sig.params.into_iter().map(|p| p.ty).collect();
-        let ty = Type::Func(params, Box::new(sig.ret));
-        if is_lambda(name) {
+        Ok(Some(Type::Func(params, Box::new(sig.ret))))
+    }
+
+    /// The value of a closure (D205), `<closure>(def, captures...)`: the
+    /// def's `Callable` without its leading capture parameters, which
+    /// the captured values fix.
+    fn closure(&mut self, args: &[Arg], span: Span) -> Result<Type> {
+        let Some(first) = args.first() else {
+            return Err(error(span, "a closure without a function".to_string()));
+        };
+        let ExprKind::Name(def) = &first.value.kind else {
+            return Err(error(span, "a closure of something but a def".to_string()));
+        };
+        let captured = args.len() - 1;
+        let ty = self.signature_value(def, span, captured)?;
+        let Some(Type::Func(mut params, ret)) = ty else {
+            return Err(error(span, format!("closure of `{def}`, not a def")));
+        };
+        let rest = params.split_off(captured.min(params.len()));
+        for (arg, want) in args[1..].iter().zip(&params) {
+            let got = self.expr(&arg.value)?;
+            self.expect(
+                arg.value.span,
+                want,
+                &got,
+                "a captured value of another type",
+            )?;
+        }
+        let ty = Type::Func(rest, ret);
+        if is_lambda(def) {
             self.lambda_values.push((ty.clone(), span));
         }
-        Ok(Some(ty))
+        Ok(ty)
     }
 
     fn list(&mut self, items: &[Expr]) -> Result<Type> {
@@ -500,6 +542,9 @@ impl Checker {
     }
 
     fn call_name(&mut self, name: &str, at: Span, args: &[Arg], span: Span) -> Result<Type> {
+        if name == crate::ast::CLOSURE {
+            return self.closure(args, span);
+        }
         let local = self
             .frame
             .locals
@@ -507,6 +552,17 @@ impl Checker {
             .or_else(|| self.globals.get(name));
         if let Some(t) = local {
             let t = self.subst.zonk(t);
+            // A name whose type a later constraint decides (a `for` target
+            // over a list of functions) is a function by this call.
+            let t = match t {
+                Type::Var(_) => {
+                    let params = args.iter().map(|_| self.subst.fresh()).collect();
+                    let want = Type::Func(params, Box::new(self.subst.fresh()));
+                    self.expect(at, &want, &t, "only function values can be called")?;
+                    self.subst.zonk(&t)
+                }
+                known => known,
+            };
             let Type::Func(params, ret) = t else {
                 let msg = format!("`{}` is {t}, not a function", source_name(name));
                 return Err(error(at, msg));
