@@ -703,6 +703,22 @@ const NATIVE: &[&str] = &[
 /// so a closed gap moves to `NATIVE`.
 const NATIVE_GAPS: &[(&str, &str)] = &[
     (
+        "cell_rebound",
+        "a cell (step 6-3b-2a, D209) needs an environment object (step 6-3c)",
+    ),
+    (
+        "cell_nonlocal",
+        "a cell (step 6-3b-2a, D209) needs an environment object (step 6-3c)",
+    ),
+    (
+        "cell_loop_late",
+        "a cell (step 6-3b-2a, D209) needs an environment object (step 6-3c)",
+    ),
+    (
+        "cell_heap",
+        "a cell (step 6-3b-2a, D209) needs an environment object (step 6-3c)",
+    ),
+    (
         "closure_levels",
         "a closure value (step 6-3b-1, D205) needs an environment object (step 6-3c)",
     ),

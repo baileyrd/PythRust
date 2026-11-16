@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use super::{error, Parser};
 use crate::ast::{
     comp_name, source_name, Arg, Block, Expr, ExprKind, FuncDef, Mode, Param, ParamMode, Stmt,
-    StmtKind, Target, TargetKind, CLOSURE,
+    StmtKind, Target, TargetKind, CELL, CLOSURE,
 };
 use crate::diag::Result;
 use crate::infer::scope;
@@ -35,14 +35,21 @@ impl Parser<'_> {
         start: usize,
     ) -> Result<()> {
         let nested = extract(body)?;
+        if !self.in_func {
+            reject_nonlocal(body)?;
+        }
         if mode == Mode::Tempered {
             if let Some(def) = nested.first() {
                 return Err(error(def.span, TEMPERED));
             }
         }
+        let mut bound = scope::assigned(body);
+        bound.extend(params.iter().map(|p| p.name.name.clone()));
         let mut names = BTreeMap::new();
+        let mut declared: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for mut def in nested {
             let hidden = comp_name(&def.name.name, def.span.start);
+            declared.insert(hidden.clone(), nonlocals(&def, &bound)?);
             names.insert(def.name.name.clone(), hidden.clone());
             def.name.name = hidden;
             self.lifted.push(Stmt {
@@ -50,23 +57,69 @@ impl Parser<'_> {
                 kind: StmtKind::FuncDef(def),
             });
         }
-        let mut bound = scope::assigned(body);
-        bound.extend(params.iter().map(|p| p.name.name.clone()));
         if let Some(clash) = names.keys().find(|n| bound.contains(*n)) {
             let msg = format!("`{clash}` is a nested `def` and also assigned or a parameter");
             return Err(error(span_of(body, clash), msg));
         }
         let lifted = &mut self.lifted[start..];
         rename(body, lifted, &names)?;
-        let captures = captures(lifted, &bound);
+        let captures = captures(lifted, &bound, &declared);
         if mode == Mode::Tempered {
             if let Some((name, _)) = captures.iter().find(|(_, c)| !c.is_empty()) {
                 let at = lifted_span(lifted, name);
                 return Err(error(at, TEMPERED));
             }
         }
-        check_captures(&captures, body, params, lifted)?;
-        add_captures(body, lifted, &captures)
+        let celled = check_captures(&captures, &declared, body, params, lifted)?;
+        add_captures(body, lifted, &captures, &celled)
+    }
+}
+
+/// The names `def` declares `nonlocal`, each bound in the enclosing
+/// function (`bound`) as Python requires; they are captured as cells.
+fn nonlocals(def: &FuncDef, bound: &BTreeSet<String>) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut bad = None;
+    scope::walk(&def.body, &mut |s| {
+        let StmtKind::Nonlocal(names) = &s.kind else {
+            return;
+        };
+        for n in names {
+            if !bound.contains(&n.name) && bad.is_none() {
+                bad = Some(n.clone());
+            }
+            out.push(n.name.clone());
+        }
+    });
+    match bad {
+        Some(n) => Err(error(
+            n.span,
+            format!(
+                "no binding for nonlocal `{}` found in the enclosing function",
+                n.name
+            ),
+        )),
+        None => Ok(out),
+    }
+}
+
+/// A `nonlocal` in a function no function encloses.
+fn reject_nonlocal(body: &Block) -> Result<()> {
+    let mut bad = None;
+    scope::walk(body, &mut |s| {
+        if let (StmtKind::Nonlocal(names), None) = (&s.kind, &bad) {
+            bad = names.first().cloned();
+        }
+    });
+    match bad {
+        Some(n) => Err(error(
+            n.span,
+            format!(
+                "no binding for nonlocal `{}` found in the enclosing function",
+                n.name
+            ),
+        )),
+        None => Ok(()),
     }
 }
 
@@ -207,7 +260,11 @@ fn rename_in(block: &mut Block, cx: &RenameCx<'_>, late: &mut Option<(Span, Stri
 
 /// What each closure of `lifted` takes: the names of `bound` it reads,
 /// and those of the closures it calls, to a fixed point.
-fn captures(lifted: &[Stmt], bound: &BTreeSet<String>) -> Captures {
+fn captures(
+    lifted: &[Stmt],
+    bound: &BTreeSet<String>,
+    declared: &BTreeMap<String, Vec<String>>,
+) -> Captures {
     let defs: Vec<&FuncDef> = lifted
         .iter()
         .filter_map(|s| match &s.kind {
@@ -221,7 +278,11 @@ fn captures(lifted: &[Stmt], bound: &BTreeSet<String>) -> Captures {
     for d in &defs {
         let uses: BTreeSet<&str> = scope::name_uses(d).into_iter().map(|(n, _)| n).collect();
         let reads = uses.iter().filter(|n| bound.contains(**n));
-        direct.insert(&d.name.name, reads.map(|n| n.to_string()).collect());
+        let nonlocal = declared.get(&d.name.name).into_iter().flatten().cloned();
+        direct.insert(
+            &d.name.name,
+            reads.map(|n| n.to_string()).chain(nonlocal).collect(),
+        );
         let callees = uses.iter().filter(|n| hidden.contains(**n));
         calls.insert(&d.name.name, callees.copied().collect());
     }
@@ -248,28 +309,29 @@ fn captures(lifted: &[Stmt], bound: &BTreeSet<String>) -> Captures {
         .collect()
 }
 
-/// A captured name is bound once in its function, before the closure
-/// (D200, D204): a parameter never bound again, or one top-level
-/// assignment before it. Otherwise a closure would see it change, or
-/// unbound, only through a cell.
+/// Which captured names live in cells (D209), and the check that every
+/// one is bound before the closure (D204): a captured name that is
+/// rebound after the closure, or that some closure declares `nonlocal`,
+/// is shared through a cell; any other is captured by value. A name bound
+/// later or only conditionally is still refused (step 6-3b-2b).
 fn check_captures(
     captures: &Captures,
+    declared: &BTreeMap<String, Vec<String>>,
     body: &Block,
     params: &[Param],
     lifted: &[Stmt],
-) -> Result<()> {
+) -> Result<BTreeSet<String>> {
     let count = binding_counts(body, params);
+    let mut celled: BTreeSet<String> = declared.values().flatten().cloned().collect();
     for (closure, names) in captures {
         let at = lifted_span(lifted, closure);
         let shown = source_name(closure);
-        let again = names.iter().find(|n| count.get(*n).is_some_and(|c| *c > 1));
-        if let Some(name) = again {
-            let msg = format!(
-                "`{name}` is captured by `{shown}` and rebound; \
-                 captures of a changing variable need cells (not supported yet)"
-            );
-            return Err(error(at, msg));
-        }
+        celled.extend(
+            names
+                .iter()
+                .filter(|n| count.get(*n).is_some_and(|c| *c > 1))
+                .cloned(),
+        );
         let is_param = |n: &str| params.iter().any(|p| p.name.name == n);
         let late = names
             .iter()
@@ -282,7 +344,7 @@ fn check_captures(
             return Err(error(at, msg));
         }
     }
-    Ok(())
+    Ok(celled)
 }
 
 /// How many times each name of the function is bound, counting twice a
@@ -309,17 +371,35 @@ fn binding_counts(body: &Block, params: &[Param]) -> BTreeMap<String, usize> {
 /// Whether a top-level assignment of `body` that ends before `start`
 /// binds `name`: one holding the closure binds only after it is made.
 fn assigned_before(body: &Block, name: &str, start: usize) -> bool {
-    body.iter().filter(|s| s.span.end <= start).any(|s| {
-        let mut out = BTreeSet::new();
-        match &s.kind {
-            StmtKind::Assign { target, .. } => scope::target_names(target, &mut out),
-            StmtKind::AnnAssign { target, .. } => {
-                out.insert(target.name.clone());
+    in_loop_of(body, name, start)
+        || body.iter().filter(|s| s.span.end <= start).any(|s| {
+            let mut out = BTreeSet::new();
+            match &s.kind {
+                StmtKind::Assign { target, .. } => scope::target_names(target, &mut out),
+                StmtKind::AnnAssign { target, .. } => {
+                    out.insert(target.name.clone());
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        out.contains(name)
-    })
+            out.contains(name)
+        })
+}
+
+/// Whether `start` is inside the body of a `for` whose target binds `name`:
+/// the target is bound by then, and rebinds each turn (a late-binding cell).
+fn in_loop_of(body: &Block, name: &str, start: usize) -> bool {
+    let mut found = false;
+    scope::walk(body, &mut |s| {
+        let StmtKind::For { target, body, .. } = &s.kind else {
+            return;
+        };
+        let inside = body.first().is_some_and(|b| b.span.start <= start)
+            && body.last().is_some_and(|b| start < b.span.end);
+        let mut out = BTreeSet::new();
+        scope::target_names(target, &mut out);
+        found |= inside && out.contains(name);
+    });
+    found
 }
 
 /// The names a statement binds, each time it does.
@@ -354,7 +434,12 @@ fn bindings(s: &Stmt) -> Vec<String> {
 /// An existing `<closure>(def, inner..)` whose def gained outer captures: splice
 /// them in front of the inner ones (the hidden def's parameter order) rather
 /// than wrapping the def operand again.
-fn widen_closure(args: &mut Vec<Arg>, captures: &Captures, callees: &mut HashSet<Span>) {
+fn widen_closure(
+    args: &mut Vec<Arg>,
+    captures: &Captures,
+    celled: &BTreeSet<String>,
+    callees: &mut HashSet<Span>,
+) {
     let Some(first) = args.first() else {
         return;
     };
@@ -370,25 +455,25 @@ fn widen_closure(args: &mut Vec<Arg>, captures: &Captures, callees: &mut HashSet
         .iter()
         .enumerate()
         .map(|(i, n)| {
-            let span = Span {
-                start: at + i,
-                end: at + i,
-            };
-            let value = Expr {
-                kind: ExprKind::Name(n.clone()),
-                span,
-            };
-            Arg {
-                name: None,
-                value,
-                span,
-            }
+            capture_arg(
+                n,
+                Span {
+                    start: at + i,
+                    end: at + i,
+                },
+                celled,
+            )
         })
         .collect();
     args.splice(1..1, extra);
 }
 
-fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> Result<()> {
+fn add_captures(
+    body: &mut Block,
+    lifted: &mut [Stmt],
+    captures: &Captures,
+    celled: &BTreeSet<String>,
+) -> Result<()> {
     let mut failed = None;
     let mut callees: HashSet<Span> = HashSet::new();
     let owner: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
@@ -412,7 +497,7 @@ fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> R
                 return;
             };
             if h == CLOSURE {
-                widen_closure(args, captures, &mut callees);
+                widen_closure(args, captures, celled, &mut callees);
                 return;
             }
             let Some(names) = captures.get(h.as_str()) else {
@@ -420,22 +505,21 @@ fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> R
             };
             callees.insert(func.span);
             let at = func.span.start;
-            let extra = names.iter().enumerate().map(|(i, n)| {
-                let span = Span {
-                    start: at + i,
-                    end: at + i,
-                };
-                let value = Expr {
-                    kind: ExprKind::Name(n.clone()),
-                    span,
-                };
-                Arg {
-                    name: None,
-                    value,
-                    span,
-                }
-            });
-            args.splice(0..0, extra.collect::<Vec<_>>());
+            let extra: Vec<Arg> = names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| {
+                    capture_arg(
+                        n,
+                        Span {
+                            start: at + i,
+                            end: at + i,
+                        },
+                        celled,
+                    )
+                })
+                .collect();
+            args.splice(0..0, extra);
         }
         ExprKind::Name(h) => {
             let Some(names) = captures.get(h.as_str()).filter(|c| !c.is_empty()) else {
@@ -452,7 +536,7 @@ fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> R
                 failed = Some((e.span, msg));
                 return;
             }
-            *e = closure_value(h, names, e.span, &mut callees);
+            *e = closure_value(h, names, celled, e.span, &mut callees);
         }
         _ => {}
     };
@@ -488,10 +572,49 @@ fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> R
     Ok(())
 }
 
+/// The argument that passes captured variable `n`: its value, or its slot
+/// when `n` is celled (D209).
+fn capture_arg(n: &str, span: Span, celled: &BTreeSet<String>) -> Arg {
+    let name = Expr {
+        kind: ExprKind::Name(n.to_string()),
+        span,
+    };
+    let value = if celled.contains(n) {
+        let func = Expr {
+            kind: ExprKind::Name(CELL.to_string()),
+            span,
+        };
+        Expr {
+            kind: ExprKind::Call {
+                func: Box::new(func),
+                args: vec![Arg {
+                    name: None,
+                    span,
+                    value: name,
+                }],
+            },
+            span,
+        }
+    } else {
+        name
+    };
+    Arg {
+        name: None,
+        span,
+        value,
+    }
+}
+
 /// The value of closure `h`, which takes `names`, made where it was
 /// written at `span` (D205): `<closure>(h, names...)`, a partial
 /// application inference, `run` and `build` know by name.
-fn closure_value(h: &str, names: &[String], span: Span, seen: &mut HashSet<Span>) -> Expr {
+fn closure_value(
+    h: &str,
+    names: &[String],
+    celled: &BTreeSet<String>,
+    span: Span,
+    seen: &mut HashSet<Span>,
+) -> Expr {
     let at = span.start;
     let name = |n: &str, k: usize| {
         let span = Span {
@@ -503,15 +626,20 @@ fn closure_value(h: &str, names: &[String], span: Span, seen: &mut HashSet<Span>
             span,
         }
     };
-    let arg = |value: Expr| Arg {
-        name: None,
-        span: value.span,
-        value,
-    };
     let def = name(h, 1);
     seen.insert(def.span);
-    let mut args = vec![arg(def)];
-    args.extend(names.iter().enumerate().map(|(i, n)| arg(name(n, 2 + i))));
+    let mut args = vec![Arg {
+        name: None,
+        span: def.span,
+        value: def,
+    }];
+    args.extend(names.iter().enumerate().map(|(i, n)| {
+        let span = Span {
+            start: at + 2 + i,
+            end: at + 2 + i,
+        };
+        capture_arg(n, span, celled)
+    }));
     Expr {
         kind: ExprKind::Call {
             func: Box::new(name(CLOSURE, 0)),

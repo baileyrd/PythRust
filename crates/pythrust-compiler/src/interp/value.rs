@@ -66,6 +66,9 @@ pub(super) enum Value<'m> {
     Bound(Rc<Bound<'m>>),
     /// A closure value (D205): a def with its captured values.
     Closure(Rc<Closure<'m>>),
+    /// A variable shared between a function and its closures (D209): only
+    /// ever a frame's variable or a captured argument, never a user value.
+    Cell(Rc<RefCell<Value<'m>>>),
 }
 
 /// A record: its definition and its fields' values, in declaration
@@ -252,6 +255,7 @@ impl<'m> Value<'m> {
             Value::Bytes(b) => !b.is_empty(),
             Value::Func(_)
             | Value::Closure(_)
+            | Value::Cell(_)
             | Value::Builtin(_)
             | Value::Method(_)
             | Value::Exc(_)
@@ -281,6 +285,7 @@ impl<'m> Value<'m> {
             Value::View(view, _) => view.name(),
             Value::Range(_) => "range",
             Value::Func(_) | Value::Closure(_) => "function",
+            Value::Cell(c) => c.borrow().type_name(),
             Value::Builtin(b) if b.exception().is_some() => "type",
             Value::Builtin(_) | Value::Method(_) => "builtin_function_or_method",
             // A user class's base: inference refuses every operation whose
@@ -820,6 +825,7 @@ fn write_repr<'m>(
         Value::Range(r) => format!("range({}, {}, {})", r.start, r.stop, r.step),
         Value::Func(f) => format!("<function {}>", f.def.name.name),
         Value::Closure(c) => format!("<function {}>", c.func.def.name.name),
+        Value::Cell(_) => "<cell>".to_string(),
         Value::Class(def) => format!("<class '{}'>", unqualified(&def.name.name)),
         Value::ExcClass(class) => format!("<class '{}'>", class.name()),
         Value::Bound(b) => format!("<bound method {}>", b.func.def.name.name),

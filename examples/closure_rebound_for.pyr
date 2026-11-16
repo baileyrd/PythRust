@@ -1,6 +1,6 @@
-# deviation: a closure over a loop target needs cells (D200, D204, step 6-3b); CPython reads its value at each call.
+# deviation: a closure over a name bound after it needs cells that may be unbound (D204, step 6-3b-2b); CPython reads the loop target at each call.
 # expect-exit: 1
-# expect-error: `x` is captured by `sq` and rebound; captures of a changing variable need cells (not supported yet)
+# expect-error: `x` is captured by `sq` but not bound before it
 
 def squares(xs: list[int]) -> list[int]:
     def sq() -> int:

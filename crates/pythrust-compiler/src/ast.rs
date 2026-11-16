@@ -125,6 +125,9 @@ pub enum StmtKind {
     Break,
     Continue,
     Pass,
+    /// `'nonlocal' NAME (',' NAME)*` (D209): the parser consumes it, with its
+    /// enclosing function's closure lifting (step 6-3b-2a).
+    Nonlocal(Vec<Ident>),
     /// A bare `expr_list` evaluated for effect.
     Expr(Expr),
     FuncDef(FuncDef),
@@ -477,6 +480,10 @@ pub fn source_name(name: &str) -> &str {
 /// argument is the closure's hidden def, the rest its captured values.
 /// Not a name a program can write.
 pub const CLOSURE: &str = "<closure>";
+
+/// The call the parser writes as a capture argument for a cell (D209,
+/// step 6-3b-2a): `<cell>(x)` passes the variable's slot, not its value.
+pub const CELL: &str = "<cell>";
 
 /// Whether `name` is the hidden def a lambda is lifted to (D195).
 pub fn is_lambda(name: &str) -> bool {

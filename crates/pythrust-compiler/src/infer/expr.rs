@@ -554,6 +554,12 @@ impl Checker {
         if name == crate::ast::CLOSURE {
             return self.closure(args, span);
         }
+        if name == crate::ast::CELL {
+            let Some(arg) = args.first() else {
+                return Err(error(span, "a cell of nothing".to_string()));
+            };
+            return self.expr(&arg.value);
+        }
         let local = self
             .frame
             .locals

@@ -429,6 +429,7 @@ impl<'a> Parser<'a> {
                 self.bump();
                 StmtKind::Pass
             }
+            TokenKind::Nonlocal => self.nonlocal_stmt()?,
             _ => self.expr_stmt()?,
         };
         Ok(Stmt {
@@ -463,6 +464,17 @@ impl<'a> Parser<'a> {
     }
 
     /// `'del' target`: only one subscript, `xs[i]` or `d[k]`, for now.
+    fn nonlocal_stmt(&mut self) -> Result<StmtKind> {
+        let at = self.bump().span;
+        if !self.in_func {
+            return Err(error(at, "`nonlocal` outside a function"));
+        }
+        let names = self
+            .comma_list(|p| p.expect_name("a name after `nonlocal`"))?
+            .0;
+        Ok(StmtKind::Nonlocal(names))
+    }
+
     fn del_stmt(&mut self) -> Result<StmtKind> {
         self.bump();
         let target = self.expr_list()?;
@@ -1754,6 +1766,7 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::Break => "break",
         TokenKind::Continue => "continue",
         TokenKind::Pass => "pass",
+        TokenKind::Nonlocal => "nonlocal",
         TokenKind::And => "and",
         TokenKind::Or => "or",
         TokenKind::Not => "not",

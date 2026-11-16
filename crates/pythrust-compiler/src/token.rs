@@ -36,6 +36,7 @@ pub enum TokenKind {
     Break,
     Continue,
     Pass,
+    Nonlocal,
     And,
     Or,
     Not,

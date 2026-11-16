@@ -255,7 +255,7 @@ fn stmt(s: &mut Stmt, rename: &mut Rename<'_>) {
         }
         StmtKind::Return(e) => e.iter_mut().for_each(|e| expr(e, rename)),
         StmtKind::Expr(e) | StmtKind::Raise(e) => expr(e, rename),
-        StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+        StmtKind::Break | StmtKind::Continue | StmtKind::Pass | StmtKind::Nonlocal(_) => {}
         StmtKind::FuncDef(f) => func(f, rename),
         StmtKind::Record(r) => ident(&mut r.name, rename),
         StmtKind::ExcClass(c) => {

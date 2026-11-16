@@ -604,7 +604,7 @@ impl<'a> FnBuilder<'_, 'a> {
 
     fn call(&mut self, func: &Expr, args: &[Arg], span: Span) -> Result<Operand> {
         let name = match &func.kind {
-            ExprKind::Name(name) if name == crate::ast::CLOSURE => {
+            ExprKind::Name(name) if name == crate::ast::CLOSURE || name == crate::ast::CELL => {
                 return Err(unsupported(span, "closures that escape"));
             }
             ExprKind::Name(name) => name,

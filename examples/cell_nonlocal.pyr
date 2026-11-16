@@ -1,0 +1,46 @@
+from collections.abc import Callable
+
+
+def counter() -> Callable[[], int]:
+    count = 0
+
+    def inc() -> int:
+        nonlocal count
+        count += 1
+        return count
+
+    return inc
+
+
+def direct() -> int:
+    total = 10
+
+    def bump(k: int) -> None:
+        nonlocal total
+        total = total + k
+
+    def read() -> int:
+        return total
+
+    bump(1)
+    bump(5)
+    return read()
+
+
+def both() -> int:
+    a = 1
+    b = 2
+
+    def swap() -> None:
+        nonlocal a, b
+        a, b = b, a
+
+    swap()
+    return a * 10 + b
+
+
+c = counter()
+d = counter()
+print(c(), c(), d(), c())
+print(direct())
+print(both())

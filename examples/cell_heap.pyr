@@ -1,0 +1,29 @@
+from collections.abc import Callable
+
+
+def grow() -> Callable[[int], int]:
+    xs: list[int] = []
+
+    def add(n: int) -> int:
+        nonlocal xs
+        xs = xs + [n]
+        return len(xs)
+
+    return add
+
+
+def alias() -> int:
+    xs = [1]
+    ys = xs
+
+    def swap() -> None:
+        nonlocal xs
+        xs = [9, 9]
+
+    swap()
+    return len(xs) * 10 + len(ys)
+
+
+f = grow()
+print(f(1), f(2), f(3))
+print(alias())

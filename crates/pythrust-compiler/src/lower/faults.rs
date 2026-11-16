@@ -133,7 +133,8 @@ impl<'a> Sites<'a> {
             | StmtKind::ExcClass(_)
             | StmtKind::Break
             | StmtKind::Continue
-            | StmtKind::Pass => {}
+            | StmtKind::Pass
+            | StmtKind::Nonlocal(_) => {}
         }
     }
 
