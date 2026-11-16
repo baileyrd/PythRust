@@ -1,0 +1,502 @@
+//! Nested `def` and closures that capture (step 6-3a, D200-D203): each
+//! nested def is lifted to a hidden top-level def, as a lambda is (D195),
+//! and each name its body or a lambda's reads from the enclosing function
+//! becomes a leading parameter, passed by every call of the closure. So
+//! inference, ownership, `raises`, `run` and lowering see ordinary defs.
+//!
+//! By reference as CPython, staged: a captured name is bound once in its
+//! function, so a closure can take its value as an argument (D200). A
+//! closure is only called by name; its value escaping, which needs cells,
+//! is the named error of step 6-3b.
+
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+use super::{error, Parser};
+use crate::ast::{
+    comp_name, source_name, Arg, Block, Expr, ExprKind, FuncDef, Mode, Param, ParamMode, Stmt,
+    StmtKind, Target, TargetKind,
+};
+use crate::diag::Result;
+use crate::infer::scope;
+use crate::span::Span;
+
+/// The names each closure takes first, by the closure's hidden name.
+type Captures = BTreeMap<String, Vec<String>>;
+
+impl Parser<'_> {
+    /// Closes the function that owns `body`: lifts its nested defs, then
+    /// gives the closures lifted since `start` their captures.
+    pub(super) fn close_function(
+        &mut self,
+        mode: Mode,
+        params: &[Param],
+        body: &mut Block,
+        start: usize,
+    ) -> Result<()> {
+        let nested = extract(body)?;
+        if mode == Mode::Tempered {
+            if let Some(def) = nested.first() {
+                return Err(error(def.span, TEMPERED));
+            }
+        }
+        let mut names = BTreeMap::new();
+        for mut def in nested {
+            let hidden = comp_name(&def.name.name, def.span.start);
+            names.insert(def.name.name.clone(), hidden.clone());
+            def.name.name = hidden;
+            self.lifted.push(Stmt {
+                span: def.span,
+                kind: StmtKind::FuncDef(def),
+            });
+        }
+        let mut bound = scope::assigned(body);
+        bound.extend(params.iter().map(|p| p.name.name.clone()));
+        if let Some(clash) = names.keys().find(|n| bound.contains(*n)) {
+            let msg = format!("`{clash}` is a nested `def` and also assigned or a parameter");
+            return Err(error(span_of(body, clash), msg));
+        }
+        let lifted = &mut self.lifted[start..];
+        rename(body, lifted, &names)?;
+        let captures = captures(lifted, &bound);
+        if mode == Mode::Tempered {
+            if let Some((name, _)) = captures.iter().find(|(_, c)| !c.is_empty()) {
+                let at = lifted_span(lifted, name);
+                return Err(error(at, TEMPERED));
+            }
+        }
+        check_bound_once(&captures, body, params, lifted)?;
+        add_captures(body, lifted, &captures)
+    }
+}
+
+const TEMPERED: &str = "a closure inside a tempered function is not supported yet (step 6-3b)";
+
+/// The nested defs at the top of `body`, taken out of it. A `def` in a
+/// block below the top is an error: it would run conditionally or in a
+/// loop (D202).
+fn extract(body: &mut Block) -> Result<Vec<FuncDef>> {
+    let mut defs = Vec::new();
+    let mut rest = Vec::new();
+    for stmt in std::mem::take(body) {
+        match stmt.kind {
+            StmtKind::FuncDef(def) => defs.push(def),
+            kind => rest.push(Stmt { kind, ..stmt }),
+        }
+    }
+    *body = rest;
+    let mut below = None;
+    scope::walk(body, &mut |s| {
+        if below.is_none() && matches!(s.kind, StmtKind::FuncDef(_)) {
+            below = Some(s.span);
+        }
+    });
+    if let Some(span) = below {
+        let msg = "a nested `def` must be at the top of its function body (not supported yet)";
+        return Err(error(span, msg));
+    }
+    for def in &defs {
+        if let Some(p) = def.params.iter().find(|p| p.default.is_some()) {
+            let msg = "a nested `def` with a default is not supported yet";
+            return Err(error(p.span, msg));
+        }
+    }
+    Ok(defs)
+}
+
+/// The span of the first use of `name` in `body`, else of the body.
+fn span_of(body: &Block, name: &str) -> Span {
+    let uses = scope::exprs(body);
+    let at = uses
+        .into_iter()
+        .find(|e| matches!(&e.kind, ExprKind::Name(n) if n == name));
+    at.map_or_else(
+        || body.first().map_or(Span { start: 0, end: 0 }, |s| s.span),
+        |e| e.span,
+    )
+}
+
+fn lifted_span(lifted: &[Stmt], name: &str) -> Span {
+    let def = lifted.iter().find_map(|s| match &s.kind {
+        StmtKind::FuncDef(d) if d.name.name == name => Some(d.span),
+        _ => None,
+    });
+    def.unwrap_or(Span { start: 0, end: 0 })
+}
+
+/// Renames each nested def's source name to its hidden one in `body` and
+/// the closures, where nothing local shadows it. A use before the def, or
+/// inside an earlier sibling, is an error: CPython finds the name unbound
+/// there (D202).
+fn rename(body: &mut Block, lifted: &mut [Stmt], names: &BTreeMap<String, String>) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    let starts: BTreeMap<&str, usize> = lifted
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::FuncDef(d) => Some((d.name.name.as_str(), d.span.start)),
+            _ => None,
+        })
+        .collect();
+    let starts: BTreeMap<String, usize> = names
+        .iter()
+        .filter_map(|(n, h)| starts.get(h.as_str()).map(|s| (n.clone(), *s)))
+        .collect();
+    let mut late = None;
+    let none = BTreeSet::new();
+    rename_in(
+        body,
+        &RenameCx {
+            names,
+            starts: &starts,
+            shadows: &none,
+            owner: None,
+        },
+        &mut late,
+    );
+    for stmt in lifted.iter_mut() {
+        let StmtKind::FuncDef(def) = &mut stmt.kind else {
+            continue;
+        };
+        let mut shadows = scope::assigned(&def.body);
+        shadows.extend(def.params.iter().map(|p| p.name.name.clone()));
+        let cx = RenameCx {
+            names,
+            starts: &starts,
+            shadows: &shadows,
+            owner: Some(def.span.start),
+        };
+        rename_in(&mut def.body, &cx, &mut late);
+    }
+    match late {
+        Some((span, name)) => {
+            let msg = format!("`{name}` is used before its `def` (not supported yet)");
+            Err(error(span, msg))
+        }
+        None => Ok(()),
+    }
+}
+
+struct RenameCx<'a> {
+    names: &'a BTreeMap<String, String>,
+    starts: &'a BTreeMap<String, usize>,
+    shadows: &'a BTreeSet<String>,
+    /// Where the def being renamed inside starts: its own name is fine.
+    owner: Option<usize>,
+}
+
+fn rename_in(block: &mut Block, cx: &RenameCx<'_>, late: &mut Option<(Span, String)>) {
+    walk_mut(block, &mut |e: &mut Expr| {
+        let ExprKind::Name(n) = &mut e.kind else {
+            return;
+        };
+        let Some(hidden) = cx.names.get(n.as_str()) else {
+            return;
+        };
+        if cx.shadows.contains(n.as_str()) {
+            return;
+        }
+        let start = cx.starts[n.as_str()];
+        if cx.owner != Some(start) && e.span.start < start {
+            *late = Some((e.span, n.clone()));
+        }
+        *n = hidden.clone();
+    });
+}
+
+/// What each closure of `lifted` takes: the names of `bound` it reads,
+/// and those of the closures it calls, to a fixed point.
+fn captures(lifted: &[Stmt], bound: &BTreeSet<String>) -> Captures {
+    let defs: Vec<&FuncDef> = lifted
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::FuncDef(d) => Some(d),
+            _ => None,
+        })
+        .collect();
+    let hidden: BTreeSet<&str> = defs.iter().map(|d| d.name.name.as_str()).collect();
+    let mut direct: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    let mut calls: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for d in &defs {
+        let uses: BTreeSet<&str> = scope::name_uses(d).into_iter().map(|(n, _)| n).collect();
+        let reads = uses.iter().filter(|n| bound.contains(**n));
+        direct.insert(&d.name.name, reads.map(|n| n.to_string()).collect());
+        let callees = uses.iter().filter(|n| hidden.contains(**n));
+        calls.insert(&d.name.name, callees.copied().collect());
+    }
+    let mut taken = direct.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (d, callees) in &calls {
+            let inherited: Vec<String> = callees
+                .iter()
+                .flat_map(|c| taken[c].iter().cloned())
+                .collect();
+            let mine = taken.get_mut(d).into_iter().next();
+            if let Some(mine) = mine {
+                let before = mine.len();
+                mine.extend(inherited);
+                changed |= mine.len() > before;
+            }
+        }
+    }
+    taken
+        .into_iter()
+        .map(|(d, names)| (d.to_string(), names.into_iter().collect()))
+        .collect()
+}
+
+/// A captured name is bound once in its function (D200): a second
+/// binding would be seen by a closure only through a cell.
+fn check_bound_once(
+    captures: &Captures,
+    body: &Block,
+    params: &[Param],
+    lifted: &[Stmt],
+) -> Result<()> {
+    let mut count: BTreeMap<String, usize> = BTreeMap::new();
+    for p in params {
+        *count.entry(p.name.name.clone()).or_default() += 1;
+    }
+    scope::walk(body, &mut |s| {
+        for name in bindings(s) {
+            *count.entry(name).or_default() += 1;
+        }
+    });
+    for (closure, names) in captures {
+        let again = names.iter().find(|n| count.get(*n).is_some_and(|c| *c > 1));
+        if let Some(name) = again {
+            let shown = source_name(closure);
+            let msg = format!(
+                "`{name}` is captured by `{shown}` and rebound; needs cells (not supported yet)"
+            );
+            return Err(error(lifted_span(lifted, closure), msg));
+        }
+    }
+    Ok(())
+}
+
+/// The names a statement binds, each time it does.
+fn bindings(s: &Stmt) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    match &s.kind {
+        StmtKind::Assign { target, .. }
+        | StmtKind::AugAssign { target, .. }
+        | StmtKind::For { target, .. } => scope::target_names(target, &mut out),
+        StmtKind::AnnAssign { target, .. } => {
+            out.insert(target.name.clone());
+        }
+        StmtKind::With { binding, .. } => {
+            out.insert(binding.name.clone());
+        }
+        StmtKind::Try { handlers, .. } => {
+            out.extend(
+                handlers
+                    .iter()
+                    .filter_map(|h| h.binding.as_ref())
+                    .map(|b| b.name.clone()),
+            );
+        }
+        _ => {}
+    }
+    out.into_iter().collect()
+}
+
+/// Gives each closure its captures as leading parameters, and passes them
+/// at every call of it in `body` and the closures. A closure that takes
+/// some and is used other than called is the error of step 6-3b.
+fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> Result<()> {
+    let mut failed = None;
+    let mut callees: HashSet<Span> = HashSet::new();
+    let mut go = |e: &mut Expr| match &mut e.kind {
+        ExprKind::Call { func, args } => {
+            if let (ExprKind::Attr { attr, .. }, Some(first)) = (&func.kind, args.first()) {
+                let task = matches!(attr.name.as_str(), "submit" | "map");
+                let taken = match &first.value.kind {
+                    ExprKind::Name(h) => captures.get(h.as_str()).and_then(|c| c.first()),
+                    _ => None,
+                };
+                if let (true, Some(name), None) = (task, taken, &failed) {
+                    let msg = format!(
+                        "a task function cannot use `{name}` from the enclosing function; \
+                         pass it as an argument"
+                    );
+                    failed = Some((first.value.span, msg));
+                }
+            }
+            let ExprKind::Name(h) = &func.kind else {
+                return;
+            };
+            let Some(names) = captures.get(h.as_str()) else {
+                return;
+            };
+            callees.insert(func.span);
+            let at = func.span.start;
+            let extra = names.iter().enumerate().map(|(i, n)| {
+                let span = Span {
+                    start: at + i,
+                    end: at + i,
+                };
+                let value = Expr {
+                    kind: ExprKind::Name(n.clone()),
+                    span,
+                };
+                Arg {
+                    name: None,
+                    value,
+                    span,
+                }
+            });
+            args.splice(0..0, extra.collect::<Vec<_>>());
+        }
+        ExprKind::Name(h) => {
+            let takes = captures.get(h.as_str()).is_some_and(|c| !c.is_empty());
+            if takes && !callees.contains(&e.span) && failed.is_none() {
+                let msg = format!(
+                    "`{}` captures names, so it cannot be a function value yet (step 6-3b)",
+                    source_name(h)
+                );
+                failed = Some((e.span, msg));
+            }
+        }
+        _ => {}
+    };
+    walk_mut(body, &mut go);
+    for stmt in lifted.iter_mut() {
+        if let StmtKind::FuncDef(def) = &mut stmt.kind {
+            walk_mut(&mut def.body, &mut go);
+        }
+    }
+    if let Some((span, msg)) = failed {
+        return Err(error(span, msg));
+    }
+    for stmt in lifted.iter_mut() {
+        let StmtKind::FuncDef(def) = &mut stmt.kind else {
+            continue;
+        };
+        let names = captures.get(def.name.name.as_str()).into_iter().flatten();
+        let lead: Vec<Param> = names
+            .map(|n| Param {
+                mode: ParamMode::Read,
+                name: crate::ast::Ident {
+                    name: n.clone(),
+                    span: def.span,
+                },
+                annotation: None,
+                default: None,
+                span: def.span,
+            })
+            .collect();
+        def.params.splice(0..0, lead);
+    }
+    Ok(())
+}
+
+/// Calls `f` on every expression of `block`, each before its parts.
+pub(super) fn walk_mut(block: &mut [Stmt], f: &mut impl FnMut(&mut Expr)) {
+    for s in block {
+        for e in own_exprs_mut(&mut s.kind) {
+            expr_mut(e, f);
+        }
+        for child in super::class::children_mut(&mut s.kind) {
+            walk_mut(child, f);
+        }
+    }
+}
+
+fn expr_mut(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
+    f(e);
+    for part in parts_mut(e) {
+        expr_mut(part, f);
+    }
+}
+
+fn parts_mut(e: &mut Expr) -> Vec<&mut Expr> {
+    match &mut e.kind {
+        ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
+            items.iter_mut().collect()
+        }
+        ExprKind::Dict(items) => items.iter_mut().flat_map(|(k, v)| [k, v]).collect(),
+        ExprKind::Unary { operand, .. } => vec![operand],
+        ExprKind::Binary { left, right, .. } | ExprKind::Logical { left, right, .. } => {
+            vec![left, right]
+        }
+        ExprKind::Compare { left, rest } => std::iter::once(&mut **left)
+            .chain(rest.iter_mut().map(|(_, x)| x))
+            .collect(),
+        ExprKind::IfExp { test, body, orelse } => vec![test, body, orelse],
+        ExprKind::Call { func, args } => std::iter::once(&mut **func)
+            .chain(args.iter_mut().map(|a| &mut a.value))
+            .collect(),
+        ExprKind::Subscript { value, index } => vec![value, index],
+        ExprKind::Slice {
+            value,
+            start,
+            stop,
+            step,
+        } => std::iter::once(&mut **value)
+            .chain(
+                [start, stop, step]
+                    .into_iter()
+                    .filter_map(|x| x.as_deref_mut()),
+            )
+            .collect(),
+        ExprKind::Attr { value, .. } => vec![value],
+        ExprKind::Comp { gather, clauses } => {
+            let mut out = Vec::new();
+            for c in clauses {
+                out.push(&mut c.iter);
+                out.extend(c.ifs.iter_mut());
+            }
+            out.extend(gather.exprs_mut());
+            out
+        }
+        ExprKind::Name(_)
+        | ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::None => Vec::new(),
+    }
+}
+
+/// The expressions a statement holds outside its nested blocks.
+fn own_exprs_mut(kind: &mut StmtKind) -> Vec<&mut Expr> {
+    match kind {
+        StmtKind::Assign { target, value } | StmtKind::AugAssign { target, value, .. } => {
+            let mut out = vec![value];
+            target_exprs_mut(target, &mut out);
+            out
+        }
+        StmtKind::AnnAssign { value, .. }
+        | StmtKind::Expr(value)
+        | StmtKind::Raise(value)
+        | StmtKind::With { value, .. } => vec![value],
+        StmtKind::Return(value) => value.iter_mut().collect(),
+        StmtKind::Del { value, index } => vec![value, index],
+        StmtKind::If { branch, elifs, .. } => std::iter::once(branch)
+            .chain(elifs)
+            .map(|b| &mut b.test)
+            .collect(),
+        StmtKind::While { branch, .. } => vec![&mut branch.test],
+        StmtKind::For { target, iter, .. } => {
+            let mut out = vec![iter];
+            target_exprs_mut(target, &mut out);
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn target_exprs_mut<'a>(t: &'a mut Target, out: &mut Vec<&'a mut Expr>) {
+    match &mut t.kind {
+        TargetKind::Name(_) => {}
+        TargetKind::Subscript { value, index } => {
+            out.push(value);
+            out.push(index);
+        }
+        TargetKind::Attr { value, .. } => out.push(value),
+        TargetKind::Tuple(items) => items.iter_mut().for_each(|i| target_exprs_mut(i, out)),
+    }
+}

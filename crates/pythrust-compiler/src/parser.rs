@@ -403,6 +403,9 @@ impl<'a> Parser<'a> {
     }
 
     fn block_stmt(&mut self) -> Result<Vec<Stmt>> {
+        if self.in_func && self.peek() == &TokenKind::Def {
+            return Ok(vec![self.func_def()?]);
+        }
         if matches!(self.peek(), TokenKind::Def | TokenKind::Temper) {
             let span = self.tok(0).span;
             return Err(error(span, "`def` is only allowed at module top level"));
@@ -599,12 +602,12 @@ impl<'a> Parser<'a> {
         };
         let raises = self.raises()?;
         self.expect(&TokenKind::Colon)?;
-        self.in_func = true;
+        let outer = std::mem::replace(&mut self.in_func, true);
         let lambdas = self.lifted.len();
         let body = self.block();
-        self.in_func = false;
-        let body = body?;
-        lambda::check_captures(&self.lifted[lambdas..], &params, &body)?;
+        self.in_func = outer;
+        let mut body = body?;
+        self.close_function(mode, &params, &mut body, lambdas)?;
         Ok(FuncDef {
             mode,
             name,
@@ -1810,6 +1813,7 @@ fn describe(kind: &TokenKind) -> String {
 }
 
 mod class;
+mod closure;
 mod exc_class;
 mod imports;
 mod init;

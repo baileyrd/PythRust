@@ -1,0 +1,15 @@
+# deviation: a nested def used before its def, or by an earlier one, is not supported (D202); CPython raises at run time.
+# expect-exit: 1
+# expect-error: `later` is used before its `def`
+
+def run() -> int:
+    def first() -> int:
+        return later()
+
+    def later() -> int:
+        return 1
+
+    return first()
+
+
+print(run())

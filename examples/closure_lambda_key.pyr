@@ -1,0 +1,10 @@
+def shifted(xs: list[int], k: int) -> list[int]:
+    return sorted(xs, key=lambda v: abs(v - k))
+
+
+def nearest(words: list[str], target: str) -> str:
+    return min(words, key=lambda w: abs(len(w) - len(target)))
+
+
+print(shifted([3, 1, 7, 5], 4))
+print(nearest(["été", "ab", "çççç"], "xyz"))

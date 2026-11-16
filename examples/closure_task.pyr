@@ -1,0 +1,17 @@
+# deviation: a task function that uses a name of its enclosing function is not supported (D203); CPython captures it.
+# expect-exit: 1
+# expect-error: a task function cannot use `k` from the enclosing function; pass it as an argument
+
+import concurrent.futures
+
+
+def run(k: int) -> int:
+    def add(n: int) -> int:
+        return n + k
+
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        f = ex.submit(add, 1)
+    return f.result()
+
+
+print(run(2))
