@@ -42,7 +42,7 @@ use crate::span::Span;
 use builtins::{Args, Builtin};
 use methods::Method;
 use table::{Key, Table};
-use value::{Bound, Exc, ExcArg, Func, Record, Value};
+use value::{Bound, Closure, Exc, ExcArg, Func, Record, Value};
 
 /// Python's default recursion limit.
 pub(crate) const MAX_DEPTH: usize = 1000;
@@ -847,6 +847,9 @@ impl<'m> Interp<'m, '_> {
     }
 
     fn eval_call(&mut self, func: &'m Expr, args: &'m [Arg], span: Span) -> Exec<'m, Value<'m>> {
+        if matches!(&func.kind, ExprKind::Name(n) if n == crate::ast::CLOSURE) {
+            return self.closure(args, span);
+        }
         if let Some(out) = self.task_call(func, args, span) {
             return out;
         }
@@ -867,6 +870,21 @@ impl<'m> Interp<'m, '_> {
             .map(|arg| self.eval(&arg.value))
             .collect::<Exec<'m, Vec<Value<'m>>>>()?;
         self.apply(func, callee, args, values, span)
+    }
+
+    /// `<closure>(def, captures...)` (D205): the def with the values its
+    /// closure captures now, as `def` ran in CPython.
+    fn closure(&mut self, args: &'m [Arg], span: Span) -> Exec<'m, Value<'m>> {
+        let mut values = Vec::new();
+        for arg in args {
+            values.push(self.eval(&arg.value)?);
+        }
+        let mut values = values.into_iter();
+        let Some(Value::Func(func)) = values.next() else {
+            return Err(rt_err(span, "closure of a value that is no def".to_string()).into());
+        };
+        let captured = values.collect();
+        Ok(Value::Closure(Rc::new(Closure { func, captured })))
     }
 
     /// The call of `callee` at `span` with `values`, one per argument of
@@ -930,6 +948,12 @@ impl<'m> Interp<'m, '_> {
             Value::Bound(b) => {
                 evaluated.positional.insert(0, b.receiver.clone());
                 self.call_func(Rc::clone(&b.func), evaluated)?
+            }
+            Value::Closure(c) => {
+                evaluated
+                    .positional
+                    .splice(0..0, c.captured.iter().cloned());
+                self.call_func(Rc::clone(&c.func), evaluated)?
             }
             other => {
                 let msg = format!("TypeError: '{}' object is not callable", other.type_name());

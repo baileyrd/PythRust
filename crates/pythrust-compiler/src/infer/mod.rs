@@ -205,7 +205,7 @@ struct Checker {
     /// Top-level defs with a `mut` or `owned` parameter, or one their body
     /// visibly changes, by name and that parameter: none can be a function
     /// value (D191).
-    by_ref: HashMap<String, String>,
+    by_ref: HashMap<String, Vec<String>>,
     /// Each lambda read as a value, with its type, which the program must
     /// fully decide (D194).
     lambda_values: Vec<(Type, Span)>,
@@ -264,10 +264,12 @@ impl Checker {
     /// parameter, keeps off function values (D191).
     fn declare_by_ref(&mut self, defs: &[&FuncDef]) {
         for f in defs {
-            let written = f.params.iter().find(|p| p.mode != ParamMode::Read);
-            let by_ref = written.map(|p| p.name.name.as_str());
-            if let Some(p) = by_ref.or_else(|| scope::changed_param(f)) {
-                self.by_ref.insert(f.name.name.clone(), p.to_string());
+            let written = f.params.iter().filter(|p| p.mode != ParamMode::Read);
+            let mut by_ref: Vec<String> = written.map(|p| p.name.name.clone()).collect();
+            by_ref.extend(scope::changed_params(f).into_iter().map(str::to_string));
+            by_ref.dedup();
+            if !by_ref.is_empty() {
+                self.by_ref.insert(f.name.name.clone(), by_ref);
             }
         }
     }

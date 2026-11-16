@@ -1,0 +1,13 @@
+# deviation: closure values can't be compared (D193, D206); CPython compares them by identity.
+# expect-exit: 1
+# expect-error: function values can't be compared
+
+def make(k: int):
+    def add(n: int) -> int:
+        return n + k
+
+    return add
+
+
+f = make(1)
+print(f == f)

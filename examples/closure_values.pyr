@@ -1,0 +1,37 @@
+from collections.abc import Callable
+
+
+def adder(k: int) -> Callable[[int], int]:
+    def add(n: int) -> int:
+        return n + k
+
+    return add
+
+
+def counters(start: int) -> list[Callable[[int], int]]:
+    one = lambda n: n + start
+    return [one, adder(start * 2), adder(start * 3)]
+
+
+def logger(prefix: str, lines: list[str]) -> Callable[[str], None]:
+    def log(msg: str) -> None:
+        lines.append(prefix + msg)
+
+    return log
+
+
+def apply(f: Callable[[int], int], n: int) -> int:
+    return f(f(n))
+
+
+plus5 = adder(5)
+print(plus5(1), adder(10)(1), apply(adder(3), 0))
+for f in counters(1):
+    print(f(100))
+store: list[str] = []
+log = logger("é: ", store)
+log("a")
+log("b")
+print(store)
+table = {"two": adder(2), "ten": adder(10)}
+print(table["two"](1), table["ten"](1))

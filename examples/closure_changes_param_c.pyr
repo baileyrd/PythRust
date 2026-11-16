@@ -1,0 +1,18 @@
+# deviation: a closure that changes its parameter cannot be a function value (D191); CPython allows it.
+# expect-exit: 1
+# expect-error: changes its parameter
+
+from collections.abc import Callable
+
+
+def make() -> Callable[[dict[str, int]], None]:
+    log: list[int] = []
+
+    def f(d: dict[str, int]) -> None:
+        d["k"] = 1
+        log.append(1)
+
+    return f
+
+
+make()({})

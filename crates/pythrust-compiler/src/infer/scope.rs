@@ -52,13 +52,15 @@ pub(crate) const MUTATORS: [&str; 9] = [
     "update",
 ];
 
-/// A parameter `f`'s body visibly changes (D191): a changing method call
-/// on it or on a value reached from it, or an item store, field store or
-/// `del` through it. A change through a call that takes it is left to
-/// `own`, which does not see function values yet (step 6-2c).
-pub(crate) fn changed_param(f: &FuncDef) -> Option<&str> {
+/// The parameters `f`'s body visibly changes (D191), in source order of
+/// first change: a changing method call on one or on a value reached from
+/// it, or an item store, field store or `del` through it. A change
+/// through a call that takes it is left to `own`, which does not see
+/// function values yet (step 6-2c).
+pub(crate) fn changed_params(f: &FuncDef) -> Vec<&str> {
     let params: BTreeSet<&str> = f.params.iter().map(|p| p.name.name.as_str()).collect();
-    let call = exprs(&f.body).into_iter().find_map(|e| {
+    let mut out: Vec<&str> = Vec::new();
+    let calls = exprs(&f.body).into_iter().filter_map(|e| {
         let ExprKind::Call { func, .. } = &e.kind else {
             return None;
         };
@@ -69,34 +71,36 @@ pub(crate) fn changed_param(f: &FuncDef) -> Option<&str> {
             .contains(&attr.name.as_str())
             .then(|| param_root(value, &params))?
     });
-    call.or_else(|| stored(&f.body, &params))
+    out.extend(calls);
+    out.extend(stored(&f.body, &params));
+    let mut seen = BTreeSet::new();
+    out.retain(|p| seen.insert(*p));
+    out
 }
 
-/// The first of `params` under an item, field or `del` store in `body`.
-fn stored<'a>(body: &'a [Stmt], params: &BTreeSet<&str>) -> Option<&'a str> {
-    let mut found = None;
+/// Each of `params` under an item, field or `del` store in `body`.
+fn stored<'a>(body: &'a [Stmt], params: &BTreeSet<&str>) -> Vec<&'a str> {
+    let mut found = Vec::new();
     walk(body, &mut |s| {
-        if found.is_some() {
-            return;
-        }
-        found = match &s.kind {
+        let root = match &s.kind {
             StmtKind::Assign { target, .. } | StmtKind::AugAssign { target, .. } => {
-                target_root(target, params)
+                target_roots(target, params)
             }
-            StmtKind::Del { value, .. } => param_root(value, params),
-            _ => None,
+            StmtKind::Del { value, .. } => param_root(value, params).into_iter().collect(),
+            _ => Vec::new(),
         };
+        found.extend(root);
     });
     found
 }
 
-fn target_root<'a>(t: &'a Target, params: &BTreeSet<&str>) -> Option<&'a str> {
+fn target_roots<'a>(t: &'a Target, params: &BTreeSet<&str>) -> Vec<&'a str> {
     match &t.kind {
-        TargetKind::Name(_) => None,
+        TargetKind::Name(_) => Vec::new(),
         TargetKind::Subscript { value, .. } | TargetKind::Attr { value, .. } => {
-            param_root(value, params)
+            param_root(value, params).into_iter().collect()
         }
-        TargetKind::Tuple(ts) => ts.iter().find_map(|t| target_root(t, params)),
+        TargetKind::Tuple(ts) => ts.iter().flat_map(|t| target_roots(t, params)).collect(),
     }
 }
 

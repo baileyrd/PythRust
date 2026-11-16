@@ -8,14 +8,14 @@
 //! function, before the closure, so a closure can take its value as an
 //! argument and never sees it change or unbound (D200, D204). A
 //! closure is only called by name; its value escaping, which needs cells,
-//! is the named error of step 6-3b.
+//! is the named error of step 6-3b-2.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::{error, Parser};
 use crate::ast::{
     comp_name, source_name, Arg, Block, Expr, ExprKind, FuncDef, Mode, Param, ParamMode, Stmt,
-    StmtKind, Target, TargetKind,
+    StmtKind, Target, TargetKind, CLOSURE,
 };
 use crate::diag::Result;
 use crate::infer::scope;
@@ -70,7 +70,7 @@ impl Parser<'_> {
     }
 }
 
-const TEMPERED: &str = "a closure inside a tempered function is not supported yet (step 6-3b)";
+const TEMPERED: &str = "a closure inside a tempered function is not supported yet (step 6-3b-2)";
 
 /// The nested defs at the top of `body`, taken out of it. A `def` in a
 /// block below the top is an error: it would run conditionally or in a
@@ -351,9 +351,47 @@ fn bindings(s: &Stmt) -> Vec<String> {
 /// Gives each closure its captures as leading parameters, and passes them
 /// at every call of it in `body` and the closures. A closure that takes
 /// some and is used other than called is the error of step 6-3b.
+/// An existing `<closure>(def, inner..)` whose def gained outer captures: splice
+/// them in front of the inner ones (the hidden def's parameter order) rather
+/// than wrapping the def operand again.
+fn widen_closure(args: &mut Vec<Arg>, captures: &Captures, callees: &mut HashSet<Span>) {
+    let Some(first) = args.first() else {
+        return;
+    };
+    let ExprKind::Name(h) = &first.value.kind else {
+        return;
+    };
+    let Some(names) = captures.get(h.as_str()).filter(|c| !c.is_empty()) else {
+        return;
+    };
+    callees.insert(first.value.span);
+    let at = first.value.span.start + 1 + args.len();
+    let extra: Vec<Arg> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let span = Span {
+                start: at + i,
+                end: at + i,
+            };
+            let value = Expr {
+                kind: ExprKind::Name(n.clone()),
+                span,
+            };
+            Arg {
+                name: None,
+                value,
+                span,
+            }
+        })
+        .collect();
+    args.splice(1..1, extra);
+}
+
 fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> Result<()> {
     let mut failed = None;
     let mut callees: HashSet<Span> = HashSet::new();
+    let owner: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
     let mut go = |e: &mut Expr| match &mut e.kind {
         ExprKind::Call { func, args } => {
             if let (ExprKind::Attr { attr, .. }, Some(first)) = (&func.kind, args.first()) {
@@ -373,6 +411,10 @@ fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> R
             let ExprKind::Name(h) = &func.kind else {
                 return;
             };
+            if h == CLOSURE {
+                widen_closure(args, captures, &mut callees);
+                return;
+            }
             let Some(names) = captures.get(h.as_str()) else {
                 return;
             };
@@ -396,20 +438,28 @@ fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> R
             args.splice(0..0, extra.collect::<Vec<_>>());
         }
         ExprKind::Name(h) => {
-            let takes = captures.get(h.as_str()).is_some_and(|c| !c.is_empty());
-            if takes && !callees.contains(&e.span) && failed.is_none() {
+            let Some(names) = captures.get(h.as_str()).filter(|c| !c.is_empty()) else {
+                return;
+            };
+            if callees.contains(&e.span) || failed.is_some() {
+                return;
+            }
+            if owner.borrow().as_deref() == Some(h.as_str()) {
                 let msg = format!(
-                    "`{}` captures names, so it cannot be a function value yet (step 6-3b)",
+                    "`{}` refers to itself as a value; that needs cells (not supported yet)",
                     source_name(h)
                 );
                 failed = Some((e.span, msg));
+                return;
             }
+            *e = closure_value(h, names, e.span, &mut callees);
         }
         _ => {}
     };
     walk_mut(body, &mut go);
     for stmt in lifted.iter_mut() {
         if let StmtKind::FuncDef(def) = &mut stmt.kind {
+            owner.replace(Some(def.name.name.clone()));
             walk_mut(&mut def.body, &mut go);
         }
     }
@@ -436,6 +486,39 @@ fn add_captures(body: &mut Block, lifted: &mut [Stmt], captures: &Captures) -> R
         def.params.splice(0..0, lead);
     }
     Ok(())
+}
+
+/// The value of closure `h`, which takes `names`, made where it was
+/// written at `span` (D205): `<closure>(h, names...)`, a partial
+/// application inference, `run` and `build` know by name.
+fn closure_value(h: &str, names: &[String], span: Span, seen: &mut HashSet<Span>) -> Expr {
+    let at = span.start;
+    let name = |n: &str, k: usize| {
+        let span = Span {
+            start: at + k,
+            end: at + k,
+        };
+        Expr {
+            kind: ExprKind::Name(n.to_string()),
+            span,
+        }
+    };
+    let arg = |value: Expr| Arg {
+        name: None,
+        span: value.span,
+        value,
+    };
+    let def = name(h, 1);
+    seen.insert(def.span);
+    let mut args = vec![arg(def)];
+    args.extend(names.iter().enumerate().map(|(i, n)| arg(name(n, 2 + i))));
+    Expr {
+        kind: ExprKind::Call {
+            func: Box::new(name(CLOSURE, 0)),
+            args,
+        },
+        span,
+    }
 }
 
 /// Calls `f` on every expression of `block`, each before its parts.
