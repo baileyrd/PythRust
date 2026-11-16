@@ -2183,3 +2183,65 @@ fn with_an_object_enters_and_exits_once() {
     let items = ok("with m ( ) as a , n ( ) : NL INDENT y NL DEDENT");
     assert!(items.contains("with#1"), "{items}");
 }
+
+// Closures (step 6-3a, D200, D204): a captured name is bound once,
+// before the closure, else the named errors until cells.
+
+const REBOUND: &str = "captures of a changing variable need cells (not supported yet)";
+const UNBOUND: &str =
+    "captures of a variable bound later or conditionally need cells (not supported yet)";
+
+#[test]
+fn a_capture_rebound_anywhere_is_the_named_error() {
+    let cases = [
+        "def f(xs):\n    def g():\n        return x\n    for x in xs:\n        g()\n",
+        "def f(n):\n    x = 0\n    def g():\n        return x\n    while n > 0:\n        x = n\n        n -= 1\n    return g()\n",
+        "def f():\n    x = 1\n    def g():\n        return x\n    try:\n        pass\n    except ValueError as x:\n        pass\n    return g()\n",
+        "def f(m):\n    x = m\n    def g():\n        return x\n    with m as x:\n        pass\n    return g()\n",
+        "def f(x):\n    def g():\n        return x\n    x += 1\n    return g()\n",
+    ];
+    for src in cases {
+        let msg = src_err(src);
+        assert!(
+            msg.starts_with("`x` is captured by `g` and rebound"),
+            "{src}: {msg}"
+        );
+        assert!(msg.ends_with(REBOUND), "{msg}");
+    }
+}
+
+#[test]
+fn a_capture_bound_after_or_in_a_branch_is_the_named_error() {
+    let after = "def f():\n    def g():\n        return x\n    x = 1\n    return g()\n";
+    let branch =
+        "def f(c):\n    if c:\n        x = 1\n    def g():\n        return x\n    return g()\n";
+    let lambda = "def f(xs):\n    ys = sorted(xs, key=lambda v: v + k)\n    k = 1\n    return ys\n";
+    let own = "def f():\n    x = sorted([1], key=lambda v: len(x))\n    return x\n";
+    let own_ann = "def f():\n    x: list[int] = sorted([1], key=lambda v: len(x))\n    return x\n";
+    for (src, name, closure) in [
+        (after, "x", "g"),
+        (branch, "x", "g"),
+        (lambda, "k", "lambda"),
+        // The assignment holding the lambda binds only after it is made.
+        (own, "x", "lambda"),
+        (own_ann, "x", "lambda"),
+    ] {
+        let msg = src_err(src);
+        let want = format!("`{name}` is captured by `{closure}` but not bound before it");
+        assert!(msg.starts_with(&want), "{src}: {msg}");
+        assert!(msg.ends_with(UNBOUND), "{msg}");
+    }
+}
+
+#[test]
+fn a_capture_bound_once_before_the_closure_is_accepted() {
+    let ok_srcs = [
+        "def f(x):\n    def g():\n        return x\n    return g()\n",
+        "def f():\n    x = 1\n    def g():\n        return x\n    return g()\n",
+        "def f(xs):\n    k: int = 2\n    return sorted(xs, key=lambda v: v * k)\n",
+        "def f(xs):\n    def g():\n        xs.append(1)\n    for v in [1]:\n        g()\n    return xs\n",
+    ];
+    for src in ok_srcs {
+        assert!(src_parse(src).is_ok(), "{src}: {:?}", src_parse(src).err());
+    }
+}

@@ -1,0 +1,29 @@
+def neg(x):
+    return -x
+
+
+def first(xs):
+    return xs[0]
+
+
+def probe(xs, n: int) -> int:
+    caught = 0
+    for i in range(4):
+        try:
+            print(len([neg(x) for x in xs if 1 // n > 0]))
+        except ZeroDivisionError:
+            caught += 1
+        try:
+            print({x: neg(first(ys)) for x, ys in [(1, [2]), (2, [])]})
+        except IndexError:
+            caught += 1
+        try:
+            print(sorted({neg(x) // (n - 1) for x in xs}))
+        except ZeroDivisionError:
+            caught += 1
+    return caught
+
+
+print(probe([1, 2], 0))
+print(probe([5], 1))
+print(probe([7], 2))

@@ -1,0 +1,15 @@
+# deviation: a closure over a loop target needs cells (D200, D204, step 6-3b); CPython reads its value at each call.
+# expect-exit: 1
+# expect-error: `x` is captured by `sq` and rebound; captures of a changing variable need cells (not supported yet)
+
+def squares(xs: list[int]) -> list[int]:
+    def sq() -> int:
+        return x * x
+
+    out: list[int] = []
+    for x in xs:
+        out.append(sq())
+    return out
+
+
+print(squares([1, 2, 3]))

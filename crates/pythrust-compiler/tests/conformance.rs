@@ -478,6 +478,8 @@ const NATIVE: &[&str] = &[
     "fn_value_native",
     "closure_lambda_key",
     "closure_nested",
+    "closure_key_generic",
+    "comp_generic_raise",
     "lambda_task",
     "sort_key_mutates_list",
     "unicode_error",

@@ -1,6 +1,6 @@
 # deviation: a closure over a name its function rebinds needs cells (D200, step 6-3b); CPython sees the new value.
 # expect-exit: 1
-# expect-error: `n` is captured by `show` and rebound; needs cells (not supported yet)
+# expect-error: `n` is captured by `show` and rebound; captures of a changing variable need cells (not supported yet)
 
 def run() -> int:
     n = 1

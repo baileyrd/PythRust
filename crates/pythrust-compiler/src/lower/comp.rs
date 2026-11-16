@@ -19,6 +19,9 @@ use super::FnBuilder;
 pub(super) enum Sink {
     /// Into a fresh list, set or dict.
     Into(LocalId),
+    /// Into a fresh one whose type generic code left open, decided by the
+    /// first item ([`FnBuilder::decide_comp`]); the comprehension's span.
+    Open(LocalId, Span),
     /// Added to an int total, as `sum` adds; `span` is the call's.
     Sum(LocalId, Span),
     /// `any` (`any` true) or `all`: `out` starts `!any` and becomes
@@ -35,10 +38,30 @@ impl FnBuilder<'_, '_> {
         clauses: &[CompFor],
         span: Span,
     ) -> Result<Operand> {
-        let ty = self.ty_at(span)?;
-        let out = self.pooled(ty);
+        let (out, sink) = match self.settled_ty_at(span)? {
+            Some(ty) => {
+                let out = self.pooled(ty);
+                (out, Sink::Into(out))
+            }
+            // `[f(x) for x in xs]` in `def g(xs)`: what `f` returns is
+            // known once its call is lowered, as for a display.
+            // A list, set or dict is counted, so the statement releases it
+            // from the start: an exception edge lowered before its type is
+            // decided releases it too.
+            None => {
+                let out = self.new_local(Ty::None);
+                if let Some(pool) = self.pools.last_mut() {
+                    pool.push(out);
+                }
+                (out, Sink::Open(out, span))
+            }
+        };
         self.assign(out, Rvalue::NewSeq(Vec::new()), span);
-        self.comp_clauses(gather, clauses, Sink::Into(out), |_| Ok(()))?;
+        self.comp_clauses(gather, clauses, sink, |_| Ok(()))?;
+        if self.ty(Operand::Local(out)) == Ty::None {
+            let what = "a value whose type depends on generic code";
+            return Err(super::unsupported(span, what));
+        }
         Ok(Operand::Local(out))
     }
 
@@ -133,8 +156,9 @@ impl FnBuilder<'_, '_> {
     /// (evaluated first) and the value, as `d[k] = v` does, or hands the
     /// item to its reducer.
     fn gather(&mut self, gather: &Gather, sink: Sink) -> Result<()> {
-        let out = match sink {
-            Sink::Into(out) => out,
+        let (out, open) = match sink {
+            Sink::Into(out) => (out, None),
+            Sink::Open(out, span) => (out, Some(span)),
             Sink::Sum(total, span) => {
                 let e = gen_item(gather, span)?;
                 return self.sum_item(e, total, span);
@@ -145,10 +169,10 @@ impl FnBuilder<'_, '_> {
             }
         };
         let table = Operand::Local(out);
-        let ty = self.ty(table);
         match gather {
             Gather::List(e) | Gather::Gen(e) => {
                 let v = self.expr(e)?;
+                let ty = self.decide_comp(out, open, &[v])?;
                 let want = self.slot_ty(ty, 0, e.span)?;
                 let value = self.expect(v, want, e.span)?;
                 self.emit(Inst::Append {
@@ -159,6 +183,7 @@ impl FnBuilder<'_, '_> {
             }
             Gather::Set(e) => {
                 let v = self.expr(e)?;
+                let ty = self.decide_comp(out, open, &[v])?;
                 let elem = self.elem_of(ty, e.span)?;
                 let value = self.stored(v, elem, e.span)?;
                 self.emit(Inst::Append {
@@ -170,10 +195,25 @@ impl FnBuilder<'_, '_> {
             Gather::Dict(k, v) => {
                 let key = self.expr(k)?;
                 let value = self.expr(v)?;
+                self.decide_comp(out, open, &[key, value])?;
                 self.dict_store(table, key, value, k.span.merge(v.span))?;
             }
         }
         Ok(())
+    }
+
+    /// The type of comprehension `out`; for an open one (`open`: its
+    /// span), decided now by the first item's values `items`, as
+    /// [`FnBuilder::bind_display`] does for a display.
+    fn decide_comp(&mut self, out: LocalId, open: Option<Span>, items: &[Operand]) -> Result<Ty> {
+        let have = self.ty(Operand::Local(out));
+        let Some(span) = open.filter(|_| have == Ty::None) else {
+            return Ok(have);
+        };
+        self.bind_display(items, span)?;
+        let ty = self.ty_at(span)?;
+        self.locals[out.0] = ty;
+        Ok(ty)
     }
 
     /// `total += item`, checked as `sum`'s ints are: an overflow is the
