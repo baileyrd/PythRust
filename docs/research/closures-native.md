@@ -1,6 +1,6 @@
 # Step 6-3c: native closures
 
-**Status: approved by project-expert (D207, D208); parked until 6-3b-2 merges (Nano, 2026-11-16: "queue it after").** Amends D197. Nano asked for 6-3c on 2026-11-16; project-expert read that as "now, ahead of 6-3b-2" (a reading, not a confirmed instruction). Cells (6-3b-2) only add a box to a captured slot, so nothing here is redone when they land.
+**Status: approved by project-expert (D207, D208); parked until 6-3b-2 merges.** Amends D197. Nano asked for 6-3c on 2026-11-16; project-expert read that as "now, ahead of 6-3b-2" (a reading, not a confirmed instruction). Cells (6-3b-2) only add a box to a captured slot, so nothing here is redone when they land.
 
 ## Objective
 
