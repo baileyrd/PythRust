@@ -148,7 +148,7 @@ fn nonlocal_clash(def: &FuncDef, n: &Ident, at: usize) -> Option<(Span, String)>
     }
     let mut bound = false;
     scope::walk(&def.body, &mut |s| {
-        bound |= s.span.end <= at && bindings(s).contains(name);
+        bound |= (s.span.end <= at && bindings(s).contains(name)) || header_binds(s, name, at);
     });
     bound.then(|| {
         (
@@ -489,6 +489,24 @@ fn in_loop_of(body: &Block, name: &str, start: usize) -> bool {
         found |= inside && out.contains(name);
     });
     found
+}
+
+/// Whether the header of compound statement `s`, which holds `at`, binds
+/// `name` before it: a `for` target, a `with ... as` or an `except ... as`.
+fn header_binds(s: &Stmt, name: &str, at: usize) -> bool {
+    match &s.kind {
+        StmtKind::For { target, .. } => {
+            let mut out = BTreeSet::new();
+            scope::target_names(target, &mut out);
+            out.contains(name) && target.span.end <= at
+        }
+        StmtKind::With { binding, .. } => binding.name == name && binding.span.end <= at,
+        StmtKind::Try { handlers, .. } => handlers
+            .iter()
+            .filter_map(|h| h.binding.as_ref())
+            .any(|b| b.name == name && b.span.end <= at),
+        _ => false,
+    }
 }
 
 /// The names a statement binds, each time it does.

@@ -2243,6 +2243,27 @@ fn nonlocal_after_a_use_or_binding_is_an_error() {
 }
 
 #[test]
+fn nonlocal_after_a_header_binding_is_an_error() {
+    let head =
+        |h: &str, body: &str| format!("def f(m):\n    x = 1\n    def g():\n{h}\n{body}\n    g()\n");
+    let cases = [
+        head("        for x in [1]:", "            nonlocal x"),
+        head("        with m as x:", "            nonlocal x"),
+        head(
+            "        try:\n            pass\n        except ValueError as x:",
+            "            nonlocal x",
+        ),
+    ];
+    for src in cases {
+        assert!(
+            src_err(&src).contains("before nonlocal declaration"),
+            "{src}: {}",
+            src_err(&src)
+        );
+    }
+}
+
+#[test]
 fn nonlocal_of_a_parameter_is_an_error() {
     let src = "def f():\n    x = 1\n    def g(x):\n        nonlocal x\n        x += 1\n    g(1)\n";
     assert!(
