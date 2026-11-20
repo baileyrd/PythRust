@@ -2291,6 +2291,19 @@ fn nonlocal_order_follows_python_scopes() {
 }
 
 #[test]
+fn nonlocal_refuses_an_except_target_of_the_name() {
+    let wrap = |name: &str| {
+        format!(
+            "def f():\n    e = 1\n    def g():\n        nonlocal e\n        try:\n            \
+             pass\n        except ValueError as {name}:\n            pass\n    g()\n"
+        )
+    };
+    let err = src_err(&wrap("e"));
+    assert!(err.contains("would unbind a `nonlocal` name"), "{err}");
+    assert!(src_parse(&wrap("other")).is_ok());
+}
+
+#[test]
 fn nonlocal_refuses_an_annotation_and_a_def_of_the_name() {
     let wrap = |body: &str| format!("def f():\n    x = 1\n    def g():\n{body}    g()\n");
     let ann_after = wrap("        nonlocal x\n        x: int = 2\n");

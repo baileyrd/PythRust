@@ -37,6 +37,7 @@ impl Parser<'_> {
         check_nonlocal_order(params, body)?;
         let nested = extract(body)?;
         reject_def_of_nonlocal(&nested, body)?;
+        reject_except_of_nonlocal(body)?;
         if !self.in_func {
             reject_nonlocal(body)?;
         }
@@ -206,6 +207,33 @@ fn reject_def_of_nonlocal(nested: &[FuncDef], body: &Block) -> Result<()> {
             format!(
                 "a nested `def {}` cannot bind a `nonlocal` name yet (not supported yet)",
                 d.name.name
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// An `except ... as` of a `nonlocal` name would unbind the shared variable
+/// when the handler ends; the cell cannot be empty yet (step 6-3b-2b).
+fn reject_except_of_nonlocal(body: &Block) -> Result<()> {
+    let own = declared_nonlocal(body);
+    let mut bad: Option<Ident> = None;
+    scope::walk(body, &mut |s| {
+        let StmtKind::Try { handlers, .. } = &s.kind else {
+            return;
+        };
+        let hit = handlers.iter().filter_map(|h| h.binding.as_ref());
+        if let (Some(b), None) = (hit.into_iter().find(|b| own.contains(&b.name)), &bad) {
+            bad = Some(b.clone());
+        }
+    });
+    match bad {
+        Some(b) => Err(error(
+            b.span,
+            format!(
+                "`except ... as {}` would unbind a `nonlocal` name after the handler; that \
+                 needs cells that may be unbound (not supported yet)",
+                b.name
             ),
         )),
         None => Ok(()),
