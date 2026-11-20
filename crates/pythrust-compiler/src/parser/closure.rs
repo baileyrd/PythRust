@@ -76,7 +76,8 @@ impl Parser<'_> {
                 return Err(error(first.span, msg));
             }
             // A name of a function further out: this one forwards the cell.
-            let at = first.span;
+            // Placed first, so no use or binding of it comes before.
+            let at = Span { start: 0, end: 0 };
             body.insert(
                 0,
                 Stmt {
@@ -102,7 +103,8 @@ impl Parser<'_> {
 /// The names `def` declares `nonlocal`, which are captured as cells, and the
 /// ones of them that `bound` (the enclosing function's bindings) lacks: they
 /// belong to a function further out, so the enclosing function forwards them.
-/// A parameter of `def` cannot be `nonlocal`, as in Python.
+/// A parameter of `def` cannot be `nonlocal`, and a name cannot be read or
+/// bound before its declaration, as in Python.
 fn nonlocals(def: &FuncDef, bound: &BTreeSet<String>) -> Result<(Vec<String>, Vec<Ident>)> {
     let (mut out, mut forwarded, mut clash) = (Vec::new(), Vec::new(), None);
     scope::walk(&def.body, &mut |s| {
@@ -110,8 +112,8 @@ fn nonlocals(def: &FuncDef, bound: &BTreeSet<String>) -> Result<(Vec<String>, Ve
             return;
         };
         for n in names {
-            if def.params.iter().any(|p| p.name.name == n.name) && clash.is_none() {
-                clash = Some(n.clone());
+            if clash.is_none() {
+                clash = nonlocal_clash(def, n, s.span.start);
             }
             if !bound.contains(&n.name) {
                 forwarded.push(n.clone());
@@ -120,12 +122,40 @@ fn nonlocals(def: &FuncDef, bound: &BTreeSet<String>) -> Result<(Vec<String>, Ve
         }
     });
     match clash {
-        Some(n) => Err(error(
-            n.span,
-            format!("name `{}` is parameter and nonlocal", n.name),
-        )),
+        Some((span, msg)) => Err(error(span, msg)),
         None => Ok((out, forwarded)),
     }
+}
+
+/// Why `n`, declared `nonlocal` at `at` in `def`, is refused: a parameter, or
+/// read or bound earlier in the body (the parser's own zero-width capture
+/// arguments are not source).
+fn nonlocal_clash(def: &FuncDef, n: &Ident, at: usize) -> Option<(Span, String)> {
+    let name = &n.name;
+    if def.params.iter().any(|p| &p.name.name == name) {
+        return Some((n.span, format!("name `{name}` is parameter and nonlocal")));
+    }
+    let used = scope::exprs(&def.body).into_iter().any(|e| {
+        matches!(&e.kind, ExprKind::Name(x) if x == name)
+            && e.span.start < e.span.end
+            && e.span.end <= at
+    });
+    if used {
+        return Some((
+            n.span,
+            format!("name `{name}` is used prior to nonlocal declaration"),
+        ));
+    }
+    let mut bound = false;
+    scope::walk(&def.body, &mut |s| {
+        bound |= s.span.end <= at && bindings(s).contains(name);
+    });
+    bound.then(|| {
+        (
+            n.span,
+            format!("name `{name}` is assigned to before nonlocal declaration"),
+        )
+    })
 }
 
 /// The names `body` itself declares `nonlocal`.

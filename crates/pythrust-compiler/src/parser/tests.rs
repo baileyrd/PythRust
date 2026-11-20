@@ -2225,6 +2225,24 @@ fn nonlocal_may_name_any_enclosing_function_variable() {
 }
 
 #[test]
+fn nonlocal_after_a_use_or_binding_is_an_error() {
+    let read = "def f():\n    x = 1\n    def g():\n        print(x)\n        nonlocal x\n        x = 2\n    g()\n";
+    let bound = "def f():\n    x = 1\n    def g():\n        x = 3\n        nonlocal x\n        x = 2\n    g()\n";
+    let first = "def f():\n    x = 1\n    def g():\n        nonlocal x\n        print(x)\n        x = 2\n    g()\n";
+    assert!(
+        src_err(read).contains("used prior to nonlocal declaration"),
+        "{}",
+        src_err(read)
+    );
+    assert!(
+        src_err(bound).contains("assigned to before nonlocal declaration"),
+        "{}",
+        src_err(bound)
+    );
+    assert!(src_parse(first).is_ok(), "{:?}", src_parse(first).err());
+}
+
+#[test]
 fn nonlocal_of_a_parameter_is_an_error() {
     let src = "def f():\n    x = 1\n    def g(x):\n        nonlocal x\n        x += 1\n    g(1)\n";
     assert!(
