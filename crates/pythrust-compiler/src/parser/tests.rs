@@ -2264,6 +2264,33 @@ fn nonlocal_after_a_header_binding_is_an_error() {
 }
 
 #[test]
+fn nonlocal_order_follows_python_scopes() {
+    let wrap = |body: &str| {
+        format!("def f():\n    x = 1\n    def g():\n{body}        nonlocal x\n    g()\n")
+    };
+    // A comprehension's own scope is not a read here; its first iterable is.
+    let free = wrap("        ys = [x for y in [1]]\n");
+    let shadowed = wrap("        ys = [x for x in [1]]\n");
+    let iterable = wrap("        ys = [y for y in x]\n");
+    // A nested def binds its name here; its body is not read here.
+    let named = wrap("        def x():\n            pass\n");
+    let inner_read = wrap("        def h():\n            return x\n");
+    for ok in [&free, &shadowed, &inner_read] {
+        assert!(src_parse(ok).is_ok(), "{ok}: {:?}", src_parse(ok).err());
+    }
+    assert!(
+        src_err(&iterable).contains("used prior to nonlocal"),
+        "{}",
+        src_err(&iterable)
+    );
+    assert!(
+        src_err(&named).contains("assigned to before nonlocal"),
+        "{}",
+        src_err(&named)
+    );
+}
+
+#[test]
 fn nonlocal_of_a_parameter_is_an_error() {
     let src = "def f():\n    x = 1\n    def g(x):\n        nonlocal x\n        x += 1\n    g(1)\n";
     assert!(

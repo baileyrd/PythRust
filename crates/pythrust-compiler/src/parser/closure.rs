@@ -34,6 +34,7 @@ impl Parser<'_> {
         body: &mut Block,
         start: usize,
     ) -> Result<()> {
+        check_nonlocal_order(params, body)?;
         let nested = extract(body)?;
         if !self.in_func {
             reject_nonlocal(body)?;
@@ -53,7 +54,7 @@ impl Parser<'_> {
         let mut forwarded: Vec<Ident> = Vec::new();
         for mut def in nested {
             let hidden = comp_name(&def.name.name, def.span.start);
-            let (shared, outward) = nonlocals(&def, &bound)?;
+            let (shared, outward) = nonlocals(&def, &bound);
             declared.insert(hidden.clone(), shared);
             forwarded.extend(outward);
             names.insert(def.name.name.clone(), hidden.clone());
@@ -103,42 +104,66 @@ impl Parser<'_> {
 /// The names `def` declares `nonlocal`, which are captured as cells, and the
 /// ones of them that `bound` (the enclosing function's bindings) lacks: they
 /// belong to a function further out, so the enclosing function forwards them.
-/// A parameter of `def` cannot be `nonlocal`, and a name cannot be read or
-/// bound before its declaration, as in Python.
-fn nonlocals(def: &FuncDef, bound: &BTreeSet<String>) -> Result<(Vec<String>, Vec<Ident>)> {
-    let (mut out, mut forwarded, mut clash) = (Vec::new(), Vec::new(), None);
+fn nonlocals(def: &FuncDef, bound: &BTreeSet<String>) -> (Vec<String>, Vec<Ident>) {
+    let (mut out, mut forwarded) = (Vec::new(), Vec::new());
     scope::walk(&def.body, &mut |s| {
         let StmtKind::Nonlocal(names) = &s.kind else {
             return;
         };
         for n in names {
-            if clash.is_none() {
-                clash = nonlocal_clash(def, n, s.span.start);
-            }
             if !bound.contains(&n.name) {
                 forwarded.push(n.clone());
             }
             out.push(n.name.clone());
         }
     });
+    (out, forwarded)
+}
+
+/// Checks each `nonlocal` of a function's own source `body` (before its
+/// nested defs are lifted and captures inserted): the name is no parameter,
+/// and is neither read nor bound earlier in the function, as in Python.
+fn check_nonlocal_order(params: &[Param], body: &Block) -> Result<()> {
+    let mut clash = None;
+    scope::walk(body, &mut |s| {
+        let StmtKind::Nonlocal(names) = &s.kind else {
+            return;
+        };
+        for n in names {
+            if clash.is_none() {
+                clash = nonlocal_clash(params, body, n, s.span.start);
+            }
+        }
+    });
     match clash {
         Some((span, msg)) => Err(error(span, msg)),
-        None => Ok((out, forwarded)),
+        None => Ok(()),
     }
 }
 
-/// Why `n`, declared `nonlocal` at `at` in `def`, is refused: a parameter, or
-/// read or bound earlier in the body (the parser's own zero-width capture
-/// arguments are not source).
-fn nonlocal_clash(def: &FuncDef, n: &Ident, at: usize) -> Option<(Span, String)> {
+/// Why `n`, declared `nonlocal` at `at`, is refused. A comprehension's own
+/// scope does not count, but its first iterable is read here; a nested
+/// def's name is bound here, its body is not read here.
+fn nonlocal_clash(params: &[Param], body: &Block, n: &Ident, at: usize) -> Option<(Span, String)> {
     let name = &n.name;
-    if def.params.iter().any(|p| &p.name.name == name) {
+    if params.iter().any(|p| &p.name.name == name) {
         return Some((n.span, format!("name `{name}` is parameter and nonlocal")));
     }
-    let used = scope::exprs(&def.body).into_iter().any(|e| {
+    let all = scope::exprs(body);
+    let own_scope = |e: &Expr| {
+        !all.iter().any(|c| {
+            let ExprKind::Comp { clauses, .. } = &c.kind else {
+                return false;
+            };
+            let inside = |outer: Span| outer.start <= e.span.start && e.span.end <= outer.end;
+            inside(c.span) && !clauses.first().is_some_and(|f| inside(f.iter.span))
+        })
+    };
+    let used = all.iter().any(|e| {
         matches!(&e.kind, ExprKind::Name(x) if x == name)
             && e.span.start < e.span.end
             && e.span.end <= at
+            && own_scope(e)
     });
     if used {
         return Some((
@@ -147,8 +172,10 @@ fn nonlocal_clash(def: &FuncDef, n: &Ident, at: usize) -> Option<(Span, String)>
         ));
     }
     let mut bound = false;
-    scope::walk(&def.body, &mut |s| {
-        bound |= (s.span.end <= at && bindings(s).contains(name)) || header_binds(s, name, at);
+    scope::walk(body, &mut |s| {
+        let def_name = matches!(&s.kind, StmtKind::FuncDef(d) if d.name.name == *name);
+        bound |= (s.span.end <= at && (def_name || bindings(s).contains(name)))
+            || header_binds(s, name, at);
     });
     bound.then(|| {
         (
