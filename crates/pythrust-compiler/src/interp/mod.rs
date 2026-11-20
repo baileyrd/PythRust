@@ -32,8 +32,8 @@ use std::iter;
 use std::rc::Rc;
 
 use crate::ast::{
-    source_name, unqualified, Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather,
-    Handler, Ident, LogicalOp, Module, RecordDef, RecordKind, Stmt, StmtKind, Target, TargetKind,
+    unqualified, Arg, BinOp, Block, CmpOp, CompFor, Expr, ExprKind, FuncDef, Gather, Handler,
+    Ident, LogicalOp, Module, RecordDef, RecordKind, Stmt, StmtKind, Target, TargetKind,
 };
 use crate::diag::{DiagKind, Diagnostic, Result};
 use crate::exc::{Class, ExcKind};
@@ -188,6 +188,9 @@ struct Interp<'m, 'o> {
 struct Frame<'m> {
     func: Rc<Func<'m>>,
     vars: HashMap<&'m str, Value<'m>>,
+    /// Names whose cell this frame made itself (`<cell>(x)` on a plain
+    /// variable); any other cell arrived as a capture (D215).
+    own_cells: HashSet<&'m str>,
 }
 
 /// How a statement finished.
@@ -725,6 +728,7 @@ impl<'m> Interp<'m, '_> {
         };
         let cell = Value::Cell(Rc::new(RefCell::new(held)));
         frame.vars.insert(name.as_str(), cell.clone());
+        frame.own_cells.insert(name.as_str());
         Ok(cell)
     }
 
@@ -740,8 +744,9 @@ impl<'m> Interp<'m, '_> {
             };
             return match frame.vars.get(name) {
                 Some(Value::Cell(cell)) => cell.borrow().clone().ok_or_else(|| {
-                    // A closure's own frame (a hidden def) sees it as free.
-                    if source_name(&frame.func.def.name.name) != frame.func.def.name.name {
+                    // A cell that came in as a capture is free here; one this
+                    // frame made is its own local, even inside a hidden def.
+                    if !frame.own_cells.contains(name) {
                         return rt_err(
                             span,
                             format!("NameError: cannot access free variable '{name}' where it is not associated with a value in enclosing scope"),
@@ -1301,6 +1306,7 @@ impl<'m> Interp<'m, '_> {
         self.frames.push(Frame {
             func: Rc::clone(&func),
             vars,
+            own_cells: HashSet::new(),
         });
         let flow = self.exec_block(body);
         self.frames.pop();
