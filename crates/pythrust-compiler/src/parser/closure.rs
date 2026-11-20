@@ -36,6 +36,7 @@ impl Parser<'_> {
     ) -> Result<()> {
         check_nonlocal_order(params, body)?;
         let nested = extract(body)?;
+        reject_def_of_nonlocal(&nested, body)?;
         if !self.in_func {
             reject_nonlocal(body)?;
         }
@@ -124,7 +125,17 @@ fn nonlocals(def: &FuncDef, bound: &BTreeSet<String>) -> (Vec<String>, Vec<Ident
 /// nested defs are lifted and captures inserted): the name is no parameter,
 /// and is neither read nor bound earlier in the function, as in Python.
 fn check_nonlocal_order(params: &[Param], body: &Block) -> Result<()> {
+    let own = declared_nonlocal(body);
     let mut clash = None;
+    scope::walk(body, &mut |s| {
+        // Python refuses an annotation on a nonlocal name, in either order.
+        if let (StmtKind::AnnAssign { target, .. }, None) = (&s.kind, &clash) {
+            if own.contains(&target.name) {
+                let msg = format!("annotated name `{}` can't be nonlocal", target.name);
+                clash = Some((target.span, msg));
+            }
+        }
+    });
     scope::walk(body, &mut |s| {
         let StmtKind::Nonlocal(names) = &s.kind else {
             return;
@@ -183,6 +194,22 @@ fn nonlocal_clash(params: &[Param], body: &Block, n: &Ident, at: usize) -> Optio
             format!("name `{name}` is assigned to before nonlocal declaration"),
         )
     })
+}
+
+/// A nested `def` of a name the function declares `nonlocal` would replace
+/// the shared variable; the lifted def makes no such store (step 6-3b-2b).
+fn reject_def_of_nonlocal(nested: &[FuncDef], body: &Block) -> Result<()> {
+    let own = declared_nonlocal(body);
+    match nested.iter().find(|d| own.contains(&d.name.name)) {
+        Some(d) => Err(error(
+            d.name.span,
+            format!(
+                "a nested `def {}` cannot bind a `nonlocal` name yet (not supported yet)",
+                d.name.name
+            ),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The names `body` itself declares `nonlocal`.

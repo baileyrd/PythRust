@@ -2291,6 +2291,36 @@ fn nonlocal_order_follows_python_scopes() {
 }
 
 #[test]
+fn nonlocal_refuses_an_annotation_and_a_def_of_the_name() {
+    let wrap = |body: &str| format!("def f():\n    x = 1\n    def g():\n{body}    g()\n");
+    let ann_after = wrap("        nonlocal x\n        x: int = 2\n");
+    let ann_before = wrap("        x: int = 2\n        nonlocal x\n");
+    let def_after = wrap("        nonlocal x\n        def x():\n            return 2\n");
+    let control =
+        wrap("        nonlocal x\n        x = 2\n        def h():\n            return 3\n");
+    assert!(
+        src_err(&ann_after).contains("can't be nonlocal"),
+        "{}",
+        src_err(&ann_after)
+    );
+    assert!(
+        src_err(&ann_before).contains("nonlocal"),
+        "{}",
+        src_err(&ann_before)
+    );
+    assert!(
+        src_err(&def_after).contains("cannot bind a `nonlocal` name"),
+        "{}",
+        src_err(&def_after)
+    );
+    assert!(
+        src_parse(&control).is_ok(),
+        "{:?}",
+        src_parse(&control).err()
+    );
+}
+
+#[test]
 fn nonlocal_of_a_parameter_is_an_error() {
     let src = "def f():\n    x = 1\n    def g(x):\n        nonlocal x\n        x += 1\n    g(1)\n";
     assert!(
