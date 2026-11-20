@@ -723,6 +723,30 @@ const NATIVE_GAPS: &[(&str, &str)] = &[
         "a cell (step 6-3b-2a, D209) needs an environment object (step 6-3c)",
     ),
     (
+        "cell_late",
+        "a cell (step 6-3b-2b, D215) needs an environment object (step 6-3c)",
+    ),
+    (
+        "cell_branch",
+        "a cell (step 6-3b-2b, D215) needs an environment object (step 6-3c)",
+    ),
+    (
+        "cell_for_after",
+        "a cell (step 6-3b-2b, D215) needs an environment object (step 6-3c)",
+    ),
+    (
+        "cell_unbound_read",
+        "a cell (step 6-3b-2b, D215) needs an environment object (step 6-3c)",
+    ),
+    (
+        "cell_unbound_owner",
+        "a cell (step 6-3b-2b, D215) needs an environment object (step 6-3c)",
+    ),
+    (
+        "cell_except_target",
+        "a cell (step 6-3b-2b, D215) needs an environment object (step 6-3c)",
+    ),
+    (
         "closure_levels",
         "a closure value (step 6-3b-1, D205) needs an environment object (step 6-3c)",
     ),

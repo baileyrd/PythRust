@@ -1,0 +1,11 @@
+def describe(n: int) -> str:
+    if n > 0:
+        label = "positive"
+
+    def show() -> str:
+        return label + "!"
+
+    return show()
+
+
+print(describe(3))

@@ -1,0 +1,18 @@
+# expect-exit: 1
+
+def outer() -> int:
+    def pick() -> int:
+        def get(read: bool) -> int:
+            if read:
+                return x
+            return 0
+
+        first = get(False)
+        if first > 0:
+            x = 5
+        return x
+
+    return pick()
+
+
+print(outer())

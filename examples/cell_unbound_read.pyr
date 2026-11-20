@@ -1,0 +1,13 @@
+# expect-exit: 1
+
+def pick() -> int:
+    def get() -> int:
+        return x
+
+    print("before")
+    first = get()
+    x = 5
+    return first + x
+
+
+print(pick())

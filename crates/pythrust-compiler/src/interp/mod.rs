@@ -188,6 +188,9 @@ struct Interp<'m, 'o> {
 struct Frame<'m> {
     func: Rc<Func<'m>>,
     vars: HashMap<&'m str, Value<'m>>,
+    /// Names whose cell this frame made itself (`<cell>(x)` on a plain
+    /// variable); any other cell arrived as a capture (D215).
+    own_cells: HashSet<&'m str>,
 }
 
 /// How a statement finished.
@@ -395,7 +398,14 @@ impl<'m> Interp<'m, '_> {
         self.store(&binding.name, Value::Exc(exc));
         let flow = self.exec_block(&h.body);
         match self.frames.last_mut() {
-            Some(frame) => frame.vars.remove(binding.name.as_str()),
+            // A cell is emptied, not dropped: closures share it (D215).
+            Some(frame) => match frame.vars.get(binding.name.as_str()) {
+                Some(Value::Cell(cell)) => {
+                    cell.take();
+                    None
+                }
+                _ => frame.vars.remove(binding.name.as_str()),
+            },
             None => self.globals.remove(binding.name.as_str()),
         };
         flow
@@ -690,7 +700,7 @@ impl<'m> Interp<'m, '_> {
             Some(frame) => match frame.vars.get(name) {
                 // A cell (D209) is shared with closures: write through it.
                 Some(Value::Cell(cell)) if !matches!(v, Value::Cell(_)) => {
-                    *cell.borrow_mut() = v;
+                    *cell.borrow_mut() = Some(v);
                 }
                 _ => {
                     frame.vars.insert(name, v);
@@ -704,19 +714,21 @@ impl<'m> Interp<'m, '_> {
 
     /// `<cell>(x)` (D209): `x`'s slot, made from its value the first time a
     /// closure takes it, so every later store of `x` is seen by the closure.
+    /// A name not bound yet gives an empty slot (D215).
     fn cell_of(&mut self, args: &'m [Arg], span: Span) -> Result<Value<'m>> {
         let ExprKind::Name(name) = &args[0].value.kind else {
             return Err(rt_err(span, "a cell of something but a name".to_string()));
         };
-        let value = self.lookup(name, span)?;
         let Some(frame) = self.frames.last_mut() else {
             return Err(rt_err(span, "a cell outside a function".to_string()));
         };
-        if let Some(cell @ Value::Cell(_)) = frame.vars.get(name.as_str()) {
-            return Ok(cell.clone());
-        }
-        let cell = Value::Cell(Rc::new(RefCell::new(value)));
+        let held = match frame.vars.get(name.as_str()) {
+            Some(cell @ Value::Cell(_)) => return Ok(cell.clone()),
+            held => held.cloned(),
+        };
+        let cell = Value::Cell(Rc::new(RefCell::new(held)));
         frame.vars.insert(name.as_str(), cell.clone());
+        frame.own_cells.insert(name.as_str());
         Ok(cell)
     }
 
@@ -731,7 +743,17 @@ impl<'m> Interp<'m, '_> {
                 )
             };
             return match frame.vars.get(name) {
-                Some(Value::Cell(cell)) => Ok(cell.borrow().clone()),
+                Some(Value::Cell(cell)) => cell.borrow().clone().ok_or_else(|| {
+                    // A cell that came in as a capture is free here; one this
+                    // frame made is its own local, even inside a hidden def.
+                    if !frame.own_cells.contains(name) {
+                        return rt_err(
+                            span,
+                            format!("NameError: cannot access free variable '{name}' where it is not associated with a value in enclosing scope"),
+                        );
+                    }
+                    unbound()
+                }),
                 found => found.cloned().ok_or_else(unbound),
             };
         }
@@ -1284,6 +1306,7 @@ impl<'m> Interp<'m, '_> {
         self.frames.push(Frame {
             func: Rc::clone(&func),
             vars,
+            own_cells: HashSet::new(),
         });
         let flow = self.exec_block(body);
         self.frames.pop();

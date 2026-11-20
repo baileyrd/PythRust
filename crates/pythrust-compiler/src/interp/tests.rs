@@ -1710,3 +1710,22 @@ fn slice_zero_is_catchable_after_operands() {
         "0\n2\n0\nslice step cannot be zero\nslice step cannot be zero\n"
     );
 }
+
+#[test]
+fn an_empty_cell_is_free_in_a_capture_and_unbound_in_its_owner() {
+    let free = "NameError: cannot access free variable 'x' where it is not associated with a value in enclosing scope";
+    let unbound = "UnboundLocalError: cannot access local variable 'x' where it is not associated with a value";
+    // The nested function owns the cell a deeper closure reads (D215).
+    let nested = |ret: &str| {
+        format!(
+            "def outer() -> int:\n    def pick() -> int:\n        def get(read: bool) -> int:\n            \
+             if read:\n                return x\n            return 0\n        first = get(False)\n        \
+             if first > 0:\n            x = 5\n        return {ret}\n    return pick()\nprint(outer())\n"
+        )
+    };
+    assert_eq!(fails_src(&nested("x")), unbound);
+    assert_eq!(fails_src(&nested("get(True)")), free);
+    // A top-level owner and a plain closure read.
+    let top = "def pick() -> int:\n    def get() -> int:\n        return x\n    first = get()\n    x = 5\n    return first + x\nprint(pick())\n";
+    assert_eq!(fails_src(top), free);
+}

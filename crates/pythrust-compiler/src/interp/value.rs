@@ -68,7 +68,7 @@ pub(super) enum Value<'m> {
     Closure(Rc<Closure<'m>>),
     /// A variable shared between a function and its closures (D209): only
     /// ever a frame's variable or a captured argument, never a user value.
-    Cell(Rc<RefCell<Value<'m>>>),
+    Cell(Rc<RefCell<Option<Value<'m>>>>),
 }
 
 /// A record: its definition and its fields' values, in declaration
@@ -285,7 +285,7 @@ impl<'m> Value<'m> {
             Value::View(view, _) => view.name(),
             Value::Range(_) => "range",
             Value::Func(_) | Value::Closure(_) => "function",
-            Value::Cell(c) => c.borrow().type_name(),
+            Value::Cell(_) => "cell",
             Value::Builtin(b) if b.exception().is_some() => "type",
             Value::Builtin(_) | Value::Method(_) => "builtin_function_or_method",
             // A user class's base: inference refuses every operation whose
