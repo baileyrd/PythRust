@@ -254,7 +254,7 @@ impl<'m> Interp<'m, '_> {
             }
             StmtKind::Break => return Ok(Flow::Break(stmt.span)),
             StmtKind::Continue => return Ok(Flow::Continue(stmt.span)),
-            StmtKind::Pass => {}
+            StmtKind::Pass | StmtKind::Nonlocal(_) => {}
             StmtKind::Expr(e) => {
                 self.eval(e)?;
             }
@@ -687,21 +687,53 @@ impl<'m> Interp<'m, '_> {
 
     fn store(&mut self, name: &'m str, v: Value<'m>) {
         match self.frames.last_mut() {
-            Some(frame) => frame.vars.insert(name, v),
-            None => self.globals.insert(name, v),
+            Some(frame) => match frame.vars.get(name) {
+                // A cell (D209) is shared with closures: write through it.
+                Some(Value::Cell(cell)) if !matches!(v, Value::Cell(_)) => {
+                    *cell.borrow_mut() = v;
+                }
+                _ => {
+                    frame.vars.insert(name, v);
+                }
+            },
+            None => {
+                self.globals.insert(name, v);
+            }
         };
+    }
+
+    /// `<cell>(x)` (D209): `x`'s slot, made from its value the first time a
+    /// closure takes it, so every later store of `x` is seen by the closure.
+    fn cell_of(&mut self, args: &'m [Arg], span: Span) -> Result<Value<'m>> {
+        let ExprKind::Name(name) = &args[0].value.kind else {
+            return Err(rt_err(span, "a cell of something but a name".to_string()));
+        };
+        let value = self.lookup(name, span)?;
+        let Some(frame) = self.frames.last_mut() else {
+            return Err(rt_err(span, "a cell outside a function".to_string()));
+        };
+        if let Some(cell @ Value::Cell(_)) = frame.vars.get(name.as_str()) {
+            return Ok(cell.clone());
+        }
+        let cell = Value::Cell(Rc::new(RefCell::new(value)));
+        frame.vars.insert(name.as_str(), cell.clone());
+        Ok(cell)
     }
 
     /// Python's scoping without `global`: a name a function assigns is
     /// local throughout it; any other name is global, then builtin.
     fn lookup(&self, name: &str, span: Span) -> Result<Value<'m>> {
         if let Some(frame) = self.frames.last().filter(|f| f.func.locals.contains(name)) {
-            return frame.vars.get(name).cloned().ok_or_else(|| {
+            let unbound = || {
                 rt_err(
                     span,
                     format!("UnboundLocalError: cannot access local variable '{name}' where it is not associated with a value"),
                 )
-            });
+            };
+            return match frame.vars.get(name) {
+                Some(Value::Cell(cell)) => Ok(cell.borrow().clone()),
+                found => found.cloned().ok_or_else(unbound),
+            };
         }
         if let Some(v) = self.globals.get(name) {
             return Ok(v.clone());
@@ -849,6 +881,9 @@ impl<'m> Interp<'m, '_> {
     fn eval_call(&mut self, func: &'m Expr, args: &'m [Arg], span: Span) -> Exec<'m, Value<'m>> {
         if matches!(&func.kind, ExprKind::Name(n) if n == crate::ast::CLOSURE) {
             return self.closure(args, span);
+        }
+        if matches!(&func.kind, ExprKind::Name(n) if n == crate::ast::CELL) {
+            return Ok(self.cell_of(args, span)?);
         }
         if let Some(out) = self.task_call(func, args, span) {
             return out;

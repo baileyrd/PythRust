@@ -171,6 +171,9 @@ fn sx_stmt(s: &Stmt) -> String {
         StmtKind::Break => "break".to_string(),
         StmtKind::Continue => "continue".to_string(),
         StmtKind::Pass => "pass".to_string(),
+        StmtKind::Nonlocal(names) => {
+            format!("(nonlocal {})", join(names.iter().map(|n| n.name.clone())))
+        }
         StmtKind::Expr(e) => sx(e),
         StmtKind::FuncDef(f) => sx_def(f),
         StmtKind::If {
@@ -2187,26 +2190,178 @@ fn with_an_object_enters_and_exits_once() {
 // Closures (step 6-3a, D200, D204): a captured name is bound once,
 // before the closure, else the named errors until cells.
 
-const REBOUND: &str = "captures of a changing variable need cells (not supported yet)";
 const UNBOUND: &str =
     "captures of a variable bound later or conditionally need cells (not supported yet)";
 
 #[test]
-fn a_capture_rebound_anywhere_is_the_named_error() {
+fn a_capture_rebound_after_the_closure_is_a_cell() {
     let cases = [
-        "def f(xs):\n    def g():\n        return x\n    for x in xs:\n        g()\n",
         "def f(n):\n    x = 0\n    def g():\n        return x\n    while n > 0:\n        x = n\n        n -= 1\n    return g()\n",
-        "def f():\n    x = 1\n    def g():\n        return x\n    try:\n        pass\n    except ValueError as x:\n        pass\n    return g()\n",
         "def f(m):\n    x = m\n    def g():\n        return x\n    with m as x:\n        pass\n    return g()\n",
         "def f(x):\n    def g():\n        return x\n    x += 1\n    return g()\n",
+        "def f():\n    c = 0\n    def g():\n        nonlocal c\n        c += 1\n    g()\n    return c\n",
     ];
     for src in cases {
-        let msg = src_err(src);
+        assert!(src_parse(src).is_ok(), "{src}: {:?}", src_parse(src).err());
+    }
+}
+
+#[test]
+fn a_loop_target_after_the_def_is_not_bound_before_it() {
+    let src = "def f(xs):\n    def g():\n        return x\n    for x in xs:\n        g()\n";
+    assert!(src_err(src).ends_with(UNBOUND), "{}", src_err(src));
+}
+
+#[test]
+fn a_loop_target_is_bound_where_a_lambda_in_its_body_captures_it() {
+    let src = "def f(xs):\n    out = []\n    for x in xs:\n        out.append(lambda: x)\n    return out\n";
+    assert!(src_parse(src).is_ok(), "{:?}", src_parse(src).err());
+}
+
+#[test]
+fn nonlocal_may_name_any_enclosing_function_variable() {
+    let src = "def f():\n    x = 1\n    def m():\n        def i():\n            nonlocal x\n            x += 1\n        i()\n    m()\n    return x\n";
+    assert!(src_parse(src).is_ok(), "{:?}", src_parse(src).err());
+}
+
+#[test]
+fn nonlocal_after_a_use_or_binding_is_an_error() {
+    let read = "def f():\n    x = 1\n    def g():\n        print(x)\n        nonlocal x\n        x = 2\n    g()\n";
+    let bound = "def f():\n    x = 1\n    def g():\n        x = 3\n        nonlocal x\n        x = 2\n    g()\n";
+    let first = "def f():\n    x = 1\n    def g():\n        nonlocal x\n        print(x)\n        x = 2\n    g()\n";
+    assert!(
+        src_err(read).contains("used prior to nonlocal declaration"),
+        "{}",
+        src_err(read)
+    );
+    assert!(
+        src_err(bound).contains("assigned to before nonlocal declaration"),
+        "{}",
+        src_err(bound)
+    );
+    assert!(src_parse(first).is_ok(), "{:?}", src_parse(first).err());
+}
+
+#[test]
+fn nonlocal_after_a_header_binding_is_an_error() {
+    let head =
+        |h: &str, body: &str| format!("def f(m):\n    x = 1\n    def g():\n{h}\n{body}\n    g()\n");
+    let cases = [
+        head("        for x in [1]:", "            nonlocal x"),
+        head("        with m as x:", "            nonlocal x"),
+        head(
+            "        try:\n            pass\n        except ValueError as x:",
+            "            nonlocal x",
+        ),
+    ];
+    for src in cases {
         assert!(
-            msg.starts_with("`x` is captured by `g` and rebound"),
-            "{src}: {msg}"
+            src_err(&src).contains("before nonlocal declaration"),
+            "{src}: {}",
+            src_err(&src)
         );
-        assert!(msg.ends_with(REBOUND), "{msg}");
+    }
+}
+
+#[test]
+fn nonlocal_order_follows_python_scopes() {
+    let wrap = |body: &str| {
+        format!("def f():\n    x = 1\n    def g():\n{body}        nonlocal x\n    g()\n")
+    };
+    // A comprehension's own scope is not a read here; its first iterable is.
+    let free = wrap("        ys = [x for y in [1]]\n");
+    let shadowed = wrap("        ys = [x for x in [1]]\n");
+    let iterable = wrap("        ys = [y for y in x]\n");
+    // A nested def binds its name here; its body is not read here.
+    let named = wrap("        def x():\n            pass\n");
+    let inner_read = wrap("        def h():\n            return x\n");
+    for ok in [&free, &shadowed, &inner_read] {
+        assert!(src_parse(ok).is_ok(), "{ok}: {:?}", src_parse(ok).err());
+    }
+    assert!(
+        src_err(&iterable).contains("used prior to nonlocal"),
+        "{}",
+        src_err(&iterable)
+    );
+    assert!(
+        src_err(&named).contains("assigned to before nonlocal"),
+        "{}",
+        src_err(&named)
+    );
+}
+
+#[test]
+fn nonlocal_refuses_an_except_target_of_the_name() {
+    let wrap = |name: &str| {
+        format!(
+            "def f():\n    e = 1\n    def g():\n        nonlocal e\n        try:\n            \
+             pass\n        except ValueError as {name}:\n            pass\n    g()\n"
+        )
+    };
+    let err = src_err(&wrap("e"));
+    assert!(err.contains("would unbind a `nonlocal` name"), "{err}");
+    assert!(src_parse(&wrap("other")).is_ok());
+}
+
+#[test]
+fn nonlocal_refuses_an_annotation_and_a_def_of_the_name() {
+    let wrap = |body: &str| format!("def f():\n    x = 1\n    def g():\n{body}    g()\n");
+    let ann_after = wrap("        nonlocal x\n        x: int = 2\n");
+    let ann_before = wrap("        x: int = 2\n        nonlocal x\n");
+    let def_after = wrap("        nonlocal x\n        def x():\n            return 2\n");
+    let control =
+        wrap("        nonlocal x\n        x = 2\n        def h():\n            return 3\n");
+    assert!(
+        src_err(&ann_after).contains("can't be nonlocal"),
+        "{}",
+        src_err(&ann_after)
+    );
+    assert!(
+        src_err(&ann_before).contains("nonlocal"),
+        "{}",
+        src_err(&ann_before)
+    );
+    assert!(
+        src_err(&def_after).contains("cannot bind a `nonlocal` name"),
+        "{}",
+        src_err(&def_after)
+    );
+    assert!(
+        src_parse(&control).is_ok(),
+        "{:?}",
+        src_parse(&control).err()
+    );
+}
+
+#[test]
+fn nonlocal_of_a_parameter_is_an_error() {
+    let src = "def f():\n    x = 1\n    def g(x):\n        nonlocal x\n        x += 1\n    g(1)\n";
+    assert!(
+        src_err(src).contains("is parameter and nonlocal"),
+        "{}",
+        src_err(src)
+    );
+}
+
+#[test]
+fn a_captured_except_target_is_the_named_error() {
+    let src = "def f():\n    e = 1\n    def g():\n        return e\n    try:\n        pass\n    except ValueError as e:\n        pass\n    return g()\n";
+    assert!(
+        src_err(src).contains("bound by `except ... as`"),
+        "{}",
+        src_err(src)
+    );
+}
+
+#[test]
+fn nonlocal_needs_an_enclosing_binding() {
+    for src in [
+        "def f():\n    nonlocal x\n    x = 1\n",
+        "def f():\n    def g():\n        nonlocal x\n        x = 1\n    g()\n",
+        "nonlocal x\n",
+    ] {
+        let msg = src_err(src);
+        assert!(msg.contains("nonlocal"), "{src}: {msg}");
     }
 }
 

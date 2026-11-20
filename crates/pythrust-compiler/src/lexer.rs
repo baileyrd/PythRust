@@ -27,9 +27,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>> {
 }
 
 /// Words reserved for later phases. The lexer rejects them.
-const RESERVED: &[&str] = &[
-    "assert", "yield", "async", "await", "global", "nonlocal", "shared",
-];
+const RESERVED: &[&str] = &["assert", "yield", "async", "await", "global", "shared"];
 
 /// Python string prefixes, rejected with a clear message.
 const STRING_PREFIXES: &[&str] = &["r", "u", "b", "f", "br", "rb", "fr", "rf"];
@@ -575,6 +573,7 @@ fn keyword(text: &str) -> Option<TokenKind> {
         "break" => Break,
         "continue" => Continue,
         "pass" => Pass,
+        "nonlocal" => Nonlocal,
         "and" => And,
         "or" => Or,
         "not" => Not,
@@ -1012,12 +1011,12 @@ mod tests {
 
     #[test]
     fn keywords_and_names() {
-        let src = "def return if elif else while for in break continue pass and or not \
+        let src = "def return if elif else while for in break continue pass nonlocal and or not \
                    True False None temper try except finally raise del as import from with pause class lambda";
         let expected = vec![
-            Def, Return, If, Elif, Else, While, For, In, Break, Continue, Pass, And, Or, Not, True,
-            False, None, Temper, Try, Except, Finally, Raise, Del, As, Import, From, With, Pause,
-            Class, Lambda,
+            Def, Return, If, Elif, Else, While, For, In, Break, Continue, Pass, Nonlocal, And, Or,
+            Not, True, False, None, Temper, Try, Except, Finally, Raise, Del, As, Import, From,
+            With, Pause, Class, Lambda,
         ];
         assert_eq!(line(src), expected);
         assert_eq!(

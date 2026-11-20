@@ -1,0 +1,34 @@
+def after() -> int:
+    n = 1
+
+    def show() -> int:
+        return n
+
+    n = 2
+    return show()
+
+
+def accumulate(xs: list[int]) -> int:
+    total = 0
+
+    def add(k: int) -> int:
+        return total + k
+
+    seen = 0
+    for x in xs:
+        total = total + x
+        seen += add(0)
+    return seen
+
+
+def param_rebound(n: int) -> int:
+    def get() -> int:
+        return n * 10
+
+    n = n + 1
+    return get()
+
+
+print(after())
+print(accumulate([1, 2, 3]))
+print(param_rebound(4))

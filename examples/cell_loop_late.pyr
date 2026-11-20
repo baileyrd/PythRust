@@ -1,0 +1,17 @@
+from collections.abc import Callable
+
+
+def late() -> list[Callable[[], int]]:
+    fs: list[Callable[[], int]] = []
+    for i in range(3):
+        fs.append(lambda: i)
+    return fs
+
+
+def keyed(xs: list[int]) -> list[int]:
+    return [f() for f in late()] + [x for x in xs]
+
+
+for f in late():
+    print(f())
+print(keyed([7]))

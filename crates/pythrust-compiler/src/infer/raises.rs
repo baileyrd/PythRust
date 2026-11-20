@@ -620,7 +620,8 @@ impl<'a> Cx<'_, 'a> {
             | StmtKind::ExcClass(_)
             | StmtKind::Break
             | StmtKind::Continue
-            | StmtKind::Pass => {}
+            | StmtKind::Pass
+            | StmtKind::Nonlocal(_) => {}
         }
         out
     }

@@ -120,7 +120,7 @@ impl FnBuilder<'_, '_> {
             StmtKind::Return(value) => self.return_stmt(value.as_ref(), s.span),
             StmtKind::Break => self.loop_jump(s.span, |l| l.exit),
             StmtKind::Continue => self.loop_jump(s.span, |l| l.next),
-            StmtKind::Pass => Ok(()),
+            StmtKind::Pass | StmtKind::Nonlocal(_) => Ok(()),
             StmtKind::FuncDef(f) => self.def_stmt(f),
             // A record is no value (D136); its methods are `def`s of their own.
             StmtKind::Record(_) | StmtKind::ExcClass(_) => Ok(()),

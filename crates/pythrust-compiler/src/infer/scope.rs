@@ -292,7 +292,8 @@ pub(crate) fn own_exprs(s: &Stmt) -> Vec<&Expr> {
         | StmtKind::Try { .. }
         | StmtKind::Break
         | StmtKind::Continue
-        | StmtKind::Pass => Vec::new(),
+        | StmtKind::Pass
+        | StmtKind::Nonlocal(_) => Vec::new(),
     }
 }
 
@@ -608,7 +609,8 @@ fn stmt_names<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span)>) {
         | StmtKind::ExcClass(_)
         | StmtKind::Break
         | StmtKind::Continue
-        | StmtKind::Pass => {}
+        | StmtKind::Pass
+        | StmtKind::Nonlocal(_) => {}
     }
 }
 

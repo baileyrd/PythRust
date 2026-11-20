@@ -1,0 +1,16 @@
+# deviation: a cell is one variable of one type (D3); CPython lets `total` change type.
+# expect-exit: 1
+# expect-error: 0.0
+
+def make() -> int:
+    total = 0
+
+    def add() -> None:
+        nonlocal total
+        total += 1.5
+
+    add()
+    return 1
+
+
+print(make())

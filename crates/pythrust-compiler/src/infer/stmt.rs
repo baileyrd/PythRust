@@ -62,7 +62,7 @@ impl Checker {
                 self.aug_assign(target, *op, value, stmt.span)
             }
             StmtKind::Return(value) => self.ret(value.as_ref(), stmt.span),
-            StmtKind::Break | StmtKind::Continue | StmtKind::Pass => Ok(()),
+            StmtKind::Break | StmtKind::Continue | StmtKind::Pass | StmtKind::Nonlocal(_) => Ok(()),
             StmtKind::Expr(e) => self.expr(e).map(drop),
             StmtKind::Del { value, index } => {
                 let out = self.subst.fresh();
